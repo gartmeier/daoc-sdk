@@ -1,0 +1,12 @@
+[submodule "server/core"]
+	path = server/core
+	url = https://github.com/OpenDAoC/OpenDAoC-Core.git
+[submodule "server/db"]
+	path = server/db
+	url = https://github.com/OpenDAoC/OpenDAoC-Database.git
+[submodule "server/buildnav"]
+	path = server/buildnav
+	url = https://github.com/OpenDAoC/OpenDAoC-BuildNav.git
+[submodule "reference/rs-sdk"]
+	path = reference/rs-sdk
+	url = https://github.com/MaxBittker/rs-sdk.git
