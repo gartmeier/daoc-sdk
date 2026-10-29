@@ -56,8 +56,9 @@ import type {
 
 export { conLevel, conColor, isKillable } from './actions-helpers';
 export type { ConColor, NpcTarget, ObjectTarget, PlayerTarget, Point } from './actions-helpers';
-export { StraightLinePathProvider, NavmeshPathProvider, getDefaultPathProvider, setDefaultPathProvider } from './pathfinding';
+export { StraightLinePathProvider, NavmeshPathProvider, getDefaultPathProvider, setDefaultPathProvider, navmeshGroundZ } from './pathfinding';
 export type { PathProvider, PathRequest, PathResult } from './pathfinding';
+export { NavmeshStore, NavMesh, getNavmeshStore, PolyFlags } from './navmesh';
 
 // Server ranges (world/WorldMgr.cs, GamePlayer.cs) and the margins we approach to.
 const MELEE_APPROACH = 90;       // AttackRange 128 (+32 per moving side), 3D

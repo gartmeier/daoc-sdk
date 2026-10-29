@@ -3,7 +3,7 @@ import { BotSDK } from '../index';
 import { ChatHistory } from '../chat-history';
 import { conColor, conLevel, diffInventory, experienceFromMessages, isKillable, MessageWatch } from '../actions-helpers';
 import { castFailureReason } from '../actions';
-import { NavmeshPathProvider, StraightLinePathProvider, getDefaultPathProvider, setDefaultPathProvider } from '../pathfinding';
+import { StraightLinePathProvider, getDefaultPathProvider, setDefaultPathProvider } from '../pathfinding';
 import type { InventoryItem } from '../types';
 import { makeMessage, makeNpc, makePlayer, makeState } from './fixtures';
 
@@ -118,8 +118,7 @@ describe('path providers', () => {
         expect(Math.abs(end.z - 2179)).toBeLessThan(300);
     });
 
-    test('navmesh stub reports failure; default provider is swappable', () => {
-        expect(new NavmeshPathProvider().findPath({ regionId: 1, from: { x: 0, y: 0, z: 0 }, to: { x: 1, y: 1 } }).success).toBeFalse();
+    test('default provider is swappable (navmesh tests: navmesh.test.ts)', () => {
         const custom = new StraightLinePathProvider({ estimateZ: null });
         setDefaultPathProvider(custom);
         expect(getDefaultPathProvider()).toBe(custom);

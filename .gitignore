@@ -5,3 +5,5 @@ bots/*/
 !bots/examples/
 *.log
 .env
+server/navmesh/
+server/OpenDAoC-Core

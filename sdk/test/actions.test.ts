@@ -1,10 +1,15 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { BotSDK } from '../index';
 import { BotActions, castFailureReason } from '../actions';
 import { ChatHistory } from '../chat-history';
+import { setDefaultPathProvider, StraightLinePathProvider } from '../pathfinding';
 import { executionContext, throwIfExecutionAborted } from '../execution-context';
 import type { ActionResult, BotAction, BotWorldState, GameMessage, NearbyNpc } from '../types';
 import { makeMessage, makeNpc, makeObject, makePlayer, makeState } from './fixtures';
+
+// Fixed straight-line paths: a locally built server/navmesh/zone000.nav would otherwise route every walk here.
+beforeAll(() => setDefaultPathProvider(new StraightLinePathProvider()));
+afterAll(() => setDefaultPathProvider(null));
 
 // ── A tiny simulated world behind a stubbed BotSDK ─────────────────────────
 

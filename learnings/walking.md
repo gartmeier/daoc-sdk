@@ -46,23 +46,38 @@ Progress counts the route still ahead, so a detour that first leads away from th
 - `bot.follow(player, { distance: 150, durationMs, until })` follows a player on the client side. OpenDAoC has no `/follow` or `/stick`.
 - `bot.travelTo('spirit hound')` walks to the nearest **static spawn point** with that name from the DB, in this region, in a straight line. `bot.travelTo({ x, y })` is `walkTo`.
 
+## Navmesh routing
+
+No navmesh ships with the server. `bun run navmesh:build` generates `server/navmesh/zoneNNN.nav` from the local DAoC client (`C:\Program Files (x86)\OpenDAoC`, or `--daoc=`), using `server/buildnav`, plus `server/navmesh/lib/Detour.dll` (Windows only, needs VS Build Tools, CMake and a .NET 10 SDK). The default build covers regions 1, 100 and 200 (42 zones, ~1.3 GB, ~20 min at `--jobs=8`). `--zones=`, `--regions=`, `--all` and `--skip-existing` pick zones.
+
+When the library and at least one `.nav` exist, `walkTo`/`followPath`/`travelTo` route with `NavmeshPathProvider` (Detour through Bun FFI, the same queries the server's `LocalPathfindingMgr` runs):
+
+- Routes go around buildings, walls and cliffs. The waypoints carry the mesh's ground z: live in Cotswold the bot's z stayed within 1–4 units of the ground (median) over 800 and 2500-unit walks, with 0 reissues.
+- A start or destination whose z is a guess is snapped onto the mesh with growing boxes (taller first, then wider).
+- Zone borders are crossed like the server does it: at the straight-line border point, snapped onto both meshes. Long routes chain past Detour's 256-poly corridor limit (a 62k-unit route across Camelot Hills takes ~250 ms).
+- Where a zone has no `.nav`, or the destination is off the mesh or unreachable, the rest is a straight line. `findPath(...).message` says so, and the walk still arrives.
+- A zone's mesh loads on its first query (~0.1 s, 20–50 MB of memory each).
+- `navmeshGroundZ(regionId, x, y, zHint?)` gives the ground height; `getNavmeshStore().at(region, x, y)` gives the raw `NavMesh` (`closestPoint`, `findPath`, `randomPoint`, `raycast`).
+- `DAOC_NAVMESH=off` forces straight lines. `DAOC_NAVMESH_DIR` and `DETOUR_LIB` override the paths.
+- `raycast` checks whether you can walk straight across the mesh. It is not visual line of sight, and the client still answers every server LoS check with "clear".
+
 ## Height (z)
 
-There is **no terrain data and no navmesh** in this server image. When `z` isn't given, `StraightLinePathProvider` splits each leg every 1000 units and takes z from `estimateZ`. That function interpolates the heights of nearby spawns, bind points and startup locations.
+Without a navmesh there is **no terrain data**. When `z` isn't given, `StraightLinePathProvider` splits each leg every 1000 units and takes z from `estimateZ`. That function interpolates the heights of nearby spawns, bind points and startup locations.
 
-- Typical error is about 25 units. Worst cases are hundreds of units near cliffs, in towns on hills, and in dungeons.
+- Typical error is about 25 units. Worst cases are hundreds of units near cliffs, in towns on hills, and in dungeons. (With navmeshes, snapping 400 Camelot Hills spawns lands within 4 units of their DB z (median), 7 at p90.)
 - The server never checks z for movement, but every range check is 3D (melee 128, interact 192). A wrong z makes things "too far away" even when they are close on the map.
 - `killNpc`, `walkToObject` and `interactWith` use the target's z from the server, which is reliable. Prefer them to walking to raw coordinates.
 
 ## Straight lines and getting stuck
 
-The default route is a straight line. It goes through walls, but the server doesn't stop you, so in practice walks rarely fail. When they do:
+Without a navmesh, the route is a straight line. It goes through walls, but the server doesn't stop you, so in practice walks rarely fail. When they do:
 
 - `stuck` with "max speed 0" in the message: you are rooted, stunned or overloaded. Wait or drop items.
 - `stuck` otherwise: no progress for `stuckMs`, usually a correction loop. Retry with waypoints.
 - `timeout`: the route was longer than the estimate, for example after many corrections.
 
-A custom `PathProvider` can be passed per call or set with `setDefaultPathProvider()` (exported from `sdk/actions.ts`). `NavmeshPathProvider` is a stub that always fails (TODO: Detour plus `.nav` files).
+A custom `PathProvider` can be passed per call or set with `setDefaultPathProvider()` (exported from `sdk/actions.ts`, along with `StraightLinePathProvider` and `NavmeshPathProvider`).
 
 ## Verified live
 

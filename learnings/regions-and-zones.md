@@ -57,5 +57,5 @@ nearestBindpoint(me.regionId, me.x, me.y, me.realm);
 
 ## What the world doesn't have
 
-- **No terrain heights and no navmesh** in this server image. The server moves NPCs in straight lines, and z for walking is estimated (see [walking.md](walking.md)).
+- **No terrain heights and no navmesh** ship with this server image, so the server moves NPCs in straight lines. On the bot side, `bun run navmesh:build` generates per-zone meshes from the local client (one `zoneNNN.nav` per zone; a region spans several zones). With those, walks route around walls and follow the ground z; without them, z is estimated (see [walking.md](walking.md)).
 - **No real line of sight:** the client answers every LoS check with "clear".

@@ -14,7 +14,8 @@
     "docs:api:check": "bun sdk/generate-api-docs.ts --check",
     "server:up": "bun scripts/check-submodules.ts && docker compose -f server/docker/docker-compose.yml up -d --build",
     "server:down": "docker compose -f server/docker/docker-compose.yml down",
-    "server:setup": "bun scripts/setup-server.ts"
+    "server:setup": "bun scripts/setup-server.ts",
+    "navmesh:build": "bun scripts/build-navmesh.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

@@ -75,7 +75,7 @@ The guarded `export default main` lets MCP run the same file: `execute_code({ bo
 - **The SDK never speaks the DAoC protocol.** It sends `BotAction` JSON and gets `BotWorldState` snapshots ([sdk/types.ts](sdk/types.ts)).
 - **The headless client** (`client/`) owns the TCP session (protocol 1.127, no encryption), the world model, and the mover. DAoC has no click-to-walk, so the client streams position updates itself. It also answers the server's line-of-sight checks with "clear".
 - **The gateway** routes between scripts and clients by username, like rs-sdk's. It also serves `/status`, `/state/<bot>`, `/chat/<bot>`, `POST /say/<bot>`, `POST /dm/<bot>` and a browser viewer at `/viewer`. See [Gateway access](#gateway-access).
-- **Static world data** (`data/`) is parsed from the OpenDAoC DB dump: NPC spawns, merchants' item lists, items, spells, styles, zones, classes and races. It also includes a ground-height estimate, because the server ships no terrain or navmesh.
+- **Static world data** (`data/`) is parsed from the OpenDAoC DB dump: NPC spawns, merchants' item lists, items, spells, styles, zones, classes and races. It also includes a ground-height estimate, because the server ships no terrain or navmesh. Navmeshes can be generated from a local DAoC client with `bun run navmesh:build` (Windows; `server/buildnav`, output in `server/navmesh/`, not redistributable); `walkTo` then routes over them (learnings/walking.md).
 
 ### Gateway access
 
