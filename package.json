@@ -1,0 +1,28 @@
+{
+  "name": "daoc-sdk",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "bun run typecheck && bun run test",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./sdk ./client ./gateway ./mcp ./data ./scripts ./bots",
+    "gateway": "bun gateway/gateway.ts",
+    "client": "bun client/runner.ts",
+    "mcp": "bun mcp/server.ts",
+    "data:build": "bun scripts/build-data.ts",
+    "docs:api": "bun sdk/generate-api-docs.ts",
+    "docs:api:check": "bun sdk/generate-api-docs.ts --check",
+    "server:up": "bun scripts/check-submodules.ts && docker compose -f server/docker/docker-compose.yml up -d --build",
+    "server:down": "docker compose -f server/docker/docker-compose.yml down",
+    "server:setup": "bun scripts/setup-server.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1"
+  }
+}

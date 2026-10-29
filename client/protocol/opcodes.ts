@@ -1,0 +1,143 @@
+// Opcodes for client 1.127. Server opcodes: packets/Server/IPacketLib.cs:12-127
+// (eServerPackets). Client opcodes: IPacketLib.cs:130-212 (eClientPackets).
+
+export const ClientOp = {
+    CharacterSelectRequest: 0x10,
+    TrainHandler: 0x53,
+    UseSlot: 0x71,
+    PlayerAttackRequest: 0x74,
+    BuyRequest: 0x78,
+    SellRequest: 0x79,
+    ObjectInteractRequest: 0x7A,
+    TrainWindowHandler: 0x7B,
+    UseSpell: 0x7D,
+    DestroyItemRequest: 0x80,
+    DialogResponse: 0x82,
+    InviteToGroup: 0x87,
+    DisbandFromGroup: 0x9F,
+    PingRequest: 0xA3,
+    LoginRequest: 0xA7,
+    PositionUpdate: 0xA9,
+    CommandHandler: 0xAF,
+    PlayerTarget: 0xB0,
+    PickUpRequest: 0xB5,
+    PlayerHeadingUpdate: 0xBA,
+    UseSkill: 0xBB,
+    CreateObjectRequest: 0xBE,
+    GameOpenRequest: 0xBF,
+    PlayerSitRequest: 0xC7,
+    DuplicateNameCheck: 0xCB,
+    CheckLosRequest: 0xD0,
+    WorldInitRequest: 0xD4,
+    CreatePlayerRequest: 0xD5,
+    PlayerMoveItem: 0xDD,
+    PlayerInitRequest: 0xE8,
+    PlayerGroundTarget: 0xEC,
+    CryptKeyRequest: 0xF4,
+    CharacterOverviewRequest: 0xFC,
+    CharacterCreateRequest: 0xFF,
+} as const;
+
+export const ServerOp = {
+    InventoryUpdate: 0x02,
+    CharacterJump: 0x04,
+    EquipmentUpdate: 0x15,
+    VariousUpdate: 0x16,
+    MerchantWindow: 0x17,
+    SpellEffectAnimation: 0x1B,
+    PositionAndObjectID: 0x20,
+    DebugMode: 0x21,
+    CryptKey: 0x22,
+    SessionID: 0x28,
+    PingReply: 0x29,
+    LoginGranted: 0x2A,
+    CharacterInitFinished: 0x2B,
+    LoginDenied: 0x2C,
+    GameOpenReply: 0x2D,
+    UDPInitReply: 0x2F,
+    PlayerCreate172: 0x4B,
+    GroupMemberUpdate: 0x70,
+    SpellCastAnimation: 0x72,
+    InterruptSpellCast: 0x73,
+    AttackMode: 0x74,
+    ConcentrationList: 0x75,
+    TrainerWindow: 0x7B,
+    Time: 0x7E,
+    UpdateIcons: 0x7F,
+    Dialog: 0x81,
+    QuestEntry: 0x83,
+    PlayerRevive: 0x89,
+    CharacterPointsUpdate: 0x91,
+    ObjectUpdate: 0xA1,
+    RemoveObject: 0xA2,
+    Quit: 0xA4,
+    PlayerPosition: 0xA9,
+    CharacterStatusUpdate: 0xAD,
+    PlayerDeath: 0xAE,
+    Message: 0xAF,
+    ClientRegion: 0xB1,
+    MaxSpeed: 0xB6,
+    RegionChanged: 0xB7,
+    PlayerHeading: 0xBA,
+    CombatAnimation: 0xBC,
+    Encumberance: 0xBD,
+    DetailWindow: 0xC4,
+    Riding: 0xC8,
+    DupNameCheckReply: 0xCC,
+    CheckLOSRequest: 0xD0,
+    DisableSkills: 0xD6,
+    DelveInfo: 0xD8,
+    ObjectCreate: 0xD9,
+    NPCCreate: 0xDA,
+    ObjectGuildID: 0xDE,
+    ObjectDelete: 0xE1,
+    ChangeGroundTarget: 0xEC,
+    ObjectDataUpdate: 0xEE,
+    ChangeTarget: 0xF6,
+    MoneyUpdate: 0xFA,
+    StatsUpdate: 0xFB,
+    CharacterOverview1126: 0xFC,
+    Realm: 0xFE,
+} as const;
+
+const SERVER_NAMES = new Map<number, string>(Object.entries(ServerOp).map(([k, v]) => [v, k]));
+const CLIENT_NAMES = new Map<number, string>(Object.entries(ClientOp).map(([k, v]) => [v, k]));
+
+export function serverOpName(code: number): string {
+    return SERVER_NAMES.get(code) ?? `0x${code.toString(16).padStart(2, '0').toUpperCase()}`;
+}
+
+export function clientOpName(code: number): string {
+    return CLIENT_NAMES.get(code) ?? `0x${code.toString(16).padStart(2, '0').toUpperCase()}`;
+}
+
+/** eLoginError (IPacketLib.cs:217-247). */
+export const LoginError: Record<number, string> = {
+    0x01: 'IncorrectPassword',
+    0x02: 'InvalidAccount',
+    0x03: 'AuthorizationServerUnavailable',
+    0x05: 'IncorrectClientVersion',
+    0x06: 'Error',
+    0x07: 'AccountNotFound',
+    0x08: 'AccountNoAccessAnyGame',
+    0x09: 'AccountNoAccessThisGame',
+    0x0A: 'ClosedAccount',
+    0x0B: 'AccountAlreadyLoggedIn',
+    0x0C: 'TooManyPlayersLoggedIn',
+    0x0D: 'GameCurrentlyClosed',
+    0x10: 'AccountAlreadyLoggedInToOtherServer',
+    0x11: 'AccountIsInLogoutProcedure',
+    0x12: 'TooManyFreeAccountsLoggedIn',
+    0x13: 'AccountNeedsInvite',
+    0x14: 'BannedAccount',
+    0x15: 'Unknown',
+    0x17: 'NotAuthorizedToUseExpansionVersion',
+    0x18: 'OnlyOneFreeAccountPerPc',
+    0x19: 'RequestedServerNotFound',
+    0x1A: 'EndlessConquestAccountNotAllowed',
+    0xAA: 'ServiceNotAvailable',
+};
+
+export function loginErrorName(code: number): string {
+    return LoginError[code] ?? `LoginError0x${code.toString(16)}`;
+}

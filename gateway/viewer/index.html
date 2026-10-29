@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>daoc-sdk viewer</title>
+<link rel="stylesheet" href="/viewer/assets/viewer.css">
+</head>
+<body>
+<main class="index">
+    <h1>daoc-sdk viewer</h1>
+    <div class="muted">Bots with a headless client attached to this gateway. Pick one to watch it.</div>
+    <div id="bots" class="bot-list"><div class="muted">Loading…</div></div>
+    <p class="muted" style="margin-top:16px">Or open <span class="mono">/viewer/&lt;bot&gt;</span> directly; the page waits for the client to attach.</p>
+</main>
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+async function refresh() {
+    const el = document.getElementById('bots');
+    try {
+        const res = await fetch('/bots', { cache: 'no-store' });
+        const { bots } = await res.json();
+        if (!bots || bots.length === 0) {
+            el.innerHTML = '<div class="muted">No bots connected. Start one with <span class="mono">bun client/runner.ts &lt;bot&gt;</span>.</div>';
+            return;
+        }
+        el.innerHTML = bots.map(b => {
+            const p = b.player;
+            const who = p ? `${esc(p.name)} · L${esc(p.level)} ${esc(p.className)} · ${esc(p.realm)} · ${esc(p.zoneName || 'region ' + p.regionId)}` : esc(b.phase || 'no state');
+            const age = b.stateAge == null ? '' : `state ${(b.stateAge / 1000).toFixed(1)} s ago`;
+            return `<a class="bot-card" href="/viewer/${encodeURIComponent(b.username)}">
+                <span class="name">${esc(b.username)}</span>
+                <span><span class="pill ${esc(b.status)}">${esc(b.status)}</span> ${b.inGame ? '<span class="pill active">in game</span>' : '<span class="pill">not in game</span>'}</span>
+                <span class="muted">${who}</span>
+                <span class="muted">${age} · ${b.controllers} ctl / ${b.observers} obs</span>
+            </a>`;
+        }).join('');
+    } catch (e) {
+        el.innerHTML = `<div class="bad">Gateway unreachable: ${esc(e.message || e)}</div>`;
+    }
+}
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

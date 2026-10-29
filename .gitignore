@@ -1,0 +1,7 @@
+node_modules/
+data/generated/
+bots/*/
+!bots/_template/
+!bots/examples/
+*.log
+.env

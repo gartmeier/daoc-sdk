@@ -1,0 +1,67 @@
+# Local OpenDAoC stack for daoc-sdk development.
+#   docker compose -f server/docker/docker-compose.yml up -d --build
+# Login/game server: tcp://localhost:10300, UDP: 10400.
+name: daoc-sdk
+
+volumes:
+  db-data:
+
+services:
+  db:
+    image: mariadb:10.6
+    command: --lower_case_table_names=1 --character-set-server=utf8mb3 --collation-server=utf8mb3_general_ci --max_allowed_packet=256M
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: opendaoc
+      MYSQL_ROOT_PASSWORD: daoc-sdk
+    volumes:
+      - db-data:/var/lib/mysql
+      - ../db/opendaoc-db-core:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "13306:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  gameserver:
+    build:
+      context: ../core
+      dockerfile: ../docker/Dockerfile.gameserver
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "10300:10300"
+      - "10400:10400/udp"
+    environment:
+      UID: "1000"
+      GID: "1000"
+      AUTO_ACCOUNT_CREATION: "True"
+      CHEAT_LOGGER_NAME: "cheats"
+      CPU_USE: "4"
+      DB_AUTOSAVE: "True"
+      DB_AUTOSAVE_INTERVAL: "10"
+      DB_CONNECTION_STRING: "server=db;port=3306;database=opendaoc;userid=root;password=daoc-sdk;treattinyasboolean=true"
+      DB_TYPE: "MYSQL"
+      DETECT_REGION_IP: "False"
+      ENABLE_COMPILATION: "True"
+      ENABLE_UPNP: "False"
+      GAME_TYPE: "Normal"
+      GM_ACTION_LOGGER_NAME: "gmactions"
+      INVALID_NAMES_FILE: "./config/invalidnames.txt"
+      LOG_CONFIG_FILE: "./config/logconfig.xml"
+      REGION_IP: "127.0.0.1"
+      REGION_PORT: "10400"
+      SCRIPT_ASSEMBLIES: ""
+      SCRIPT_COMPILATION_TARGET: "./lib/GameServerScripts.dll"
+      SERVER_IP: "0.0.0.0"
+      SERVER_NAME: "DAoC-SDK"
+      SERVER_NAME_SHORT: "DAOCSDK"
+      SERVER_PORT: "10300"
+      UDP_IP: "0.0.0.0"
+      UDP_PORT: "10400"
+      DOTNET_SYSTEM_GLOBALIZATION_INVARIANT: "False"

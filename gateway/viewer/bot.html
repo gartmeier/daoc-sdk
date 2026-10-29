@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{BOT}} · daoc-sdk viewer</title>
+<link rel="stylesheet" href="/viewer/assets/viewer.css">
+</head>
+<body data-bot="{{BOT}}">
+<div class="viewer">
+    <header class="topbar">
+        <a href="/viewer">← bots</a>
+        <span class="title">{{BOT}}</span>
+        <span id="conn" class="pill">connecting</span>
+        <span id="age" class="muted mono"></span>
+        <span class="spacer"></span>
+        <label title="Map keeps the bot centred"><input type="checkbox" id="follow" checked> follow</label>
+        <label title="Draw NPC names"><input type="checkbox" id="labels" checked> labels</label>
+        <label title="Send actions as a controlling SDK (pre-empts any running script's controller)"><input type="checkbox" id="control"> control</label>
+        <input type="password" id="password" placeholder="bot.env password" autocomplete="current-password" size="14">
+    </header>
+    <div class="map-wrap" id="mapwrap">
+        <canvas id="map"></canvas>
+        <div class="legend" id="legend"></div>
+        <div class="map-tools">
+            <button id="zoomin" title="Zoom in">+</button>
+            <button id="zoomout" title="Zoom out">−</button>
+            <button id="center" title="Centre on bot">◎</button>
+        </div>
+        <div class="map-hud mono" id="hud"></div>
+        <div class="tooltip" id="tooltip"></div>
+        <div class="toast" id="toast"></div>
+        <div class="banner" id="banner"></div>
+    </div>
+    <aside class="side" id="side">
+        <section class="section" id="s-control" hidden>
+            <h3>Control</h3>
+            <div class="control-row">
+                <input type="text" id="say" placeholder="say…" maxlength="200">
+                <button id="saybtn">Say</button>
+            </div>
+            <div class="control-row">
+                <button id="stopbtn">Stop</button>
+                <button id="sitbtn">Sit/stand</button>
+                <button id="attackbtn">Attack</button>
+                <button id="cleartarget">Clear target</button>
+            </div>
+            <div class="hint">Click ground: move there. Click a mob/player/object: target it. Double-click an NPC: interact. Drag: pan.</div>
+        </section>
+        <section class="section who" id="s-who"></section>
+        <section class="section" id="s-bars"></section>
+        <section class="section" id="s-target"></section>
+        <section class="section" id="s-dialog"></section>
+        <section class="section" id="s-npcdialog"></section>
+        <section class="section" id="s-textwindow"></section>
+        <section class="section" id="s-merchant"></section>
+        <section class="section" id="s-effects"></section>
+        <section class="section" id="s-group"></section>
+        <section class="section" id="s-inventory"></section>
+        <section class="section" id="s-log"></section>
+    </aside>
+</div>
+<script type="module" src="/viewer/assets/app.js"></script>
+</body>
+</html>

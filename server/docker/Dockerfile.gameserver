@@ -1,0 +1,16 @@
+# Builds OpenDAoC from the local server/core submodule so server-side
+# modifications (bot-friendly tweaks) can be applied and tested.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /build
+COPY . .
+RUN sed -i 's/\r$//' entrypoint.sh \
+ && cp CoreServer/config/serverconfig.example.xml CoreServer/config/serverconfig.xml \
+ && dotnet build DOLLinux.sln -c Release
+
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS final
+RUN apk add --no-cache icu-libs su-exec
+WORKDIR /app
+COPY --from=build /build/Release /app
+COPY --from=build /build/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
