@@ -1052,7 +1052,10 @@ export class BotSDK {
         return this.sendAction({ type: 'castSpell', lineIndex, spellIndex, reason: 'SDK' });
     }
 
-    /** Set the ground target. */
+    /**
+     * Set the ground target. In a zone where the server has a navmesh loaded it silently drops a
+     * target more than 16 units off the mesh (ground_target_snap_max_distance): take z from navmeshGroundZ.
+     */
     async sendSetGroundTarget(x: number, y: number, z: number): Promise<ActionResult> {
         return this.sendAction({ type: 'setGroundTarget', x, y, z, reason: 'SDK' });
     }

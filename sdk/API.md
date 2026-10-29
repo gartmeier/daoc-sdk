@@ -222,7 +222,7 @@
 | `async sendAttack(on: boolean = true): Promise<ActionResult>` | Toggle melee auto-attack on the current target. |
 | `async sendUseSkill(skillIndex: number): Promise<ActionResult>` | Use a style or ability by skillIndex (see findStyle/findAbility). |
 | `async sendCastSpell(lineIndex: number, spellIndex: number): Promise<ActionResult>` | Cast a spell by lineIndex/spellIndex (see findSpell) on the current target. |
-| `async sendSetGroundTarget(x: number, y: number, z: number): Promise<ActionResult>` | Set the ground target. |
+| `async sendSetGroundTarget(x: number, y: number, z: number): Promise<ActionResult>` | Set the ground target. In a zone where the server has a navmesh loaded it silently drops a target more than 16 units off the mesh (ground_target_snap_max_distance): take z from navmeshGroundZ. |
 | `async sendUseItem(slot: number, useType?: number): Promise<ActionResult>` | Use an item in a slot (potions, charged items). |
 | `async sendMoveItem(fromSlot: number, toSlot: number, count?: number): Promise<ActionResult>` | Move an item between slots (equip, unequip, stack split, vault). |
 | `async sendDropItem(slot: number): Promise<ActionResult>` | Drop an item on the ground. |

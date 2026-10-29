@@ -55,3 +55,4 @@ const c = await bot.castSpell(nuke, mob);       // target: NPC, player, name, ob
 - Acolyte (Cleric line): a heal through the hybrid `useSkill` path.
 - The interrupt and must-wait messages and their `retryAfterMs`.
 - Unverified: pets, ground-target spells (`sdk.sendSetGroundTarget`), concentration buffs (`state.concentrationEffects`), resists.
+- Ground targets (from source, not live): when the gameserver has the zone's navmesh loaded, it silently drops a ground target more than 16 units off the mesh (`ground_target_snap_max_distance`). Take z from `navmeshGroundZ(regionId, x, y)` (exported from `sdk/actions.ts`), not `estimateZ`.
