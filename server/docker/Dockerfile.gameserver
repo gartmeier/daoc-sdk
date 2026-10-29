@@ -3,14 +3,30 @@
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /build
 COPY . .
+# The entrypoint chowns /app; skip the read-only navmesh mount (one error per file otherwise).
 RUN sed -i 's/\r$//' entrypoint.sh \
+ && sed -i 's|^chown -R appuser:appgroup /app$|find /app -path /app/navmesh -prune -o -exec chown -h appuser:appgroup {} +|' entrypoint.sh \
+ && grep -q 'path /app/navmesh -prune' entrypoint.sh \
  && cp CoreServer/config/serverconfig.example.xml CoreServer/config/serverconfig.xml \
  && dotnet build DOLLinux.sln -c Release
+
+# Native Detour for LocalPathfindingMgr, built against the runtime image's musl
+# and libstdc++. 64-bit polyrefs to match the navmeshes from `bun run navmesh:build`.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS detour
+RUN apk add --no-cache build-base cmake
+COPY Pathing/Detour/CMakeLists.txt /detour/
+COPY Pathing/Detour/Include /detour/Include
+COPY Pathing/Detour/Source /detour/Source
+RUN cmake -S /detour -B /detour/out -DCMAKE_BUILD_TYPE=Release -DRECASTNAVIGATION_DT_POLYREF64=ON \
+      -DSOVERSION=1 -DLIB_VERSION=1.0.0 \
+ && cmake --build /detour/out -j"$(nproc)" \
+ && cp -L /detour/out/libDetour.so /libDetour.so
 
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine AS final
 RUN apk add --no-cache icu-libs su-exec
 WORKDIR /app
 COPY --from=build /build/Release /app
 COPY --from=build /build/entrypoint.sh /app/entrypoint.sh
+COPY --from=detour /libDetour.so /app/lib/libDetour.so
 RUN chmod +x /app/entrypoint.sh
 ENTRYPOINT ["/bin/sh", "/app/entrypoint.sh"]
