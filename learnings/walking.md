@@ -19,10 +19,10 @@ console.log(r.distance, r.reissues);                  // 2D distance left, re-is
 
 | Option | Default | Notes |
 |---|---|---|
-| `z` | estimated | pass it when you know it (an NPC's z, a spawn's z) |
+| `z` | navmesh ground, else estimated | pass it when you know it (an NPC's z, a spawn's z) |
 | `tolerance` | 64 | arrival radius on the ground plane |
 | `stuckMs` | 8000 | fail when the remaining route hasn't shrunk for this long |
-| `timeout` | 1.5 × ETA + 15 s | overall deadline |
+| `timeout` | 1.5 × ETA + 15 s | overall deadline. The default ETA is measured along the planned route (a navmesh detour can be 4× the straight distance), and a re-plan after a correction extends it. An explicit `timeout` also covers planning |
 | `speedFactor` | 0.9 | fraction of max speed; keep it ≤ 0.9 |
 
 - **Already there:** `walkTo` to where you stand stops any earlier move and returns `Already at destination`.
@@ -44,7 +44,7 @@ Progress counts the route still ahead, so a detour that first leads away from th
 
 - `bot.walkToObject(target, { range: 100 })` walks within a 3D range of an NPC, player or object, and follows it if it moves. Its `timeout` applies to each of up to 4 attempts.
 - `bot.follow(player, { distance: 150, durationMs, until })` follows a player on the client side. OpenDAoC has no `/follow` or `/stick`.
-- `bot.travelTo('spirit hound')` walks to the nearest **static spawn point** with that name from the DB, in this region, in a straight line. `bot.travelTo({ x, y })` is `walkTo`.
+- `bot.travelTo('spirit hound')` walks to the nearest **static spawn point** with that name from the DB, in this region, through `walkTo` (a navmesh route when meshes are built, else a straight line). `bot.travelTo({ x, y })` is `walkTo`.
 
 ## Navmesh routing
 
@@ -55,7 +55,7 @@ When the library and at least one `.nav` exist, `walkTo`/`followPath`/`travelTo`
 - Routes go around buildings, walls and cliffs. The waypoints carry the mesh's ground z: live in Cotswold the bot's z stayed within 1–4 units of the ground (median) over 800 and 2500-unit walks, with 0 reissues.
 - A start or destination whose z is a guess is snapped onto the mesh with growing boxes (taller first, then wider).
 - Zone borders are crossed like the server does it: at the straight-line border point, snapped onto both meshes. Long routes chain past Detour's 256-poly corridor limit (a 62k-unit route across Camelot Hills takes ~250 ms).
-- Where a zone has no `.nav`, or the destination is off the mesh or unreachable, the rest is a straight line. `findPath(...).message` says so, and the walk still arrives.
+- Any part of the route that can't use a mesh is a straight line, and the walk still arrives. `findPath(...).message` is set whenever any part is such a fallback: the start zone has no `.nav` or its mesh failed to load (the message includes `getNavmeshStore().loadError(zoneId)`), the start is off the mesh, a later zone has no mesh, or the destination is off the mesh or unreachable. A route entirely on the mesh has no message.
 - A zone's mesh loads on its first query (~0.1 s, 20–50 MB of memory each).
 - `navmeshGroundZ(regionId, x, y, zHint?)` gives the ground height; `getNavmeshStore().at(region, x, y)` gives the raw `NavMesh` (`closestPoint`, `findPath`, `randomPoint`, `raycast`).
 - `DAOC_NAVMESH=off` forces straight lines. `DAOC_NAVMESH_DIR` and `DETOUR_LIB` override the paths.
@@ -75,7 +75,7 @@ Without a navmesh, the route is a straight line. It goes through walls, but the 
 
 - `stuck` with "max speed 0" in the message: you are rooted, stunned or overloaded. Wait or drop items.
 - `stuck` otherwise: no progress for `stuckMs`, usually a correction loop. Retry with waypoints.
-- `timeout`: the route was longer than the estimate, for example after many corrections.
+- `timeout`: the walk took longer than 1.5 × the planned ETA + 15 s, for example after many corrections.
 
 A custom `PathProvider` can be passed per call or set with `setDefaultPathProvider()` (exported from `sdk/actions.ts`, along with `StraightLinePathProvider` and `NavmeshPathProvider`).
 

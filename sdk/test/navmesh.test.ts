@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { NavmeshStore } from '../navmesh';
+import { NavmeshStore, type NavMesh } from '../navmesh';
 import { NavmeshPathProvider, navmeshGroundZ, simplifyPath, StraightLinePathProvider } from '../pathfinding';
 
 // The FFI tests need meshes generated from a local client (bun run navmesh:build):
@@ -20,9 +20,10 @@ describe('simplifyPath', () => {
             { x: 0, y: 0, z: 0 }, { x: 100, y: 0, z: 10 }, { x: 200, y: 0, z: 20 }, // straight, linear z
             { x: 300, y: 0, z: 200 },                                                 // z bump
             { x: 400, y: 0, z: 30 }, { x: 400, y: 0, z: 300 },                        // ladder: same x/y
-            { x: 400, y: 100, z: 300 },                                               // turn
+            { x: 400, y: 100, z: 300 },                                               // flat corner: only the turn check keeps it
+            { x: 500, y: 100, z: 300 },
         ];
-        expect(simplifyPath(pts)).toEqual([0, 2, 3, 4, 5, 6].map(i => pts[i]!));
+        expect(simplifyPath(pts)).toEqual([0, 2, 3, 4, 5, 6, 7].map(i => pts[i]!));
     });
 });
 
@@ -33,7 +34,41 @@ describe('NavmeshStore without files', () => {
         expect(empty.unavailableReason()).toContain('navmesh:build');
         const p = new NavmeshPathProvider({ store: empty, fallback: straight });
         const r = await p.findPath({ regionId: 1, from: { x: 0, y: 0, z: 0 }, to: { x: 10, y: 0, z: 5 } });
-        expect(r).toEqual({ success: true, waypoints: [{ x: 10, y: 0, z: 5 }] });
+        expect(r.success).toBeTrue();
+        expect(r.waypoints).toEqual([{ x: 10, y: 0, z: 5 }]);
+        expect(r.message).toContain('navmesh:build');
+    });
+});
+
+// A store whose every zone has the same scripted mesh, for provider logic without the native library.
+type FakeMesh = Pick<NavMesh, 'closestPoint' | 'findPath'>;
+const fakeStore = (mesh: FakeMesh | null, loadError: string | null = null) =>
+    ({ available: () => true, unavailableReason: () => '', forZone: () => mesh, at: () => mesh, loadError: () => loadError }) as unknown as NavmeshStore;
+const camelotHills = { x: 560000, y: 500000, z: 2400 }; // region 1, zone 0
+
+describe('NavmeshPathProvider fallbacks and edge cases', () => {
+    test('a start zone whose mesh did not load walks straight and says why', async () => {
+        const p = new NavmeshPathProvider({ store: fakeStore(null, 'cannot load zone000.nav (LoadNavMesh failed)'), fallback: straight });
+        const r = await p.findPath({ regionId: 1, from: camelotHills, to: { x: 561000, y: 500000, z: 2400 } });
+        expect(r.success).toBeTrue();
+        expect(r.waypoints).toEqual([{ x: 561000, y: 500000, z: 2400 }]);
+        expect(r.message).toContain('zone 0');
+        expect(r.message).toContain('zone000.nav');
+    });
+
+    test('a start off the mesh walks straight and says so', async () => {
+        const p = new NavmeshPathProvider({ store: fakeStore({ closestPoint: () => null, findPath: () => ({ status: 'none', points: [] }) }), fallback: straight });
+        const r = await p.findPath({ regionId: 1, from: camelotHills, to: { x: 561000, y: 500000, z: 2400 } });
+        expect(r.success).toBeTrue();
+        expect(r.waypoints).toEqual([{ x: 561000, y: 500000, z: 2400 }]);
+        expect(r.message).toContain('off the navmesh');
+    });
+
+    test('a zero-length leg on the mesh still ends at the destination', async () => {
+        const mesh: FakeMesh = { closestPoint: p => ({ ...p }), findPath: start => ({ status: 'found', points: [{ ...start, flags: 0 }] }) };
+        const p = new NavmeshPathProvider({ store: fakeStore(mesh), fallback: straight });
+        const r = await p.findPath({ regionId: 1, from: camelotHills, to: { ...camelotHills } });
+        expect(r).toEqual({ success: true, waypoints: [camelotHills] });
     });
 });
 
@@ -77,5 +112,32 @@ describe.skipIf(!ready)('Detour via Bun FFI (generated Camelot Hills meshes)', (
         expect(r.waypoints.at(-1)).toMatchObject(to);
         const ys = r.waypoints.map(w => w.y);
         expect(ys.some(y => y < 548864) && ys.some(y => y >= 548864)).toBeTrue();
+    });
+
+    test('a zero-length leg on a real mesh returns the destination', async () => {
+        const at = store.forZone(0)!.closestPoint({ x: 548972, y: 493199, z: 2262 })!;
+        const r = await new NavmeshPathProvider({ store, fallback: straight }).findPath({ regionId: 1, from: at, to: { ...at } });
+        expect(r).toEqual({ success: true, waypoints: [at] });
+    });
+
+    test.skipIf(store.hasZone(26))('a zone without a .nav file walks straight and names the missing file', async () => {
+        // City of Camelot (region 10, zone 26) has no mesh in this build.
+        const r = await new NavmeshPathProvider({ store, fallback: straight }).findPath({ regionId: 10, from: { x: 40000, y: 40000, z: 0 }, to: { x: 41000, y: 40000, z: 0 } });
+        expect(r.success).toBeTrue();
+        expect(r.waypoints).toEqual([{ x: 41000, y: 40000, z: 0 }]);
+        expect(r.message).toContain('zone026.nav');
+    });
+});
+
+// Dartmoor (region 1, zone 4): Detour's first 256 polys lead sideways, so the second partial query
+// barely gets closer (45 units) before the third finds the goal.
+describe.skipIf(!store.available() || !store.hasZone(4))('chaining sideways partial corridors (generated Dartmoor mesh)', () => {
+    test('keeps chaining while partial queries move and reaches the goal', async () => {
+        const from = { x: 368211, y: 701267, z: 3132 };
+        const to = { x: 400526, y: 702187, z: 1649 };
+        const r = await new NavmeshPathProvider({ store, fallback: straight }).findPath({ regionId: 1, from, to });
+        expect(r.success).toBeTrue();
+        expect(r.message).toBeUndefined();
+        expect(r.waypoints.at(-1)).toEqual(to);
     });
 });

@@ -11,8 +11,8 @@
 // Everything here takes and returns game units.
 
 import { dlopen, FFIType, type Pointer } from 'bun:ffi';
-import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import type { Vec3 } from './types';
 import { getZoneAt, getZone } from '../data/zones';
 
@@ -63,6 +63,65 @@ export function detourLibraryCandidates(navmeshDir: string, env: Record<string, 
         ...libNames.flatMap(n => [join(build, 'Release', n), join(build, n)]),
     ];
 }
+
+const kernel32Symbols = {
+    GetACP: { args: [], returns: FFIType.u32 },
+    // (codePage, flags, wide, wideLen, *out, outLen, defaultChar, *usedDefault)
+    WideCharToMultiByte: { args: [FFIType.u32, FFIType.u32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.i32, FFIType.ptr, FFIType.ptr], returns: FFIType.i32 },
+    // (longPath, *out, outLen in WCHARs)
+    GetShortPathNameW: { args: [FFIType.ptr, FFIType.ptr, FFIType.u32], returns: FFIType.u32 },
+} as const;
+const CP_UTF8 = 65001;
+const WC_NO_BEST_FIT_CHARS = 0x400;
+const isAscii = (s: string) => /^[\x00-\x7f]*$/.test(s);
+
+let kernel32: ReturnType<typeof dlopen<typeof kernel32Symbols>>['symbols'] | null | undefined;
+
+/**
+ * `file` as the NUL-terminated char* that Detour's std::fopen opens. On Windows fopen reads it in the
+ * ANSI code page, not UTF-8 (the server marshals it with AnsiStringMarshaller), so a non-ASCII path is
+ * converted to the ANSI code page when every character fits, else to its 8.3 short name (pure ASCII
+ * when the volume keeps short names). Falls back to UTF-8, which then fails to open.
+ */
+export function nativePath(file: string, platform: string = process.platform): Buffer {
+    const utf8 = Buffer.from(`${file}\0`, 'utf8');
+    if (platform !== 'win32' || isAscii(file)) return utf8;
+    if (kernel32 === undefined) {
+        try {
+            kernel32 = dlopen('kernel32.dll', kernel32Symbols).symbols;
+        } catch {
+            kernel32 = null;
+        }
+    }
+    if (!kernel32) return utf8;
+    const wide = Buffer.from(`${file}\0`, 'utf16le');
+    const acp = kernel32.GetACP();
+    if (acp === CP_UTF8) return utf8;
+    const size = kernel32.WideCharToMultiByte(acp, WC_NO_BEST_FIT_CHARS, wide, -1, null, 0, null, null);
+    if (size > 0) {
+        const ansi = Buffer.alloc(size);
+        const usedDefault = new Int32Array(1);
+        if (kernel32.WideCharToMultiByte(acp, WC_NO_BEST_FIT_CHARS, wide, -1, ansi, size, null, usedDefault) === size && !usedDefault[0]) return ansi;
+    }
+    const len = kernel32.GetShortPathNameW(wide, null, 0);
+    if (len > 0) {
+        const out = Buffer.alloc(len * 2);
+        const n = kernel32.GetShortPathNameW(wide, out, len);
+        const short = n > 0 && n < len ? out.toString('utf16le', 0, n * 2) : '';
+        if (short && isAscii(short)) return Buffer.from(`${short}\0`, 'ascii');
+    }
+    return utf8;
+}
+
+/** size:mtime of a file, '' when it is missing; a failed zone is retried once this changes. */
+const fileStamp = (file: string): string => {
+    try {
+        const st = statSync(file);
+        return `${st.size}:${st.mtimeMs}`;
+    } catch {
+        return '';
+    }
+};
 
 const toRecast = (p: Vec3, out: Float32Array, at = 0): Float32Array => {
     out[at] = p.x * SCALE;
@@ -131,14 +190,17 @@ export class NavMesh {
 
     /**
      * Walkability raycast along the mesh surface from `start` towards `end` (2D, like dtNavMeshQuery::raycast).
-     * `clear` is true when nothing blocks the straight walk; `hit` is where it stops otherwise.
+     * `clear` is true when nothing blocks the straight walk; `hit` is where it stops otherwise (`end` when clear).
      * This is not visual line of sight: it ignores height and stops at mesh edges (walls, cliffs, water borders).
      */
     raycast(start: Vec3, end: Vec3, halfExtents: Vec3 = DEFAULT_EXTENTS): { clear: boolean; hit: Vec3 } | null {
         this.check();
         this.losFlag[0] = 0;
         const s = this.lib.HasLineOfSight(this.query, toRecast(start, this.start), toRecast(end, this.end), toRecast(halfExtents, this.ext), DEFAULT_FILTER, this.losFlag, this.out);
-        return ok(s) ? { clear: this.losFlag[0] !== 0, hit: fromRecast(this.out) } : null;
+        if (!ok(s)) return null;
+        // Detour reports t = FLT_MAX when the ray reaches `end`, which makes the native hit point infinite.
+        const clear = this.losFlag[0] !== 0;
+        return { clear, hit: clear ? { x: end.x, y: end.y, z: end.z } : fromRecast(this.out) };
     }
 
     dispose(): void {
@@ -166,7 +228,9 @@ export class NavmeshStore {
     private lib: DetourLib | null | undefined;
     private libError = '';
     private readonly libPath: string | undefined;
-    private readonly meshes = new Map<number, NavMesh | null>();
+    private readonly meshes = new Map<number, NavMesh>();
+    /** Zones whose last load failed: the reason and the file's fileStamp at that time. */
+    private readonly failures = new Map<number, { reason: string; stamp: string }>();
     private zoneFiles: Set<number> | null = null;
 
     constructor(opts: NavmeshStoreOptions = {}) {
@@ -203,14 +267,31 @@ export class NavmeshStore {
         return this.zones().has(zoneId);
     }
 
-    /** The zone's mesh, loading it on first use; null without a file or library. */
+    /**
+     * The zone's mesh, loading it on first use; null without a file or library (see loadError).
+     * A failed zone is retried once its file's size or mtime changes.
+     */
     forZone(zoneId: number): NavMesh | null {
         const cached = this.meshes.get(zoneId);
-        if (cached !== undefined) return cached;
-        const lib = this.hasZone(zoneId) ? this.library() : null;
-        const mesh = lib ? this.load(lib, join(this.dir, `zone${String(zoneId).padStart(3, '0')}.nav`), zoneId) : null;
-        this.meshes.set(zoneId, mesh);
-        return mesh;
+        if (cached) return cached;
+        const file = join(this.dir, `zone${String(zoneId).padStart(3, '0')}.nav`);
+        const stamp = fileStamp(file);
+        if (this.failures.get(zoneId)?.stamp === stamp) return null;
+        const lib = stamp ? this.library() : null;
+        const result = !stamp ? `no ${basename(file)} in ${this.dir}` : lib ? this.load(lib, file, zoneId) : this.libError;
+        if (typeof result === 'string') {
+            this.failures.set(zoneId, { reason: result, stamp });
+            return null;
+        }
+        this.failures.delete(zoneId);
+        this.zones().add(zoneId);
+        this.meshes.set(zoneId, result);
+        return result;
+    }
+
+    /** Why forZone(zoneId) returned null; null when its mesh loaded or was never requested. */
+    loadError(zoneId: number): string | null {
+        return this.failures.get(zoneId)?.reason ?? null;
     }
 
     /** The mesh of the zone containing (x, y) in a region. */
@@ -222,22 +303,25 @@ export class NavmeshStore {
     /** Load any .nav file (e.g. the Detour test mesh) outside the zone cache. */
     loadFile(file: string): NavMesh | null {
         const lib = this.library();
-        return lib ? this.load(lib, file, null) : null;
+        const mesh = lib ? this.load(lib, file, null) : null;
+        return typeof mesh === 'string' ? null : mesh;
     }
 
     dispose(): void {
         for (const m of this.meshes.values()) m?.dispose();
         this.meshes.clear();
+        this.failures.clear();
     }
 
-    private load(lib: DetourLib, file: string, zoneId: number | null): NavMesh | null {
+    /** The loaded mesh, or why it failed. */
+    private load(lib: DetourLib, file: string, zoneId: number | null): NavMesh | string {
         const meshOut = new BigUint64Array(1);
-        if (!lib.LoadNavMesh(Buffer.from(`${file}\0`, 'utf8'), meshOut) || meshOut[0] === 0n) return null;
+        if (!lib.LoadNavMesh(nativePath(file), meshOut) || meshOut[0] === 0n) return `cannot load ${file} (LoadNavMesh failed)`;
         const mesh = Number(meshOut[0]) as Pointer;
         const queryOut = new BigUint64Array(1);
         if (!lib.CreateNavMeshQuery(mesh, queryOut) || queryOut[0] === 0n) {
             lib.FreeNavMesh(mesh);
-            return null;
+            return `cannot load ${file} (CreateNavMeshQuery failed)`;
         }
         return new NavMesh(lib, mesh, Number(queryOut[0]) as Pointer, zoneId, file);
     }

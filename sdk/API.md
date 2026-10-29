@@ -49,7 +49,7 @@
 | `isDead(): boolean` | Our character is dead. |
 | `freeBackpackSlots(): number` | Free backpack slots (of 40). |
 | `findNpcSpawn(pattern: NamePattern, options: { regionId?: number; guild?: NamePattern } = {}): NpcSpawnMatch \| null` | Nearest static spawn (DB `mob` table) in our region matching a name, or null. |
-| `async travelTo(destination: NamePattern \| (Point & { regionId?: number }), options: WalkOptions = {}): Promise<TravelResult>` | Walk (straight line, same region) to a named spawn from static data or to a point. |
+| `async travelTo(destination: NamePattern \| (Point & { regionId?: number }), options: WalkOptions = {}): Promise<TravelResult>` | Walk (same region, through walkTo: navmesh route when built, else a straight line) to a named spawn from static data or to a point. |
 | `async say(text: string): Promise<ChatResult>` | Say text (chunked) and observe our echo. Spaces calls SAY_SPACING_MS apart: the server drops a say < 500 ms after the last accepted one with "Slow down! Think before you say each word!" (commands/playercommands/say.cs:49-53); that answer retries once, then fails with 'rate_limited'. |
 | `async send(to: string, text: string): Promise<ChatResult>` | Private message a player ('/send'); fails on "not online"-style answers. |
 | `async grind(options: GrindOptions = {}): Promise<GrindResult>` | Hunt around an anchor: pick a killable target (attackers first), kill, loot, rest when low, walk back when drifted. Stops on death unless `respawn` is set, and with stopReason 'no_targets' after `noTargetTimeoutMs` (default 60 s) without any candidate. |
@@ -846,13 +846,13 @@ interface ChatSendOptions {
 
 ```typescript
 interface WalkOptions {
-  /** Destination height; default: estimate from static data (pathfinding provider). */
+  /** Destination height; default: the navmesh ground where the zone has a mesh, else estimated from static data (by the path provider). */
   z?: number;
   /** Arrival radius on the ground plane (default 64). */
   tolerance?: number;
-  /** Overall deadline in ms (default: 1.5 × ETA + 15 s). */
+  /** Overall deadline in ms, planning included (default: 1.5 × ETA along the planned route + 15 s, extended when a correction re-plans a longer route). */
   timeout?: number;
-  /** Route planner (default StraightLinePathProvider). */
+  /** Route planner (default getDefaultPathProvider(): NavmeshPathProvider when meshes are built with bun run navmesh:build, else StraightLinePathProvider; DAOC_NAVMESH=off forces straight lines). */
   pathProvider?: PathProvider;
   /** Fraction of max speed (default 0.9, the mover's safe cap). */
   speedFactor?: number;

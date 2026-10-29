@@ -1,8 +1,8 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { BotSDK } from '../index';
 import { BotActions, castFailureReason } from '../actions';
 import { ChatHistory } from '../chat-history';
-import { setDefaultPathProvider, StraightLinePathProvider } from '../pathfinding';
+import { setDefaultPathProvider, StraightLinePathProvider, type PathProvider } from '../pathfinding';
 import { executionContext, throwIfExecutionAborted } from '../execution-context';
 import type { ActionResult, BotAction, BotWorldState, GameMessage, NearbyNpc } from '../types';
 import { makeMessage, makeNpc, makeObject, makePlayer, makeState } from './fixtures';
@@ -297,6 +297,66 @@ describe('walkTo', () => {
         const r = await bot.walkTo(570000, 511000, { timeout: 100, stuckMs: 10_000 });
         expect(r.reason).toBe('timeout');
         expect(w.sentOf('stop')).toHaveLength(1);
+    });
+
+    // A 1000-unit walk east that the planner routes 4000 units north first: 9000 units in all.
+    const detour = (from: { x: number; y: number }, z = 2500) => [at(from.x, from.y + 4000, z), at(from.x + 1000, from.y + 4000, z), at(from.x + 1000, from.y, z)];
+    // Deadlines run as setTimeouts (withExecutionDeadline); the walk itself is fast in the fake world.
+    const deadlinesDuring = async <T>(run: () => Promise<T>): Promise<{ result: T; delays: number[] }> => {
+        const spy = spyOn(globalThis, 'setTimeout');
+        try {
+            const result = await run();
+            return { result, delays: spy.mock.calls.map(c => Number(c[1] ?? 0)) };
+        } finally {
+            spy.mockRestore();
+        }
+    };
+
+    test('the default timeout covers the planned detour, not the straight distance', async () => {
+        const { w, bot } = world();
+        w.stepSize = 1000;
+        const start = { x: w.player.x, y: w.player.y };
+        const pathProvider: PathProvider = { name: 'detour', findPath: () => ({ success: true, waypoints: detour(start) }) };
+        const { result, delays } = await deadlinesDuring(() => bot.walkTo(start.x + 1000, start.y, { pathProvider }));
+        expect(result).toMatchObject({ success: true, message: 'Arrived' });
+        // 9000 units at 0.9 × 191: 1.5 × 52 s + 15 s ≈ 93 s (the straight 1000 units would give ≈ 24 s).
+        expect(Math.max(...delays)).toBeGreaterThan(90_000);
+        expect(w.sentOf('moveTo')[0]!.waypoints).toHaveLength(2);
+    });
+
+    test('a re-plan after a correction extends the default timeout', async () => {
+        const { w, bot } = world();
+        w.stepSize = 1000;
+        const start = { x: w.player.x, y: w.player.y };
+        let plans = 0;
+        // Straight first; after the snap back the planner only finds the long way round.
+        const pathProvider: PathProvider = {
+            name: 'detour-after-correction',
+            findPath: ({ to }) => ({ success: true, waypoints: ++plans === 1 ? [at(to.x, to.y)] : detour(start) }),
+        };
+        let corrected = false;
+        w.handlers.moveTo = (a, world) => {
+            defaultHandlers.moveTo!(a, world);
+            if (!corrected) {
+                corrected = true;
+                world.stepSize = 0;
+                setTimeout(() => {
+                    world.state.movement = { ...world.state.movement, moving: false, destination: null, waypoints: [], lastStopReason: 'teleported', correctionCount: 1 };
+                    world.stepSize = 1000;
+                }, 15);
+            }
+        };
+        const { result, delays } = await deadlinesDuring(() => bot.walkTo(start.x + 1000, start.y, { pathProvider }));
+        expect(result).toMatchObject({ success: true, reissues: 1 });
+        expect(plans).toBe(2);
+        expect(Math.max(...delays)).toBeGreaterThan(90_000);
+    });
+
+    test('an explicit timeout covers planning', async () => {
+        const { bot } = world();
+        const pathProvider: PathProvider = { name: 'slow', findPath: () => new Promise(() => {}) };
+        const r = await bot.walkTo(561000, 511000, { pathProvider, timeout: 100 });
+        expect(r).toMatchObject({ success: false, reason: 'timeout', message: 'Walk timed out after 100ms' });
     });
 
     test('followPath passes waypoints through one move', async () => {

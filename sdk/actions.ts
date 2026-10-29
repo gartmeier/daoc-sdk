@@ -78,17 +78,22 @@ const DEFAULT_SPELL_RANGE = 1500;
 const PAPER_DOLL_SLOT = 100;
 /** Server dialog code for a group invite (PacketLib168.SendGroupInviteCommand). */
 const GROUP_INVITE_DIALOG = 0x05;
+/** Bound on one route plan when walkTo has no explicit timeout (its deadline follows the plan). */
+const PLAN_TIMEOUT_MS = 15_000;
 
 // ── Result / option types ───────────────────────────────────────────────────
 
 export interface WalkOptions {
-    /** Destination height; default: estimate from static data (pathfinding provider). */
+    /** Destination height; default: the navmesh ground where the zone has a mesh, else estimated from static data (by the path provider). */
     z?: number;
     /** Arrival radius on the ground plane (default 64). */
     tolerance?: number;
-    /** Overall deadline in ms (default: 1.5 × ETA + 15 s). */
+    /** Overall deadline in ms, planning included (default: 1.5 × ETA along the planned route + 15 s, extended when a correction re-plans a longer route). */
     timeout?: number;
-    /** Route planner (default StraightLinePathProvider). */
+    /**
+     * Route planner (default getDefaultPathProvider(): NavmeshPathProvider when meshes are built
+     * with bun run navmesh:build, else StraightLinePathProvider; DAOC_NAVMESH=off forces straight lines).
+     */
     pathProvider?: PathProvider;
     /** Fraction of max speed (default 0.9, the mover's safe cap). */
     speedFactor?: number;
@@ -1587,7 +1592,7 @@ export class BotActions {
         return findNpcSpawns({ name: pattern, guild: options.guild, regionId, near: p ? { x: p.x, y: p.y } : undefined, limit: 1 })[0] ?? null;
     }
 
-    /** Walk (straight line, same region) to a named spawn from static data or to a point. */
+    /** Walk (same region, through walkTo: navmesh route when built, else a straight line) to a named spawn from static data or to a point. */
     async travelTo(destination: NamePattern | (Point & { regionId?: number }), options: WalkOptions = {}): Promise<TravelResult> {
         const p = this.helpers.player();
         if (!p) return { ...fail('Not in game', 'not_in_game', {}), position: null, distance: Infinity, reissues: 0, spawn: null };
@@ -2001,77 +2006,96 @@ export class BotActions {
         }
 
         const speed = (p0.maxSpeed || 191) * (options.speedFactor ?? 0.9);
-        const total = routeLength(p0, [...via, dest]);
-        const timeout = options.timeout ?? Math.round((total / Math.max(30, speed)) * 1500 + 15_000);
         const provider = options.pathProvider ?? getDefaultPathProvider();
+        // An explicit timeout covers planning and never moves. The default is 1.5 × the ETA along
+        // the planned route + 15 s, set once a plan exists (navmesh detours can be several times
+        // the straight distance) and extended when a correction re-plans a longer way.
+        const started = Date.now();
+        let deadline = options.timeout !== undefined ? started + options.timeout : 0;
         let reissues = 0;
-
-        const walk = () => withExecutionDeadline<WalkResult>(timeout, async () => {
-            const plan = async (from: Vec3, regionId: number, remainingVia: Point[]): Promise<Vec3[] | string> => {
-                const pts: Vec3[] = [];
-                let cur = from;
-                for (const leg of [...remainingVia, dest]) {
-                    const path = await provider.findPath({ regionId, from: cur, to: leg });
-                    if (!path.success || path.waypoints.length === 0) return path.message ?? 'no path';
-                    pts.push(...path.waypoints);
-                    cur = pts[pts.length - 1]!;
-                }
-                return pts;
-            };
-            let remainingVia = via.slice();
-            let remaining = await plan({ x: p0.x, y: p0.y, z: p0.z }, p0.regionId, remainingVia);
-            if (typeof remaining === 'string') return at({ message: `No path to (${dest.x}, ${dest.y}): ${remaining}`, reason: 'no_path' });
-            const deathCount0 = p0.deathCount;
-            const region0 = p0.regionId;
-            let best = Infinity;
-            let lastProgressAt = Date.now();
-            const stuckMs = options.stuckMs ?? 8000;
-
-            for (;;) {
-                const last = remaining[remaining.length - 1]!;
-                const r = await this.sdk.sendMoveTo(last.x, last.y, last.z, { tolerance, waypoints: remaining.slice(0, -1), speedFactor: options.speedFactor });
-                if (!r.success) return at({ message: `Move refused: ${r.message}`, reason: r.reason ?? 'dispatch_failed', reissues });
-                // Wait until a snapshot shows the new move (or arrival) before reading stop reasons.
-                await this.helpers.waitFor(s => s.movement.moving || (s.player && Math.hypot(dest.x - s.player.x, dest.y - s.player.y) <= tolerance), 2000);
-                let lastSeenRemaining: Vec3[] = remaining;
-                for (;;) {
-                    const s = await this.helpers.nextState(1000);
-                    const p = s?.player;
-                    if (!s || !p) return at({ message: 'Lost game state', reason: 'not_in_game', reissues });
-                    if (p.isDead || p.deathCount !== deathCount0) return at({ message: `Died en route to (${dest.x}, ${dest.y})`, reason: 'died', reissues });
-                    if (p.regionId !== region0) return at({ message: `Region changed to ${p.regionId} en route`, reason: 'region_changed', reissues });
-                    const d = Math.hypot(dest.x - p.x, dest.y - p.y);
-                    if (d <= tolerance + 2 && (!s.movement.moving || remainingVia.length === 0)) return at({ success: true, message: 'Arrived', reissues });
-                    if (s.movement.moving && s.movement.waypoints.length) lastSeenRemaining = s.movement.waypoints;
-                    // Progress is the route still ahead, not the straight distance: a path that
-                    // first leads away from the destination (followPath detours) is not stuck.
-                    const left = routeLength(p, lastSeenRemaining);
-                    if (left < best - 10) { best = left; lastProgressAt = Date.now(); }
-                    if (s.movement.moving) {
-                        if (Date.now() - lastProgressAt > stuckMs) {
-                            await this.sdk.sendStop();
-                            const why = p.maxSpeed === 0 ? ' (max speed 0: rooted, stunned or overloaded)' : '';
-                            return at({ message: `No progress for ${stuckMs}ms at (${p.x}, ${p.y})${why}`, reason: 'stuck', reissues });
-                        }
-                        continue;
-                    }
-                    // Stopped short: corrected by the server, interrupted, or arrived outside tolerance.
-                    if (++reissues > 8) return at({ message: `Gave up after ${reissues - 1} re-issues at (${p.x}, ${p.y}); last stop: ${s.movement.lastStopReason}`, reason: 'stuck', reissues });
-                    if (Date.now() - lastProgressAt > stuckMs) return at({ message: `No progress for ${stuckMs}ms at (${p.x}, ${p.y})`, reason: 'stuck', reissues });
-                    if (s.movement.lastStopReason === 'teleported') {
-                        // Corrected: re-plan from where the server put us, dropping vias already passed.
-                        remainingVia = remainingVia.filter(w => lastSeenRemaining.some(r2 => Math.hypot(r2.x - w.x, r2.y - w.y) < 2));
-                        const replanned = await plan({ x: p.x, y: p.y, z: p.z }, p.regionId, remainingVia);
-                        if (typeof replanned === 'string') return at({ message: `No path after correction: ${replanned}`, reason: 'no_path', reissues });
-                        remaining = replanned;
-                        best = Infinity; // measured along the new route; the re-issue cap bounds repeated snaps
-                    } else {
-                        remaining = lastSeenRemaining.length ? lastSeenRemaining : remaining;
-                    }
-                    break;
-                }
+        const timedOut = () => at({ message: `Walk timed out after ${deadline - started}ms`, reason: 'timeout', reissues });
+        let remainingVia = via.slice();
+        const plan = (from: Vec3) => withExecutionDeadline<Vec3[] | string | null>(options.timeout !== undefined ? deadline - Date.now() : PLAN_TIMEOUT_MS, async () => {
+            const pts: Vec3[] = [];
+            let cur = from;
+            for (const leg of [...remainingVia, dest]) {
+                const path = await provider.findPath({ regionId: p0.regionId, from: cur, to: leg });
+                if (!path.success || path.waypoints.length === 0) return path.message ?? 'no path';
+                pts.push(...path.waypoints);
+                cur = pts[pts.length - 1]!;
             }
-        }, () => at({ message: `Walk timed out after ${timeout}ms`, reason: 'timeout', reissues }));
+            if (options.timeout === undefined) deadline = Math.max(deadline, Date.now() + Math.round((routeLength(from, pts) / Math.max(30, speed)) * 1500 + 15_000));
+            return pts;
+        }, () => null);
+        const planTimedOut = () => options.timeout !== undefined ? timedOut() : at({ message: `Path planning timed out after ${PLAN_TIMEOUT_MS}ms`, reason: 'timeout', reissues });
+
+        const deathCount0 = p0.deathCount;
+        const region0 = p0.regionId;
+        const stuckMs = options.stuckMs ?? 8000;
+        let remaining: Vec3[] = [];
+        let best = Infinity;
+        let lastProgressAt = 0;
+
+        // One move until it ends: a result, a position to re-plan from (corrected), or undefined to re-issue.
+        const leg = async (): Promise<WalkResult | Vec3 | undefined> => {
+            const last = remaining[remaining.length - 1]!;
+            const r = await this.sdk.sendMoveTo(last.x, last.y, last.z, { tolerance, waypoints: remaining.slice(0, -1), speedFactor: options.speedFactor });
+            if (!r.success) return at({ message: `Move refused: ${r.message}`, reason: r.reason ?? 'dispatch_failed', reissues });
+            // Wait until a snapshot shows the new move (or arrival) before reading stop reasons.
+            await this.helpers.waitFor(s => s.movement.moving || (s.player && Math.hypot(dest.x - s.player.x, dest.y - s.player.y) <= tolerance), 2000);
+            let lastSeenRemaining: Vec3[] = remaining;
+            for (;;) {
+                const s = await this.helpers.nextState(1000);
+                const p = s?.player;
+                if (!s || !p) return at({ message: 'Lost game state', reason: 'not_in_game', reissues });
+                if (p.isDead || p.deathCount !== deathCount0) return at({ message: `Died en route to (${dest.x}, ${dest.y})`, reason: 'died', reissues });
+                if (p.regionId !== region0) return at({ message: `Region changed to ${p.regionId} en route`, reason: 'region_changed', reissues });
+                const d = Math.hypot(dest.x - p.x, dest.y - p.y);
+                if (d <= tolerance + 2 && (!s.movement.moving || remainingVia.length === 0)) return at({ success: true, message: 'Arrived', reissues });
+                if (s.movement.moving && s.movement.waypoints.length) lastSeenRemaining = s.movement.waypoints;
+                // Progress is the route still ahead, not the straight distance: a path that
+                // first leads away from the destination (followPath detours) is not stuck.
+                const left = routeLength(p, lastSeenRemaining);
+                if (left < best - 10) { best = left; lastProgressAt = Date.now(); }
+                if (s.movement.moving) {
+                    if (Date.now() - lastProgressAt > stuckMs) {
+                        await this.sdk.sendStop();
+                        const why = p.maxSpeed === 0 ? ' (max speed 0: rooted, stunned or overloaded)' : '';
+                        return at({ message: `No progress for ${stuckMs}ms at (${p.x}, ${p.y})${why}`, reason: 'stuck', reissues });
+                    }
+                    continue;
+                }
+                // Stopped short: corrected by the server, interrupted, or arrived outside tolerance.
+                if (++reissues > 8) return at({ message: `Gave up after ${reissues - 1} re-issues at (${p.x}, ${p.y}); last stop: ${s.movement.lastStopReason}`, reason: 'stuck', reissues });
+                if (Date.now() - lastProgressAt > stuckMs) return at({ message: `No progress for ${stuckMs}ms at (${p.x}, ${p.y})`, reason: 'stuck', reissues });
+                if (s.movement.lastStopReason === 'teleported') {
+                    // Corrected: re-plan from where the server put us, dropping vias already passed.
+                    remainingVia = remainingVia.filter(w => lastSeenRemaining.some(r2 => Math.hypot(r2.x - w.x, r2.y - w.y) < 2));
+                    return { x: p.x, y: p.y, z: p.z };
+                }
+                remaining = lastSeenRemaining.length ? lastSeenRemaining : remaining;
+                return undefined;
+            }
+        };
+
+        const walk = async (): Promise<WalkResult> => {
+            const first = await plan({ x: p0.x, y: p0.y, z: p0.z });
+            if (first === null) return planTimedOut();
+            if (typeof first === 'string') return at({ message: `No path to (${dest.x}, ${dest.y}): ${first}`, reason: 'no_path' });
+            remaining = first;
+            lastProgressAt = Date.now();
+            for (;;) {
+                const r = await withExecutionDeadline<WalkResult | Vec3 | undefined>(deadline - Date.now(), leg, timedOut);
+                if (r && 'success' in r) return r;
+                if (!r) continue;
+                // Re-planned outside the move's deadline, so the plan can extend it first.
+                const replanned = await plan(r);
+                if (replanned === null) return planTimedOut();
+                if (typeof replanned === 'string') return at({ message: `No path after correction: ${replanned}`, reason: 'no_path', reissues });
+                remaining = replanned;
+                best = Infinity; // measured along the new route; the re-issue cap bounds repeated snaps
+            }
+        };
         let result: WalkResult;
         try {
             result = await walk();

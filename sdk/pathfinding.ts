@@ -91,6 +91,10 @@ const SNAP_EXTENTS: Vec3[] = [DEFAULT_EXTENTS, { x: 32, y: 32, z: 512 }, { x: 32
 /** Pathfinder.TryGetZoneExitPoint: exit/entry points sit 8 units off the border, snapped within 128 x 128 x 4000. */
 const BORDER_MARGIN = 8;
 const BORDER_SNAP: Vec3 = { x: 128, y: 128, z: 4000 };
+/** chain(): max Detour queries per leg (256 polys each, far more than a zone crossing needs). */
+const MAX_CHAIN = 128;
+/** chain(): a partial query ending this close to the leg start or an earlier end made no progress. */
+const CHAIN_STALL = 4;
 
 function snapToMesh(mesh: NavMesh, p: Vec3): Vec3 | null {
     for (const ext of SNAP_EXTENTS) {
@@ -164,10 +168,16 @@ export class NavmeshPathProvider implements PathProvider {
         if (![from.x, from.y, from.z, to.x, to.y].every(Number.isFinite)) {
             return { success: false, waypoints: [], message: 'non-finite coordinates' };
         }
-        if (!this.store.available()) return this.fallback.findPath(request);
-        const startMesh = this.store.at(regionId, from.x, from.y);
-        const start = startMesh && snapToMesh(startMesh, from);
-        if (!startMesh || !start) return this.fallback.findPath(request);
+        if (!this.store.available()) return this.straight(request, `no navmesh: ${this.store.unavailableReason()}; straight line`);
+        const startZone = getZoneAt(regionId, from.x, from.y);
+        if (!startZone) return this.straight(request, `(${from.x}, ${from.y}) is in no zone of region ${regionId}; straight line`);
+        const startMesh = this.store.forZone(startZone.id);
+        if (!startMesh) {
+            const why = this.store.loadError(startZone.id) ?? 'no mesh';
+            return this.straight(request, `no navmesh for ${zoneLabel(startZone.id)} (${why}); straight line`);
+        }
+        const start = snapToMesh(startMesh, from);
+        if (!start) return this.straight(request, `start (${from.x}, ${from.y}) is off the navmesh of ${zoneLabel(startZone.id)}; straight line`);
 
         const endZone = getZoneAt(regionId, to.x, to.y);
         const endMesh = endZone ? this.store.forZone(endZone.id) : null;
@@ -213,26 +223,35 @@ export class NavmeshPathProvider implements PathProvider {
             const rest = await this.fallback.findPath({ regionId, from: last, to: { x: to.x, y: to.y, z: finalZ } });
             if (!rest.success) return rest;
             waypoints.push(...rest.waypoints);
-        } else if (last.x !== to.x || last.y !== to.y || last.z !== finalZ) {
-            // Snapping moved the end onto the mesh: finish at the exact requested point.
+        } else if (waypoints.length === 0 || last.x !== to.x || last.y !== to.y || last.z !== finalZ) {
+            // Snapping moved the end onto the mesh (or the leg was zero-length): finish at the exact requested point.
             if (dist2(last, to) < 1) waypoints.pop();
             waypoints.push({ x: to.x, y: to.y, z: finalZ });
         }
         return { success: true, waypoints, ...(note ? { message: note } : {}) };
     }
 
+    /** The fallback's straight line for the whole request, with `note` saying why. */
+    private async straight(request: PathRequest, note: string): Promise<PathResult> {
+        const r = await this.fallback.findPath(request);
+        return r.success ? { ...r, message: r.message ? `${note}; ${r.message}` : note } : r;
+    }
+
     /** Chains Detour queries past the 256-poly corridor limit until `end` is reached or progress stops. */
     private chain(mesh: NavMesh, start: Vec3, end: Vec3): { points: Vec3[]; reached: boolean } {
         const points: Vec3[] = [start];
+        const ends: Vec3[] = [start];
         let cur = start;
-        for (let i = 0; i < 64; i++) {
+        for (let i = 0; i < MAX_CHAIN; i++) {
             const path = mesh.findPath(cur, end);
             if (path.status === 'none' || path.points.length === 0) return { points, reached: false };
             for (const p of path.points.slice(1)) points.push({ x: p.x, y: p.y, z: p.z });
             const last = points[points.length - 1]!;
             if (path.status === 'found') return { points, reached: true };
-            // Partial: Detour stopped at the visited poly nearest the goal. Continue only while that gets closer.
-            if (dist2(last, end) > dist2(cur, end) - 64) return { points, reached: false };
+            // Partial: the first 256 polys of the best corridor, which may lead sideways before it
+            // turns toward the goal. Continue while each query moves on; stop when it stalls or loops back.
+            if (ends.some(e => Math.hypot(last.x - e.x, last.y - e.y, last.z - e.z) < CHAIN_STALL)) return { points, reached: false };
+            ends.push(last);
             cur = last;
         }
         return { points, reached: false };
