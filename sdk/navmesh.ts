@@ -168,6 +168,13 @@ export class NavMesh {
         return ok(s) ? fromRecast(this.out) : null;
     }
 
+    /** Unrounded height of closestPoint(p, halfExtents), or null when no poly is within the extents. */
+    surfaceZ(p: Vec3, halfExtents: Vec3 = DEFAULT_EXTENTS): number | null {
+        this.check();
+        const s = this.lib.FindClosestPoint(this.query, toRecast(p, this.start), toRecast(halfExtents, this.ext), DEFAULT_FILTER, this.out);
+        return ok(s) ? this.out[1]! / SCALE : null;
+    }
+
     /** Straight path between two points that are already on (or within the default extents of) the mesh. */
     findPath(start: Vec3, end: Vec3, halfExtents: Vec3 = DEFAULT_EXTENTS): NavPath {
         this.check();

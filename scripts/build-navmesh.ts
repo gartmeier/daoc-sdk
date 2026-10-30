@@ -12,6 +12,7 @@
 //
 // Output (gitignored; navmeshes are derived from client assets and must not be redistributed):
 //   server/navmesh/zoneNNN.nav       one mesh per zone, region-global game coordinates
+//   server/navmesh/zoneNNN.terrain   exact outdoor terrain heights (scripts/build-terrain.ts)
 //   server/navmesh/lib/Detour.dll    64-bit-polyref Detour from server/core/Pathing/Detour
 //
 // Steps:
@@ -24,6 +25,7 @@
 //      blocks on an error dialog.
 //   5. Drop the meshes of zones that failed or never finished (a zoneNNN.nav.pending marker next
 //      to the mesh outlives a crashed run), then copy the rest to server/navmesh.
+//   6. Write the terrain grids of every zone with a mesh (bun run terrain:build alone does just this).
 
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -72,8 +74,8 @@ export function readMpkEntry(mpk: Buffer, name: string): Buffer {
     throw new Error(`no ${name} in the archive`);
 }
 
-/** The zones buildnav loads from zones.dat: [zoneNNN] sections whose enabled is not 0 (IniFile: first section/key wins). */
-export function parseZonesDat(text: string): ZoneRef[] {
+/** A client .dat INI the way buildnav's IniFile reads it: section -> key -> value, first section/key wins. */
+export function parseIni(text: string): Map<string, Map<string, string>> {
     const sections = new Map<string, Map<string, string>>();
     let cur: Map<string, string> | undefined;
     for (const line of text.split(/\r?\n/)) {
@@ -87,8 +89,13 @@ export function parseZonesDat(text: string): ZoneRef[] {
         const eq = line.indexOf('=');
         if (cur && eq >= 0 && !cur.has(line.slice(0, eq))) cur.set(line.slice(0, eq), line.slice(eq + 1));
     }
+    return sections;
+}
+
+/** The zones buildnav loads from zones.dat: [zoneNNN] sections whose enabled is not 0 (IniFile: first section/key wins). */
+export function parseZonesDat(text: string): ZoneRef[] {
     const zones: ZoneRef[] = [];
-    for (const [name, items] of sections) {
+    for (const [name, items] of parseIni(text)) {
         const m = /^zone(\d+)/.exec(name);
         if (m && items.get('enabled') !== '0') zones.push({ id: Number(m[1]), regionId: Number(items.get('region')) });
     }
@@ -405,6 +412,14 @@ export async function main(argv: string[]): Promise<void> {
     const all = readdirSync(NAVMESH_DIR).filter(f => /^zone\d{3,}\.nav$/.test(f));
     const mb = all.reduce((s, f) => s + statSync(join(NAVMESH_DIR, f)).size, 0) / 1e6;
     console.log(`\n${all.length} navmesh(es), ${mb.toFixed(1)} MB in ${NAVMESH_DIR}`);
+    // Exact terrain next to each mesh, for the SDK's ground height (sdk/ground.ts); a few ms per zone.
+    try {
+        const { writeTerrainGrids } = await import('./build-terrain');
+        const terrain = writeTerrainGrids(a.daoc, all.map(f => Number(/\d+/.exec(f)![0])));
+        console.log(`${terrain.written.length} terrain grid(s)${terrain.none.length ? `; none for zone(s) ${terrain.none.join(', ')} (no heightmap)` : ''}`);
+    } catch (e) {
+        console.warn(`warning: terrain grids not written (${e instanceof Error ? e.message : e}); retry: bun run terrain:build`);
+    }
     const dll = join(NAVMESH_DIR, 'lib', 'Detour.dll');
     try {
         copyIfChanged(DETOUR_DLL, dll);

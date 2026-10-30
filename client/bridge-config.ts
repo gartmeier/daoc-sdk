@@ -7,6 +7,7 @@ import { DaocClient, defaultCharName } from './client';
 import { GatewayBridge, type BridgeOptions } from './bridge';
 import { defaultClass, defaultRace } from './session';
 import { realmName, realmNumber } from './model/classes';
+import { moverGround } from '../sdk/ground';
 
 export interface BotConfig {
     botName: string;
@@ -111,6 +112,7 @@ export function createBotBridge(config: BotConfig, opts: Partial<BridgeOptions> 
         createIfMissing: true,
         log: msg => log(`[client] ${msg}`),
         trace: opts.trace,
+        ground: moverGround(),
     });
     const bridge = new GatewayBridge(client, {
         gatewayUrl: config.gatewayUrl,

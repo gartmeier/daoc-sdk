@@ -693,6 +693,8 @@ interface MovementState {
   lastStopReason: 'arrived' | 'stopped' | 'teleported' | 'regionChange' | 'died' | null;
   /** Count of server position corrections (0x04 CharacterJump / 0x20) received. */
   correctionCount: number;
+  /** In deep water: position updates carry the swim flag and z sits under the river surface (sdk/ground.ts). */
+  swimming: boolean;
 }
 ```
 

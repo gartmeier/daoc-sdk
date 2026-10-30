@@ -60,7 +60,7 @@ export function makeState(overrides: Partial<BotWorldState> = {}): BotWorldState
         inGame: true,
         connection: { phase: 'playing', serverName: 'OpenDAoC', clientVersion: '1.127', lastError: null },
         player: makePlayer(),
-        movement: { moving: false, destination: null, waypoints: [], lastStopReason: null, correctionCount: 0 },
+        movement: { moving: false, destination: null, waypoints: [], lastStopReason: null, correctionCount: 0, swimming: false },
         nearbyNpcs: [
             makeNpc(),
             makeNpc({ objectId: 201, name: 'sewer rat', level: 3, distance: 300, distance2d: 300 }),

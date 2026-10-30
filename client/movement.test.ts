@@ -161,3 +161,96 @@ describe('Mover', () => {
         expect(mover.x).toBeGreaterThan(CAMELOT.x);
     });
 });
+
+describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
+    type Ground = { z: number; swimming: boolean } | null;
+
+    function groundHarness(ground: (regionId: number, x: number, y: number, zHint: number) => Ground) {
+        let now = 1_000_000;
+        const sent: Array<{ x: number; z: number; flags: number }> = [];
+        const hints: number[] = [];
+        const mover = new Mover({
+            now: () => now,
+            timer: false,
+            ground: (r, x, y, zHint) => {
+                hints.push(zHint);
+                return ground(r, x, y, zHint);
+            },
+            send: (_code, p) => {
+                const r = new PacketReader(p);
+                const x = r.f32le();
+                r.f32le();
+                const z = r.f32le();
+                r.skip(12); // speed, zSpeed, session id, object id
+                r.u16(); // zone
+                sent.push({ x, z, flags: r.u8() });
+            },
+        });
+        const advance = (ms: number) => {
+            for (let t = 0; t < ms; t += 100) {
+                now += 100;
+                mover.pump();
+            }
+        };
+        return { mover, sent, hints, advance };
+    }
+
+    test('z follows the ground every step instead of the waypoint interpolation', () => {
+        // A dip the waypoints don't know about: ground 30 lower between x+200 and x+600.
+        const { mover, sent, advance } = groundHarness((_r, x) => ({ z: x > CAMELOT.x + 200 && x < CAMELOT.x + 600 ? 2870 : 2900, swimming: false }));
+        mover.snap(1, CAMELOT.x, CAMELOT.y, 2950, 0, null);
+        expect(mover.z).toBe(2900); // the server's z is re-grounded too
+        mover.start();
+        mover.moveTo({ x: CAMELOT.x + 800, y: CAMELOT.y, z: 2950 });
+        advance(5000);
+        const dip = sent.filter(s => s.x > CAMELOT.x + 250 && s.x < CAMELOT.x + 550);
+        expect(dip.length).toBeGreaterThan(0);
+        expect(dip.every(s => s.z === 2870)).toBe(true);
+        expect(mover.z).toBe(2900);
+        expect(mover.moving).toBe(false);
+    });
+
+    test('a null ground keeps the interpolated z', () => {
+        const { mover, advance } = groundHarness(() => null);
+        mover.snap(1, CAMELOT.x, CAMELOT.y, 2900, 0, null);
+        mover.start();
+        mover.moveTo({ x: CAMELOT.x + 400, y: CAMELOT.y, z: 3000 });
+        advance(1100);
+        expect(mover.z).toBeGreaterThan(2900);
+        expect(mover.z).toBeLessThan(3000);
+    });
+
+    test('swimming sets the SWIMMING state flag alone and clears sitting', () => {
+        const { mover, sent, advance } = groundHarness((_r, x) => (x > CAMELOT.x + 100 ? { z: 1789, swimming: true } : { z: 1830, swimming: false }));
+        mover.snap(1, CAMELOT.x, CAMELOT.y, 1830, 0, null);
+        mover.sitting = true;
+        mover.start();
+        expect(sent.at(-1)!.flags).toBe(0x10);
+        mover.moveTo({ x: CAMELOT.x + 400, y: CAMELOT.y, z: 1814 });
+        advance(3000);
+        expect(mover.swimming).toBe(true);
+        expect(mover.sitting).toBe(false);
+        expect(mover.state().swimming).toBe(true);
+        expect(sent.at(-1)!).toMatchObject({ z: 1789, flags: 0x04 });
+        mover.sitting = true; // a sit request while swimming must not combine into DEAD (0x14)
+        mover.sendUpdate();
+        expect(sent.at(-1)!.flags).toBe(0x04);
+    });
+
+    test('a ladder hop keeps its interpolated z', () => {
+        const { mover, advance } = groundHarness(() => ({ z: 2900, swimming: false }));
+        mover.snap(1, CAMELOT.x, CAMELOT.y, 2900, 0, null);
+        mover.start();
+        // 20 units across, 300 up: a climb, not a walk.
+        mover.moveTo({ x: CAMELOT.x + 20, y: CAMELOT.y, z: 3200 }, { tolerance: 1, speedFactor: 0.05 });
+        advance(200);
+        expect(mover.z).toBeGreaterThan(2900);
+    });
+
+    test('the current z is the layer hint', () => {
+        const { mover, hints } = groundHarness(() => ({ z: 3500, swimming: false }));
+        mover.snap(1, CAMELOT.x, CAMELOT.y, 3510, 0, null);
+        expect(hints.at(-1)).toBe(3510);
+        expect(mover.z).toBe(3500);
+    });
+});
