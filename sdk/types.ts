@@ -530,6 +530,8 @@ export type BotAction = ActionBase & (
 
     // Status
     | { type: 'sit'; sit: boolean }
+    // Drop one of our concentration buffs: its index in state.concentrationEffects.
+    | { type: 'removeConcentration'; index: number }
     | { type: 'release' }
     | { type: 'quit' }
 );

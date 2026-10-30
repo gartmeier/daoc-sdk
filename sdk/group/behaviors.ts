@@ -7,9 +7,11 @@
 // runs to the tank, and positions change only while the tank holds the mob.
 
 import { findNpcSpawns } from '../../data/index';
+import { type BuffTask, nextBuff, planBuffs, surplusConcentration } from './buffs';
+import { chooseSong, SONG_SETTINGS, type SongSettings } from './songs';
 import type { Behavior, MemberContext } from './member';
 import { safePath } from './terrain';
-import type { Point, Role } from './types';
+import type { BuffSlot, Point, Role } from './types';
 
 /** Settings the behaviours read; strategies extend this. */
 export interface TacticsSettings {
@@ -27,8 +29,14 @@ export interface TacticsSettings {
     formation: Partial<Record<Role, { back: number; angle: number }>>;
     /** The puller walks a focus farther than this from the anchor back to it. */
     pullDistance: number;
-    /** Buff only above this mana %. */
+    /** Timed buffs (they cost power) only above this mana %; concentration buffs cost none. */
     buffMana: number;
+    /** Buff slots per role, most important first (default BUFF_NEEDS in buffs.ts). */
+    buffNeeds?: Partial<Record<Role, BuffSlot[]>>;
+    /** Slots a role takes only from its own spells (default BUFF_SELF_ONLY: casters' AF and bubble). */
+    buffSelfOnly?: Partial<Record<Role, BuffSlot[]>>;
+    /** When a Bard switches to power or health songs between fights (default SONG_SETTINGS in songs.ts). */
+    songs?: SongSettings;
     /** Allow area damage spells (they break mezz on nearby adds). */
     aoe: boolean;
     /** Damage dealers without power melee the focus (default false: cloth casters die in melee). */
@@ -416,8 +424,50 @@ export const rest = (): Behavior<TacticsSettings> => ({
 });
 
 /**
- * While the group waits: keep our buffs up. Each buff has one owner (the first
- * member, healers first, whose spell list has it). Realm buffs go on us and the tank.
+ * Play the song the moment calls for (songs.ts): speed while travelling, endurance
+ * while pulling and fighting, power or health between fights when casters are low
+ * or someone is hurt. Never re-casts the song that is playing: that stops it.
+ */
+export const song = (): Behavior<TacticsSettings> => ({
+    name: 'song',
+    interruptible: false,
+    async run(ctx) {
+        const songs = ctx.spells.songs();
+        if (!songs.length || ctx.bot.isDead()) return false;
+        const kind = chooseSong(songs.map(s => s.kind), ctx.orders().phase, ctx.members(), ctx.settings.songs ?? SONG_SETTINGS);
+        const want = songs.find(s => s.kind === kind);
+        if (!want) return false;
+        const playing = (ctx.sdk.getState()?.effects ?? []).map(e => e.name);
+        if (playing.includes(want.spell.name)) return false;
+        // Just cast: give the effect time to show before trying again (a second cast would stop it).
+        const last: { name: string; at: number } | undefined = ctx.memory.get('songCast');
+        if (last?.name === want.spell.name && Date.now() - last.at < 10_000) return false;
+        // Keep a song we started for songs.holdMs (short hops between idle and travel made it flap),
+        // except into a fight.
+        const holdMs = (ctx.settings.songs ?? SONG_SETTINGS).holdMs;
+        if (last && playing.includes(last.name) && Date.now() - last.at < holdMs && ctx.orders().phase !== 'engage') return false;
+        if (want.spell.cooldownRemaining > 0) return false;
+        ctx.doing('song', null, want.spell.name);
+        ctx.memory.set('songCast', { name: want.spell.name, at: Date.now() });
+        ctx.result('song', await ctx.bot.castSpell(want.spell));
+        return true;
+    },
+});
+
+/** How long to leave a (buff, target) alone after a cast, by its outcome. */
+function buffRetryMs(c: { success: boolean; reason?: string; message?: string }): number {
+    if (c.success) return 20_000;   // the effect shows up in the target's report within a few snapshots
+    if (/concentration/i.test(c.message ?? '')) return 300_000;
+    if (c.reason === 'out_of_range' || c.reason === 'interrupted' || c.reason === 'must_wait') return 8_000;
+    return 60_000;
+}
+
+/**
+ * While the group waits: keep the group's buffs up by plan (buffs.ts): every
+ * member its own self buffs, the Bard/Warden base buffs, the Druid spec buffs,
+ * most important first within the caster's concentration. A failed cast is
+ * retried after a few seconds (minutes when concentration ran out); when the
+ * pool is short, concentration buffs outside the plan are dropped first.
  */
 export const buff = (): Behavior<TacticsSettings> => ({
     name: 'buff',
@@ -425,31 +475,40 @@ export const buff = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         if (!QUIET_PHASES.has(ctx.orders().phase) || ctx.threats().length) return false;
         const me = ctx.me();
-        if (me.maxMana > 0 && me.manaPercent < ctx.settings.buffMana) return false;
-        const order: Role[] = ['healer', 'support', 'nuker', 'tank', 'melee'];
-        const members = [...ctx.members()].sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
-        const self = ctx.member(me.name);
-        const tankM = ctx.tank();
-        const last: Map<string, number> = ctx.memory.get('buffs') ?? new Map();
-        ctx.memory.set('buffs', last);
-        for (const s of ctx.spells.buffs()) {
-            if (members.find(m => m.capabilities.buffs.includes(s.spell.name))?.name !== me.name) continue;
-            if (me.mana < s.power || s.spell.cooldownRemaining > 0) continue;
-            const targets = s.target === 'Realm' ? [self, tankM] : [self];
-            for (const t of new Set(targets)) {
-                if (!t || t.isDead) continue;
-                if (t.effects.includes(s.spell.name)) continue;
-                const key = `${s.spell.name}:${t.name}`;
-                const gap = s.concentration > 0 ? 600_000 : Math.max(60_000, s.duration * 800);
-                if (Date.now() - (last.get(key) ?? 0) < gap) continue;
-                last.set(key, Date.now());
-                ctx.doing('buff', t.objectId, s.spell.name);
-                const c = await ctx.bot.castSpell(s.spell, s.target === 'Realm' ? t.objectId : undefined);
-                ctx.result('buff', c, t.objectId);
-                return true;
-            }
+        const tasks = planBuffs(me.name, ctx.members(), { needs: ctx.settings.buffNeeds, selfOnly: ctx.settings.buffSelfOnly });
+        if (!tasks.length) return false;
+        const conc = { current: me.concentration ?? 0, max: me.maxConcentration ?? 0 };
+        const retry: Map<string, number> = ctx.memory.get('buffRetry') ?? new Map();
+        ctx.memory.set('buffRetry', retry);
+        // Free concentration held by buffs another member should provide (or nobody needs).
+        const drop = surplusConcentration(tasks, ctx.sdk.getState()?.concentrationEffects ?? [], conc, ctx.members())
+            .find(d => Date.now() >= (retry.get(`drop:${d.name}:${d.ownerName}`) ?? 0));
+        if (drop) {
+            ctx.doing('buff', null, `drop ${drop.name} on ${drop.ownerName}`);
+            const r = await ctx.sdk.sendRemoveConcentrationEffect(drop.index);
+            const freed = r.success && await ctx.sdk.waitForCondition(s => (s.player?.concentration ?? 0) > conc.current, 3000).then(() => true).catch(() => false);
+            retry.set(`drop:${drop.name}:${drop.ownerName}`, Date.now() + (freed ? 10_000 : 300_000));
+            ctx.result('dropConc', freed ? r : { ...r, success: false, message: r.success ? 'concentration did not come back' : r.message });
+            return true;
         }
-        return false;
+        const book = new Map(ctx.spells.buffs().map(s => [s.spell.name, s]));
+        const lowMana = me.maxMana > 0 && me.manaPercent < ctx.settings.buffMana;
+        const waiting = (t: BuffTask) => {
+            const s = book.get(t.spell.name);
+            // Timed buffs cost power; concentration buffs cost none.
+            return !s || (Date.now() < (retry.get(`${t.spell.name}:${t.target}`) ?? 0)) || s.spell.cooldownRemaining > 0
+                || (s.power > 0 && (lowMana || me.mana < s.power));
+        };
+        const next = nextBuff(tasks, conc, waiting);
+        if (!next) return false;
+        const pick = book.get(next.spell.name)!;
+        const target = ctx.member(next.target);
+        const onOther = next.target !== me.name;
+        ctx.doing('buff', target?.objectId ?? null, `${pick.spell.name} on ${next.target}`);
+        const c = await ctx.bot.castSpell(pick.spell, pick.target === 'Realm' ? (onOther ? target?.objectId : me.objectId) : undefined);
+        retry.set(`${next.spell.name}:${next.target}`, Date.now() + buffRetryMs(c));
+        ctx.result('buff', c, target?.objectId ?? null);
+        return true;
     },
 });
 
@@ -482,7 +541,7 @@ export function defaultBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
         tank: [release(), healer(), retreat(), pull(), tank(), shedLoad(), holdFormation(), buff(), rest()],
         healer: [release(), healer(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
-        support: [release(), healer(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), position(), shedLoad(), holdFormation(), buff(), rest()],
+        support: [release(), healer(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
         nuker: [release(), healer(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
         melee: [release(), healer(), retreat(), assist({ melee: true }), shedLoad(), holdFormation(), buff(), rest()],
     };

@@ -238,6 +238,7 @@
 | `async sendGroupSay(text: string): Promise<ActionResult>` | Group chat. |
 | `async sendCommand(command: string): Promise<ActionResult>` | Slash command sent verbatim, e.g. '&stick', '/bind' ('/' becomes '&'). |
 | `async sendSit(sit: boolean = true): Promise<ActionResult>` | Sit (true) or stand (false). |
+| `async sendRemoveConcentrationEffect(index: number): Promise<ActionResult>` | Drop one of our concentration buffs (frees its concentration), by its `index` in `state.concentrationEffects`. Observe the effect leaving that list. |
 | `async sendRelease(): Promise<ActionResult>` | Release after death (back to bind point). |
 | `async sendQuit(): Promise<ActionResult>` | Quit to the character screen ('&quit'; the server timer is 20 s+). |
 | `async sendNone(): Promise<ActionResult>` | No-op round trip: succeeds once the client's action queue reaches it. |

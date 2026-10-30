@@ -7,7 +7,7 @@ import type { GroupPicture, MemberReport, Orders } from './types';
 // Region 9999 has no spawns: no danger zones or aggro data get in the way.
 const R = 9999;
 const BASE = { x: 10_000, y: 10_000, z: 0 };
-const caps = (heal: boolean, cc: boolean, nuke: boolean) => ({ heal, cc, nuke, buffs: [] });
+const caps = (heal: boolean, cc: boolean, nuke: boolean) => ({ heal, cc, nuke, buffs: [], buffSpells: [] });
 
 function team(over: Partial<Record<string, Partial<MemberReport>>> = {}): MemberReport[] {
     const at = (dx: number) => ({ regionId: R, x: BASE.x + dx, y: BASE.y });

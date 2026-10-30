@@ -22,13 +22,33 @@ export interface Activity {
     since: number;
 }
 
+/**
+ * What a buff raises. Buffs of one slot don't stack (the stronger wins), so a slot
+ * is covered once any of them is on the target. Base: af, str, con, dex; spec
+ * (Druid Nurture spec and the like): strcon, dexqui, acuity, specaf.
+ */
+export type BuffSlot = 'af' | 'str' | 'con' | 'dex' | 'qui' | 'strcon' | 'dexqui' | 'acuity' | 'specaf'
+    | 'haste' | 'dmgshield' | 'dmgadd' | 'absorb' | 'regen' | 'resist';
+
+/** A buff spell a member can cast: the top rank per slot and target kind. */
+export interface BuffSpell {
+    name: string;
+    slot: BuffSlot;
+    /** Spell target: 'Self' (only on the caster), 'Realm' (anyone), 'Group' (everyone at once). */
+    target: string;
+    /** Concentration it ties up while it lasts (0 for timed buffs). */
+    concentration: number;
+}
+
 /** What a member can do, from its spell list (refreshed as it levels). */
 export interface Capabilities {
     heal: boolean;
     cc: boolean;
     nuke: boolean;
-    /** Buff spell names it can cast (others skip a buff the first owner covers). */
+    /** Buff spell names it can cast. */
     buffs: string[];
+    /** The same buffs with slot, target and concentration (who buffs whom: buffs.ts). */
+    buffSpells: BuffSpell[];
 }
 
 /** One member's view of itself, built from its own snapshots. */

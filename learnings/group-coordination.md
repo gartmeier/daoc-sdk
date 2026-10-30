@@ -70,7 +70,29 @@ A member runs its role's **behaviour list** top to bottom every turn; the first 
 | melee | release, retreat, assistMelee, shedLoad, holdFormation, buff, rest |
 
 - A behaviour sees its own character in full (`ctx.bot`, `ctx.sdk`) and everyone else only through the picture (`ctx.members()`, `ctx.tank()`, `ctx.threats()`, `ctx.focus()`). That keeps the information honest.
-- **Capabilities come from spells** (`Spellbook`): `heal()`, `mezz()`, `nuke({ dotted })` (each DoT once per mob, then direct damage; area spells only with `aoe`, they break mezz), `buffs()`.
+- **Capabilities come from spells** (`Spellbook`): `heal()`, `mezz()`, `nuke({ dotted })` (each DoT once per mob, then direct damage; area spells only with `aoe`, they break mezz), `buffs()` (top rank per buff slot and target kind, with the slot from `slotOf(type)`).
+- **Buffs by plan** (`buffs.ts`, used by the `buff` behaviour in quiet phases). Each role needs slots in priority order (`BUFF_NEEDS`, setting `buffNeeds`):
+  - tank: everything but acuity;
+  - healers and support: AF, Con, Dex, Str/Con, Dex/Qui;
+  - casters: Con, Dex, Str/Con, Dex/Qui, acuity, plus AF and an absorb "bubble" from their own spells only (`BUFF_SELF_ONLY`).
+
+  Who provides a slot:
+  - the target itself first, when it can (casters' self AF, the Druid's own base buffs);
+  - else the support (Bard/Warden) for base buffs, the healer (Druid) for spec buffs and the rest.
+
+  Each caster works through its tasks in rounds: every member's first buff it can get (tank first), then every member's second, and so on, within its concentration. Retries:
+  - after a failed cast, 8 s (out of range, interrupted) or 5 min (out of concentration);
+  - after a success, 20 s, until the effect shows in the target's report.
+
+  When a task lacks concentration, the caster first drops its own concentration buffs that are outside its plan (`sdk.sendRemoveConcentrationEffect(index)`, client opcode 0x76). Rules from a Hibernia player; replaced "first caster of a spell name owns it", which left an Enchanter without his own Powerbarrier because the Mentalist "owned" it.
+  - Concentration buffs on others stay up until dropped, the caster dies, or the target is beyond `concentration_buff_range` (5000).
+  - Concentration list names are cut to ~12 characters plus "..".
+- **Songs** (`songs.ts`, the `song` behaviour in the support list after heals and crowd control):
+  - Server rules: a Bard plays one song at a time. A new song ends the running one (`CancelIncompatiblePulseEffects`), and casting the running song again stops it ("You stop playing your song.").
+  - So songs are not buffs: `song` never re-casts the song that's playing, and waits 10 s after a cast for the effect to show.
+  - Choice: speed while travelling; endurance while pulling and fighting (the tank's styles); between fights, power when a caster is below 70 % (`songs.powerBelow`), health when someone is below 80 %, else endurance.
+  - Hibernian Bard at level 9: Clear Path (speed), Rhythm of Hibernia (endurance), Chant of Healing (health). Power (Rhyme of Earth and up) comes later in Music. All take 3 s to cast and can be cast on the move.
+  - Verified live: speed on every travel leg, endurance while gathering and fighting. A song is kept at least `songs.holdMs` (30 s) except into a fight, because short idle/travel hops made it flap.
 - **Interrupts:** a material orders change aborts a running walk, fight or rest at once (`interruptible`, the default); casts finish (`interruptible: false`).
 - **Pacing:** a turn that "acts" in under 250 ms is padded. Without it, a `rest()` that failed instantly ("attacked by ...") spun the loop, starved the event loop, and the group wiped.
 - `ctx.skip(reason)` records why a behaviour did not act. The observer reports the top idle reasons per member, which is how "waiting for the tank to hold it" showed up.

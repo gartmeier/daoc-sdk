@@ -132,6 +132,7 @@ describe('BotSDK.sendAction dispatch failures', () => {
             groupSay: s => s.sendGroupSay('hi'),
             command: s => s.sendCommand('&stick'),
             sit: s => s.sendSit(true),
+            removeConcentration: s => s.sendRemoveConcentrationEffect(0),
             release: s => s.sendRelease(),
             quit: s => s.sendQuit(),
         };

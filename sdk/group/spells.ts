@@ -4,7 +4,8 @@
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import type { Spell } from '../types';
-import type { Capabilities } from './types';
+import { songKind, type SongKind } from './songs';
+import type { BuffSlot, Capabilities } from './types';
 
 export interface SpellPick {
     spell: Spell;
@@ -17,20 +18,42 @@ export interface SpellPick {
     /** Seconds (0 = instant/permanent). */
     duration: number;
     concentration: number;
+    /** A song or chant: keeps pulsing until cancelled; casting it again stops it. */
+    pulse: boolean;
 }
 
 const NUKE_TYPES = /^(DirectDamage|Bolt|Lifedrain|DamageOverTime|DirectDamageWithDebuff|DamageSpeedDecrease)$/;
 const CC_TYPES = /^Mesmerize$/;
 const HEAL_TYPES = /^(Heal|CombatHeal)$/;
-const BUFF_TYPES = /Buff|DamageAdd|DamageShield|Ablative|Regen|Resist|Armor|Haste|Absorb/i;
-const NOT_BUFFS = /Heal|Mesmerize|Summon|Pet|Resurrect|DirectDamage|Bolt|Lifedrain|Speed/i;
+
+/** The buff slot of a spell handler type, or null when it isn't a buff we keep up. */
+export function slotOf(type: string): BuffSlot | null {
+    switch (type) {
+        case 'BaseArmorFactorBuff': return 'af';
+        case 'SpecArmorFactorBuff': case 'ArmorFactorBuff': return 'specaf';
+        case 'StrengthBuff': return 'str';
+        case 'ConstitutionBuff': return 'con';
+        case 'DexterityBuff': return 'dex';
+        case 'QuicknessBuff': return 'qui';
+        case 'StrengthConstitutionBuff': return 'strcon';
+        case 'DexterityQuicknessBuff': return 'dexqui';
+        case 'AcuityBuff': case 'IntelligenceBuff': return 'acuity';
+        case 'CombatSpeedBuff': return 'haste';
+        case 'DamageShield': return 'dmgshield';
+        case 'DamageAdd': return 'dmgadd';
+    }
+    if (/Ablative|Absorb|Bladeturn/i.test(type)) return 'absorb';
+    if (/Regen/i.test(type)) return 'regen';
+    if (/Resist/i.test(type) && /Buff/i.test(type)) return 'resist';
+    return null;
+}
 
 export function spellsOf(sdk: BotSDK, bot: BotActions): SpellPick[] {
     const out: SpellPick[] = [];
     for (const spell of sdk.getSkills().spells ?? []) {
         const info = bot.getSpellInfo(spell);
         if (!info) continue;
-        out.push({ spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, concentration: info.concentration });
+        out.push({ spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, concentration: info.concentration, pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0 });
     }
     return out;
 }
@@ -68,25 +91,40 @@ export class Spellbook {
         return best(ok.filter(s => s.type !== 'DamageOverTime'));
     }
 
-    /** Buffs worth keeping up: the top rank per type and target, no pet or enemy spells. */
-    buffs(): SpellPick[] {
-        const top = new Map<string, SpellPick>();
+    /** Buffs worth keeping up: the top rank per slot and target, no pet or enemy spells. */
+    buffs(): (SpellPick & { slot: BuffSlot })[] {
+        const top = new Map<string, SpellPick & { slot: BuffSlot }>();
         for (const s of this.all()) {
-            if (s.target === 'Enemy' || s.target === 'Pet' || NOT_BUFFS.test(s.type) || !BUFF_TYPES.test(s.type)) continue;
+            const slot = slotOf(s.type);
+            // Songs are played one at a time by situation (songs.ts), not kept up like buffs.
+            if (!slot || s.pulse || s.target === 'Enemy' || s.target === 'Pet') continue;
             if (s.duration <= 0 && s.concentration <= 0) continue;
-            const k = `${s.type}:${s.target}`;
-            if (!top.has(k) || top.get(k)!.spell.level < s.spell.level) top.set(k, s);
+            const k = `${slot}:${s.target}`;
+            if (!top.has(k) || top.get(k)!.spell.level < s.spell.level) top.set(k, { ...s, slot });
+        }
+        return [...top.values()];
+    }
+
+    /** Friendly songs we can play, the top rank per kind (only one plays at a time). */
+    songs(): (SpellPick & { kind: SongKind })[] {
+        const top = new Map<SongKind, SpellPick & { kind: SongKind }>();
+        for (const s of this.all()) {
+            const kind = songKind(s);
+            if (!kind) continue;
+            if (!top.has(kind) || top.get(kind)!.spell.level < s.spell.level) top.set(kind, { ...s, kind });
         }
         return [...top.values()];
     }
 
     capabilities(): Capabilities {
         const all = this.all();
+        const buffs = this.buffs();
         return {
             heal: all.some(s => HEAL_TYPES.test(s.type) && s.target !== 'Enemy'),
             cc: all.some(s => CC_TYPES.test(s.type)),
             nuke: all.some(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type)),
-            buffs: this.buffs().map(s => s.spell.name),
+            buffs: buffs.map(s => s.spell.name),
+            buffSpells: buffs.map(s => ({ name: s.spell.name, slot: s.slot, target: s.target, concentration: s.concentration })),
         };
     }
 }

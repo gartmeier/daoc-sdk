@@ -9,7 +9,7 @@ export function report(name: string, over: Partial<MemberReport> = {}): MemberRe
         name, bot: name.toLowerCase(), role: 'nuker', className: 'Mentalist', level: 6, experience: 1000,
         objectId: name.length * 100, regionId: 200, x: 1000, y: 1000, z: 0,
         hp: 100, mana: 100, endurance: 100, load: 10, isDead: false, isSitting: false, inCombat: false, attacking: false, targetId: null,
-        effects: [], capabilities: { heal: false, cc: false, nuke: true, buffs: [] },
+        effects: [], capabilities: { heal: false, cc: false, nuke: true, buffs: [], buffSpells: [] },
         activity: { kind: 'idle', targetId: null, detail: '', since: 0 }, at: Date.now(),
         ...over,
     };

@@ -257,6 +257,11 @@ export function encodeGroundTarget(x: number, y: number, z: number, inView = tru
         .toBytes();
 }
 
+/** 0x76 RemoveConcentrationEffect: u8 index in our concentration list (RemoveConcentrationEffectHandler.cs:12). */
+export function encodeRemoveConcentrationEffect(index: number): Uint8Array {
+    return Uint8Array.of(index & 0xff);
+}
+
 /** 0xC7 PlayerSitRequest: u8 status (PlayerSitRequest.cs:8). */
 export function encodeSit(sit: boolean): Uint8Array {
     return Uint8Array.of(sit ? 1 : 0);

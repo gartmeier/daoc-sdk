@@ -11,6 +11,8 @@ export { pveLeveling, decidePve, pickPullTarget, pickFocus, assignCc, PVE_SETTIN
 export { GroupObserver, findingsFor, formatReport, saveReport, inferPhase, type Finding, type FightSummary, type MemberStats, type RunReport } from './observer';
 export { loadGroup, connectBot, connectGroup, formGroup } from './roster';
 export { runGroup, runGroupScript, groupArgs, type GroupRunOptions, type GroupRunResult } from './runner';
-export { Spellbook, spellsOf, type SpellPick } from './spells';
+export { Spellbook, spellsOf, slotOf, type SpellPick } from './spells';
+export * from './buffs';
+export * from './songs';
 export * from './terrain';
 export type { ScriptContext } from '../runner';

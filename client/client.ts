@@ -571,6 +571,13 @@ export class DaocClient {
                 }
                 return ok(a.sit ? 'sit requested' : 'standing');
             }
+            case 'removeConcentration': {
+                const i = a.index;
+                if (!Number.isInteger(i) || i < 0 || i > 255) return fail('bad_args', 'index must be 0..255');
+                if (!(m.concentrationEffects ?? []).some(e => e.index === i)) return fail('not_found', `no concentration effect at index ${i}`);
+                this.send(ClientOp.RemoveConcentrationEffect, out.encodeRemoveConcentrationEffect(i));
+                return ok(`concentration effect ${i} removal requested`);
+            }
             case 'release':
                 if (!m.self.isDead) return fail('not_dead', 'release only works while dead');
                 this.command('&release');
