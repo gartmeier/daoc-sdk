@@ -41,11 +41,15 @@ export interface PveSettings extends TacticsSettings {
     maxAggroNeighbors: number;
     /** Pull aggressive monsters too (false: passive ones only; aggressive ones still get fought when they come). */
     pullAggressive: boolean;
+    /**
+     * Running away. Off by default: in PvE it almost never saves anyone (monsters run as
+     * fast as an unsprinting player), and the group has crowd control and a tank to hold adds.
+     */
     retreat: {
         enabled: boolean;
         /** Retreat when the tank drops below this while the focus has more than half its health. */
         tankHp: number;
-        /** ... or this many attackers are not crowd-controlled. */
+        /** ... or this many adds (not the focus) are neither crowd-controlled nor assigned to a mezzer. */
         maxAdds: number;
         /** ... or this many members are dead. */
         deaths: number;
@@ -77,6 +81,9 @@ export const PVE_SETTINGS: PveSettings = {
     meleeWhenOom: false,
     shedLoadAt: 95,
     keepItems: 'Bind Recall|Initiate|Staff of|Lute|Focus Staff|^task',
+    tauntOpenMs: 6000,
+    peelAfterMs: 4000,
+    guard: { guard: 'healer', protect: 'nuker' },
     minCon: -1,
     maxCon: 1,
     camp: null,
@@ -92,7 +99,7 @@ export const PVE_SETTINGS: PveSettings = {
     aggroPad: 300,
     maxAggroNeighbors: 0,
     pullAggressive: true,
-    retreat: { enabled: true, tankHp: 25, maxAdds: 3, deaths: 2, distance: 2500, maxMs: 25_000 },
+    retreat: { enabled: false, tankHp: 25, maxAdds: 3, deaths: 2, distance: 2500, maxMs: 25_000 },
     travelLeg: 1500,
     roamMs: 25_000,
     newCampMs: 120_000,
@@ -194,11 +201,12 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
             && dist(focus, o.anchor) > s.engageRadius && now - (mem.pullStart ?? now) < s.pullTimeoutMs) {
             return { phase: 'pull', reason: `${o.puller} brings ${focus.name} to the base (${Math.round(dist(focus, o.anchor))} away)` };
         }
-        const uncontrolled = threats.filter(t => !t.cc);
+        // The focus is being killed, and an add with a mezz ordered on it gets one within a cast (2.5-3 s).
+        const uncontrolled = threats.filter(t => !t.cc && t.objectId !== focus.objectId && !o.cc.some(a => a.targetId === t.objectId));
         const dead = p.members.length - alive.length;
         const lost = !s.retreat.enabled ? null
             : !tank && threats.some(t => t.hp > 50) ? 'the tank is dead'
-            : uncontrolled.length >= s.retreat.maxAdds ? `${uncontrolled.length} attackers not under control`
+            : uncontrolled.length >= s.retreat.maxAdds ? `${uncontrolled.length} adds not under control`
             : dead >= s.retreat.deaths ? `${dead} members dead`
             : tank && tank.hp < s.retreat.tankHp && focus.hp > 50 ? `tank at ${tank.hp}% with ${focus.name} at ${focus.hp}%`
             : null;

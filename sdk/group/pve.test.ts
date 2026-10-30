@@ -78,18 +78,33 @@ describe('decidePve', () => {
         expect(d.cc).toEqual([{ targetId: 60, by: 'Bard' }]);
     });
 
-    test('retreats when the tank is dead, keeps running while followed, fights again after maxMs', () => {
+    test('the add count for a retreat leaves out the focus and adds with a mezz ordered', () => {
+        const now = Date.now();
+        const settings = { retreat: { ...PVE_SETTINGS.retreat, enabled: true, maxAdds: 2 } };
+        const mob = (id: number) => contact(id, { regionId: R, target: 'Tank', targetId: 1, threat: true, hostileSince: now - 3000, hp: 90, x: BASE.x + 100, y: BASE.y });
+        // The focus plus two adds the Bard and the Mentalist are mezzing: under control.
+        let d = decidePve(ctx(picture(team(), [mob(51), mob(52), mob(53)], { phase: 'engage', focus: 51, cc: [{ targetId: 52, by: 'Bard' }, { targetId: 53, by: 'Menta' }] }, now), { settings }));
+        expect(d.phase).toBe('engage');
+        // A third add nobody can take: two adds loose (52 kept by the Bard, 53 and 54 have no mezzer left).
+        d = decidePve(ctx(picture(team({ Menta: { capabilities: caps(true, false, true) } }), [mob(51), mob(52), mob(53), mob(54)], { phase: 'engage', focus: 51, cc: [{ targetId: 52, by: 'Bard' }] }, now), { settings }));
+        expect(d.phase).toBe('retreat');
+        expect(d.reason).toContain('2 adds not under control');
+    });
+
+    test('retreat is off by default; when on: retreats when the tank is dead, keeps running while followed', () => {
         const now = Date.now();
         const mob = contact(51, { regionId: R, target: 'Druid', targetId: 2, threat: true, hostileSince: now - 9000, hp: 90, x: BASE.x + 200, y: BASE.y });
         const memory: Record<string, any> = { camp: { ...BASE, zone: '', count: 0, names: '' }, campLevel: 6, base: BASE };
         const members = team({ Tank: { isDead: true, hp: 0 } });
-        let d = decidePve(ctx(picture(members, [mob], { phase: 'engage', focus: 51 }, now), { memory }));
+        const settings = { retreat: { ...PVE_SETTINGS.retreat, enabled: true } };
+        expect(decidePve(ctx(picture(members, [mob], { phase: 'engage', focus: 51 }, now), { memory: { ...memory } })).phase).toBe('engage');
+        let d = decidePve(ctx(picture(members, [mob], { phase: 'engage', focus: 51 }, now), { memory, settings }));
         expect(d.phase).toBe('retreat');
         expect(d.retreatTo).toBeTruthy();
         expect(d.reason).toContain('tank is dead');
-        d = decidePve(ctx(picture(members, [mob], { phase: 'retreat', reason: d.reason }, now + 5000), { memory, now: now + 5000 }));
+        d = decidePve(ctx(picture(members, [mob], { phase: 'retreat', reason: d.reason }, now + 5000), { memory, now: now + 5000, settings }));
         expect(d.phase).toBe('retreat');
-        d = decidePve(ctx(picture(members, [mob], { phase: 'retreat', reason: d.reason }, now + 30_000), { memory, now: now + 30_000 }));
+        d = decidePve(ctx(picture(members, [mob], { phase: 'retreat', reason: d.reason }, now + 30_000), { memory, now: now + 30_000, settings }));
         expect(d.phase).toBe('retreat');   // still lost: the tank is dead, so it starts running again
     });
 

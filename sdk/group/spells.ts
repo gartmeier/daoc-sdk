@@ -20,10 +20,17 @@ export interface SpellPick {
     concentration: number;
     /** A song or chant: keeps pulsing until cancelled; casting it again stops it. */
     pulse: boolean;
+    /** The spell's value (for SpeedDecrease: the slow in %, 99 = root). */
+    value: number;
 }
 
 const NUKE_TYPES = /^(DirectDamage|Bolt|Lifedrain|DamageOverTime|DirectDamageWithDebuff|DamageSpeedDecrease)$/;
-const CC_TYPES = /^Mesmerize$/;
+const MEZZ_TYPES = /^Mesmerize$/;
+// A SpeedDecrease of 99 % is a root (Druid "Webbing Vines"): the add can't walk up to us. It still
+// hits whoever stands next to it, and the blackboard drops it as broken when it swings.
+const ROOT_TYPES = /^(SpeedDecrease|UnbreakableSpeedDecrease)$/;
+const isMezz = (s: SpellPick) => MEZZ_TYPES.test(s.type);
+const isRoot = (s: SpellPick) => ROOT_TYPES.test(s.type) && s.value >= 99 && s.radius === 0;
 const HEAL_TYPES = /^(Heal|CombatHeal)$/;
 
 /** The buff slot of a spell handler type, or null when it isn't a buff we keep up. */
@@ -53,7 +60,7 @@ export function spellsOf(sdk: BotSDK, bot: BotActions): SpellPick[] {
     for (const spell of sdk.getSkills().spells ?? []) {
         const info = bot.getSpellInfo(spell);
         if (!info) continue;
-        out.push({ spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, concentration: info.concentration, pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0 });
+        out.push({ spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, concentration: info.concentration, pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0, value: info.value ?? 0 });
     }
     return out;
 }
@@ -76,7 +83,15 @@ export class Spellbook {
     }
 
     mezz(): SpellPick | null {
-        return best(this.all().filter(s => CC_TYPES.test(s.type) && s.target === 'Enemy' && this.ready(s)));
+        return best(this.all().filter(s => isMezz(s) && s.target === 'Enemy' && this.ready(s)));
+    }
+
+    /** Crowd control for an add: a mezz when one is ready, else a root. */
+    cc(): (SpellPick & { kind: 'mezz' | 'root' }) | null {
+        const m = this.mezz();
+        if (m) return { ...m, kind: 'mezz' };
+        const r = best(this.all().filter(s => isRoot(s) && s.target === 'Enemy' && this.ready(s)));
+        return r ? { ...r, kind: 'root' } : null;
     }
 
     /**
@@ -121,7 +136,7 @@ export class Spellbook {
         const buffs = this.buffs();
         return {
             heal: all.some(s => HEAL_TYPES.test(s.type) && s.target !== 'Enemy'),
-            cc: all.some(s => CC_TYPES.test(s.type)),
+            cc: all.some(s => s.target === 'Enemy' && (isMezz(s) || isRoot(s))),
             nuke: all.some(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type)),
             buffs: buffs.map(s => s.spell.name),
             buffSpells: buffs.map(s => ({ name: s.spell.name, slot: s.slot, target: s.target, concentration: s.concentration })),

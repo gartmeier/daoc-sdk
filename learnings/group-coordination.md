@@ -46,9 +46,9 @@ The PvE leveling policy (`decidePve`):
 
 | Phase | When |
 |---|---|
-| `engage` | anything is a threat. Keeps the focus while it lives (no target thrash); else what the tank hits, else whatever is on a non-tank. Adds go to mezzers (support first) |
-| `retreat` | the tank is dead, 3+ attackers are not controlled, 2+ members are dead, or the tank is under 25 % while the focus has over half. Runs 2500 away from the attackers until nothing follows (max 25 s) |
-| `travel` | most of the group is far from the base. Legs of 1500 around danger zones; the next leg once everyone is within 1200 of this one (or after 30 s) |
+| `engage` | anything is a threat. Keeps the focus while it lives (no target thrash); else what the tank hits, else whatever is on a non-tank. Adds go to crowd control: mezzers first (support, then nukers), then roots (the healer) |
+| `retreat` | off by default (`retreat.enabled`). When on: the tank is dead, 3+ adds (not the focus) are neither controlled nor assigned to a mezzer, 2+ members are dead, or the tank is under 25 % while the focus has over half. Runs 2500 away from the attackers until nothing follows (max 25 s) |
+| `travel` | most of the group is far from the base. Legs of 1500 along a route around every aggro zone (`safePath`); the next leg once everyone is within 1200 of this one (or after 30 s) |
 | `gather` | a few members are away from the base |
 | `recover` | someone is dead (waiting for release and return) or below `ready.hp` / `ready.mana` |
 | `pull` | everyone is ready: the tank body-pulls the best target (highest con in the window, nearest to the base) |
@@ -63,14 +63,19 @@ A member runs its role's **behaviour list** top to bottom every turn; the first 
 
 | Role | Behaviours (in order) |
 |---|---|
-| tank | release, retreat, pull, tank, shedLoad, holdFormation, buff, rest |
+| tank | release, retreat, pull, tank, guard, shedLoad, holdFormation, buff, rest |
 | healer | release, retreat, emergencyHeal, flee, heal, crowdControl (assigned), position, shedLoad, holdFormation, buff, rest |
 | support | release, retreat, emergencyHeal, flee, crowdControl, heal, position, shedLoad, holdFormation, buff, rest |
 | nuker | release, retreat, flee, crowdControl (assigned), emergencyHeal, position, assist, shedLoad, holdFormation, buff, rest |
 | melee | release, retreat, assistMelee, shedLoad, holdFormation, buff, rest |
 
 - A behaviour sees its own character in full (`ctx.bot`, `ctx.sdk`) and everyone else only through the picture (`ctx.members()`, `ctx.tank()`, `ctx.threats()`, `ctx.focus()`). That keeps the information honest.
-- **Capabilities come from spells** (`Spellbook`): `heal()`, `mezz()`, `nuke({ dotted })` (each DoT once per mob, then direct damage; area spells only with `aoe`, they break mezz), `buffs()` (top rank per buff slot and target kind, with the slot from `slotOf(type)`).
+- **Routes avoid aggressive mobs** (`safePath`, used for travel legs, by members more than 2500 from their slot, and by `groups/hibernia/town.ts`):
+  - A mob aggroes only on players it doesn't con grey to (`StandardMobBrain.CanAggroTarget`: "Only attack if green+ to target"), and only within its aggro range, mostly 500 (`CheckPlayerAggro`).
+  - `aggroZones(region, level)` is every aggressive spawn not grey to the group's lowest level, out to its aggro range plus 300 (`AGGRO_PAD`, mobs wander). At level 11 in region 200 that is about 11,000 circles.
+  - The route is a grid A* (400-unit cells) where a cell inside a zone costs 30× more, so it crosses a zone only when there's no way around. Planning takes 5–40 ms.
+  - Before this, routes only avoided mobs 3+ levels up or packs of 4+ at or above the group's level. At level 11 the route to the next camp ran through aggressive lunantishee (L8–9, blue), and every fight on the way brought adds.
+- **Capabilities come from spells** (`Spellbook`): `heal()`, `mezz()`, `cc()` (a mezz when one is ready, else a root: SpeedDecrease with value 99, e.g. the Druid's Webbing Vines), `nuke({ dotted })` (each DoT once per mob, then direct damage; area spells only with `aoe`, they break mezz), `buffs()` (top rank per buff slot and target kind, with the slot from `slotOf(type)`).
 - **Buffs by plan** (`buffs.ts`, used by the `buff` behaviour in quiet phases). Each role needs slots in priority order (`BUFF_NEEDS`, setting `buffNeeds`):
   - tank: everything but acuity;
   - healers and support: AF, Con, Dex, Str/Con, Dex/Qui;
@@ -95,6 +100,11 @@ A member runs its role's **behaviour list** top to bottom every turn; the first 
   - Verified live: speed on every travel leg, endurance while gathering and fighting. A song is kept at least `songs.holdMs` (30 s) except into a fight, because short idle/travel hops made it flap.
 - **Roaming can walk the group into aggressive mobs:** once the camp is out of targets, `decidePve` moves the base to a random spot within 900 of the camp every `roamMs`, without checking aggressive spawns. At a passive camp next to an aggressive one this caused a wipe (6 adds). Set `roamMs` high and let `newCampMs` pick another camp instead.
 - **Aggressive neighbours wander into a base:** `chooseBase` faces the side the group comes from, which put the wolfhound base 4,700 from a wild lucradan camp. The lucradans walked in, and the group died there four times in one run. With `baseClearance` above 700, a base now also keeps twice that from aggressive spawns at level-1 and up (2,600 for 1,300).
+- **Tank** (`tank`, `guard`):
+  - Taunt styles (names with "Taunt", e.g. the Hero's Taunting Blade) proc a StyleTaunt spell worth 1.7× the hit's damage in extra threat (`StyleTaunt.cs`). The tank uses the taunt style while the focus hits someone else and for `tauntOpenMs` (6 s) from his first hit, else his best other anytime style.
+  - An add hitting a caster or healer that nobody controls (`peelTarget`: no mezz ordered on it, or one ordered more than `peelAfterMs`, 4 s, ago) pulls the tank off the focus: he taunts the add until it has targeted him for 1.5 s or gets mezzed, then goes back to the focus.
+  - `guard` keeps Guard on the healer and Protect on a nuker (`guard: { guard, protect }`, a name or role), out of fights. Guard blocks attacks on that member with the tank's shield while he stands within 256 (`GuardAbilityHandler.GUARD_DISTANCE`). Protect moves 10 % per level of the threat the member causes to the tank, within 1000. Both show in the tank's effects ("Brigid guarded by Cuchulainn", "Ciaran protected by Cuchulainn"), and using either again on the same member cancels it, so the behaviour acts only when that effect is missing. The answer "You are now guarding Brigid, but you must stand closer." is a success; `useAbility` reports it as refused. Verified live.
+  - A Hero's shield styles don't hold adds yet: Numb (Shield 3) stuns for 2 s, Slam (9 s) needs Shield 42.
 - **Interrupts:** a material orders change aborts a running walk, fight or rest at once (`interruptible`, the default); casts finish (`interruptible: false`).
 - **Pacing:** a turn that "acts" in under 250 ms is padded. Without it, a `rest()` that failed instantly ("attacked by ...") spun the loop, starved the event loop, and the group wiped.
 - `ctx.skip(reason)` records why a behaviour did not act. The observer reports the top idle reasons per member, which is how "waiting for the tank to hold it" showed up.
@@ -145,7 +155,7 @@ export default defineStrategy(pveLeveling, {
 ```
 
 - Individual scripts are not replaced: a behaviour can call any `bot.*` method or a helper from a bot's own folder, and outside a group run every bot still runs its own scripts.
-- Settings worth knowing (all in `PVE_SETTINGS`): `minCon`/`maxCon`, `camp` (hunt here), `campLevelBand`/`campAggressiveWeight`, `huntRadius`, `baseClearance`, `ready`, `holdMs`, `assistAfterMs`, `heal.*`, `rest`, `combatRange`, `formation`, `pullDistance`, `engageRadius`, `avoidAggressive`/`aggroPad`/`maxAggroNeighbors`/`pullAggressive`, `roamMs`/`newCampMs`, `retreat.*`, `shedLoadAt`/`keepItems`.
+- Settings worth knowing (all in `PVE_SETTINGS`): `minCon`/`maxCon`, `camp` (hunt here), `campLevelBand`/`campAggressiveWeight`, `huntRadius`, `baseClearance`, `ready`, `holdMs`, `assistAfterMs`, `heal.*`, `rest`, `combatRange`, `formation`, `pullDistance`, `engageRadius`, `avoidAggressive`/`aggroPad`/`maxAggroNeighbors`/`pullAggressive`, `roamMs`/`newCampMs`, `retreat.*`, `shedLoadAt`/`keepItems`, `tauntOpenMs`/`peelAfterMs`/`guard`.
 
 ## The improvement loop (LLM observer)
 
@@ -175,7 +185,9 @@ What this loop did live (3–4 minutes per run, same camp, water beetles L6–8)
 - **Formation depth counts in travel:** legs must chain from the last leg point, not from the group's centre, which trails the anchor by the formation's depth.
 - **Ending mid-pull:** a mob already hit follows the tank after the run and killed it between runs. A run now finishes a pull under way.
 - **Bring a friend:** a mob that gets *hit* calls same-faction mobs within 450 + 150 per extra attacker (1050 for a group of five), with a 200 % chance for five attackers, so two adds are guaranteed (`StandardMobBrain.BringFriends`, `baf_initial_chance` 0 + `baf_additional_chance` 50 per extra attacker). A body pull doesn't trigger it until the mob is hit. So fight a body-pulled mob where no friend stands within ~1050: `baseClearance` (default 700) keeps the base that far from every spawn.
-- **Retreating from mobs that keep up kills everyone:** at level 7 against an aggressive L8–9 camp in Lough Derg, a retreat at 3 attackers left all five dead "en route" while nobody fought back (runs 20261030-122154/-122647, 14 deaths). It happened again at level 9 (3 runs out of 3), so hibernia doesn't retreat at all (`retreat.enabled: false`) and fights it out with the mezzers.
+- **Retreating from mobs that keep up kills everyone:** at level 7 against an aggressive L8–9 camp in Lough Derg, a retreat at 3 attackers left all five dead "en route" while nobody fought back (runs 20261030-122154/-122647, 14 deaths). It happened again at level 9 (3 runs out of 3). Likely cause: nobody sprinted, and monsters run as fast as a player who doesn't. The `sprint` behaviour (before `retreat` in every role list) now sprints (x1.3, `MaxSpeedCalculator`) for the whole retreat and stops afterwards to save endurance. Live: the first retreat with sprint saved everyone, the next ones started at 6–11 % endurance and died en route.
+  - The add count was also wrong: it counted the focus and adds whose mezz was still being cast. Every "4 attackers" retreat came 1–3 s after the mezz orders. In the group's last campaign hour a retreat came about every minute, all on routes through aggressive mobs.
+  - So retreat is now off by default: in PvE, crowd control, the tank's taunts and guard hold adds better than running.
 - **Constitution loss:** every PvE death from level 6 (`pve_con_loss_level`) lowers Constitution until a town healer (GameHealer) restores it for money (188 copper per point at level 9). After about a dozen deaths the Hibernian group had lost 10–21 Con each (casters at 25 instead of 40). `player.constitutionLost` shows it; the `healer` behaviour (second in every default role list) visits the healer near the bind point after a death, which also cures resurrection illness. Lost Con is added at release, not at death. The visit isn't interruptible: an orders change once aborted the walk, so the healer was out of view ("Target not found") and the member kept the loss.
 - **Aggressive camps two levels up are too much at level 7:** `campLevelBand: [1, 2]` with `maxAggroNeighbors: 1` meant 5–7 adds per fight. Passive camps at even con were clean. Lough Derg's camps from level 9 up are almost all aggressive. `campAggressiveWeight: 0` (the camp finder counts only passive spawns) and `pullAggressive: false` (pull only passive mobs) found passive red wolfhound camps for levels 8–10: 0.5–1.2M group XP/h without deaths.
 

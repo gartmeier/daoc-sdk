@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { findNpcSpawns } from '../../data/index';
-import { aggroAt, chooseBase, safePath } from './terrain';
+import { aggroAt, aggroZones, chooseBase, safePath } from './terrain';
 
 describe('terrain (static data, Shannon Estuary)', () => {
     test('aggro comes from the nearest spawn: the same name is aggressive in one camp and passive in another', () => {
@@ -29,5 +29,35 @@ describe('terrain (static data, Shannon Estuary)', () => {
 
     test('safePath is a straight line where nothing dangerous is in the way', () => {
         expect(safePath(9999, 5, { x: 0, y: 0 }, { x: 5000, y: 0 })).toEqual([{ x: 5000, y: 0 }]);
+    });
+
+    test('aggro zones leave out mobs that con grey: they never attack', () => {
+        const lunantishee = (level: number) => aggroZones(200, level).filter(z => z.name === 'lunantishee');
+        expect(lunantishee(11).length).toBeGreaterThan(0);   // L8-9: blue to 11
+        expect(lunantishee(20)).toEqual([]);                  // grey to 20
+        expect(lunantishee(11)[0]!.r).toBe(500 + 300);        // aggro range plus wandering room
+    });
+
+    test('safePath goes around every aggro zone the straight line crosses', () => {
+        // Session 2: from the red wolfhound camp west of Tir na mBeo to the next camp for level 11,
+        // the straight line crosses aggressive red wolfhounds and badgers.
+        const from = { x: 333707, y: 529072 }, to = { x: 333638, y: 536348 };
+        const zones = aggroZones(200, 11);
+        const inside = (pts: { x: number; y: number }[]) => {
+            let n = 0, a = from;
+            for (const b of pts) {
+                const steps = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 50);
+                for (let i = 1; i <= steps; i++) {
+                    const x = a.x + (b.x - a.x) * i / steps, y = a.y + (b.y - a.y) * i / steps;
+                    if (zones.some(z => Math.hypot(z.x - x, z.y - y) < z.r)) n++;
+                }
+                a = b;
+            }
+            return n;
+        };
+        expect(inside([to])).toBeGreaterThan(0);
+        const path = safePath(200, 11, from, to);
+        expect(path.at(-1)).toEqual(to);
+        expect(inside(path)).toBe(0);
     });
 });

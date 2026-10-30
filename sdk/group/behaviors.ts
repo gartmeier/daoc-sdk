@@ -7,11 +7,13 @@
 // runs to the tank, and positions change only while the tank holds the mob.
 
 import { findNpcSpawns } from '../../data/index';
+import type { StyleChooser } from '../actions';
+import { abortable, executionContext } from '../execution-context';
 import { type BuffTask, nextBuff, planBuffs, surplusConcentration } from './buffs';
 import { chooseSong, SONG_SETTINGS, type SongSettings } from './songs';
 import type { Behavior, MemberContext } from './member';
 import { safePath } from './terrain';
-import type { BuffSlot, Point, Role } from './types';
+import type { BuffSlot, Contact, Point, Role } from './types';
 
 /** Settings the behaviours read; strategies extend this. */
 export interface TacticsSettings {
@@ -45,6 +47,12 @@ export interface TacticsSettings {
     shedLoadAt: number;
     /** ... never dropping items whose name matches this (case-insensitive regexp source). */
     keepItems: string;
+    /** Tank: taunt the focus (a taunt style every swing) while it hits someone else, and for this long after he first hits it (ms). */
+    tauntOpenMs: number;
+    /** Tank: taunt an add off a caster or healer once it has been loose this long (ms): a mezz ordered on it gets that long to land. */
+    peelAfterMs: number;
+    /** Tank: whom to keep Guard and Protect on, by name or role (empty: nobody). */
+    guard: { guard: string; protect: string };
 }
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -133,6 +141,33 @@ export const healer = (opts: { radius?: number } = {}): Behavior<TacticsSettings
     },
 });
 
+/** Sprint's effect icon (SprintECSGameEffect); its name is a translation key's text. */
+const SPRINT_ICON = 0x199;
+
+/**
+ * Sprint while the orders say retreat, else not. Sprint is x1.3 run speed
+ * (MaxSpeedCalculator), and monsters run as fast as a player who doesn't sprint:
+ * without it every retreat ended with members caught "en route". Outside a
+ * retreat it is turned off, to keep endurance for styles. The server stops it at
+ * low endurance or after ~30 idle ticks. Toggling doesn't end the turn, so
+ * `retreat` (next in the list) starts running at once.
+ */
+export const sprint = (): Behavior<TacticsSettings> => ({
+    name: 'sprint',
+    interruptible: false,
+    async run(ctx) {
+        if (ctx.bot.isDead()) return false;
+        const on = (ctx.sdk.getState()?.effects ?? []).some(e => e.icon === SPRINT_ICON || /^sprint$/i.test(e.name));
+        const want = ctx.orders().phase === 'retreat';
+        if (on === want || (want && ctx.me().endurance <= 10)) return false;
+        // The effect shows a moment after the toggle: don't toggle it straight back.
+        if (Date.now() - (ctx.memory.get('sprintAt') ?? 0) < 3000) return false;
+        ctx.memory.set('sprintAt', Date.now());
+        ctx.result('sprint', await ctx.bot.useAbility('Sprint'));
+        return false;
+    },
+});
+
 /** Orders say retreat: run to our slot at the retreat point. */
 export const retreat = (): Behavior<TacticsSettings> => ({
     name: 'retreat',
@@ -198,8 +233,8 @@ export const heal = (opts: { emergencyOnly?: boolean } = {}): Behavior<TacticsSe
 });
 
 /**
- * Mezz our crowd-control assignment; without `assignedOnly`, also any add (not
- * the focus) attacking the group that nobody controls or is mezzing yet.
+ * Mezz (or, without a mezz, root) our crowd-control assignment; without `assignedOnly`,
+ * also any add (not the focus) attacking the group that nobody controls or is mezzing yet.
  */
 export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<TacticsSettings> => ({
     name: 'crowdControl',
@@ -213,13 +248,13 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
             .filter(t => t.objectId !== o.focus && !t.cc && !o.cc.some(a => a.targetId === t.objectId) && !claimedBy(ctx, 'cc', t.objectId, 4000).length);
         const target = assigned[0] ?? extra[0];
         if (!target) return false;
-        const sp = ctx.spells.mezz();
-        if (!sp) return ctx.skip('cc: no mezz ready');
+        const sp = ctx.spells.cc();
+        if (!sp) return ctx.skip('cc: no mezz or root ready');
         await stopSwinging(ctx);
         ctx.doing('cc', target.objectId, sp.spell.name);
         const c = await ctx.bot.castSpell(sp.spell, target.objectId);
         ctx.result('cc', c, target.objectId);
-        if (c.success && !c.resisted) ctx.markCc(target.objectId, 'mezz', Math.max(3000, sp.duration * 900));
+        if (c.success && !c.resisted) ctx.markCc(target.objectId, sp.kind, Math.max(3000, sp.duration * 900));
         else if (c.retryAfterMs) await Bun.sleep(Math.min(c.retryAfterMs, 3000));
         return true;
     },
@@ -265,23 +300,129 @@ export function anytimeStyles(ctx: MemberContext): string[] {
     return (ctx.sdk.getSkills().styles ?? []).filter(s => s.prerequisite === 256).sort((a, b) => b.specLevel - a.specLevel).slice(0, 1).map(s => s.name);
 }
 
-/** Tank: fight the focus to the death (an orders change switches targets). */
+// Taunt styles proc a StyleTaunt spell: extra threat of 1.7x the hit's damage (Hero "Taunting
+// Blade"; StyleTaunt.cs: damage * Value 17 * 0.1). The static data names them all "Taunt...".
+const TAUNT_STYLE = /taunt/i;
+
+/** The best anytime taunt style, and the best anytime style that isn't one. */
+function tankStyles(ctx: MemberContext): { taunt: string | null; damage: string | null } {
+    const anytime = (ctx.sdk.getSkills().styles ?? []).filter(s => s.prerequisite === 256).sort((a, b) => b.specLevel - a.specLevel);
+    return { taunt: anytime.find(s => TAUNT_STYLE.test(s.name))?.name ?? null, damage: anytime.find(s => !TAUNT_STYLE.test(s.name))?.name ?? null };
+}
+
+/**
+ * Run `work` until it settles or `stop()` turns true (checked every 500 ms): null when stopped.
+ * Waits for the work's own cleanup (killNpc turns melee off) before returning. A parent
+ * cancellation still throws.
+ */
+async function until<T>(stop: () => boolean, work: () => Promise<T>): Promise<T | null> {
+    const parent = executionContext.getStore();
+    const controller = new AbortController();
+    const stopped = new Error('Stopped');
+    const abort = () => controller.abort(parent?.signal.reason);
+    parent?.signal.addEventListener('abort', abort, { once: true });
+    const timer = setInterval(() => { if (stop()) controller.abort(stopped); }, 500);
+    const running: { work?: Promise<T> } = {};
+    try {
+        return await executionContext.run({ ...parent, signal: controller.signal }, () => abortable(running.work = work()));
+    } catch (error) {
+        if (error !== stopped) throw error;
+        await Promise.race([running.work?.catch(() => {}), Bun.sleep(2000)]);
+        return null;
+    } finally {
+        clearInterval(timer);
+        parent?.signal.removeEventListener('abort', abort);
+    }
+}
+
+/** An add hitting one of our casters or healers that nobody controls (a mezz ordered on it had peelAfterMs to land). */
+export function peelTarget(ctx: MemberContext<TacticsSettings>): Contact | null {
+    const o = ctx.orders();
+    const now = Date.now();
+    const soft = new Set(ctx.members().filter(m => !m.isDead && m.role !== 'tank' && m.role !== 'melee').map(m => m.name));
+    return ctx.threats()
+        .filter(t => t.objectId !== o.focus && !t.cc && !t.stale && t.hp > 0 && t.target !== null && soft.has(t.target))
+        .filter(t => !o.cc.some(a => a.targetId === t.objectId) || now - t.hostileSince > ctx.settings.peelAfterMs)
+        .sort((a, b) => a.hostileSince - b.hostileSince)[0] ?? null;
+}
+
+/**
+ * Tank: fight the focus to the death (an orders change switches targets), with a taunt
+ * style while it hits someone else and for tauntOpenMs from the first hit. An add on a
+ * caster or healer that nobody controls (peelTarget) gets taunted until it turns on us
+ * or is mezzed; then back to the focus.
+ */
 export const tank = (): Behavior<TacticsSettings> => ({
     name: 'tank',
     async run(ctx) {
         const o = ctx.orders();
         if (o.phase !== 'engage' || o.focus === null) return false;
-        const mob = ctx.focus();
+        const add = peelTarget(ctx);
+        const mob = add ?? ctx.focus();
         if (!mob) return ctx.skip('tank: focus unknown');
         if (!ctx.sdk.getNearbyNpc(mob.objectId)) {
-            ctx.doing('move', mob.objectId, 'to the focus');
+            ctx.doing('move', mob.objectId, add ? `to the add on ${add.target}` : 'to the focus');
             await ctx.bot.walkTo(mob.x, mob.y, { z: mob.z, tolerance: 200, timeout: 10_000 });
             return true;
         }
+        const { taunt, damage } = tankStyles(ctx);
+        const first: Map<number, number> = ctx.memory.get('firstHit') ?? new Map();
+        if (!first.has(mob.objectId)) first.set(mob.objectId, Date.now());
+        ctx.memory.set('firstHit', first);
+        const opening = first.get(mob.objectId)!;
+        const useStyle: StyleChooser = ({ npc, player }) =>
+            taunt && (add || npc.targetObjectId !== player.objectId || Date.now() - opening < ctx.settings.tauntOpenMs) ? taunt : damage;
+        if (add) {
+            ctx.doing('melee', add.objectId, `taunt off ${add.target}`);
+            const held = () => {
+                const c = ctx.contact(add.objectId);
+                return !c || !!c.cc || (c.target === ctx.name && Date.now() - c.targetSince > 1500);
+            };
+            const k = await until(held, () => ctx.bot.killNpc(add.objectId, { force: true, useStyle, timeout: 20_000, maxChaseDistance: 3000 }));
+            if (k) ctx.result('kill', k, add.objectId);
+            return true;
+        }
         ctx.doing('melee', mob.objectId, 'tank');
-        const k = await ctx.bot.killNpc(mob.objectId, { force: true, styles: anytimeStyles(ctx), timeout: 90_000, maxChaseDistance: 3000 });
-        ctx.result('kill', k, mob.objectId);
+        const k = await until(() => peelTarget(ctx) !== null, () => ctx.bot.killNpc(mob.objectId, { force: true, useStyle, timeout: 90_000, maxChaseDistance: 3000 }));
+        if (k) ctx.result('kill', k, mob.objectId);
         return true;
+    },
+});
+
+/**
+ * Tank: keep Guard and Protect on the members settings.guard names (a name or a role).
+ * Guard blocks attacks on them with our shield while we stand within 256 of them
+ * (GuardAbilityHandler.GUARD_DISTANCE); Protect moves 10 % per ability level of the
+ * threat they cause to us while within 1000 (StandardMobBrain.AddToAggroList). Both
+ * last until cancelled or a death, and show in our effects as "Brigid guarded by
+ * Cuchulainn" / "Ciaran protected by Cuchulainn". Using one again on the same member
+ * cancels it, so this acts only when that effect is missing. Out of fights only: it
+ * selects the member as our target.
+ */
+export const guard = (): Behavior<TacticsSettings> => ({
+    name: 'guard',
+    async run(ctx) {
+        const phase = ctx.orders().phase;
+        if ((!QUIET_PHASES.has(phase) && phase !== 'travel') || ctx.threats().length || ctx.bot.isDead()) return false;
+        const effects = (ctx.sdk.getState()?.effects ?? []).map(e => e.name);
+        for (const [ability, verb] of [['Guard', 'guarded'], ['Protect', 'protected']] as const) {
+            const want = ability === 'Guard' ? ctx.settings.guard.guard : ctx.settings.guard.protect;
+            if (!want || !ctx.sdk.findAbility(new RegExp(`^${ability}`, 'i'))) continue;
+            const m = ctx.members().find(x => !x.isDead && x.name !== ctx.name && (x.name === want || x.role === want));
+            if (!m || effects.includes(`${m.name} ${verb} by ${ctx.name}`)) continue;
+            // The effect shows a snapshot after the server applies it: don't toggle it off again meanwhile.
+            if (Date.now() - (ctx.memory.get(`${ability}At`) ?? 0) < 10_000) continue;
+            ctx.memory.set(`${ability}At`, Date.now());
+            await stopSwinging(ctx);
+            await ctx.sdk.sendSetTarget(m.objectId);
+            ctx.doing('guard', null, `${ability} ${m.name}`);
+            const r = await ctx.bot.useAbility(new RegExp(`^${ability}`, 'i'));
+            // "You are now guarding Brigid, but you must stand closer." is a success (it works once we are near).
+            const on = r.messages.find(x => /You are now (guarding|protecting)/.test(x.text));
+            ctx.result(ability.toLowerCase(), on ? { ...r, success: true, message: on.text } : r);
+            return true;
+        }
+        return false;
     },
 });
 
@@ -539,11 +680,11 @@ export const shedLoad = (): Behavior<TacticsSettings> => ({
 /** The behaviour lists the default strategies use, by role. */
 export function defaultBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
-        tank: [release(), healer(), retreat(), pull(), tank(), shedLoad(), holdFormation(), buff(), rest()],
-        healer: [release(), healer(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
-        support: [release(), healer(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
-        nuker: [release(), healer(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
-        melee: [release(), healer(), retreat(), assist({ melee: true }), shedLoad(), holdFormation(), buff(), rest()],
+        tank: [release(), healer(), sprint(), retreat(), pull(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
+        healer: [release(), healer(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
+        support: [release(), healer(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
+        nuker: [release(), healer(), sprint(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
+        melee: [release(), healer(), sprint(), retreat(), assist({ melee: true }), shedLoad(), holdFormation(), buff(), rest()],
     };
 }
 
