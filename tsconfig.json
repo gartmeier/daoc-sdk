@@ -16,6 +16,6 @@
     "noUncheckedIndexedAccess": true,
     "types": ["bun"]
   },
-  "include": ["*.ts", "sdk/**/*.ts", "client/**/*.ts", "gateway/**/*.ts", "mcp/**/*.ts", "data/**/*.ts", "scripts/**/*.ts", "bots/**/*.ts"],
+  "include": ["*.ts", "sdk/**/*.ts", "client/**/*.ts", "gateway/**/*.ts", "mcp/**/*.ts", "data/**/*.ts", "scripts/**/*.ts", "bots/**/*.ts", "groups/**/*.ts"],
   "exclude": ["node_modules", "reference", "server"]
 }

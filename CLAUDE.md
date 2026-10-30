@@ -2,7 +2,7 @@
 
 You play Dark Age of Camelot on a local OpenDAoC server by writing bot scripts. Start small, make one step toward the goal, then learn and grow the script as you go. Characters are **persistent**: every session continues where the last one ended.
 
-Before writing logic for a topic (walking, combat, spells, merchants, looting, death, classes, zones, grouping/chat), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
+Before writing logic for a topic (walking, combat, spells, merchants, looting, death, classes, zones, grouping/chat, group coordination), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
 
 ## First-time setup
 
@@ -42,6 +42,19 @@ MCP `execute_code` does steps 3–4 itself. Scripts and the CLIs never start a c
    A failed 5-minute run costs more than five 30-second diagnostic runs.
 4. **Check** the result's `success`/`reason`/`message`, the printed state summary, and `bun sdk/cli.ts <name>` again.
 5. **Record** what you learned in `bots/<name>/lab_log.md`, then improve the script.
+
+## Groups
+
+Several bots play as one group through `sdk/group` (read [learnings/group-coordination.md](learnings/group-coordination.md) first): members share what they see on a blackboard, a coordinator runs the strategy's `decide()` (pull, focus, crowd control, retreat), each member runs its role's behaviour list, and an observer scores every run.
+
+```bash
+bun groups/create-group.ts <group> <bot> <bot> ...    # groups/<group>/: group.json, strategy.ts, hunt.ts, lab_log.md
+bun client/swarm.ts <bot> <bot> ...                   # one process with every member's client
+bun sdk/group/cli.ts <group>                          # shared picture, observe only (--watch=60 scores whatever runs)
+bun groups/<group>/hunt.ts 180                        # coordinated hunt; report in groups/<group>/runs/<stamp>.md
+```
+
+The loop is the session loop at group scale: run, read the report (findings name the setting to change), change one thing in `strategy.ts`, run again and compare, note it in the group's `lab_log.md`. A group run controls every member, so don't drive a member separately meanwhile.
 
 ## MCP tools
 
@@ -128,8 +141,10 @@ The game server is the source of truth and is well tested. When something fails,
 ```
 bots/<name>/      bot.env (credentials + character), script.ts, lab_log.md
 bots/examples/    grinder.ts, merchant-run.ts, caster.ts, explorer.ts, duo.ts (bun bots/examples/<x>.ts <bot>); script-args.ts
+groups/<group>/   group.json (members, roles), strategy.ts, hunt.ts, lab_log.md, runs/ (observer reports); create-group.ts, _template/
 learnings/        topic notes from live runs
 sdk/              BotSDK (index.ts), BotActions (actions.ts), runner.ts, cli.ts, chat.ts, API.md
+sdk/group/        group coordination: blackboard, member agents + behaviours, coordinator, pve strategy, observer, runner, cli
 client/           headless DAoC client (runner.ts, swarm.ts for many bots in one process)
 data/             static world data: findNpcSpawns, getMerchantItems, estimateZ, validateCharacter, ...
 docs/SERVER.md    server properties, GM commands, SQL access

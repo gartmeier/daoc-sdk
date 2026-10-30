@@ -18,7 +18,8 @@ await leader.groupSay('assist me');
 - **Shared XP and money:** two level-1/2 Fighters each got **10 XP** for a spirit hound that gives 16–17 solo, and money was split ("Your share of the loot is 1 copper": 2 copper between two).
 - **Assisting:** object ids are per region and the same on every client, so the follower attacks the leader's target with `killNpc(mob.objectId, { force: true })`.
 - **Following:** OpenDAoC has no `/follow` or `/stick` (the retail client follows locally), so `bot.follow(player, { distance: 150, durationMs: 60_000, until })` walks after the player client-side. It stops when the player is out of view for 5 s.
-- **Unverified:** leaving or disbanding a group, group heals and buffs, and groups of more than two.
+- **Five-player groups** work (invites need a 1.5 s pause after the previous member joined). For coordinated group play (shared picture, coordinator, roles, observer) use `sdk/group`: see [group-coordination.md](group-coordination.md).
+- **Unverified:** leaving or disbanding a group, group heals and buffs.
 
 ## Chat
 

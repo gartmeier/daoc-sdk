@@ -48,8 +48,16 @@ client/               headless DAoC client
   dev/                live smoke scripts against the local server
 gateway/              gateway.ts, types.ts, state-fanout.ts, security.ts (Origin/Host checks, bot.env auth), viewer/ (port of rs-sdk server/gateway, without engine coupling)
 sdk/                  index.ts (BotSDK), actions.ts (BotActions = bot.*), runner.ts (runScript), cli.ts, chat.ts, chat-history.ts (shared with the gateway), formatter.ts, execution-context.ts, pathfinding.ts, generate-api-docs.ts, API.md, test/
+sdk/group/            group coordination on top of BotSDK/BotActions (one control connection per member, in one process):
+  types.ts            the JSON contract: MemberReport, Sighting, Contact, Orders, GroupEvent, GroupDefinition
+  blackboard.ts       shared picture: merges members' sightings into contacts (freshness, staleness, sticky threat, cc, kills)
+  member.ts           MemberAgent: publishes its snapshots, runs its role's behaviour list; orders changes interrupt
+  behaviors.ts        behaviour library (release, retreat, flee, heal, crowdControl, pull, tank, assist, position, holdFormation, rest, buff, shedLoad)
+  strategy.ts, pve.ts GroupStrategy (decide + behaviours + settings), Coordinator, the PvE leveling policy
+  observer.ts         metrics, findings and runs/<stamp>.md reports; runner.ts runGroup/runGroupScript; cli.ts; terrain.ts camps/danger/aggro
 mcp/                  server.ts, execute-code.ts, console-capture.ts, api/ (BotManager, which spawns client/runner.ts when no client is attached)
 bots/                 create-bot.ts, _template/, examples/ (+ script-args.ts); each bots/<name>/ is gitignored
+groups/               create-group.ts, _template/; each groups/<name>/ (group.json, strategy.ts, runs/) is gitignored
 scripts/              build-data.ts, setup-server.ts, check-submodules.ts
 server/docker/        docker-compose.yml and Dockerfile that build OpenDAoC from the server/core submodule
 learnings/            per-topic markdown notes for agents writing bots
