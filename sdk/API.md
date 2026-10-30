@@ -353,6 +353,8 @@ interface PlayerState {
   realmSpecPoints: number;
   money: Money;
   stats: Stats | null;
+  /** Constitution lost to PvE deaths (from level 6); a town healer (GameHealer) restores it for money. */
+  constitutionLost: number;
   encumbrance: { current: number; max: number } | null;
   isDead: boolean;
   isSitting: boolean;

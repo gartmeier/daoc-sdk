@@ -13,7 +13,7 @@ export function makePlayer(overrides: Partial<PlayerState> = {}): PlayerState {
         experience: 1500, experienceForNextLevel: 4000, levelPermill: 375, realmPoints: 0, bountyPoints: 0,
         specPoints: 3, realmSpecPoints: 0,
         money: { copper: 50, silver: 2, gold: 1, mithril: 0, platinum: 0, totalCopper: 10250 },
-        stats: null, encumbrance: null,
+        stats: null, constitutionLost: 0, encumbrance: null,
         isDead: false, isSitting: false, attacking: false, inCombat: false, targetObjectId: null,
         deathCount: 0, lastDeathAt: null,
         ...overrides,

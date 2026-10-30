@@ -6,6 +6,7 @@
 // ~1.5 s, casters stand 900-1400 back and healers 450-1000, whoever pulls aggro
 // runs to the tank, and positions change only while the tank holds the mob.
 
+import { findNpcSpawns } from '../../data/index';
 import type { Behavior, MemberContext } from './member';
 import { safePath } from './terrain';
 import type { Point, Role } from './types';
@@ -70,6 +71,56 @@ export const release = (): Behavior => ({
         if (!ctx.bot.isDead()) return false;
         ctx.doing('release');
         ctx.result('release', await ctx.bot.releaseAndRespawn());
+        return true;
+    },
+});
+
+/**
+ * After a death: visit a town healer (GameHealer) within `radius`, usually next to
+ * the bind point we respawned at. Interacting cures resurrection illness; lost
+ * Constitution (every PvE death from level 6, `pve_con_loss_level`) comes back
+ * for money through a yes/no dialog (`Healer.cs`). Not while the group fights.
+ */
+export const healer = (opts: { radius?: number } = {}): Behavior<TacticsSettings> => ({
+    name: 'healer',
+    // A walk aborted by an orders change left the healer out of view ("Target not found"):
+    // the visit is short and happens in town, so it runs to the end.
+    interruptible: false,
+    async run(ctx) {
+        const phase = ctx.orders().phase;
+        if (phase === 'engage' || phase === 'retreat' || ctx.bot.isDead()) return false;
+        const me = ctx.me();
+        const sick = (ctx.sdk.getState()?.effects ?? []).some(e => /Resurrection Illness/i.test(e.name));
+        const lost = me.constitutionLost ?? 0;
+        if (!sick && lost <= 0) return false;
+        if (Date.now() < (ctx.memory.get('healerRetry') ?? 0)) return false;
+        const spot = findNpcSpawns({ regionId: me.regionId, near: me, radius: opts.radius ?? 4000, classType: /GameHealer/, limit: 1 })[0];
+        if (!spot) { ctx.memory.set('healerRetry', Date.now() + 60_000); return ctx.skip('healer: none near'); }
+        ctx.doing('move', null, `to ${spot.name} (healer)`);
+        if (Math.hypot(spot.x - me.x, spot.y - me.y) > 600) await ctx.bot.walkTo(spot.x, spot.y, { z: spot.z, tolerance: 200 });
+        if (!ctx.sdk.findNearbyNpc(spot.name)) {
+            // Not there (stuck, attacked on the way): try again soon.
+            ctx.memory.set('healerRetry', Date.now() + 20_000);
+            return ctx.skip(`healer: ${spot.name} not in view`);
+        }
+        const since = ctx.sdk.getGameMessages().at(-1)?.id ?? 0;
+        const hi = await ctx.bot.interactWith(spot.name);
+        let outcome = hi.success ? 'cured' : hi.message;
+        if (hi.success && lost > 0) {
+            // "It will cost N to have your lost constitution restored. Do you accept?"
+            const asked = await ctx.sdk.waitForCondition(s => !!s.dialog, 4000).then(() => true).catch(() => false);
+            if (asked) {
+                await ctx.bot.respondToDialog(true);
+                await ctx.sdk.waitForCondition(() => ctx.sdk.getGameMessages().some(g => g.id > since && /restores \d+ points? of your lost constitution|You don't have that much/i.test(g.text)), 4000).catch(() => null);
+            }
+            outcome = ctx.sdk.getGameMessages().filter(g => g.id > since && /constitution|resurrection/i.test(g.text)).map(g => g.text).join(' | ') || 'no answer';
+        }
+        const left = ctx.me().constitutionLost ?? 0;
+        const ok = hi.success && left < lost || (lost === 0 && hi.success);
+        // Out of money: try again much later, not every turn; anything else in a minute.
+        const broke = /don't have that much/i.test(outcome);
+        ctx.memory.set('healerRetry', Date.now() + (ok && left === 0 ? 5_000 : broke ? 600_000 : 60_000));
+        ctx.result('healer', { success: ok, message: `${outcome} (con lost ${lost} → ${left})`, reason: ok ? undefined : 'refused' } as any);
         return true;
     },
 });
@@ -429,11 +480,11 @@ export const shedLoad = (): Behavior<TacticsSettings> => ({
 /** The behaviour lists the default strategies use, by role. */
 export function defaultBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
-        tank: [release(), retreat(), pull(), tank(), shedLoad(), holdFormation(), buff(), rest()],
-        healer: [release(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
-        support: [release(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), position(), shedLoad(), holdFormation(), buff(), rest()],
-        nuker: [release(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
-        melee: [release(), retreat(), assist({ melee: true }), shedLoad(), holdFormation(), buff(), rest()],
+        tank: [release(), healer(), retreat(), pull(), tank(), shedLoad(), holdFormation(), buff(), rest()],
+        healer: [release(), healer(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
+        support: [release(), healer(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), position(), shedLoad(), holdFormation(), buff(), rest()],
+        nuker: [release(), healer(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
+        melee: [release(), healer(), retreat(), assist({ melee: true }), shedLoad(), holdFormation(), buff(), rest()],
     };
 }
 

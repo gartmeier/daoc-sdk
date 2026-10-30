@@ -229,7 +229,7 @@ export class DaocClient {
             experience: self.experience, experienceForNextLevel: self.experienceForNextLevel, levelPermill: self.levelPermill,
             realmPoints: self.realmPoints, bountyPoints: self.bountyPoints, specPoints: self.specPoints,
             realmSpecPoints: self.realmSpecPoints, money: { ...self.money }, stats: self.stats ? { ...self.stats } : null,
-            encumbrance: self.encumbrance ? { ...self.encumbrance } : null,
+            constitutionLost: self.constitutionLost, encumbrance: self.encumbrance ? { ...self.encumbrance } : null,
             isDead: self.isDead, isSitting: self.isSitting || mv.sitting, attacking: self.attacking, inCombat: m.inCombat(),
             targetObjectId: self.targetObjectId, deathCount: self.deathCount, lastDeathAt: self.lastDeathAt,
         } : null;

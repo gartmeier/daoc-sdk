@@ -175,13 +175,15 @@ describe('own-character packets', () => {
     test('0xFB stats vs resists (byte 72)', () => {
         const w = W();
         for (const v of [70, 60, 70, 60, 60, 60, 60, 60]) w.u16(v);
-        w.u16(0).fill(0, 18).fill(0, 18).fill(0, 9).fill(0, 9).u8(0).u8(0).u16(38).u16(0);
+        w.u16(0).fill(0, 18).fill(0, 18).fill(0, 9).fill(0, 9).u8(0).u8(4).u16(38).u16(0);
         const p = w.toBytes();
         expect(p.length).toBe(78);
         const d = decodeStatsUpdate(p);
         expect(d.kind).toBe('stats');
         expect(d.base).toEqual([70, 60, 70, 60, 60, 60, 60, 60]);
         expect(d.maxHealth).toBe(38);
+        // Byte 73: Constitution lost to deaths (PacketLib175.cs:323).
+        expect(d.constitutionLost).toBe(4);
         const res = W().fill(0, 72).u8(0xFF).u8(0).u16(0).u16(0).toBytes();
         expect(decodeStatsUpdate(res).kind).toBe('resists');
     });
