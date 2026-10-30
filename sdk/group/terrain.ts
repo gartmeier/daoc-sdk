@@ -70,16 +70,22 @@ export function aggroAt(regionId: number, name: string, p: Point): { level: numb
     return best && best.level > 0 ? { level: best.level, range: best.range } : null;
 }
 
-/** Densest cluster of monster spawns in the level band, weighted by distance from `near`. */
-export function findCamp(regionId: number, near: Point, lo: number, hi: number, opts: { maxDist?: number; avoid?: Point[] } = {}): Camp | null {
+/**
+ * Densest cluster of monster spawns in the level band, weighted by distance from `near`.
+ * `aggressiveWeight` (default 1) counts each aggressive spawn as that fraction of a
+ * passive one: below 1 prefers camps the pull filter (avoidAggressive) can work.
+ */
+export function findCamp(regionId: number, near: Point, lo: number, hi: number, opts: { maxDist?: number; avoid?: Point[]; aggressiveWeight?: number } = {}): Camp | null {
     const pool = findNpcSpawns({ regionId, realm: 0, near, radius: opts.maxDist ?? 60_000, limit: 100_000 })
         .filter(s => !(s.flags & 0x10) && s.name === s.name.toLowerCase() && !/new mob/.test(s.name) && s.level >= lo && s.level <= hi);
+    const w = opts.aggressiveWeight ?? 1;
+    const weight = (s: (typeof pool)[number]) => (s.aggroLevel > 0 && s.aggroRange > 0 ? w : 1);
     let best: Camp | null = null, bestScore = 0;
     for (const c of pool) {
         if (dangerNear(regionId, lo + 1, c, 1000)) continue;
         if (opts.avoid?.some(a => Math.hypot(a.x - c.x, a.y - c.y) < 2500)) continue;
         const around = pool.filter(o => Math.hypot(o.x - c.x, o.y - c.y) < 1500);
-        const score = around.length / (1 + Math.hypot(c.x - near.x, c.y - near.y) / 10_000);
+        const score = around.reduce((a, o) => a + weight(o), 0) / (1 + Math.hypot(c.x - near.x, c.y - near.y) / 10_000);
         if (score <= bestScore) continue;
         bestScore = score;
         const avg = (f: (o: typeof c) => number) => Math.round(around.reduce((a, o) => a + f(o), 0) / around.length);
@@ -93,25 +99,43 @@ export function findCamp(regionId: number, near: Point, lo: number, hi: number, 
 }
 
 /**
- * A home base near the camp: open ground (no spawn within 700) away from danger,
- * as close to the camp as possible, on the side we come from.
+ * A home base near the camp: open ground (no spawn within `clearance`) away from danger,
+ * as close to the camp as possible, on the side we come from. Spots lie 600 to
+ * 2600 from the camp (up to 3600 for a larger clearance); when none meets the
+ * clearance (and twice it from aggressive spawns near our level) it is
+ * relaxed in steps of 200 down to 700.
+ *
+ * Why clearance matters: a mob that gets hit calls same-faction friends within
+ * 450 + 150 per extra attacking group member (1050 for five; StandardMobBrain.BringFriends),
+ * but not on a body pull. A body-pulled mob fought at a base this far from other
+ * spawns brings no friends.
  */
-export function chooseBase(regionId: number, level: number, camp: Point3, from: Point): Point3 {
-    const spawns = findNpcSpawns({ regionId, near: camp, radius: 5000, limit: 2000 });
+export function chooseBase(regionId: number, level: number, camp: Point3, from: Point, clearance = 700): Point3 {
+    const spawns = findNpcSpawns({ regionId, near: camp, radius: 7000, limit: 4000 });
     const toward = Math.atan2(from.y - camp.y, from.x - camp.x);
-    let best: Point3 | null = null, bestScore = Infinity;
-    for (let r = 600; r <= 2600; r += 250) {
+    const maxR = 2600 + Math.min(1000, Math.max(0, clearance - 700));
+    // Aggressive monsters near our level wander into a base and come at it on their own.
+    const aggressive = spawns.filter(s => s.aggroLevel > 0 && s.aggroRange > 0 && !(s.flags & 0x10) && s.level >= level - 1);
+    // Every spot once: its distance from the camp, its score, and its distance to the nearest spawn (and aggressive spawn).
+    const spots: { p: Point3; r: number; score: number; clear: number; aggClear: number }[] = [];
+    for (let r = 600; r <= maxR; r += 250) {
         for (let a = 0; a < 24; a++) {
             const ang = (a / 24) * Math.PI * 2;
             const x = camp.x + Math.cos(ang) * r, y = camp.y + Math.sin(ang) * r;
             if (dangerNear(regionId, level, { x, y }, 600)) continue;
-            if (spawns.some(s => Math.hypot(s.x - x, s.y - y) < 700)) continue;
+            let clear = Infinity, aggClear = Infinity;
+            for (const s of spawns) clear = Math.min(clear, Math.hypot(s.x - x, s.y - y));
+            for (const s of aggressive) aggClear = Math.min(aggClear, Math.hypot(s.x - x, s.y - y));
             const off = Math.abs(Math.atan2(Math.sin(ang - toward), Math.cos(ang - toward)));
-            const score = r + off * 300;
-            if (score < bestScore) { bestScore = score; best = { x: Math.round(x), y: Math.round(y), z: camp.z }; }
+            spots.push({ p: { x: Math.round(x), y: Math.round(y), z: camp.z }, r, score: r + off * 300, clear, aggClear });
         }
     }
-    return best ?? { x: camp.x, y: camp.y, z: camp.z };
+    for (let need = Math.max(700, clearance); ; need = Math.max(700, need - 200)) {
+        // The default clearance keeps the original 2600 reach; aggressive spawns get twice the room above it.
+        const ok = spots.filter(s => s.clear >= need && (need > 700 || s.r <= 2600) && (need <= 700 || s.aggClear >= 2 * need));
+        if (ok.length) return ok.reduce((a, b) => (b.score < a.score ? b : a)).p;
+        if (need <= 700) return { x: camp.x, y: camp.y, z: camp.z };
+    }
 }
 
 /** Waypoints from `from` to `to` around danger circles (just [to] when the line is clear). Coarse grid A*. */

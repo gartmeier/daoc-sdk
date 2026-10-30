@@ -93,6 +93,8 @@ A member runs its role's **behaviour list** top to bottom every turn; the first 
   - Choice: speed while travelling; endurance while pulling and fighting (the tank's styles); between fights, power when a caster is below 70 % (`songs.powerBelow`), health when someone is below 80 %, else endurance.
   - Hibernian Bard at level 9: Clear Path (speed), Rhythm of Hibernia (endurance), Chant of Healing (health). Power (Rhyme of Earth and up) comes later in Music. All take 3 s to cast and can be cast on the move.
   - Verified live: speed on every travel leg, endurance while gathering and fighting. A song is kept at least `songs.holdMs` (30 s) except into a fight, because short idle/travel hops made it flap.
+- **Roaming can walk the group into aggressive mobs:** once the camp is out of targets, `decidePve` moves the base to a random spot within 900 of the camp every `roamMs`, without checking aggressive spawns. At a passive camp next to an aggressive one this caused a wipe (6 adds). Set `roamMs` high and let `newCampMs` pick another camp instead.
+- **Aggressive neighbours wander into a base:** `chooseBase` faces the side the group comes from, which put the wolfhound base 4,700 from a wild lucradan camp. The lucradans walked in, and the group died there four times in one run. With `baseClearance` above 700, a base now also keeps twice that from aggressive spawns at level-1 and up (2,600 for 1,300).
 - **Interrupts:** a material orders change aborts a running walk, fight or rest at once (`interruptible`, the default); casts finish (`interruptible: false`).
 - **Pacing:** a turn that "acts" in under 250 ms is padded. Without it, a `rest()` that failed instantly ("attacked by ...") spun the loop, starved the event loop, and the group wiped.
 - `ctx.skip(reason)` records why a behaviour did not act. The observer reports the top idle reasons per member, which is how "waiting for the tank to hold it" showed up.
@@ -143,7 +145,7 @@ export default defineStrategy(pveLeveling, {
 ```
 
 - Individual scripts are not replaced: a behaviour can call any `bot.*` method or a helper from a bot's own folder, and outside a group run every bot still runs its own scripts.
-- Settings worth knowing (all in `PVE_SETTINGS`): `minCon`/`maxCon`, `camp` (hunt here), `huntRadius`, `ready`, `holdMs`, `assistAfterMs`, `heal.*`, `rest`, `combatRange`, `formation`, `pullDistance`, `engageRadius`, `avoidAggressive`/`aggroPad`/`maxAggroNeighbors`, `retreat.*`, `shedLoadAt`/`keepItems`.
+- Settings worth knowing (all in `PVE_SETTINGS`): `minCon`/`maxCon`, `camp` (hunt here), `campLevelBand`/`campAggressiveWeight`, `huntRadius`, `baseClearance`, `ready`, `holdMs`, `assistAfterMs`, `heal.*`, `rest`, `combatRange`, `formation`, `pullDistance`, `engageRadius`, `avoidAggressive`/`aggroPad`/`maxAggroNeighbors`/`pullAggressive`, `roamMs`/`newCampMs`, `retreat.*`, `shedLoadAt`/`keepItems`.
 
 ## The improvement loop (LLM observer)
 
@@ -172,12 +174,15 @@ What this loop did live (3–4 minutes per run, same camp, water beetles L6–8)
 - **The first invite to each member went unanswered** right after the previous member joined; `formGroup` waits 1.5 s before each invite.
 - **Formation depth counts in travel:** legs must chain from the last leg point, not from the group's centre, which trails the anchor by the formation's depth.
 - **Ending mid-pull:** a mob already hit follows the tank after the run and killed it between runs. A run now finishes a pull under way.
+- **Bring a friend:** a mob that gets *hit* calls same-faction mobs within 450 + 150 per extra attacker (1050 for a group of five), with a 200 % chance for five attackers, so two adds are guaranteed (`StandardMobBrain.BringFriends`, `baf_initial_chance` 0 + `baf_additional_chance` 50 per extra attacker). A body pull doesn't trigger it until the mob is hit. So fight a body-pulled mob where no friend stands within ~1050: `baseClearance` (default 700) keeps the base that far from every spawn.
+- **Retreating from mobs that keep up kills everyone:** at level 7 against an aggressive L8–9 camp in Lough Derg, a retreat at 3 attackers left all five dead "en route" while nobody fought back (runs 20261030-122154/-122647, 14 deaths). It happened again at level 9 (3 runs out of 3), so hibernia doesn't retreat at all (`retreat.enabled: false`) and fights it out with the mezzers.
 - **Constitution loss:** every PvE death from level 6 (`pve_con_loss_level`) lowers Constitution until a town healer (GameHealer) restores it for money (188 copper per point at level 9). After about a dozen deaths the Hibernian group had lost 10–21 Con each (casters at 25 instead of 40). `player.constitutionLost` shows it; the `healer` behaviour (second in every default role list) visits the healer near the bind point after a death, which also cures resurrection illness. Lost Con is added at release, not at death. The visit isn't interruptible: an orders change once aborted the walk, so the healer was out of view ("Target not found") and the member kept the loss.
+- **Aggressive camps two levels up are too much at level 7:** `campLevelBand: [1, 2]` with `maxAggroNeighbors: 1` meant 5–7 adds per fight. Passive camps at even con were clean. Lough Derg's camps from level 9 up are almost all aggressive. `campAggressiveWeight: 0` (the camp finder counts only passive spawns) and `pullAggressive: false` (pull only passive mobs) found passive red wolfhound camps for levels 8–10: 0.5–1.2M group XP/h without deaths.
 
 ## Unverified / next
 
 - **RvR:** enemy-realm players already arrive as contacts (`kind: 'player'`) and the observer works unchanged. Missing: an RvR `decide()` (assist trains on enemy healers, cc rotations, focus switching on low health, retreat on numbers), and line of sight is not real (the client always answers "clear").
 - **Pets** (Druid, Enchanter): no SDK pet commands yet.
-- **Town visits** as a phase (sell, train, tasks): the old single-process scripts in `bots/cuchulainn/` (town.ts) do it; not ported.
+- **Town visits** as a phase: not in the PvE policy. `groups/hibernia/town.ts` does it between runs (teleport to the trainer's town, train, wear upgrades, sell, teleport to the hub and `/bind`), and `groups/hibernia/campaign.ts` alternates it with hunts until a target level.
 - **Across processes:** the blackboard is in-process. Its reports, orders and events are plain JSON, so a gateway channel could let separately running per-bot scripts or MCP sessions join one group.
 - **Leaving or disbanding** a group (`/disband` in `formGroup` for members already in another group) is unverified.

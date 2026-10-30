@@ -19,8 +19,12 @@ export interface PveSettings extends TacticsSettings {
     camp: Point3 | null;
     /** Camp search: spawn levels from group level + band[0] to + band[1]. */
     campLevelBand: [number, number];
+    /** Camp search: an aggressive spawn counts as this fraction of a passive one (below 1 prefers passive camps). */
+    campAggressiveWeight: number;
     /** Pull targets within this distance of the base. */
     huntRadius: number;
+    /** The base keeps this far from every spawn (a hit mob calls friends within 1050 for a group of five). */
+    baseClearance: number;
     /** Pull only when every living member is at or above these (mana counts for casters only). */
     ready: { hp: number; mana: number };
     /** Members within this distance of the base count as present. */
@@ -35,6 +39,8 @@ export interface PveSettings extends TacticsSettings {
     aggroPad: number;
     /** ... and allowing this many of them (an add the mezzers can take). */
     maxAggroNeighbors: number;
+    /** Pull aggressive monsters too (false: passive ones only; aggressive ones still get fought when they come). */
+    pullAggressive: boolean;
     retreat: {
         enabled: boolean;
         /** Retreat when the tank drops below this while the focus has more than half its health. */
@@ -75,7 +81,9 @@ export const PVE_SETTINGS: PveSettings = {
     maxCon: 1,
     camp: null,
     campLevelBand: [-1, 2],
+    campAggressiveWeight: 1,
     huntRadius: 2200,
+    baseClearance: 700,
     ready: { hp: 80, mana: 50 },
     gatherRadius: 1200,
     engageRadius: 700,
@@ -83,6 +91,7 @@ export const PVE_SETTINGS: PveSettings = {
     avoidAggressive: true,
     aggroPad: 300,
     maxAggroNeighbors: 0,
+    pullAggressive: true,
     retreat: { enabled: true, tankHp: 25, maxAdds: 3, deaths: 2, distance: 2500, maxMs: 25_000 },
     travelLeg: 1500,
     roamMs: 25_000,
@@ -103,6 +112,7 @@ export function rejectPull(c: Contact, live: Contact[], opts: { base: Point; reg
     const con = conLevel(opts.level, c.level);
     if (con < s.minCon || con > s.maxCon) return `con ${con}`;
     if (dist(c, opts.base) > s.huntRadius) return 'too far';
+    if (!s.pullAggressive && aggroAt(opts.regionId, c.name, c)) return 'aggressive';
     if (!s.avoidAggressive) return null;
     if (dangerNear(opts.regionId, opts.level, c, 300)) return 'in a danger zone';
     const near = live.filter(o => {
@@ -211,11 +221,11 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     if (!mem.camp || (!s.camp && mem.campLevel !== level)) {
         const camp: Camp | null = s.camp
             ? { ...s.camp, zone: '', count: 0, names: 'given camp' }
-            : findCamp(regionId, leader, Math.max(0, level + s.campLevelBand[0]), level + s.campLevelBand[1], { avoid: mem.avoidCamps });
+            : findCamp(regionId, leader, Math.max(0, level + s.campLevelBand[0]), level + s.campLevelBand[1], { avoid: mem.avoidCamps, aggressiveWeight: s.campAggressiveWeight });
         if (!camp) return { phase: 'idle', anchor: null, focus: null, reason: `no camp for level ${level} in region ${regionId}` };
         mem.camp = camp;
         mem.campLevel = level;
-        mem.base = chooseBase(regionId, level, camp, leader);
+        mem.base = chooseBase(regionId, level, camp, leader, s.baseClearance);
         mem.route = null;
         mem.leg = null;
     }
