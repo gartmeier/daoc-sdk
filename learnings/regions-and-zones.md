@@ -27,6 +27,11 @@
 - **Teleporters** (verified live):
   - Master Visur <Teleporter> near Prydwen Keep takes a level-1 character to Camelot (region 10) and back for free. See [npc-dialog.md](npc-dialog.md).
   - The client reports phase `regionChange`, then `playing`. `player.regionId` changes, and the snapshot's NPC lists are replaced.
+- **Battlegrounds** (verified live: five Hibernians at level 20 to Thidranki, region 252; `groups/hibernia/thidranki.ts`):
+  - The portal keep's teleporter ports everyone within 500 of it each time it casts (about every 45 s, `OF_REPORT_INTERVAL`). It only ports players wearing a medallion in the Mythical slot (37), and the medallion picks the destination (`scripts/teleporters/OFTeleporters.cs`).
+  - The Battlegrounds Medallion of Passage is free from the Medallion Merchant next to the teleporter (Hibernia: Glasny and Araisa at Druim Ligen). `equipItem` puts it in slot 37.
+  - The medallion is used up by the port. Thidranki takes levels 20–24 below 7,125 realm points.
+  - Whispering "battlegrounds" works only for teleporters that hand it to `GameTeleporter.GetTeleportLocation`. Channeler Glasny (LiveTeleporter) and SimpleTeleporters don't. A SimpleTeleporter answers only the exact names of its destinations (Channeler Ynsalg at Druim Cain: "Druim Ligen").
 - **Zone exits do not fire by walking** (`getZonePointsFrom(regionId)` gives `id`, `sourceX/Y/Z` → `targetRegion`):
   - Verified live: walking onto zone point 111 (region 1 → 2, at 554895, 523579, 2512) ended "Arrived" 10 units from it, and 5 s later the bot was still in region 1.
   - Why: the server uses a zone point only when the client sends 0x90 PlayerRegionChangeRequest with its id (`RegionChangeRequestHandler.cs:11`, u16 little-endian for 1.126+ at `:23`; `IPacketLib.cs:148`). Position updates never trigger it. For PrivLevel-1 players the zone point's `realm` must be 0 or theirs (`:33-37`).
