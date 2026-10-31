@@ -731,6 +731,59 @@ describe('castSpell', () => {
         expect((await bot.castSpell(spell, 'rat')).reason).toBe('no_target');
     });
 
+    test('does not retry "You must select a target" once the cast began and the target died', async () => {
+        const { w, bot } = world({ skills });
+        w.handlers.castSpell = (_a, world) => {
+            setTimeout(() => {
+                world.message('You begin casting a Minor Vitality Drain spell!', { type: 'spell' });
+                world.combat({ kind: 'spellCast', attackerObjectId: world.player.objectId, targetObjectId: null, castTimeMs: 1000 });
+            }, 10);
+            setTimeout(() => {
+                world.combat({ kind: 'death', attackerObjectId: null, targetObjectId: 200, targetHealthPercent: 0 });
+                world.message('You must select a target for this spell!', { type: 'spell' });
+            }, 60);
+        };
+        const r = await bot.castSpell(spell, 'rat');
+        expect(r).toMatchObject({ success: false, reason: 'no_target', castTimeMs: 1000 });
+        expect(r.message).toEndWith(' (target gone, not retried)');
+        expect(w.sentOf('castSpell')).toHaveLength(1);
+        expect(w.sentOf('setTarget')).toHaveLength(1);
+    });
+
+    test('does not retry a refusal before the cast when the ID died or holds another object', async () => {
+        const { w, bot } = world({ skills });
+        const refuse = (world: FakeWorld, change: (world: FakeWorld) => void): void => {
+            setTimeout(() => {
+                change(world);
+                world.message('You must select a target for this spell!', { type: 'spell' });
+            }, 10);
+        };
+        // The rat died after we selected it.
+        w.handlers.castSpell = (_a, world) => refuse(world, wd => wd.combat({ kind: 'death', attackerObjectId: null, targetObjectId: 200, targetHealthPercent: 0 }));
+        expect(await bot.castSpell(spell, 'rat')).toMatchObject({ reason: 'no_target', castTimeMs: null, message: 'You must select a target for this spell! (target gone, not retried)' });
+        expect(w.sentOf('castSpell')).toHaveLength(1);
+        // Its ID went to a new spawn (the death event was missed).
+        w.handlers.castSpell = (_a, world) => refuse(world, wd => { wd.state.nearbyNpcs = wd.state.nearbyNpcs.map(n => n.objectId === 200 ? { ...n, name: 'wolf' } : n); });
+        expect((await bot.castSpell(spell, 'rat')).reason).toBe('no_target');
+        expect(w.sentOf('castSpell')).toHaveLength(2);
+        // The ID is gone from the world.
+        w.state.nearbyNpcs = [makeNpc({ objectId: 201, name: 'rat' })];
+        w.publish();
+        w.handlers.castSpell = (_a, world) => refuse(world, wd => wd.removeNpc(201));
+        expect((await bot.castSpell(spell, 'rat')).message).toEndWith(' (target gone, not retried)');
+        expect(w.sentOf('castSpell')).toHaveLength(3);
+        expect(w.sentOf('setTarget').map(a => a.objectId)).toEqual([200, 200, 201]);
+    });
+
+    test('retryNoTarget false never retries', async () => {
+        const { w, bot } = world({ skills });
+        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('You must select a target for this spell!', { type: 'spell' }), 10); };
+        const r = await bot.castSpell(spell, 'rat', { retryNoTarget: false });
+        expect(r).toMatchObject({ success: false, reason: 'no_target', message: 'You must select a target for this spell!' });
+        expect(w.sentOf('castSpell')).toHaveLength(1);
+        expect(w.sentOf('setTarget')).toHaveLength(1);
+    });
+
     test('a foreign DoT tick or damage-shield hit mid-cast is not completion', async () => {
         const { w, bot } = world({ skills });
         w.handlers.castSpell = (_a, world) => {

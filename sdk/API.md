@@ -32,7 +32,7 @@
 | `async target(target: ObjectTarget \| null): Promise<TargetResult>` | Select a target (NPC, player, object, or our own objectId) and observe it in player.targetObjectId. |
 | `async attack(npc: NpcTarget, options: { timeout?: number } = {}): Promise<AttackResult>` | Approach, target, face and switch melee on; observed via attack mode or a swing. |
 | `async killNpc(target: NpcTarget, options: KillOptions = {}): Promise<KillResult>` | Fight an NPC to the death: walk into melee range (adopting its z), face, target, attack, re-approach when it moves, use styles, and wait for the death (remove packet / 0 HP). Reports XP, RP, money, items and duration. |
-| `async castSpell(spell: NamePattern \| Spell, target?: ObjectTarget \| null, options: CastOptions = {}): Promise<CastResult>` | Cast a spell (name, RegExp or Spell) on a target, or on the current target when none is given. Selects the target every time (the server drops it on death without telling the client) and re-selects and retries once on "You must select a target". Observes the cast start ("You begin casting", cast animation) and completion ("You cast a <spell> spell!", or an effect/damage/resist once the cast time is up). Reason 'died' when we die mid-cast; 'dead' when already dead before casting. |
+| `async castSpell(spell: NamePattern \| Spell, target?: ObjectTarget \| null, options: CastOptions = {}): Promise<CastResult>` | Cast a spell (name, RegExp or Spell) on a target, or on the current target when none is given. Selects the target every time (the server drops it on death without telling the client) and re-selects and retries once on "You must select a target" while that target is still there (CastOptions.retryNoTarget). Observes the cast start ("You begin casting", cast animation) and completion ("You cast a <spell> spell!", or an effect/damage/resist once the cast time is up). Reason 'died' when we die mid-cast; 'dead' when already dead before casting. |
 | `async useStyle(name: NamePattern): Promise<SkillUseResult>` | Queue a combat style for the next swing; observed by "You prepare to perform a ...". |
 | `findKillableNpc(options: FindKillableOptions = {}): NearbyNpc \| null` | Best monster to fight nearby: killable, not engaged with someone else, within the con (or level-difference) window, nearest first. |
 | `findKillableNpcs(options: FindKillableOptions = {}): NearbyNpc[]` | All candidates findKillableNpc considers, best first. |
@@ -1009,6 +1009,8 @@ interface CastOptions {
   range?: number;
   /** Wait for this long beyond the cast time for completion (default 2500 ms). */
   timeout?: number;
+  /** Re-select the target and cast once more on "You must select a target" (default true). Only when the refusal came before the cast began and the target is still the one we chose: no death since we selected it and the same name under its ID (the server hands a dead mob's ID to the next spawn). Otherwise the result keeps reason 'no_target' and its message ends in " (target gone, not retried)". */
+  retryNoTarget?: boolean;
 }
 ```
 

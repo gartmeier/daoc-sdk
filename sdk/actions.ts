@@ -200,6 +200,14 @@ export interface CastOptions {
     range?: number;
     /** Wait for this long beyond the cast time for completion (default 2500 ms). */
     timeout?: number;
+    /**
+     * Re-select the target and cast once more on "You must select a target" (default true). Only
+     * when the refusal came before the cast began and the target is still the one we chose: no
+     * death since we selected it and the same name under its ID (the server hands a dead mob's ID
+     * to the next spawn). Otherwise the result keeps reason 'no_target' and its message ends in
+     * " (target gone, not retried)".
+     */
+    retryNoTarget?: boolean;
 }
 
 export interface CastResult extends ActionResult {
@@ -937,7 +945,8 @@ export class BotActions {
      * Cast a spell (name, RegExp or Spell) on a target, or on the current
      * target when none is given. Selects the target every time (the server
      * drops it on death without telling the client) and re-selects and retries
-     * once on "You must select a target". Observes the cast start ("You begin
+     * once on "You must select a target" while that target is still there
+     * (CastOptions.retryNoTarget). Observes the cast start ("You begin
      * casting", cast animation) and completion ("You cast a <spell> spell!", or
      * an effect/damage/resist once the cast time is up). Reason 'died' when we
      * die mid-cast; 'dead' when already dead before casting.
@@ -984,6 +993,7 @@ export class BotActions {
             }
             if (obj.objectId !== player.objectId) targetId = obj.objectId;
         }
+        const baseline = maxCombatEventId(this.helpers.state());
         if (targetId !== null) await this.sdk.sendSetTarget(targetId);
         const p = this.helpers.player()!;
         if (p.isSitting) await this.sdk.sendSit(false);
@@ -991,9 +1001,20 @@ export class BotActions {
         if (obj && obj.objectId !== p.objectId) await this.sdk.sendFaceObject(obj.objectId);
 
         const first = await this.observeCast(sp, obj, info, options);
-        if (first.reason !== 'no_target' || targetId === null) return first;
-        // "You must select a target": the server lost our target after all (e.g. it cleared it
-        // while this cast was being set up). Select it again and try once more.
+        if (first.reason !== 'no_target' || targetId === null || options.retryNoTarget === false) return first;
+        // "You must select a target" before the cast began: the server lost our target after all
+        // (e.g. it cleared it while this cast was being set up). Select it again and try once more,
+        // but only while it is the target we chose. A refusal after "You begin casting", a death,
+        // or another name under the ID (the server reuses a dead mob's ID for the next spawn) means
+        // it is gone, and a retry would land on whatever holds the ID now.
+        const s = this.helpers.state();
+        const began = first.castTimeMs !== null
+            || first.messages.some(m => /you begin casting/i.test(m.text))
+            || !!s?.combatEvents.some(e => e.id > baseline && e.kind === 'spellCast' && e.attackerObjectId === p.objectId);
+        const died = !!s?.combatEvents.some(e => e.id > baseline && e.kind === 'death' && e.targetObjectId === targetId);
+        // No obj: a friendly spell on ourselves, which cannot be replaced.
+        const same = !obj || this.sdk.getObject(targetId)?.name === obj.name;
+        if (began || died || !same) return { ...first, message: `${first.message} (target gone, not retried)` };
         await this.sdk.sendSetTarget(targetId);
         return this.observeCast(sp, obj, info, options);
     }
