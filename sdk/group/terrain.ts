@@ -76,15 +76,22 @@ export function aggroAt(regionId: number, name: string, p: Point): { level: numb
  * `aggressiveWeight` (default 1) counts each aggressive spawn as that fraction of a
  * passive one: below 1 prefers camps the pull filter (avoidAggressive) can work.
  */
-export function findCamp(regionId: number, near: Point, lo: number, hi: number, opts: { maxDist?: number; avoid?: Point[]; aggressiveWeight?: number } = {}): Camp | null {
+export function findCamp(regionId: number, near: Point, lo: number, hi: number, opts: { maxDist?: number; avoid?: Point[]; aggressiveWeight?: number; clear?: { radius: number; level: number } } = {}): Camp | null {
     const pool = findNpcSpawns({ regionId, realm: 0, near, radius: opts.maxDist ?? 60_000, limit: 100_000 })
         .filter(s => !(s.flags & 0x10) && s.name === s.name.toLowerCase() && !/new mob/.test(s.name) && s.level >= lo && s.level <= hi);
+    // Aggressive spawns at or above `clear.level` that must not stand within `clear.radius` of the camp.
+    const clear = opts.clear && opts.clear.radius > 0 ? opts.clear : null;
+    const hostile = clear
+        ? findNpcSpawns({ regionId, realm: 0, near, radius: (opts.maxDist ?? 60_000) + clear.radius, limit: 200_000 })
+            .filter(s => s.aggroLevel > 0 && s.aggroRange > 0 && !(s.flags & 0x10) && s.level >= clear.level)
+        : [];
     const w = opts.aggressiveWeight ?? 1;
     const weight = (s: (typeof pool)[number]) => (s.aggroLevel > 0 && s.aggroRange > 0 ? w : 1);
     let best: Camp | null = null, bestScore = 0;
     for (const c of pool) {
         if (dangerNear(regionId, lo + 1, c, 1000)) continue;
         if (opts.avoid?.some(a => Math.hypot(a.x - c.x, a.y - c.y) < 2500)) continue;
+        if (clear && hostile.some(h => Math.abs(h.x - c.x) < clear.radius && Math.abs(h.y - c.y) < clear.radius && Math.hypot(h.x - c.x, h.y - c.y) < clear.radius)) continue;
         const around = pool.filter(o => Math.hypot(o.x - c.x, o.y - c.y) < 1500);
         const score = around.reduce((a, o) => a + weight(o), 0) / (1 + Math.hypot(c.x - near.x, c.y - near.y) / 10_000);
         if (score <= bestScore) continue;

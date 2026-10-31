@@ -4,8 +4,11 @@ import { aggroAt, aggroZones, chooseBase, safePath } from './terrain';
 
 describe('terrain (static data, Shannon Estuary)', () => {
     test('aggro comes from the nearest spawn: the same name is aggressive in one camp and passive in another', () => {
-        expect(aggroAt(200, 'mudman', { x: 303753, y: 461624 })?.range).toBe(500);
-        expect(aggroAt(200, 'mudman', { x: 288913, y: 457729 })).toBeNull();
+        expect(aggroAt(200, 'wind ghoul', { x: 290348, y: 458975 })?.range).toBe(500);
+        expect(aggroAt(200, 'wind ghoul', { x: 316154, y: 456937 })).toBeNull();
+        // Mudmen are passive everywhere: their npctemplates (ReplaceMobValues) have AggroLevel 0,
+        // whatever the stale mob rows say.
+        expect(aggroAt(200, 'mudman', { x: 303753, y: 461624 })).toBeNull();
         // The lugradan whelp camp east of Mag Mell: passive, though "feccan" is aggressive elsewhere.
         expect(aggroAt(200, 'feccan', { x: 307784, y: 634226 })).toBeNull();
         expect(aggroAt(200, 'no such mob', { x: 0, y: 0 })).toBeNull();

@@ -21,6 +21,12 @@ export interface PveSettings extends TacticsSettings {
     campLevelBand: [number, number];
     /** Camp search: an aggressive spawn counts as this fraction of a passive one (below 1 prefers passive camps). */
     campAggressiveWeight: number;
+    /**
+     * Reject a camp when an aggressive spawn at or above (group level - 2) stands within this
+     * radius of it (0 = off). Midgard L3 run 20261030-203443: two aggressive L5 sapherds inside a
+     * dryad sprig camp and huldu lurkers around it, 21 deaths; dangers() let both through.
+     */
+    campClearance: number;
     /** Pull targets within this distance of the base. */
     huntRadius: number;
     /** The base keeps this far from every spawn (a hit mob calls friends within 1050 for a group of five). */
@@ -89,6 +95,7 @@ export const PVE_SETTINGS: PveSettings = {
     camp: null,
     campLevelBand: [-1, 2],
     campAggressiveWeight: 1,
+    campClearance: 0,
     huntRadius: 2200,
     baseClearance: 700,
     ready: { hp: 80, mana: 50 },
@@ -226,14 +233,19 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     }
 
     // ── Where to hunt ──
+    // A level-up with no camp for the new level nearby keeps the current camp (the next town
+    // visit moves the hub) instead of idling for the rest of the run.
+    let found: Camp | null = null;
     if (!mem.camp || (!s.camp && mem.campLevel !== level)) {
-        const camp: Camp | null = s.camp
+        found = s.camp
             ? { ...s.camp, zone: '', count: 0, names: 'given camp' }
-            : findCamp(regionId, leader, Math.max(0, level + s.campLevelBand[0]), level + s.campLevelBand[1], { avoid: mem.avoidCamps, aggressiveWeight: s.campAggressiveWeight });
-        if (!camp) return { phase: 'idle', anchor: null, focus: null, reason: `no camp for level ${level} in region ${regionId}` };
-        mem.camp = camp;
+            : findCamp(regionId, leader, Math.max(0, level + s.campLevelBand[0]), level + s.campLevelBand[1], { avoid: mem.avoidCamps, aggressiveWeight: s.campAggressiveWeight, clear: { radius: s.campClearance, level: level - 2 } });
+        if (!found && !mem.camp) return { phase: 'idle', anchor: null, focus: null, reason: `no camp for level ${level} in region ${regionId}` };
         mem.campLevel = level;
-        mem.base = chooseBase(regionId, level, camp, leader, s.baseClearance);
+    }
+    if (found) {
+        mem.camp = found;
+        mem.base = chooseBase(regionId, level, found, leader, s.baseClearance);
         mem.route = null;
         mem.leg = null;
     }

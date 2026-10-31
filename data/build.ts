@@ -397,13 +397,24 @@ export function buildStarterEquipment(): StarterEquipment[] {
     })).sort((a, b) => a.id - b.id);
 }
 
-export function buildNpcs(mobRows: SqlRow[] = table('mob')): CompactTable<typeof NPC_COLUMNS> {
-    const rows = mobRows.map(r => [
-        str(r.Mob_ID), str(r.Name), str(r.Guild), str(r.ClassType).replace(/^DOL\.GS\./, ''),
-        num(r.Region), Math.round(num(r.X)), Math.round(num(r.Y)), Math.round(num(r.Z)), num(r.Heading),
-        num(r.Level), num(r.Realm), num(r.Model), num(r.Flags), str(r.ItemsListTemplateID),
-        num(r.AggroLevel), num(r.AggroRange), num(r.RespawnInterval), num(r.NPCTemplateID),
-    ]);
+export function buildNpcs(mobRows: SqlRow[] = table('mob'), templateRows: SqlRow[] = table('npctemplate')): CompactTable<typeof NPC_COLUMNS> {
+    // GameNPC.LoadTemplate (HandleLevel, HandleBrain): a template with ReplaceMobValues replaces the
+    // mob row's level (a random pick from its ';' list; we keep the highest) and the brain's aggro.
+    // Many mob rows are stale: in Gotar, passive L2 wild hogs are also stored as aggressive L12 rows,
+    // which made the camp finder see danger everywhere. A mob with its own Brain keeps its row's aggro.
+    const tpl = new Map<number, SqlRow>();
+    for (const t of templateRows) if (num(t.ReplaceMobValues) && !tpl.has(num(t.TemplateId))) tpl.set(num(t.TemplateId), t);
+    const rows = mobRows.map(r => {
+        const t = tpl.get(num(r.NPCTemplateID));
+        const levels = t ? splitClassList(str(t.Level)) : [];
+        const aggro = t && !str(r.Brain) ? t : r;
+        return [
+            str(r.Mob_ID), str(r.Name), str(r.Guild), str(r.ClassType).replace(/^DOL\.GS\./, ''),
+            num(r.Region), Math.round(num(r.X)), Math.round(num(r.Y)), Math.round(num(r.Z)), num(r.Heading),
+            levels.length ? Math.max(...levels) : num(r.Level), num(r.Realm), num(r.Model), num(r.Flags), str(r.ItemsListTemplateID),
+            num(aggro.AggroLevel), num(aggro.AggroRange), num(r.RespawnInterval), num(r.NPCTemplateID),
+        ];
+    });
     // Region, then x, then id: stable and diff-friendly.
     rows.sort((a, b) => (a[4] as number) - (b[4] as number) || (a[5] as number) - (b[5] as number)
         || (a[0] as string).localeCompare(b[0] as string));
@@ -713,7 +724,7 @@ export const GENERATED_FILES: GeneratedFile[] = [
     { file: 'teleports.json', tables: ['teleport'], build: buildTeleports, count: len },
     { file: 'startuplocations.json', tables: ['startuplocation'], build: buildStartupLocations, count: len },
     { file: 'starterequipment.json', tables: ['starterequipment'], build: buildStarterEquipment, count: len },
-    { file: 'npcs.json', tables: ['mob'], build: () => buildNpcs(), count: len },
+    { file: 'npcs.json', tables: ['mob', 'npctemplate'], build: () => buildNpcs(), count: len },
     { file: 'items.json', tables: ['itemtemplate'], build: () => buildItems(), count: len },
     { file: 'merchants.json', tables: ['merchantitem', 'itemtemplate'], build: () => buildMerchants(), count: (d: MerchantsFile) => Object.keys(d.lists).length },
     { file: 'spells.json', tables: ['spell'], build: buildSpells, count: len },
