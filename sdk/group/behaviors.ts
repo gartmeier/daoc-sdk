@@ -316,14 +316,21 @@ export function anytimeStyles(ctx: MemberContext): string[] {
     return (ctx.sdk.getSkills().styles ?? []).filter(s => s.prerequisite === 256).sort((a, b) => b.specLevel - a.specLevel).slice(0, 1).map(s => s.name);
 }
 
-// Taunt styles proc a StyleTaunt spell: extra threat of 1.7x the hit's damage (Hero "Taunting
-// Blade"; StyleTaunt.cs: damage * Value 17 * 0.1). The static data names them all "Taunt...".
-const TAUNT_STYLE = /taunt/i;
+// Styles with a StyleTaunt proc (stylexspell -> spell 20000 "Taunt", Value 17, or 20001 "Detaunt",
+// Value -19). StyleTaunt.cs adds damage * Value * 0.1 threat on top of the hit's own: a taunt nets
+// +2.7x the hit, a detaunt -0.9x (floored at 0, AggroTable.cs). Names don't tell: the Warrior's
+// Plague, Draw Out and Provoke taunt, Hoarfrost, Temper and Placate detaunt, the Hunter's "Taunting
+// Call" detaunts. Both sets come from style.sql x stylexspell.sql. Midgard run 20261031-072248: the
+// tank swung Hoarfrost on every hit (the old /taunt/i match took it for a damage style), hold 31 %.
+const TAUNT_STYLES = new Set(['Bludgeon', "Bumblebee's Sting", 'Celtic Fury', 'Diamondback', 'Distract', 'Draw Out', 'Engage', 'Enrage', 'Forest Spear', "Friar's Boon", 'Inflame', 'Plague', 'Provoke', 'Rile', 'Slam', 'Snowblind', 'Squall', 'Sting', 'Taunting Blade', 'Taunting Scythe', 'Wild Call']);
+const DETAUNT_STYLES = new Set(['Arboreal Shield', 'Blunt Trauma', 'Boomslang', 'Decaying Rage', 'Deflect', 'Dismissal', 'Enervating Blade', "Friar's Redress", 'Hibernian Wrath', 'Hoarfrost', "Hunter's Barb", 'Obscure', 'Pacify', 'Placate', 'Protector', 'Reflect', 'Scorpion', 'Taunting Call', 'Temper', 'Thunderstorm', 'Tranquillize']);
+/** Only the Blunt "Slam" taunts; the Shields and Hammer Slams have no proc. */
+const isTaunt = (s: { name: string; specName: string | null }) => TAUNT_STYLES.has(s.name) && (s.name !== 'Slam' || s.specName === 'Blunt');
 
-/** The best anytime taunt style, and the best anytime style that isn't one. */
+/** The best anytime taunt style, and the best anytime style that is neither a taunt nor a detaunt (a detaunt sheds the tank's threat). */
 function tankStyles(ctx: MemberContext): { taunt: string | null; damage: string | null } {
     const anytime = (ctx.sdk.getSkills().styles ?? []).filter(s => s.prerequisite === 256).sort((a, b) => b.specLevel - a.specLevel);
-    return { taunt: anytime.find(s => TAUNT_STYLE.test(s.name))?.name ?? null, damage: anytime.find(s => !TAUNT_STYLE.test(s.name))?.name ?? null };
+    return { taunt: anytime.find(isTaunt)?.name ?? null, damage: anytime.find(s => !isTaunt(s) && !DETAUNT_STYLES.has(s.name))?.name ?? null };
 }
 
 /**
