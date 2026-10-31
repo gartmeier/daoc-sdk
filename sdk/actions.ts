@@ -59,6 +59,8 @@ export type { ConColor, NpcTarget, ObjectTarget, PlayerTarget, Point } from './a
 export { StraightLinePathProvider, NavmeshPathProvider, getDefaultPathProvider, setDefaultPathProvider, navmeshGroundZ } from './pathfinding';
 export type { PathProvider, PathRequest, PathResult } from './pathfinding';
 export { NavmeshStore, NavMesh, getNavmeshStore, PolyFlags } from './navmesh';
+export { groundAt, GROUND_TUNING, type Ground } from './ground';
+export { TerrainStore, getTerrainStore, type TerrainSample } from './terrain';
 
 // Server ranges (world/WorldMgr.cs, GamePlayer.cs) and the margins we approach to.
 const MELEE_APPROACH = 90;       // AttackRange 128 (+32 per moving side), 3D
@@ -493,14 +495,18 @@ export class BotActions {
             }
             if (obj.distance2d <= tolerance) {
                 // Close on the ground but out of range in 3D: our z is off (estimateZ can miss by
-                // hundreds). route() would return 'Already at destination' without moving, so move
-                // onto the target ourselves; the mover adopts its z on arrival (client/movement.ts
-                // arriveAt). The server measures these ranges in 3D (Point3D.cs:114-140).
+                // hundreds) or the target is on another layer (ledge, wall, balcony). route() would
+                // return 'Already at destination' without moving, so step onto the target ourselves.
+                // The mover adopts its z on arrival (client/movement.ts arriveAt); with ground data
+                // (sdk/ground.ts) it takes the layer nearest that z at the target's spot, and there is
+                // none when the target is out of reach. The server measures these ranges in 3D
+                // (Point3D.cs:114-140).
                 const targetZ = obj.z;
-                const r = await this.sdk.sendMoveTo(obj.x, obj.y, targetZ, { tolerance });
+                const r = await this.sdk.sendMoveTo(obj.x, obj.y, targetZ, { tolerance: Math.min(tolerance, 24) });
                 if (!r.success) return { ...last, ...fail(`Cannot reach ${obj.name}: ${r.message}`, r.reason ?? 'dispatch_failed', {}), target: obj };
-                await this.helpers.waitFor(s => s.player && Math.abs(s.player.z - targetZ) <= 16 ? true : null, 2000);
+                const adopted = await this.helpers.waitFor(s => s.player && Math.abs(s.player.z - targetZ) <= 16 ? true : null, 2000);
                 last = { success: true, message: 'Adopted target height', position: this.position(), distance: obj.distance2d, reissues: last.reissues };
+                if (!adopted) break; // no layer near the target's height here: retrying won't find one
             } else {
                 last = await this.route({ x: obj.x, y: obj.y, z: obj.z }, [], { tolerance, timeout: options.timeout });
             }

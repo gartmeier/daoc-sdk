@@ -9,7 +9,7 @@ import { getZone } from '../data/zones';
 import { DaocSession, SessionError, type SessionEndReason } from './session';
 import { ClientOp } from './protocol/opcodes';
 import * as out from './protocol/outgoing';
-import { headingTo } from './movement';
+import { headingTo, type MoverDeps } from './movement';
 import { realmName } from './model/classes';
 
 export interface DaocClientOptions {
@@ -28,6 +28,8 @@ export interface DaocClientOptions {
     trace?: boolean;
     /** Minimum ms between published snapshots (default 250). */
     publishIntervalMs?: number;
+    /** Ground height for the mover (sdk/ground.ts moverGround); default none: z follows the waypoints. */
+    ground?: MoverDeps['ground'];
 }
 
 type StateListener = (state: BotWorldState) => void;
@@ -104,6 +106,7 @@ export class DaocClient {
             createIfMissing: this.opts.createIfMissing ?? true,
             log: this.log,
             trace: this.opts.trace,
+            ground: this.opts.ground,
         });
         this.session = s;
         s.model.hooks.onSignificant = (reason: string) => this.significant(reason);
@@ -195,7 +198,7 @@ export class DaocClient {
             clientVersion: '1.127',
             lastError: s?.lastError ?? this.lastError,
         };
-        const emptyMovement = { moving: false, destination: null, waypoints: [], lastStopReason: null, correctionCount: 0 };
+        const emptyMovement = { moving: false, destination: null, waypoints: [], lastStopReason: null, correctionCount: 0, swimming: false };
         if (!s) {
             return {
                 tick: this.tick, revision: 0, timestamp: Date.now(), inGame: false, connection, player: null,

@@ -52,16 +52,29 @@ No navmesh ships with the server. `bun run navmesh:build` generates `server/navm
 
 When the library and at least one `.nav` exist, `walkTo`/`followPath`/`travelTo` route with `NavmeshPathProvider` (Detour through Bun FFI, the same queries the server's `LocalPathfindingMgr` runs):
 
-- Routes go around buildings, walls and cliffs. The waypoints carry the mesh's ground z: live in Cotswold the bot's z stayed within 1–4 units of the ground (median) over 800 and 2500-unit walks, with 0 reissues.
+- Routes go around buildings, walls and cliffs. Live in Cotswold, 800 and 2500-unit walks arrived with 0 reissues.
 - A start or destination whose z is a guess is snapped onto the mesh with growing boxes (taller first, then wider).
 - Zone borders are crossed like the server does it: at the straight-line border point, snapped onto both meshes. Long routes chain past Detour's 256-poly corridor limit (a 62k-unit route across Camelot Hills takes ~250 ms).
 - Any part of the route that can't use a mesh is a straight line, and the walk still arrives. `findPath(...).message` is set whenever any part is such a fallback: the start zone has no `.nav` or its mesh failed to load (the message includes `getNavmeshStore().loadError(zoneId)`), the start is off the mesh, a later zone has no mesh, or the destination is off the mesh or unreachable. A route entirely on the mesh has no message.
 - A zone's mesh loads on its first query (~0.1 s, 20–50 MB of memory each).
-- `navmeshGroundZ(regionId, x, y, zHint?)` gives the ground height; `getNavmeshStore().at(region, x, y)` gives the raw `NavMesh` (`closestPoint`, `findPath`, `randomPoint`, `raycast`).
+- `navmeshGroundZ(regionId, x, y, zHint?)` gives the navmesh height (what the server snaps ground targets and mob paths to); `groundAt(regionId, x, y, zHint)` gives the real ground (next section); `getNavmeshStore().at(region, x, y)` gives the raw `NavMesh` (`closestPoint`, `surfaceZ`, `findPath`, `randomPoint`, `raycast`).
 - `DAOC_NAVMESH=off` forces straight lines. `DAOC_NAVMESH_DIR` and `DETOUR_LIB` override the paths.
 - `raycast` checks whether you can walk straight across the mesh. It is not visual line of sight, and the client still answers every server LoS check with "clear".
 
-## Height (z)
+## Ground height (navmesh zones)
+
+Navmesh z floats above the real ground: Recast rounds every surface up to its 3.2-unit cell height, adds one more cell inside polygons and rounds higher on slopes. Measured against the client's own terrain over the 42 default zones, the mesh is 0.9–12.5 units above it (p1–p99, median 4.5). A real client draws that as feet above the grass. Interpolating z between path corners made it worse while walking (p5 −17 to p95 +22 units).
+
+So the client's mover takes z from `groundAt` (sdk/ground.ts) on every step and every server position snap:
+
+- **Terrain:** `navmesh:build` (or `bun run terrain:build` alone, under a second) writes `server/navmesh/zoneNNN.terrain`, the exact outdoor heightmap the client uses (256×256 vertices from `zones/zoneNNN/datNNN.mpk`, same triangles as buildnav). Real-client positions sit at floor(terrain z). Outdoors the bot stands on the terrain unless the mesh at its own height (a ±64 poly search around its current z) is an object: 99.9 % of dry outdoor points. A gap in the mesh (eroded at walls, trees, steep slopes) keeps the terrain; it never jumps to a roof or cliff top found further away.
+- **Objects** (bridges, roofs, rocks, and all of cities and dungeons, which have no heightmap): mesh z − 2.5, the mean flat-surface offset. A layer counts as an object when it is more than 8 (+16 × slope, at most 40) units above the surface buildnav built the mesh from, so the bot can sink up to 8 units into a low object on flat ground, more on slopes. A floor below the surface (cave, tunnel) counts once the bot's z is closer to it than to the surface.
+- **Water at least 40 deep:** z = river surface − 40 and the 0xA9 carries the SWIMMING state flag (`state.movement.swimming`). buildnav moves every terrain vertex under a river to 16 under the surface (deep beds up, shallow banks down), so the mesh in water is that plane; mobs placed by real clients while swimming sat 40 under the surface, and a bot at 40 under it swims with its head at the waterline in a real 1.127 client (checked by eye in Lough Derg). On bank cells the mesh is compared with that warped surface, not the bed. The server only relays the flag to other clients (it never sets `IsSwimming` for 1.124+ clients), so it changes the animation, nothing else. SWIMMING is never combined with SITTING (= dead) or JUMPING (= flying, an autoban under `ban_hackers`). Shallower water: the bot wades on the bed, up to 24 units under the mesh.
+- Ladders (a waypoint that rises more than 48 units and twice its distance) keep the interpolated z.
+- `GROUND_TUNING` holds the constants. `DAOC_NAVMESH=off` turns ground correction off with the routing; without `.terrain` files only the mesh − 2.5 rule applies.
+- Each runner process loads the meshes of the zones its bot walks through (20–50 MB each) on the first step there.
+
+## Height (z) without navmeshes
 
 Without a navmesh there is **no terrain data**. When `z` isn't given, `StraightLinePathProvider` splits each leg every 1000 units and takes z from `estimateZ`. That function interpolates the heights of nearby spawns, bind points and startup locations.
 

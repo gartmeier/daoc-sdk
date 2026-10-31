@@ -57,7 +57,16 @@ export interface MoverDeps {
     log?: (msg: string) => void;
     /** Run the internal 100 ms timer (default true; tests drive pump() themselves). */
     timer?: boolean;
+    /**
+     * Ground under (x, y) on the layer nearest zHint (sdk/ground.ts moverGround). When set, every step
+     * and every server snap takes z from it instead of interpolating between waypoints, and the swim
+     * state flag follows it. Null means unknown there: keep the interpolated z.
+     */
+    ground?: (regionId: number, x: number, y: number, zHint: number) => { z: number; swimming: boolean } | null;
 }
+
+/** A segment that climbs more than this and twice its length is a ladder/off-mesh hop: keep its interpolated z. */
+const HOP_MIN_RISE = 48;
 
 export class Mover {
     regionId = 0;
@@ -73,6 +82,8 @@ export class Mover {
     sessionId = 0;
     healthPercent = 100;
     sitting = false;
+    /** In deep water (from deps.ground): 0xA9 carries the SWIMMING state flag instead of SITTING. */
+    swimming = false;
     targetInView = true;
 
     moving = false;
@@ -128,6 +139,8 @@ export class Mover {
         this.z = z;
         this.heading = heading & 0xFFF;
         this.updateZone();
+        this.swimming = false;
+        this.reground(false);
         if (reason === 'teleported') this.correctionCount++;
         if (wasMoving || reason === 'teleported') this.finish(reason ?? 'stopped', true);
     }
@@ -242,6 +255,7 @@ export class Mover {
             waypoints: this.moving ? this.waypoints.map(w => ({ x: w.x, y: w.y, z: w.z ?? this.z })) : [],
             lastStopReason: this.lastStopReason,
             correctionCount: this.correctionCount,
+            swimming: this.swimming,
         };
     }
 
@@ -302,7 +316,27 @@ export class Mover {
             if (Math.hypot(w.x - this.x, w.y - this.y) <= tol + 0.01) this.arriveAt(w, isLast);
         }
         this.updateZone();
+        this.reground(true);
         if (this.waypoints.length === 0 && this.moving) this.finish('arrived', false);
+    }
+
+    /**
+     * Take z (and the swim state) from deps.ground, with the current z as the layer hint. During a
+     * move z is the waypoint interpolation up to here; ladder hops (skipHops) keep it.
+     */
+    private reground(skipHops: boolean): void {
+        const ground = this.deps.ground;
+        if (!ground) return;
+        const w = this.waypoints[0];
+        if (skipHops && w?.z !== undefined) {
+            const rise = Math.abs(w.z - this.segmentStart.z);
+            if (rise > HOP_MIN_RISE && rise > 2 * Math.hypot(w.x - this.segmentStart.x, w.y - this.segmentStart.y)) return;
+        }
+        const g = ground(this.regionId, this.x, this.y, this.z);
+        if (!g) return;
+        this.z = g.z;
+        this.swimming = g.swimming;
+        if (g.swimming) this.sitting = false;
     }
 
     private arriveAt(w: Waypoint, isLast: boolean): void {
@@ -336,7 +370,9 @@ export class Mover {
             sessionId: this.sessionId,
             objectId: this.objectId,
             zoneId: this.zoneId,
-            stateFlags: this.sitting ? StateFlags.Sitting : 0,
+            // Never both: SWIMMING|SITTING reads as DEAD, and SWIMMING|JUMPING as FLYING (an autoban
+            // under ban_hackers; PlayerPositionUpdateHandler.ProcessStateFlags).
+            stateFlags: this.swimming ? StateFlags.Swimming : this.sitting ? StateFlags.Sitting : 0,
             fallingDamage: 0x8000,
             heading: this.heading,
             actionFlags: this.targetInView ? ActionFlags.TargetInView : 0,

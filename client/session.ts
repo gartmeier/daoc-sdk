@@ -19,7 +19,7 @@ import { decodeCharacterJump, decodeLosRequest, decodeMaxSpeed, decodePositionAn
 import { decodeSpellCastAnimation } from './protocol/incoming/combat';
 import { decodeStatusUpdate } from './protocol/incoming/player';
 import { WorldModel } from './model/world-model';
-import { Mover } from './movement';
+import { Mover, type MoverDeps } from './movement';
 import { className as classNameById, planCharacter, raceNameById, realmNumber } from './model/classes';
 
 export type SessionEndReason =
@@ -64,6 +64,8 @@ export interface SessionOptions {
     log?: (msg: string) => void;
     /** Log every packet in and out. */
     trace?: boolean;
+    /** Ground height for the mover (MoverDeps.ground). */
+    ground?: MoverDeps['ground'];
 }
 
 interface Waiter {
@@ -116,7 +118,7 @@ export class DaocSession {
             onUnknownSession: sid => this.requestPlayer(sid),
             onSelfDeath: () => this.mover.stop('died'),
         });
-        this.mover = new Mover({ send: (c, p) => this.send(c, p), log: opts.trace ? this.log : undefined });
+        this.mover = new Mover({ send: (c, p) => this.send(c, p), log: opts.trace ? this.log : undefined, ground: opts.ground });
     }
 
     // ── events ────────────────────────────────────────────────────────────
