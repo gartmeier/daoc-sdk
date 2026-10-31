@@ -1,6 +1,7 @@
 // What a member can cast, from its spell list and the static spell data:
 // heals, crowd control, damage and buffs. Highest-level rank wins.
 
+import type { SpellInfo } from '../../data/index';
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import type { Spell } from '../types';
@@ -22,9 +23,18 @@ export interface SpellPick {
     pulse: boolean;
     /** The spell's value (for SpeedDecrease: the slow in %, 99 = root). */
     value: number;
+    /** Damage per hit, per tick for a DoT. */
+    damage: number;
+    /** Shared by every rank of one spell (Illusory Ache..Anguish are all 4611); 0 when the DB has none. */
+    spellGroup: number;
+    /** Server stacking keys: DoTs conflict by effect group, else (same type) by tick frequency. */
+    effectGroup: number;
+    frequency: number;
 }
 
 const NUKE_TYPES = /^(DirectDamage|Bolt|Lifedrain|DamageOverTime|DirectDamageWithDebuff|DamageSpeedDecrease)$/;
+// A DoT is worth a cast only when it ticks for at least this share of our best direct damage.
+const DOT_MIN_SHARE = 0.25;
 const MEZZ_TYPES = /^Mesmerize$/;
 // A SpeedDecrease of 99 % is a root (Druid "Webbing Vines"): the add can't walk up to us. It still
 // hits whoever stands next to it, and the blackboard drops it as broken when it swings.
@@ -55,17 +65,64 @@ export function slotOf(type: string): BuffSlot | null {
     return null;
 }
 
+/** A known spell with its static data. */
+export function toPick(spell: Spell, info: SpellInfo): SpellPick {
+    return {
+        spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, concentration: info.concentration,
+        pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0, value: info.value ?? 0, damage: info.damage ?? 0, spellGroup: info.spellGroup ?? 0,
+        effectGroup: info.effectGroup ?? 0, frequency: info.frequency ?? 0,
+    };
+}
+
 export function spellsOf(sdk: BotSDK, bot: BotActions): SpellPick[] {
     const out: SpellPick[] = [];
     for (const spell of sdk.getSkills().spells ?? []) {
         const info = bot.getSpellInfo(spell);
-        if (!info) continue;
-        out.push({ spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, concentration: info.concentration, pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0, value: info.value ?? 0 });
+        if (info) out.push(toPick(spell, info));
     }
     return out;
 }
 
 const best = (list: SpellPick[]) => [...list].sort((a, b) => b.spell.level - a.spell.level)[0] ?? null;
+
+/**
+ * The DoTs a new one would overwrite on the server, as a key: DoTSpellHandler.HasConflictingEffectWith
+ * matches on effect group when either has one, else (both DamageOverTime) on tick frequency, so a
+ * Mentalist's Illusory line (frequency 50) and Mind Fade (40) stack, and all Illusory ranks don't.
+ */
+export const dotFamily = (s: Pick<SpellPick, 'effectGroup' | 'frequency'>): string => (s.effectGroup ? `e${s.effectGroup}` : `f${s.frequency}`);
+
+export interface NukeOptions {
+    /** DoT family keys (dotFamily) already on the target. */
+    dotted?: ReadonlySet<string>;
+    /** The target's health in % (default 100). */
+    targetHp?: number;
+    /** DoTs only while the target has more than this % health (default 40). */
+    dotAbove?: number;
+    /** Allow area spells (they break mezz on nearby adds). */
+    aoe?: boolean;
+    /** Castable now (power, cooldown); default: every spell. */
+    ready?: (s: SpellPick) => boolean;
+}
+
+/**
+ * Next damage spell on one target, from the spells a member knows: the best DoT
+ * whose family isn't on the target yet while it has more than `dotAbove` % health,
+ * else the best direct damage. A DoT must tick for at least a quarter of our best
+ * direct damage (Illusory Anguish 19 against Moon Blast 49, not Ache or Minor Mind
+ * Fade at 2); without direct damage every DoT qualifies. The bar is the best direct
+ * damage we know, ready or not, so low power never makes a weak DoT worth a cast.
+ * Area spells are left out unless `aoe` (they break mezz on nearby adds).
+ */
+export function pickNuke(picks: SpellPick[], opts: NukeOptions = {}): SpellPick | null {
+    const ready = opts.ready ?? (() => true);
+    const ok = picks.filter(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type) && s.range > 0 && (opts.aoe || s.radius === 0));
+    const isDot = (s: SpellPick) => s.type === 'DamageOverTime';
+    const top = best(ok.filter(s => !isDot(s)));
+    const dot = best(ok.filter(s => isDot(s) && ready(s) && !opts.dotted?.has(dotFamily(s)) && (!top || s.damage >= DOT_MIN_SHARE * top.damage)));
+    if (dot && (opts.targetHp ?? 100) > (opts.dotAbove ?? 40)) return dot;
+    return best(ok.filter(s => !isDot(s) && ready(s)));
+}
 
 /** Spell picks for one member; `mana` is its current power (absolute). */
 export class Spellbook {
@@ -95,15 +152,11 @@ export class Spellbook {
     }
 
     /**
-     * Next damage spell on one target: a DoT not yet on it while it has more than
-     * `dotAbove` % health (DoTs don't stack), else the best direct damage.
-     * Area spells are left out unless `aoe` (they break mezz on nearby adds).
+     * Next damage spell on one target that we can cast now (pickNuke). `dotted` holds
+     * the family keys (dotFamily) of the DoTs already on it, not spell names.
      */
-    nuke(opts: { dotted?: Set<string>; targetHp?: number; dotAbove?: number; aoe?: boolean } = {}): SpellPick | null {
-        const ok = this.all().filter(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type) && s.range > 0 && (opts.aoe || s.radius === 0) && this.ready(s));
-        const dot = best(ok.filter(s => s.type === 'DamageOverTime' && !opts.dotted?.has(s.spell.name)));
-        if (dot && (opts.targetHp ?? 100) > (opts.dotAbove ?? 40)) return dot;
-        return best(ok.filter(s => s.type !== 'DamageOverTime'));
+    nuke(opts: Omit<NukeOptions, 'ready'> = {}): SpellPick | null {
+        return pickNuke(this.all(), { ...opts, ready: s => this.ready(s) });
     }
 
     /** Buffs worth keeping up: the top rank per slot and target, no pet or enemy spells. */

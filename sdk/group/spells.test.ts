@@ -1,0 +1,112 @@
+import { describe, expect, test } from 'bun:test';
+import { getSpell, getSpellLines } from '../../data/index';
+import type { BotActions } from '../actions';
+import type { BotSDK } from '../index';
+import type { Spell } from '../types';
+import { dotFamily, pickNuke, Spellbook, toPick, type SpellPick } from './spells';
+
+// The spells of each line up to a level, with their real DB rows (as spellsOf builds them).
+function known(lines: Record<string, number>): SpellPick[] {
+    return Object.entries(lines).flatMap(([key, upTo]) => {
+        const line = getSpellLines().find(l => l.keyName === key)!;
+        return line.spells.filter(s => s.level <= upTo).map((s, i) => {
+            const info = getSpell(s.spellId)!;
+            const spell: Spell = { name: info.name, level: s.level, internalId: info.id, lineName: line.name, lineIndex: 0, spellIndex: i, cooldownRemaining: 0 };
+            return toPick(spell, info);
+        });
+    });
+}
+
+// Niamh, the hibernia Mentalist at 13: Mentalism and Way of the Sun (baseline) to 13, Holism to 4.
+const NIAMH = known({ Mentalism: 13, Holism: 4, 'Way of the Sun': 13 });
+const byName = (name: string) => NIAMH.find(s => s.spell.name === name)!;
+const name = (s: SpellPick | null) => s?.spell.name ?? null;
+const ILLUSORY = 'f50';
+const MIND_FADE = 'f40';
+
+describe('pickNuke (Niamh, Mentalist 13, real spell rows)', () => {
+    test('the data: the Illusory ranks share one group, Minor Mind Fade has its own', () => {
+        const row = (n: string) => [byName(n).spellGroup, byName(n).damage, byName(n).type];
+        expect(row('Illusory Anguish')).toEqual([4611, 19, 'DamageOverTime']);
+        expect(row('Illusory Cramps')).toEqual([4611, 15, 'DamageOverTime']);
+        expect(row('Illusory Pains')).toEqual([4611, 9, 'DamageOverTime']);
+        expect(row('Illusory Ache')).toEqual([4611, 2, 'DamageOverTime']);
+        expect(row('Minor Mind Fade')).toEqual([4421, 2, 'DamageOverTime']);
+        expect(row('Moon Blast')).toEqual([4101, 49, 'DirectDamage']);
+        expect(dotFamily(byName('Illusory Anguish'))).toBe(ILLUSORY);
+        expect(dotFamily(byName('Illusory Ache'))).toBe(ILLUSORY);
+        expect(dotFamily(byName('Minor Mind Fade'))).toBe(MIND_FADE);
+    });
+
+    test('a fresh target gets Illusory Anguish', () => {
+        expect(name(pickNuke(NIAMH, { dotted: new Set() }))).toBe('Illusory Anguish');
+        expect(name(pickNuke(NIAMH))).toBe('Illusory Anguish');
+    });
+
+    test('with the Illusory family on it: Moon Blast, never Cramps, Pains or Ache', () => {
+        const dotted = new Set([dotFamily(byName('Illusory Anguish'))]);
+        expect(name(pickNuke(NIAMH, { dotted, targetHp: 100 }))).toBe('Moon Blast');
+    });
+
+    test('Minor Mind Fade and the weaker Illusory ranks are never picked', () => {
+        const families = [[], [ILLUSORY], [MIND_FADE], [ILLUSORY, MIND_FADE]];
+        const allowed: (string | null)[] = ['Illusory Anguish', 'Moon Blast'];
+        for (const f of families) {
+            for (const targetHp of [100, 60, 41, 40, 10]) {
+                expect(allowed).toContain(name(pickNuke(NIAMH, { dotted: new Set(f), targetHp })));
+            }
+        }
+    });
+
+    test('at or below dotAbove only direct damage', () => {
+        expect(name(pickNuke(NIAMH, { targetHp: 40 }))).toBe('Moon Blast');
+        expect(name(pickNuke(NIAMH, { targetHp: 30, dotAbove: 20 }))).toBe('Illusory Anguish');
+    });
+
+    test('an effect group, when a DoT has one, is its family (the server matches on it first)', () => {
+        const grouped = { ...byName('Illusory Anguish'), effectGroup: 99 };
+        expect(dotFamily(grouped)).toBe('e99');
+        expect(name(pickNuke([grouped, byName('Moon Blast')], { dotted: new Set(['e99']) }))).toBe('Moon Blast');
+        expect(name(pickNuke([grouped, byName('Moon Blast')], { dotted: new Set([ILLUSORY]) }))).toBe('Illusory Anguish');
+    });
+
+    test('low power: the bar stays at the best direct damage we know', () => {
+        const upTo = (power: number) => (s: SpellPick) => s.power <= power;
+        expect(name(pickNuke(NIAMH, { ready: upTo(7) }))).toBe('Illusory Anguish');
+        expect(name(pickNuke(NIAMH, { dotted: new Set([ILLUSORY]), ready: upTo(7) }))).toBe('Moon Streak');
+        // 3 power: Pains (9) clears a quarter of Gleam Blast (13), the best we can afford, but not of Moon Blast (49).
+        expect(name(pickNuke(NIAMH, { ready: upTo(3) }))).toBe('Gleam Blast');
+        // 1 power: Ache is all we could afford, and not worth a cast.
+        expect(pickNuke(NIAMH, { ready: upTo(1) })).toBeNull();
+    });
+
+    test('without direct damage every DoT qualifies, one per family', () => {
+        const dots = known({ Mentalism: 13, Holism: 4 });
+        expect(name(pickNuke(dots))).toBe('Illusory Anguish');
+        expect(name(pickNuke(dots, { dotted: new Set([ILLUSORY]) }))).toBe('Minor Mind Fade');
+        expect(pickNuke(dots, { dotted: new Set([ILLUSORY, MIND_FADE]) })).toBeNull();
+    });
+
+    test('area DoTs only with aoe (Holism 17: Shroud of Madness, radius 350)', () => {
+        const mana17 = known({ Holism: 17, 'Way of the Sun': 17 });
+        expect(name(pickNuke(mana17))).toBe('Mind Dissolution');
+        expect(name(pickNuke(mana17, { aoe: true }))).toBe('Shroud of Madness');
+    });
+});
+
+describe('Spellbook.nuke', () => {
+    function book(mana: number, cooldowns: Record<string, number> = {}): Spellbook {
+        const spells = NIAMH.map(p => ({ ...p.spell, cooldownRemaining: cooldowns[p.spell.name] ?? 0 }));
+        const sdk = { getSkills: () => ({ spells }), getPlayer: () => ({ mana }) } as unknown as BotSDK;
+        const bot = { getSpellInfo: (s: Spell) => getSpell(s.internalId) ?? null } as unknown as BotActions;
+        return new Spellbook(sdk, bot);
+    }
+
+    test('picks by family over the spells castable now', () => {
+        expect(name(book(100).nuke({ dotted: new Set() }))).toBe('Illusory Anguish');
+        expect(name(book(100).nuke({ dotted: new Set([ILLUSORY]) }))).toBe('Moon Blast');
+        expect(name(book(7).nuke({ dotted: new Set([ILLUSORY]) }))).toBe('Moon Streak');
+        expect(name(book(100, { 'Moon Blast': 5 }).nuke({ dotted: new Set([ILLUSORY]) }))).toBe('Moon Streak');
+        expect(book(1).nuke()).toBeNull();
+    });
+});
