@@ -174,6 +174,7 @@ export interface SelfState {
     realmSpecPoints: number;
     money: Money;
     stats: Stats | null;
+    constitutionLost: number;
     encumbrance: { current: number; max: number } | null;
     isDead: boolean;
     isSitting: boolean;
@@ -215,7 +216,7 @@ function newSelf(): SelfState {
         health: 0, maxHealth: 0, healthPercent: 100, mana: 0, maxMana: 0, manaPercent: 0,
         endurance: 0, maxEndurance: 0, endurancePercent: 100, concentration: 0, maxConcentration: 0,
         experience: 0, experienceForNextLevel: 0, levelPermill: 0, realmPoints: 0, bountyPoints: 0,
-        specPoints: 0, realmSpecPoints: 0, money: emptyMoney(), stats: null, encumbrance: null,
+        specPoints: 0, realmSpecPoints: 0, money: emptyMoney(), stats: null, constitutionLost: 0, encumbrance: null,
         isDead: false, isSitting: false, attacking: false, targetObjectId: null, deathCount: 0,
         lastDeathAt: null, lastCombatAt: 0, statusReceived: false,
     };
@@ -507,6 +508,7 @@ export class WorldModel {
                         intelligence: v(4), piety: v(5), empathy: v(6), charisma: v(7),
                     };
                     if (d.maxHealth > 0) this.self.maxHealth = d.maxHealth;
+                    this.self.constitutionLost = d.constitutionLost;
                 }
                 return true;
             }

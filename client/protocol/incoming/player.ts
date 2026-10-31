@@ -84,6 +84,8 @@ export function decodeMoney(p: Uint8Array): MoneyUpdate {
 /** 0xFB StatsUpdate (PacketLib175.cs:188) or the resists variant (175:331); byte 72 is 0x00 / 0xFF. */
 export interface StatsUpdate {
     kind: 'stats' | 'resists';
+    /** Constitution lost to deaths (stats packets only); a healer restores it for money. */
+    constitutionLost: number;
     base: number[];
     /**
      * Buffs minus debuffs, signed: the server writes `(ushort) buff` where buff = modified - base -
@@ -119,11 +121,13 @@ export function decodeStatsUpdate(p: Uint8Array): StatsUpdate {
     const itemCap = readBytes();
     const ra = readBytes();
     let maxHealth = 0;
+    // Byte 73: Constitution lost to deaths, not yet restored at a healer (PacketLib175.cs:323).
+    const constitutionLost = !isResists && p.length > 73 ? p[73]! : 0;
     if (!isResists && p.length >= 76) {
         r.pos = 74;
         maxHealth = r.u16();
     }
-    return { kind: isResists ? 'resists' : 'stats', base, buff, item, itemCap, ra, maxHealth };
+    return { kind: isResists ? 'resists' : 'stats', base, buff, item, itemCap, ra, maxHealth, constitutionLost };
 }
 
 // ── Items ───────────────────────────────────────────────────────────────────

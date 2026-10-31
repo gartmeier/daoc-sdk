@@ -1,0 +1,117 @@
+// The group's members: groups/<name>/group.json, one control connection per
+// bot, and the in-game group (invites).
+
+import { existsSync, readFileSync } from 'fs';
+import { basename, join } from 'path';
+import { BotActions } from '../actions';
+import { BotSDK, deriveGatewayUrl, findBotEnv, parseEnvFile } from '../index';
+import type { ConnectionMode } from '../types';
+import type { Member } from './member';
+import { roleForClass } from './strategy';
+import type { GroupDefinition, Role } from './types';
+
+const ROLES: readonly Role[] = ['tank', 'healer', 'support', 'nuker', 'melee'];
+
+/** Read and check groups/<name>/group.json. */
+export function loadGroup(dir: string): GroupDefinition {
+    const path = join(dir, 'group.json');
+    if (!existsSync(path)) throw new Error(`no group.json in ${dir}; create one with: bun groups/create-group.ts <group> <bot> <bot> ...`);
+    const def = JSON.parse(readFileSync(path, 'utf-8')) as GroupDefinition;
+    if (!Array.isArray(def.members) || !def.members.length) throw new Error(`${path}: "members" must list at least one { "bot": "<name>" }`);
+    for (const m of def.members) {
+        if (!m.bot || !findBotEnv(m.bot)) throw new Error(`${path}: no bots/${m.bot}/bot.env`);
+        if (m.role && !ROLES.includes(m.role)) throw new Error(`${path}: ${m.bot} has role "${m.role}"; use one of ${ROLES.join(', ')}`);
+    }
+    if (def.leader && !def.members.some(m => m.bot === def.leader)) throw new Error(`${path}: leader ${def.leader} is not a member`);
+    return { ...def, name: def.name || basename(dir) };
+}
+
+/** A control (or observe) connection to a bot by name, requiring a live client. */
+export async function connectBot(name: string, mode: ConnectionMode = 'control'): Promise<{ sdk: BotSDK; bot: BotActions }> {
+    const path = findBotEnv(name);
+    if (!path) throw new Error(`no bots/${name}/bot.env`);
+    const env = parseEnvFile(readFileSync(path, 'utf-8'));
+    const sdk = new BotSDK({
+        botUsername: env.BOT_USERNAME || name,
+        password: env.PASSWORD,
+        gatewayUrl: deriveGatewayUrl(env.GATEWAY_URL),
+        connectionMode: mode,
+        autoLaunchClient: false,
+        showChat: env.SHOW_CHAT?.toLowerCase() !== 'false',
+    });
+    try {
+        await sdk.connect();
+        // The gateway replays a dead client's last state, so require a fresh tick.
+        const cached = sdk.getState();
+        await sdk.waitForCondition(s => s.inGame && s.player !== null && (!cached || s.tick !== cached.tick), 15_000)
+            .catch(() => { throw new Error(`no live client for ${name}; start it with: bun client/runner.ts ${name} (or bun client/swarm.ts <bots...>)`); });
+    } catch (e) {
+        await sdk.disconnect();
+        throw e;
+    }
+    return { sdk, bot: new BotActions(sdk) };
+}
+
+export interface ConnectedGroup {
+    def: GroupDefinition;
+    members: Member[];
+    /** Connections this call opened (the caller's own connection is not in here). */
+    opened: BotSDK[];
+}
+
+/**
+ * Connect every member. `have` is a connection the caller already holds (runScript
+ * or MCP gave it): it is used for its bot instead of opening a second one.
+ */
+export async function connectGroup(def: GroupDefinition, have?: { bot: BotActions; sdk: BotSDK }, roleOf: (className: string) => Role = roleForClass): Promise<ConnectedGroup> {
+    const members: Member[] = [];
+    const opened: BotSDK[] = [];
+    try {
+        for (const m of def.members) {
+            const own = have && sameBot(have.sdk, m.bot) ? have : null;
+            const c = own ?? await connectBot(m.bot);
+            if (!own) opened.push(c.sdk);
+            const className = c.sdk.getPlayer()?.className ?? '';
+            members.push({ bot: m.bot, role: m.role ?? roleOf(className), sdk: c.sdk, actions: c.bot });
+        }
+    } catch (e) {
+        await Promise.all(opened.map(s => s.disconnect().catch(() => {})));
+        throw e;
+    }
+    return { def, members, opened };
+}
+
+function sameBot(sdk: BotSDK, bot: string): boolean {
+    const path = findBotEnv(bot);
+    const user = path ? parseEnvFile(readFileSync(path, 'utf-8')).BOT_USERNAME || bot : bot;
+    return sdk.config.botUsername.toLowerCase() === user.toLowerCase();
+}
+
+/**
+ * Put everyone in one in-game group led by `leader` (default: the group's leader).
+ * Starts each member's accept before the invite, retries twice. Returns one line per member.
+ */
+export async function formGroup(members: Member[], leaderBot?: string): Promise<string[]> {
+    const leader = members.find(m => m.bot === leaderBot) ?? members[0]!;
+    const name = (m: Member) => m.sdk.getPlayer()?.name ?? m.bot;
+    const out: string[] = [];
+    for (const m of members) {
+        if (m === leader) continue;
+        if (leader.sdk.getGroup().some(g => g.name === name(m))) continue;
+        // Already in another group: leave it first, or the invite is refused.
+        if (m.sdk.getGroup().length) {
+            await m.sdk.sendCommand('/disband');
+            await m.sdk.waitForCondition(s => s.group.length === 0, 3000).catch(() => null);
+        }
+        for (let attempt = 0; attempt < 3; attempt++) {
+            // Invites right after the previous member joined go unanswered: pause first.
+            await Bun.sleep(1500);
+            const accepted = m.actions.acceptGroupInvite({ timeout: 10_000 });
+            const inv = await leader.actions.invite(name(m));
+            const joined = await accepted;
+            out.push(`${name(m)}: ${inv.success ? 'invited' : inv.message} / ${joined.success ? 'joined' : joined.message}`);
+            if (joined.success) break;
+        }
+    }
+    return out;
+}

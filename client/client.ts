@@ -229,7 +229,7 @@ export class DaocClient {
             experience: self.experience, experienceForNextLevel: self.experienceForNextLevel, levelPermill: self.levelPermill,
             realmPoints: self.realmPoints, bountyPoints: self.bountyPoints, specPoints: self.specPoints,
             realmSpecPoints: self.realmSpecPoints, money: { ...self.money }, stats: self.stats ? { ...self.stats } : null,
-            encumbrance: self.encumbrance ? { ...self.encumbrance } : null,
+            constitutionLost: self.constitutionLost, encumbrance: self.encumbrance ? { ...self.encumbrance } : null,
             isDead: self.isDead, isSitting: self.isSitting || mv.sitting, attacking: self.attacking, inCombat: m.inCombat(),
             targetObjectId: self.targetObjectId, deathCount: self.deathCount, lastDeathAt: self.lastDeathAt,
         } : null;
@@ -570,6 +570,13 @@ export class DaocClient {
                     m.self.isSitting = false;
                 }
                 return ok(a.sit ? 'sit requested' : 'standing');
+            }
+            case 'removeConcentration': {
+                const i = a.index;
+                if (!Number.isInteger(i) || i < 0 || i > 255) return fail('bad_args', 'index must be 0..255');
+                if (!(m.concentrationEffects ?? []).some(e => e.index === i)) return fail('not_found', `no concentration effect at index ${i}`);
+                this.send(ClientOp.RemoveConcentrationEffect, out.encodeRemoveConcentrationEffect(i));
+                return ok(`concentration effect ${i} removal requested`);
             }
             case 'release':
                 if (!m.self.isDead) return fail('not_dead', 'release only works while dead');

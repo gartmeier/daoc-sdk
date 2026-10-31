@@ -213,8 +213,16 @@ const NON_COMBAT_ROLES = new Set(['merchant', 'trainer', 'guard', 'healer', 'sta
 export function isKillable(npc: NearbyNpc, player: PlayerState | null): boolean {
     if (!isAttackable(npc, player)) return false;
     if (npc.realm !== 'none') return false;
-    if (npc.role && NON_COMBAT_ROLES.has(npc.role)) return false;
+    // The role is guessed from name text, so "wood-eater royal guard" or "wood-eater soldier" reads as
+    // a town guard. Monster names are lowercase; townspeople ("Sentinel Glynis", "Guard Ulf") are not.
+    if (npc.role && NON_COMBAT_ROLES.has(npc.role) && !isMonsterName(npc.name)) return false;
     return npc.name.length > 0;
+}
+
+/** DAoC monster names start lowercase ("wood-eater royal guard"); named NPCs start uppercase. */
+function isMonsterName(name: string): boolean {
+    const c = name.charAt(0);
+    return c !== '' && c === c.toLowerCase() && c !== c.toUpperCase();
 }
 
 // ── Money / inventory deltas ───────────────────────────────────────────────

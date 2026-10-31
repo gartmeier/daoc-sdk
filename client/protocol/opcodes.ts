@@ -11,6 +11,7 @@ export const ClientOp = {
     ObjectInteractRequest: 0x7A,
     TrainWindowHandler: 0x7B,
     UseSpell: 0x7D,
+    RemoveConcentrationEffect: 0x76,
     DestroyItemRequest: 0x80,
     DialogResponse: 0x82,
     InviteToGroup: 0x87,

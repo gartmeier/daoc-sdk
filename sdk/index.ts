@@ -1135,6 +1135,14 @@ export class BotSDK {
         return this.sendAction({ type: 'sit', sit, reason: 'SDK' });
     }
 
+    /**
+     * Drop one of our concentration buffs (frees its concentration), by its `index`
+     * in `state.concentrationEffects`. Observe the effect leaving that list.
+     */
+    async sendRemoveConcentrationEffect(index: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'removeConcentration', index, reason: 'SDK' });
+    }
+
     /** Release after death (back to bind point). */
     async sendRelease(): Promise<ActionResult> {
         return this.sendAction({ type: 'release', reason: 'SDK' });

@@ -94,6 +94,8 @@ export interface PlayerState {
     realmSpecPoints: number;
     money: Money;
     stats: Stats | null;
+    /** Constitution lost to PvE deaths (from level 6); a town healer (GameHealer) restores it for money. */
+    constitutionLost: number;
     encumbrance: { current: number; max: number } | null;
 
     isDead: boolean;
@@ -528,6 +530,8 @@ export type BotAction = ActionBase & (
 
     // Status
     | { type: 'sit'; sit: boolean }
+    // Drop one of our concentration buffs: its index in state.concentrationEffects.
+    | { type: 'removeConcentration'; index: number }
     | { type: 'release' }
     | { type: 'quit' }
 );

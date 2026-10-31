@@ -39,7 +39,10 @@ describe('isKillable', () => {
     test('monsters yes, townsfolk and realm NPCs no', () => {
         expect(isKillable(makeNpc(), p)).toBeTrue();
         expect(isKillable(makeNpc({ realm: 'albion' }), p)).toBeFalse();
-        expect(isKillable(makeNpc({ role: 'merchant' }), p)).toBeFalse();
+        expect(isKillable(makeNpc({ name: 'Grizelda', role: 'merchant' }), p)).toBeFalse();
+        expect(isKillable(makeNpc({ name: 'Guard Ulf', role: 'guard' }), p)).toBeFalse();
+        // The role is guessed from the name: a monster called "... royal guard" is still a monster.
+        expect(isKillable(makeNpc({ name: 'wood-eater royal guard', role: 'guard' }), p)).toBeTrue();
         expect(isKillable(makeNpc({ isPeaceful: true }), p)).toBeFalse();
         expect(isKillable(makeNpc({ healthPercent: 0 }), p)).toBeFalse();
         expect(isKillable(makeNpc({ name: '' }), p)).toBeFalse();

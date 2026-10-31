@@ -7,3 +7,6 @@ bots/*/
 .env
 server/navmesh/
 server/OpenDAoC-Core
+
+groups/*/
+!groups/_template/
