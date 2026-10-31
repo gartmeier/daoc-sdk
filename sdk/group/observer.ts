@@ -31,8 +31,18 @@ export interface FightSummary {
     /** Distinct attackers beyond the first. */
     adds: number;
     maxAttackers: number;
-    /** % of samples (with a living tank and a known focus) in which the focus targeted the tank. */
+    /**
+     * % of samples (with a living tank and a known focus) in which the focus targeted the tank.
+     * The board keeps a mob's last target while it runs or is out of reach (the server then
+     * reports none), so those samples count too.
+     */
     tankHold: number | null;
+    /**
+     * Ms from the fight's first engage sample to each member's first nuke (0 when it came
+     * before that sample); null for a nuker that stood through the engage without one.
+     * Coordinated fights only: a passive watch knows no activities.
+     */
+    openerMs: Record<string, number | null>;
     deaths: string[];
     retreated: boolean;
     outcome: 'won' | 'retreated' | 'wiped' | 'lost' | 'unfinished';
@@ -56,6 +66,12 @@ export interface MemberStats {
     targeted: number;
     /** % of fight samples a non-tank stood within 250 of an attacker. */
     inMelee: number;
+    /** % of engaged time (alive) spent walking (activity 'move': position(), closing in, ...); null for the tank. */
+    movingInFights: number | null;
+    /** Median of the fights' openerMs for this member; null when it never nuked. */
+    openerMs: number | null;
+    /** Fights in which this nuker was engaged and alive but never started a nuke. */
+    fightsWithoutNuke: number;
     minHp: number;
     /** % of run time the group waited for this member, by reason (health, power, dead, away). */
     waitedFor: Record<string, number>;
@@ -87,14 +103,30 @@ export interface RunReport {
 interface Track {
     role: string; className: string; level0: number; level1: number; xp0: number; xp1: number;
     deaths: number; actions: Record<string, number>; failures: Record<string, number>;
-    fightSamples: number; engageSamples: number; idle: number; idleReasons: Record<string, number>; targeted: number; inMelee: number; minHp: number;
+    fightSamples: number; engageSamples: number; idle: number; idleReasons: Record<string, number>; targeted: number; inMelee: number; moving: number; minHp: number;
     waitMs: Record<string, number>;
 }
 
-interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outcome' | 'adds'> { at: number; attackers: Set<number>; holdSamples: number; heldSamples: number }
+interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outcome' | 'adds' | 'openerMs'> {
+    at: number; attackers: Set<number>; holdSamples: number; heldSamples: number;
+    /** The first sample under the coordinator's engage order; members alive in such samples; each member's first nuke. */
+    engageAt: number | null; engaged: Set<string>; firstNuke: Map<string, number>;
+}
 
 const pct = (a: number, b: number) => b > 0 ? Math.round(100 * a / b) : 0;
 const inc = (r: Record<string, number>, k: string, by = 1) => { r[k] = (r[k] ?? 0) + by; };
+const median = (xs: number[]): number | null => {
+    if (!xs.length) return null;
+    const s = [...xs].sort((a, b) => a - b), h = s.length >> 1;
+    return s.length % 2 ? s[h]! : Math.round((s[h - 1]! + s[h]!) / 2);
+};
+const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+
+/** Note a member's nuke in the open fight, keeping the earliest. */
+function nuked(f: OpenFight, name: string, at: number): void {
+    const first = f.firstNuke.get(name);
+    if (first === undefined || at < first) f.firstNuke.set(name, at);
+}
 
 /** Phase for a picture without a coordinator: fighting when anything attacks the group. */
 export function inferPhase(p: GroupPicture): Phase {
@@ -157,7 +189,7 @@ export class GroupObserver {
         for (const m of p.members) {
             let t = this.members.get(m.name);
             if (!t) {
-                t = { role: m.role, className: m.className, level0: m.level, level1: m.level, xp0: m.experience, xp1: m.experience, deaths: 0, actions: {}, failures: {}, fightSamples: 0, engageSamples: 0, idle: 0, idleReasons: {}, targeted: 0, inMelee: 0, minHp: m.hp, waitMs: {} };
+                t = { role: m.role, className: m.className, level0: m.level, level1: m.level, xp0: m.experience, xp1: m.experience, deaths: 0, actions: {}, failures: {}, fightSamples: 0, engageSamples: 0, idle: 0, idleReasons: {}, targeted: 0, inMelee: 0, moving: 0, minHp: m.hp, waitMs: {} };
                 this.members.set(m.name, t);
             }
             t.className = m.className;
@@ -173,18 +205,29 @@ export class GroupObserver {
         // Close a fight after 3 calm samples: a mob's target field flickers during a body pull.
         this.calm = fighting ? 0 : this.calm + 1;
         if (fighting && !this.fight) {
-            this.fight = { start: Math.round((p.at - this.started) / 1000), at: p.at, focus: [], kills: [], maxAttackers: 0, deaths: [], retreated: false, attackers: new Set(), holdSamples: 0, heldSamples: 0 };
+            this.fight = {
+                start: Math.round((p.at - this.started) / 1000), at: p.at, focus: [], kills: [], maxAttackers: 0, deaths: [], retreated: false, attackers: new Set(), holdSamples: 0, heldSamples: 0,
+                engageAt: null, engaged: new Set(), firstNuke: new Map(),
+            };
         }
         if (this.calm >= 3 && this.fight) this.closeFight(p.at, p);
         if (!this.fight || !fighting) return;
         const f = this.fight;
+        // Openers count from the coordinator's engage order; a passive watch has no orders.
+        const ordered = phase === 'engage' && p.orders.seq > 0;
+        if (ordered && f.engageAt === null) {
+            // The engage order itself (the board stamps the focus), not this sample: up to a sample earlier.
+            const fc = p.contacts.find(c => c.objectId === p.orders.focus);
+            f.engageAt = Math.min(p.at, fc?.engagedAt || p.orders.issuedAt || p.at);
+        }
         for (const t of threats) f.attackers.add(t.objectId);
         f.maxAttackers = Math.max(f.maxAttackers, threats.length);
         const tank = p.members.find(m => m.role === 'tank' && !m.isDead);
         const focus = p.contacts.find(c => c.objectId === p.orders.focus) ?? (tank ? p.contacts.find(c => c.objectId === tank.targetId) : undefined);
         if (focus && !f.focus.includes(focus.name)) f.focus.push(focus.name);
-        // Only samples where the mob's target is known: the field is empty in some snapshots.
-        if (tank && focus && focus.hp > 0 && !focus.cc && focus.target !== null) {
+        // Only samples where the mob's target is known. The board keeps the last one while the mob
+        // runs or is out of reach (the server sends none then), so those count; a reset clears it.
+        if (phase === 'engage' && tank && focus && focus.hp > 0 && !focus.cc && focus.target !== null) {
             f.holdSamples++;
             if (focus.target === tank.name) f.heldSamples++;
         }
@@ -192,9 +235,16 @@ export class GroupObserver {
             if (m.isDead) continue;
             const t = this.members.get(m.name)!;
             t.fightSamples++;
-            // Idle counts while engaged only: during a pull, waiting at the base is the job.
+            // Idle and moving count while engaged only: during a pull, waiting at the base is the job.
             if (phase === 'engage') t.engageSamples++;
             if (phase === 'engage' && m.activity.kind === 'idle') { t.idle++; inc(t.idleReasons, m.activity.detail || 'nothing to do'); }
+            if (phase === 'engage' && m.activity.kind === 'move') t.moving++;
+            if (ordered) f.engaged.add(m.name);
+            // The activity's start is exact; a nuke begun before this fight is a leftover.
+            if (m.activity.kind === 'nuke') {
+                const at = m.activity.since > 0 ? Math.min(m.activity.since, p.at) : p.at;
+                if (at >= f.at) nuked(f, m.name, at);
+            }
             if (threats.some(c => c.target === m.name)) t.targeted++;
             if (m.role !== 'tank' && threats.some(c => !c.cc && Math.hypot(c.x - m.x, c.y - m.y) < 250)) t.inMelee++;
         }
@@ -206,10 +256,19 @@ export class GroupObserver {
         this.fight = null;
         const alive = p ? p.members.filter(m => !m.isDead).length : 1;
         const outcome = p && alive === 0 ? 'wiped' : f.retreated ? 'retreated' : f.kills.length ? 'won' : at === Infinity ? 'unfinished' : 'lost';
+        // The sampler trails the engage order by up to a sample, so a nuke can come first: 0.
+        const openerMs: Record<string, number | null> = {};
+        if (f.engageAt !== null) {
+            for (const name of f.engaged) {
+                const first = f.firstNuke.get(name);
+                if (first !== undefined) openerMs[name] = Math.max(0, first - f.engageAt);
+                else if (this.members.get(name)?.role === 'nuker') openerMs[name] = null;
+            }
+        }
         this.fights.push({
             start: f.start, durationMs: (at === Infinity ? this.last : at) - f.at, focus: f.focus, kills: f.kills,
             adds: Math.max(0, f.attackers.size - 1), maxAttackers: f.maxAttackers,
-            tankHold: f.holdSamples ? pct(f.heldSamples, f.holdSamples) : null,
+            tankHold: f.holdSamples ? pct(f.heldSamples, f.holdSamples) : null, openerMs,
             deaths: f.deaths, retreated: f.retreated, outcome,
         });
     }
@@ -233,8 +292,10 @@ export class GroupObserver {
             else inc(t.failures, `${action}:${String(e.data?.reason ?? 'failed')}`);
         }
         if (e.kind === 'activity') {
-            // Two members starting the same heal/cc on one target within a moment: wasted effort.
             const kind = String(e.data?.activity);
+            // Exact where a sample could miss a short cast.
+            if (kind === 'nuke' && e.member && this.fight) nuked(this.fight, e.member, e.at);
+            // Two members starting the same heal/cc on one target within a moment: wasted effort.
             if ((kind === 'cc' || kind === 'heal') && e.targetId !== null && e.targetId !== undefined) {
                 const window = kind === 'cc' ? 3000 : 1500;
                 const dup = this.recent.some(o => o !== e && o.kind === 'activity' && o.data?.activity === kind && o.targetId === e.targetId && o.member !== e.member && e.at - o.at < window);
@@ -257,11 +318,15 @@ export class GroupObserver {
             const xp = Math.max(0, t.xp1 - t.xp0);
             xpTotal += xp;
             deaths += t.deaths;
+            const openers = this.fights.map(f => f.openerMs[name]).filter(v => v !== undefined);
             members[name] = {
                 role: t.role, className: t.className, level: t.level0 === t.level1 ? `${t.level1}` : `${t.level0}→${t.level1}`,
                 xp, xpPerHour: Math.round(xp / hours), deaths: t.deaths, actions: t.actions, failures: t.failures,
                 idleInFights: pct(t.idle, t.engageSamples), idleReasons: t.idleReasons,
-                targeted: pct(t.targeted, t.fightSamples), inMelee: pct(t.inMelee, t.fightSamples), minHp: t.minHp,
+                targeted: pct(t.targeted, t.fightSamples), inMelee: pct(t.inMelee, t.fightSamples),
+                movingInFights: t.role === 'tank' ? null : pct(t.moving, t.engageSamples),
+                openerMs: median(openers.filter((v): v is number => v !== null)), fightsWithoutNuke: openers.filter(v => v === null).length,
+                minHp: t.minHp,
                 waitedFor: Object.fromEntries(Object.entries(t.waitMs).map(([k, v]) => [k, pct(v, durationMs)]).filter(([, v]) => (v as number) > 0)),
             };
         }
@@ -305,6 +370,8 @@ export function findingsFor(r: RunReport): Finding[] {
         // Healers and supports idle when nobody needs them; that is fine.
         if ((m.role === 'nuker' || m.role === 'melee') && m.idleInFights > 40) out.push({ severity: 'medium', topic: 'idle', member: name, issue: `${name} was idle ${m.idleInFights}% of fight time`, evidence: `idle because: ${top(m.idleReasons, 3) || 'unknown'}`, suggestion: 'Check its behaviour list and spells for the role; "no power" points at mana (ready.mana, rest), "waiting for the tank" at holdMs.' });
         if (m.role !== 'tank' && m.inMelee > 15) out.push({ severity: 'medium', topic: 'positioning', member: name, issue: `${name} stood in melee range of an attacker ${m.inMelee}% of fight time`, evidence: `targeted ${m.targeted}%, min health ${m.minHp}%`, suggestion: 'Widen combatRange for its role, or put position() before its damage behaviour.' });
+        // Every step in a fight delays a cast; older reports lack the field.
+        if ((m.movingInFights ?? 0) > 20) out.push({ severity: m.movingInFights! >= 35 ? 'medium' : 'low', topic: 'positioning', member: name, issue: `${name} was moving ${m.movingInFights}% of engaged time`, evidence: `in melee range ${m.inMelee}%, targeted ${m.targeted}%${m.openerMs != null ? `, first nuke ${secs(m.openerMs)} after the engage (median)` : ''}`, suggestion: 'Widen the combatRange limits for its role (it moves only when closer than the min or farther than the max), or raise slotSlack so it stays where it stands near its slot.' });
         for (const [why, share] of Object.entries(m.waitedFor)) {
             if (share < 15) continue;
             const fix: Record<string, string> = {
@@ -343,14 +410,17 @@ export function formatReport(r: RunReport): string {
     lines.push('', '## Findings', '');
     if (!r.findings.length) lines.push('None.');
     for (const f of r.findings) lines.push(`- **${f.severity}** [${f.topic}] ${f.issue}. ${f.evidence ? `Evidence: ${f.evidence}. ` : ''}Try: ${f.suggestion}`);
-    lines.push('', '## Members', '', '| Member | Role | Level | XP/h | Deaths | Actions | Failures | Idle in fights | Targeted | In melee | Min HP | Group waited for it |', '|---|---|---|---|---|---|---|---|---|---|---|---|');
+    lines.push('', '## Members', '', 'Moving: share of engaged time spent walking. First nuke: median time from the engage to its first nuke, and the fights it never nuked in.', '',
+        '| Member | Role | Level | XP/h | Deaths | Actions | Failures | Idle in fights | Moving in fights | First nuke | Targeted | In melee | Min HP | Group waited for it |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|---|');
     for (const [n, m] of Object.entries(r.members)) {
         const waited = Object.entries(m.waitedFor).map(([k, v]) => `${k} ${v}%`).join(', ');
-        lines.push(`| ${n} | ${m.role} | ${m.level} | ${m.xpPerHour} | ${m.deaths} | ${top(m.actions, 4)} | ${top(m.failures, 3)} | ${m.idleInFights}%${m.idleInFights ? ` (${top(m.idleReasons, 1)})` : ''} | ${m.targeted}% | ${m.inMelee}% | ${m.minHp}% | ${waited || '-'} |`);
+        const opener = [m.openerMs != null ? secs(m.openerMs) : '', m.fightsWithoutNuke ? `${m.fightsWithoutNuke} fights without` : ''].filter(Boolean).join(', ');
+        lines.push(`| ${n} | ${m.role} | ${m.level} | ${m.xpPerHour} | ${m.deaths} | ${top(m.actions, 4)} | ${top(m.failures, 3)} | ${m.idleInFights}%${m.idleInFights ? ` (${top(m.idleReasons, 1)})` : ''} | ${m.movingInFights != null ? `${m.movingInFights}%` : '-'} | ${opener || '-'} | ${m.targeted}% | ${m.inMelee}% | ${m.minHp}% | ${waited || '-'} |`);
     }
     lines.push('', '## Fights', '');
     for (const f of r.fights) {
-        lines.push(`- ${String(Math.floor(f.start / 60)).padStart(2, '0')}:${String(f.start % 60).padStart(2, '0')} ${f.focus.join(' / ') || '?'}: ${f.outcome} in ${Math.round(f.durationMs / 1000)} s, kills ${f.kills.length}, adds ${f.adds}, tank hold ${f.tankHold ?? '-'}%${f.deaths.length ? `, died: ${f.deaths.join(', ')}` : ''}`);
+        const openers = Object.entries(f.openerMs ?? {}).map(([n, ms]) => `${n} ${ms === null ? 'none' : secs(ms)}`).join(', ');
+        lines.push(`- ${String(Math.floor(f.start / 60)).padStart(2, '0')}:${String(f.start % 60).padStart(2, '0')} ${f.focus.join(' / ') || '?'}: ${f.outcome} in ${Math.round(f.durationMs / 1000)} s, kills ${f.kills.length}, adds ${f.adds}, tank hold ${f.tankHold ?? '-'}%${openers ? `, first nuke: ${openers}` : ''}${f.deaths.length ? `, died: ${f.deaths.join(', ')}` : ''}`);
     }
     lines.push('', '## Timeline (last events)', '', '```', ...r.timeline, '```', '');
     return lines.join('\n');

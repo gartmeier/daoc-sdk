@@ -59,11 +59,13 @@ function spawnsByName(regionId: number): Map<string, AggroSpawn[]> {
 
 /**
  * Aggro of a live monster (live data does not say whether a mob is aggressive):
- * that of the nearest spawn with its name within 2500, since the same name can be
- * passive in one camp and aggressive in another. Null when it is passive or unknown.
+ * that of the nearest spawn with its name, since the same name can be passive in one
+ * camp and aggressive in another. Within 2500 first; else within 6000, because a mob
+ * chasing someone keeps its aggro far from its spawn (hunt 195452: a wild lucradan 2,500+
+ * from its spawn counted as passive and got pulled). Null when it is passive or unknown.
  */
 export function aggroAt(regionId: number, name: string, p: Point): { level: number; range: number } | null {
-    let best: AggroSpawn | null = null, bestD = 2500;
+    let best: AggroSpawn | null = null, bestD = 6000;
     for (const s of spawnsByName(regionId).get(name) ?? []) {
         const d = Math.hypot(s.x - p.x, s.y - p.y);
         if (d < bestD) { bestD = d; best = s; }
@@ -76,7 +78,7 @@ export function aggroAt(regionId: number, name: string, p: Point): { level: numb
  * `aggressiveWeight` (default 1) counts each aggressive spawn as that fraction of a
  * passive one: below 1 prefers camps the pull filter (avoidAggressive) can work.
  */
-export function findCamp(regionId: number, near: Point, lo: number, hi: number, opts: { maxDist?: number; avoid?: Point[]; aggressiveWeight?: number; clear?: { radius: number; level: number } } = {}): Camp | null {
+export function findCamp(regionId: number, near: Point, lo: number, hi: number, opts: { maxDist?: number; avoid?: Point[]; aggressiveWeight?: number; aggressiveMaxLevel?: number; clear?: { radius: number; level: number } } = {}): Camp | null {
     const pool = findNpcSpawns({ regionId, realm: 0, near, radius: opts.maxDist ?? 60_000, limit: 100_000 })
         .filter(s => !(s.flags & 0x10) && s.name === s.name.toLowerCase() && !/new mob/.test(s.name) && s.level >= lo && s.level <= hi);
     // Aggressive spawns at or above `clear.level` that must not stand within `clear.radius` of the camp.
@@ -86,7 +88,8 @@ export function findCamp(regionId: number, near: Point, lo: number, hi: number, 
             .filter(s => s.aggroLevel > 0 && s.aggroRange > 0 && !(s.flags & 0x10) && s.level >= clear.level)
         : [];
     const w = opts.aggressiveWeight ?? 1;
-    const weight = (s: (typeof pool)[number]) => (s.aggroLevel > 0 && s.aggroRange > 0 ? w : 1);
+    // Aggressive spawns above aggressiveMaxLevel are no targets for us (the pull filter rejects them): they count 0.
+    const weight = (s: (typeof pool)[number]) => (s.aggroLevel > 0 && s.aggroRange > 0 ? (s.level > (opts.aggressiveMaxLevel ?? Infinity) ? 0 : w) : 1);
     let best: Camp | null = null, bestScore = 0;
     for (const c of pool) {
         if (dangerNear(regionId, lo + 1, c, 1000)) continue;

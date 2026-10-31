@@ -3,13 +3,16 @@
 //
 // The tactics come from live runs of a five-player Hibernian group: the tank
 // body-pulls to a base, damage dealers wait until the tank has held the mob for
-// ~1.5 s, casters stand 900-1400 back and healers 450-1000, whoever pulls aggro
-// runs to the tank, and positions change only while the tank holds the mob.
+// ~1.5 s (holdState), whoever pulls aggro runs to the tank, and casters move only
+// when outside their limits from the fight (combatRange, positioning.ts): out when
+// a mob could reach them mid-cast, in when their spells don't reach.
 
 import { findNpcSpawns } from '../../data/index';
 import type { StyleChooser } from '../actions';
 import { abortable, executionContext } from '../execution-context';
 import { type BuffTask, nextBuff, planBuffs, surplusConcentration } from './buffs';
+import { combatSpot, dangerStops, effectiveLimits, focusSettled, safeSpot, trackFocus } from './positioning';
+import { dotFamily } from './spells';
 import { chooseSong, SONG_SETTINGS, type SongSettings } from './songs';
 import type { Behavior, MemberContext } from './member';
 import { safePath } from './terrain';
@@ -25,8 +28,16 @@ export interface TacticsSettings {
     heal: { tank: number; other: number; emergency: number; outOfCombat: number };
     /** Sit until these percentages while the group waits. */
     rest: { hp: number; mana: number };
-    /** Distance band from the focus per role, kept while the tank holds it. */
+    /**
+     * Distance limits from the fight per role: a member moves only when closer than the first
+     * (a mob could reach it mid-cast) or, once the tank holds the focus, farther than the second
+     * (spells out of reach). Inside the limits nobody moves (positioning.ts).
+     */
     combatRange: Partial<Record<Role, [number, number]>>;
+    /** Between fights, members within this of their slot (and safe, and near the anchor) stay where they are. */
+    slotSlack: number;
+    /** Aggressive mobs at or below this con to the group are welcome (PveSettings; default -3: only grey). */
+    aggroTolerance?: number;
     /** Formation slot per role: distance behind the anchor and angle off the facing line (radians). */
     formation: Partial<Record<Role, { back: number; angle: number }>>;
     /** The puller walks a focus farther than this from the anchor back to it. */
@@ -70,13 +81,18 @@ function claimedBy(ctx: MemberContext, kind: string, targetId: number, withinMs:
 
 /** Our slot around `anchor`: `back` units away from `facing`, roles fanned out by angle, same-role members on alternating sides. */
 export function formationSlot(ctx: MemberContext<TacticsSettings>, anchor: Point, facing: Point | null): Point {
-    const f = ctx.settings.formation[ctx.role] ?? { back: 200, angle: 0 };
     const same = ctx.members().filter(m => m.role === ctx.role).map(m => m.name);
-    const i = Math.max(0, same.indexOf(ctx.name));
-    const spread = f.angle || (i ? 0.4 : 0);
-    const angle = spread * (i % 2 ? -1 : 1) * (1 + Math.floor(i / 2) * 0.6);
     const away = facing && dist(anchor, facing) > 1 ? Math.atan2(anchor.y - facing.y, anchor.x - facing.x) : 0;
-    return { x: Math.round(anchor.x + Math.cos(away + angle) * f.back), y: Math.round(anchor.y + Math.sin(away + angle) * f.back) };
+    const o = formationOffset(ctx.settings.formation, ctx.role, Math.max(0, same.indexOf(ctx.name)), away);
+    return { x: Math.round(anchor.x + o.x), y: Math.round(anchor.y + o.y) };
+}
+
+/** Offset of the `index`-th member of `role` from the anchor, with `away` the angle from the facing point to the anchor. */
+export function formationOffset(formation: TacticsSettings['formation'], role: Role, index: number, away: number): Point {
+    const f = formation[role] ?? { back: 200, angle: 0 };
+    const spread = f.angle || (index ? 0.4 : 0);
+    const angle = spread * (index % 2 ? -1 : 1) * (1 + Math.floor(index / 2) * 0.6);
+    return { x: Math.cos(away + angle) * f.back, y: Math.sin(away + angle) * f.back };
 }
 
 /** Dead: release and respawn at the bind point (holdFormation walks back). */
@@ -335,6 +351,23 @@ async function until<T>(stop: () => boolean, work: () => Promise<T>): Promise<T 
     }
 }
 
+/**
+ * A contact's identity across object-id reuse: the server deletes a dead mob at once and hands its
+ * id to the next new object (Region.cs:955), so per-mob memory keys on the id and when we first saw it.
+ */
+export const ckey = (c: { objectId: number; firstSeen: number }) => `${c.objectId}:${c.firstSeen}`;
+
+/** When the tank first fought this mob (its taunt window starts there); forgets mobs that are gone. */
+export function openingOf(ctx: MemberContext, mob: Contact, now = Date.now()): number {
+    const first: Map<string, number> = ctx.memory.get('firstHit') ?? new Map();
+    const live = new Set(ctx.picture().contacts.map(ckey));
+    for (const k of first.keys()) if (!live.has(k)) first.delete(k);
+    const k = ckey(mob);
+    if (!first.has(k)) first.set(k, now);
+    ctx.memory.set('firstHit', first);
+    return first.get(k)!;
+}
+
 /** An add hitting one of our casters or healers that nobody controls (a mezz ordered on it had peelAfterMs to land). */
 export function peelTarget(ctx: MemberContext<TacticsSettings>): Contact | null {
     const o = ctx.orders();
@@ -366,12 +399,16 @@ export const tank = (): Behavior<TacticsSettings> => ({
             return true;
         }
         const { taunt, damage } = tankStyles(ctx);
-        const first: Map<number, number> = ctx.memory.get('firstHit') ?? new Map();
-        if (!first.has(mob.objectId)) first.set(mob.objectId, Date.now());
-        ctx.memory.set('firstHit', first);
-        const opening = first.get(mob.objectId)!;
-        const useStyle: StyleChooser = ({ npc, player }) =>
-            taunt && (add || npc.targetObjectId !== player.objectId || Date.now() - opening < ctx.settings.tauntOpenMs) ? taunt : damage;
+        const opening = openingOf(ctx, mob);
+        // One note per mob (for the observer): the style the tank opened with.
+        const noted: Set<string> = ctx.memory.get('openerNoted') ?? new Set();
+        ctx.memory.set('openerNoted', new Set([...noted].filter(k => (ctx.memory.get('firstHit') as Map<string, number>).has(k))));
+        const useStyle: StyleChooser = ({ npc, player }) => {
+            const style = taunt && (add || npc.targetObjectId !== player.objectId || Date.now() - opening < ctx.settings.tauntOpenMs) ? taunt : damage;
+            const seen: Set<string> = ctx.memory.get('openerNoted');
+            if (style && !seen.has(ckey(mob))) { seen.add(ckey(mob)); ctx.note(`opener ${style} on ${mob.name}`); }
+            return style;
+        };
         if (add) {
             ctx.doing('melee', add.objectId, `taunt off ${add.target}`);
             const held = () => {
@@ -427,8 +464,22 @@ export const guard = (): Behavior<TacticsSettings> => ({
 });
 
 /**
- * Damage dealer: once the tank has held the focus for holdMs (or opts.holdMs), nuke it (each DoT
- * once, then direct damage), or melee with `melee`. Never touches crowd-controlled mobs.
+ * Whether damage dealers may open on `mob`, and when: once it has targeted the tank for holdMs,
+ * counted from the engage order for a mob that ran there (a body pull carried home: the server
+ * hides a running mob's target, so its targetSince only starts when it stops), or once it has
+ * fought for assistAfterMs whoever it hits. Without a living tank: at once.
+ */
+export function holdState(mob: Pick<Contact, 'target' | 'targetSince' | 'movedAt' | 'engagedAt' | 'hostileSince'>, tankName: string | null, holdMs: number, assistAfterMs: number, now: number): { held: boolean; dueAt: number } {
+    if (!tankName) return { held: true, dueAt: now };
+    // A carried mob keeps its last target (and so stays hostile) all the way home: both clocks start at the engage order.
+    const floor = (t: number) => (mob.movedAt > 0 ? Math.max(t, mob.engagedAt || now) : t);
+    const dueAt = Math.min(mob.target === tankName ? floor(mob.targetSince) + holdMs : Infinity, mob.hostileSince > 0 ? floor(mob.hostileSince) + assistAfterMs : Infinity);
+    return { held: now >= dueAt, dueAt };
+}
+
+/**
+ * Damage dealer: once the tank has held the focus (holdState, holdMs or opts.holdMs), nuke it (the
+ * best DoT family once, then direct damage), or melee with `melee`. Never touches crowd-controlled mobs.
  */
 export const assist = (opts: { melee?: boolean; holdMs?: number } = {}): Behavior<TacticsSettings> => ({
     name: opts.melee ? 'assistMelee' : 'assist',
@@ -455,19 +506,22 @@ export const assist = (opts: { melee?: boolean; holdMs?: number } = {}): Behavio
         }
         const tankM = ctx.tank();
         const now = Date.now();
-        const held = !tankM || (mob.target === tankM.name && now - mob.targetSince >= (opts.holdMs ?? ctx.settings.holdMs))
-            || (mob.hostileSince > 0 && now - mob.hostileSince >= ctx.settings.assistAfterMs);
+        const { held } = holdState(mob, tankM?.name ?? null, opts.holdMs ?? ctx.settings.holdMs, ctx.settings.assistAfterMs, now);
         if (!held) return ctx.skip('assist: waiting for the tank to hold it');
         const me = ctx.me();
         if (!opts.melee) {
-            const dotted: Set<string> = ctx.memory.get(`dotted:${mob.objectId}`) ?? new Set();
+            // DoT families already on this mob, kept per mob (object ids are reused at once).
+            const key = `dotted:${ckey(mob)}`;
+            const live = new Set(ctx.picture().contacts.map(c => `dotted:${ckey(c)}`));
+            for (const k of [...ctx.memory.keys()]) if (k.startsWith('dotted:') && !live.has(k)) ctx.memory.delete(k);
+            const dotted: Set<string> = ctx.memory.get(key) ?? new Set();
             const sp = ctx.spells.nuke({ dotted, targetHp: mob.hp, aoe: ctx.settings.aoe });
             if (sp) {
                 await stopSwinging(ctx);
                 ctx.doing('nuke', mob.objectId, sp.spell.name);
                 const c = await ctx.bot.castSpell(sp.spell, mob.objectId);
                 ctx.result('nuke', c, mob.objectId);
-                if (c.success && sp.type === 'DamageOverTime') { dotted.add(sp.spell.name); ctx.memory.set(`dotted:${mob.objectId}`, dotted); }
+                if (sp.type === 'DamageOverTime' && (c.success || /already has that effect/i.test(c.message ?? ''))) { dotted.add(dotFamily(sp)); ctx.memory.set(key, dotted); }
                 if (!c.success && c.retryAfterMs) await Bun.sleep(Math.min(c.retryAfterMs, 3000));
                 return true;
             }
@@ -485,8 +539,11 @@ export const assist = (opts: { melee?: boolean; holdMs?: number } = {}): Behavio
 });
 
 /**
- * Keep our role's distance band from the focus, on the tank's side of it (the mob
- * never walks through us), spread sideways. Only while the tank holds the mob.
+ * Stay within our role's limits from the fight (combatRange, narrowed by the spell we cast;
+ * positioning.ts): step out when a mob could reach us mid-cast, step in when the settled focus
+ * is out of our spells' reach, along our own bearing and never into aggressive reach. Inside
+ * the limits we don't move, so assist casts at once. Session 2: with a band to centre in on the
+ * tank's side, casters crossed most close fights (1,200-1,400 units) and nuked 5-9 s late.
  */
 export const position = (): Behavior<TacticsSettings> => ({
     name: 'position',
@@ -495,23 +552,33 @@ export const position = (): Behavior<TacticsSettings> => ({
         const band = ctx.settings.combatRange[ctx.role];
         if (o.phase !== 'engage' || !band) return false;
         const mob = ctx.focus();
-        const tankM = ctx.tank();
-        if (!mob || !tankM || mob.target !== tankM.name) return false;
-        const live = ctx.sdk.getNearbyNpc(mob.objectId) ?? mob;
+        if (!mob) return false;
+        const now = Date.now();
+        if (now < (ctx.memory.get('positionRetryAt') ?? 0)) return ctx.skip('position: walk failed, retrying soon');
         const me = ctx.me();
-        const d = dist(me, live);
-        if (d >= band[0] && d <= band[1]) return false;
-        let dx = tankM.x - live.x, dy = tankM.y - live.y;
-        if (Math.hypot(dx, dy) < 50) { dx = me.x - live.x; dy = me.y - live.y; }
-        const len = Math.hypot(dx, dy) || 1;
-        const others = ctx.members().filter(m => m.role !== 'tank').map(m => m.name);
-        const side = others.length > 1 ? (others.indexOf(ctx.name) / (others.length - 1)) * 2 - 1 : 0;
-        const want = (band[0] + band[1]) / 2;
-        const px = live.x + (dx / len) * want - (dy / len) * side * 250;
-        const py = live.y + (dy / len) * want + (dx / len) * side * 250;
+        // Chased by an add: flee() brings us to the tank for the peel and the mezz; stepping out would undo it.
+        if (ctx.threats().some(t => t.target === ctx.name && !t.cc)) return ctx.skip('position: chased, staying by the tank');
+        const live = ctx.sdk.getNearbyNpc(mob.objectId);
+        const at = live ?? mob;
+        const trail = trackFocus(ctx.memory.get('focusTrail'), mob.objectId, at, now);
+        ctx.memory.set('focusTrail', trail);
+        const [min, max] = effectiveLimits(band, ctx.role === 'nuker' ? ctx.spells.nuke() : ctx.spells.heal());
+        // Crowd-controlled adds drop out of the threats ~4 s after the mezz lands; they still wake up.
+        const around = ctx.picture().contacts.filter(c => !c.stale && c.hp > 0 && (c.threat || c.cc));
+        const spot = combatSpot({
+            me, anchor: o.anchor, stops: dangerStops(around, ctx.members(), me, now),
+            focus: { x: at.x, y: at.y, d3: live?.distance ?? dist(me, at) },
+            settled: focusSettled({ focus: mob, at, tank: ctx.tank(), speed: live?.speed, trail, now }),
+            min, max, safe: safeSpot(me.regionId, me.level, ctx.settings.aggroTolerance ?? -3),
+        });
+        if (!spot) return false;
+        if (!spot.to) return ctx.skip('position: no safe spot');
+        // Already there in 2D (the 'in' check is 3D, so slopes leave a gap a step can't close): cast; castSpell closes in itself.
+        if (dist(me, spot.to) <= 60) return false;
         await stopSwinging(ctx);
-        ctx.doing('move', mob.objectId, `position ${Math.round(d)}→${Math.round(want)}`);
-        await ctx.bot.walkTo(px, py, { z: live.z, tolerance: 60, timeout: 8000 });
+        ctx.doing('move', mob.objectId, `position ${spot.move} ${Math.round(spot.d)}→${Math.round(spot.want)}`);
+        const w = await ctx.bot.walkTo(spot.to.x, spot.to.y, { tolerance: 60, timeout: 1500 + dist(me, spot.to) / 0.191 });
+        if (!w.success) { ctx.result('walk', w); ctx.memory.set('positionRetryAt', Date.now() + 3000); }
         return true;
     },
 });
@@ -529,7 +596,8 @@ export const holdFormation = (): Behavior<TacticsSettings> => ({
         const me = ctx.me();
         const slot = formationSlot(ctx, o.anchor, o.facing);
         const d = dist(me, slot);
-        if (d < (o.phase === 'travel' ? 250 : 120)) return false;
+        const safe = safeSpot(me.regionId, me.level, ctx.settings.aggroTolerance ?? -3);
+        if (!needsSlot({ dSlot: d, dAnchor: dist(me, o.anchor), phase: o.phase, slack: ctx.settings.slotSlack, gatherRadius: (ctx.settings as { gatherRadius?: number }).gatherRadius, safe: safe(me) })) return false;
         await stopSwinging(ctx);
         let to: Point = slot;
         if (d > 2500) {
@@ -544,6 +612,17 @@ export const holdFormation = (): Behavior<TacticsSettings> => ({
         return true;
     },
 });
+
+/**
+ * Whether a member walks back to its formation slot. Travelling: from 250 off. Otherwise from
+ * 120 off, unless within `slack` of the slot, at a safe spot, and well inside the gather radius
+ * (so slack never turns into a "gather: waiting for ..."): after a fight casters stay put.
+ */
+export function needsSlot(o: { dSlot: number; dAnchor: number; phase: string; slack: number; gatherRadius?: number; safe: boolean }): boolean {
+    if (o.phase === 'travel') return o.dSlot >= 250;
+    if (o.dSlot < 120) return false;
+    return !(o.dSlot < o.slack && o.dAnchor < (o.gatherRadius ?? 1200) - 100 && o.safe);
+}
 
 /** While the group waits: sit until rest.hp / rest.mana. */
 export const rest = (): Behavior<TacticsSettings> => ({

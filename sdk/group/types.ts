@@ -106,10 +106,18 @@ export interface Sighting {
 /** The group's merged knowledge of one enemy. May be outdated: check lastSeen / stale. */
 export interface Contact extends Sighting {
     regionId: number;
-    /** Member name it is targeting, or null (targetId may point at someone outside the group). */
+    /**
+     * Member name it is targeting, or null (targetId may point at someone outside the group).
+     * While it is in combat but the server reports no target (it runs, or its target is out
+     * of reach), the last known target and targetId are kept.
+     */
     target: string | null;
     /** When it started targeting `target` (how long the tank has held it). */
     targetSince: number;
+    /** When the coordinator first ordered engage with it as the focus; 0 until then. */
+    engagedAt: number;
+    /** The last sighting before engagedAt that kept the target while it ran (a carried pull); 0 if none. */
+    movedAt: number;
     /** Members that see it in their latest snapshot. */
     seenBy: string[];
     firstSeen: number;

@@ -102,13 +102,24 @@ export function isMaterialChange(a: Orders, b: Orders): boolean {
         || moved(a.retreatTo, b.retreatTo, 300) || moved(a.anchor, b.anchor, 300);
 }
 
-type InternalContact = Contact & { engaged: boolean; ccSince: number; lastHostile: number };
+/** Late sightings of a dead mob (a member's client lags) are ignored this long ... */
+const KILLED_MS = 20_000;
+/** ... when they are this close to its corpse and carry its name. */
+const CORPSE_RADIUS = 300;
+/** A death stays in members' observations this long (observeState keeps death events 5 s), plus lag. */
+const DEATH_ECHO_MS = 6000;
+
+/**
+ * `engaged`: the group fought it, so its death is a kill event (not `engagedAt`, the engage order).
+ * `deathEchoUntil`: it inherited a dead mob's id; deaths reported for that id until then are the old mob's.
+ */
+type InternalContact = Contact & { engaged: boolean; ccSince: number; lastHostile: number; deathEchoUntil: number };
 
 export class Blackboard {
     private readonly reports = new Map<string, MemberReport>();
     private readonly contacts = new Map<string, InternalContact>();
-    /** Recently died, by key: ignore late sightings of them (ids are reused, so not forever). */
-    private readonly killed = new Map<string, number>();
+    /** Recently died, by key, with where and as what: ignore its own late sightings (ids are reused at once). */
+    private readonly killed = new Map<string, { at: number; name: string; x: number; y: number; hp: number }>();
     private orders: Orders = emptyOrders();
     private readonly eventLog: GroupEvent[] = [];
     private readonly eventListeners = new Set<(e: GroupEvent) => void>();
@@ -143,20 +154,41 @@ export class Blackboard {
         const seen = new Set<string>();
         for (const s of obs.sightings) {
             const key = `${r.regionId}:${s.objectId}`;
-            if (now - (this.killed.get(key) ?? -Infinity) < 20_000) continue;
+            const dead = this.killed.get(key);
+            let deathEchoUntil = 0;
+            if (dead) {
+                // Only the dead mob's own late sightings are ignored. Anything else under its id
+                // is a mob that inherited it (the server frees ids on death): a new contact at once.
+                // A camp respawn can inherit the id at the same spot: it shows full health, the corpse never more than it died with.
+                if (now - dead.at < KILLED_MS && s.name === dead.name && Math.hypot(s.x - dead.x, s.y - dead.y) < CORPSE_RADIUS && s.hp <= dead.hp + 5) continue;
+                this.killed.delete(key);
+                deathEchoUntil = dead.at + DEATH_ECHO_MS;
+            }
             seen.add(key);
             const target = s.targetId !== null ? memberById.get(s.targetId) ?? null : null;
             let c = this.contacts.get(key);
             if (!c) {
-                c = { ...s, regionId: r.regionId, target, targetSince: now, seenBy: [], firstSeen: now, lastSeen: r.at, stale: false, threat: false, hostileSince: 0, cc: null, engaged: false, ccSince: 0, lastHostile: 0 };
+                c = { ...s, regionId: r.regionId, target, targetSince: now, engagedAt: 0, movedAt: 0, seenBy: [], firstSeen: now, lastSeen: r.at, stale: false, threat: false, hostileSince: 0, cc: null, engaged: false, ccSince: 0, lastHostile: 0, deathEchoUntil };
                 this.contacts.set(key, c);
             } else if (r.at >= c.lastSeen) {
-                if (c.targetId !== s.targetId) c.targetSince = now;
-                Object.assign(c, s, { target, lastSeen: r.at });
+                // In combat with no target: the server sends none (65535) while the mob runs or its
+                // target is out of reach. Keep the last one, so target and targetSince don't blink.
+                const unknown = s.targetId === null && s.inCombat;
+                if (unknown && c.targetId !== null) {
+                    Object.assign(c, s, { targetId: c.targetId, target: c.target, lastSeen: r.at });
+                    // Running before the engage order: a carried pull (its hold counts from engagedAt).
+                    if (c.engagedAt === 0) c.movedAt = now;
+                } else {
+                    // A new target, or none after a reset or leash (no longer in combat).
+                    if (c.targetId !== s.targetId) c.targetSince = now;
+                    Object.assign(c, s, { target, lastSeen: r.at });
+                }
             }
             if (!c.seenBy.includes(r.name)) c.seenBy.push(r.name);
-            if (target || targetedByUs.has(s.objectId)) c.engaged = true;
-            if (target || s.swinging || attackedByUs.has(s.objectId)) {
+            // The contact's target, which is kept while it runs at a member; an older report's own as a fallback.
+            const onMember = c.target ?? target;
+            if (onMember || targetedByUs.has(s.objectId)) c.engaged = true;
+            if (onMember || s.swinging || attackedByUs.has(s.objectId)) {
                 if (now - c.lastHostile > this.hostileMs) c.hostileSince = now;
                 c.lastHostile = now;
             }
@@ -178,9 +210,11 @@ export class Blackboard {
 
     private kill(key: string, by: string, now: number): void {
         const c = this.contacts.get(key);
-        if (!c) return;
+        // A mob that just inherited the id: the death members still report is its predecessor's.
+        if (!c || now < c.deathEchoUntil) return;
         this.contacts.delete(key);
-        this.killed.set(key, now);
+        for (const [k, d] of this.killed) if (now - d.at >= KILLED_MS) this.killed.delete(k);
+        this.killed.set(key, { at: now, name: c.name, x: c.x, y: c.y, hp: c.hp });
         if (c.engaged) this.emit({ at: now, kind: 'kill', member: by, targetId: c.objectId, text: `${c.name} (L${c.level}) died`, data: { name: c.name, level: c.level } });
     }
 
@@ -198,7 +232,7 @@ export class Blackboard {
         for (const [key, c] of this.contacts) {
             if (now - c.lastSeen > this.forgetAfterMs) { this.contacts.delete(key); continue; }
             if (c.cc && c.cc.until <= now) c.cc = null;
-            const { engaged: _e, ccSince: _s, lastHostile, ...pub } = c;
+            const { engaged: _e, ccSince: _s, deathEchoUntil: _d, lastHostile, ...pub } = c;
             const stale = now - c.lastSeen > this.staleAfterMs;
             const threat = !stale && c.hp > 0 && now - lastHostile < this.hostileMs;
             contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null });
@@ -220,8 +254,10 @@ export class Blackboard {
             next.issuedAt = now;
         }
         this.orders = next;
+        const focus = this.contactById(next.focus);
+        // Set once per contact (cc or reason changes don't move it): a carried mob's hold counts from here.
+        if (next.phase === 'engage' && focus && focus.engagedAt === 0) focus.engagedAt = now;
         if (material) {
-            const focus = next.focus !== null ? [...this.contacts.values()].find(c => c.objectId === next.focus) : null;
             this.emit({
                 at: now, kind: 'orders', targetId: next.focus,
                 text: `${next.phase}${focus ? ` on ${focus.name}` : ''}${next.cc.length ? ` (cc ${next.cc.map(c => `${c.by}→${c.targetId}`).join(', ')})` : ''}: ${next.reason}`,
@@ -230,6 +266,14 @@ export class Blackboard {
             for (const l of this.orderListeners) l(this.getOrders(), prev);
         }
         return material;
+    }
+
+    /** The contact under an object id. Ids are per region: the most recently seen one wins. */
+    private contactById(id: number | null): InternalContact | undefined {
+        let best: InternalContact | undefined;
+        if (id === null) return best;
+        for (const c of this.contacts.values()) if (c.objectId === id && (!best || c.lastSeen > best.lastSeen)) best = c;
+        return best;
     }
 
     emit(event: GroupEvent): void {

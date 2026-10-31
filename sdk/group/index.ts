@@ -15,4 +15,6 @@ export { Spellbook, spellsOf, slotOf, pickNuke, dotFamily, toPick, type SpellPic
 export * from './buffs';
 export * from './songs';
 export * from './terrain';
+export * from './baseplan';
+export * from './positioning';
 export type { ScriptContext } from '../runner';

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { assignCc, decidePve, pickFocus, PVE_SETTINGS, type PveSettings } from './pve';
+import type { BasePlan } from './baseplan';
+import { assignCc, decidePve, pickFocus, PVE_SETTINGS, rejectPull, type PveSettings } from './pve';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { contact, picture, report } from './fixtures';
 import type { GroupPicture, MemberReport, Orders } from './types';
@@ -138,6 +139,52 @@ describe('decidePve', () => {
         const mob = contact(51, { regionId: R, level: 7, x: BASE.x + 1500, y: BASE.y });
         const d = decidePve(ctx(picture(team(), [mob], { phase: 'pull', focus: 51, puller: 'Tank', anchor: BASE }, now), { memory, windingDown: true }));
         expect(d.phase).toBe('pull');
+    });
+
+    test('with a base plan: no pulls from unsafe spawns, the group faces the targets, the objective names them', () => {
+        const spawn = (x: number) => ({ name: 'water beetle', x, y: BASE.y, z: 0, level: 7, aggroLevel: 0, aggroRange: 0, flags: 0 });
+        const plan: BasePlan = {
+            base: BASE, facing: { x: BASE.x + 800, y: BASE.y }, score: 800, margin: 400,
+            targets: [{ ...spawn(BASE.x + 800), d: 800 }], unsafe: [{ ...spawn(BASE.x - 900), why: 'stand: wild lucradan 700' }],
+        };
+        const memory = { camp: { ...BASE, zone: '', count: 0, names: 'beetles' }, campLevel: 6, base: BASE, plan, facing: plan.facing };
+        // The beetle from the unsafe spawn cons higher and would win without the plan.
+        const mobs = [contact(51, { regionId: R, level: 7, x: BASE.x + 800, y: BASE.y }), contact(52, { regionId: R, level: 8, x: BASE.x - 950, y: BASE.y + 50 })];
+        const d = decidePve(ctx(picture(team(), mobs), { memory }));
+        expect(d.phase).toBe('pull');
+        expect(d.focus).toBe(51);
+        expect(d.facing).toEqual(plan.facing);
+        expect(d.objective).toContain('1 targets 800-800 away');
+        expect(d.reason).toContain('800 away');
+    });
+});
+
+describe('rejectPull (static data, Lough Derg)', () => {
+    test('a wolf whose pull walks past a live aggressive lucradan is rejected', () => {
+        // Hunt 195452 / 201202: wolves west of the clearance base were pulled past a wild lucradan, which joined.
+        const settings = mergeSettings(PVE_SETTINGS, { huntRadius: 3500, pullAggressive: false } as any);
+        const base = { x: 350439, y: 521657 };
+        const wolf = contact(51, { regionId: 200, name: 'red wolfhound', level: 12, x: 347046, y: 521117 });
+        const lucradan = contact(52, { regionId: 200, name: 'wild lucradan', level: 10, x: 347965, y: 520638 });
+        const opts = { base, regionId: 200, level: 12, exclude: new Set<number>(), settings };
+        expect(rejectPull(wolf, [wolf, lucradan], opts)).toBe('aggressive on the way: wild lucradan');
+        expect(rejectPull(wolf, [wolf], opts)).toBeNull();
+    });
+
+    test('with pullAggressive, aggressive mobs are pulled up to aggroTolerance; grey and tolerated ones block nothing', () => {
+        // A level-13 wild lucradan at a lucradan spawn: aggressive (aggroAt goes by name and place), yellow to L13.
+        const lucradan = contact(52, { regionId: 200, name: 'wild lucradan', level: 13, x: 347965, y: 520638 });
+        const settings = (over: Partial<PveSettings>) => mergeSettings(PVE_SETTINGS, { huntRadius: 3500, maxCon: 3, ...over } as any);
+        const at = (level: number, over: Partial<PveSettings>) => rejectPull(lucradan, [lucradan], { base: { x: 348800, y: 520300 }, regionId: 200, level, exclude: new Set<number>(), settings: settings(over) });
+        expect(at(13, { pullAggressive: false, aggroTolerance: 0 })).toBe('aggressive');
+        expect(at(13, { pullAggressive: true, aggroTolerance: 0 })).toBeNull();            // yellow: pulled
+        expect(at(12, { pullAggressive: true, aggroTolerance: 0 })).toBe('aggressive');    // orange to L12: not
+        // A tolerated (here blue) aggressive mob next to a wolf doesn't make the wolf "near aggressive mobs".
+        const wolf = contact(51, { regionId: 200, name: 'red wolfhound', level: 12, x: 348300, y: 520700 });
+        const blue = { ...lucradan, level: 10 };   // blue to L12
+        const near = (tol: number) => rejectPull(wolf, [wolf, blue], { base: { x: 348800, y: 520300 }, regionId: 200, level: 12, exclude: new Set<number>(), settings: settings({ aggroTolerance: tol }) });
+        expect(near(-3)).toBe('near aggressive wild lucradan');
+        expect(near(-1)).toBeNull();
     });
 });
 

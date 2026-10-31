@@ -26,7 +26,7 @@ export function obs(r: MemberReport, sightings: Sighting[] = [], deaths: number[
 export function contact(objectId: number, over: Partial<Contact> = {}): Contact {
     const now = Date.now();
     return {
-        ...sighting(objectId), regionId: 200, target: null, targetSince: now, seenBy: ['Tank'], firstSeen: now, lastSeen: now,
+        ...sighting(objectId), regionId: 200, target: null, targetSince: now, engagedAt: 0, movedAt: 0, seenBy: ['Tank'], firstSeen: now, lastSeen: now,
         stale: false, threat: false, hostileSince: 0, cc: null, ...over,
     };
 }

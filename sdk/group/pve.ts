@@ -6,6 +6,7 @@
 // orders; members carry them out with their behaviour lists.
 
 import { conLevel } from '../actions-helpers';
+import { planBase, planRejects, segDist, type BasePlan } from './baseplan';
 import { defaultBehaviors, type TacticsSettings } from './behaviors';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { aggroAt, chooseBase, dangerNear, findCamp, safePath, type Camp } from './terrain';
@@ -29,7 +30,17 @@ export interface PveSettings extends TacticsSettings {
     campClearance: number;
     /** Pull targets within this distance of the base. */
     huntRadius: number;
-    /** The base keeps this far from every spawn (a hit mob calls friends within 1050 for a group of five). */
+    /**
+     * Place the base by planBase (baseplan.ts): next to the targets the tank can pull safely, every
+     * formation slot and the walk to each target out of aggressive reach. Off: chooseBase with baseClearance.
+     */
+    basePlan: boolean;
+    /**
+     * Aggressive mobs at or below this con to the group are welcome walk-ins: the base plan doesn't keep
+     * away from them and pulls don't avoid them (-3: only grey ones, which never aggro).
+     */
+    aggroTolerance: number;
+    /** Base without basePlan: this far from every spawn, and twice that from aggressive ones near our level. */
     baseClearance: number;
     /** Pull only when every living member is at or above these (mana counts for casters only). */
     ready: { hp: number; mana: number };
@@ -78,10 +89,14 @@ export const PVE_SETTINGS: PveSettings = {
     // outOfCombat above ready.hp: healers top the group up instead of everyone sitting.
     heal: { tank: 70, other: 60, emergency: 35, outOfCombat: 90 },
     rest: { hp: 95, mana: 90 },
-    combatRange: { healer: [450, 1000], support: [450, 900], nuker: [900, 1400] },
+    // Limits, not a band to centre in: a fight at the anchor moves nobody (slots 550/900 back).
+    // Session 2 recording: with bands, casters walked 1,200-1,400 across most close fights and nuked 5-9 s late.
+    combatRange: { healer: [500, 1600], support: [500, 1600], nuker: [700, 1400] },
+    slotSlack: 350,
     // The pulled mob ends up on the tank at the anchor: everyone else stands well out of its reach.
     formation: { tank: { back: 0, angle: 0 }, healer: { back: 550, angle: 0.45 }, support: { back: 550, angle: -0.45 }, nuker: { back: 900, angle: 0.3 }, melee: { back: 120, angle: 0.8 } },
-    pullDistance: 450,
+    // Keep equal to engageRadius: a mob the coordinator doesn't carry home is fought where it stands, swinging.
+    pullDistance: 700,
     buffMana: 40,
     aoe: false,
     meleeWhenOom: false,
@@ -97,6 +112,8 @@ export const PVE_SETTINGS: PveSettings = {
     campAggressiveWeight: 1,
     campClearance: 0,
     huntRadius: 2200,
+    basePlan: false,
+    aggroTolerance: -3,
     baseClearance: 700,
     ready: { hp: 80, mana: 50 },
     gatherRadius: 1200,
@@ -116,9 +133,16 @@ const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 const centroid = (ps: Point[]): Point => ({ x: ps.reduce((a, p) => a + p.x, 0) / Math.max(1, ps.length), y: ps.reduce((a, p) => a + p.y, 0) / Math.max(1, ps.length) });
 const usesMana = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc;
 const names = (ms: { name: string }[]) => ms.map(m => m.name).join(', ');
+/** The highest aggressive mob level we pull or welcome: con up to aggroTolerance with pullAggressive, else none. */
+const tolerated = (level: number, s: PveSettings) => {
+    if (!s.pullAggressive) return Infinity;   // camp weighting as before: campAggressiveWeight alone
+    let max = -1;
+    for (let l = 0; l <= level + 10; l++) if (conLevel(level, l) <= s.aggroTolerance) max = l;
+    return max;
+};
 
 /** Why a contact is not worth pulling, or null when it is. */
-export function rejectPull(c: Contact, live: Contact[], opts: { base: Point; regionId: number; level: number; exclude: Set<number>; settings: PveSettings }): string | null {
+export function rejectPull(c: Contact, live: Contact[], opts: { base: Point; regionId: number; level: number; exclude: Set<number>; settings: PveSettings; plan?: BasePlan | null }): string | null {
     const s = opts.settings;
     if (c.kind !== 'npc' || c.stale || c.hp <= 0 || c.regionId !== opts.regionId) return 'gone';
     if (opts.exclude.has(c.objectId)) return 'failed pull';
@@ -126,11 +150,21 @@ export function rejectPull(c: Contact, live: Contact[], opts: { base: Point; reg
     const con = conLevel(opts.level, c.level);
     if (con < s.minCon || con > s.maxCon) return `con ${con}`;
     if (dist(c, opts.base) > s.huntRadius) return 'too far';
-    if (!s.pullAggressive && aggroAt(opts.regionId, c.name, c)) return 'aggressive';
+    const unsafe = opts.plan ? planRejects(opts.plan, c) : null;
+    if (unsafe) return unsafe;
+    if (aggroAt(opts.regionId, c.name, c) && (!s.pullAggressive || con > Math.max(-3, s.aggroTolerance))) return 'aggressive';
     if (!s.avoidAggressive) return null;
     if (dangerNear(opts.regionId, opts.level, c, 300)) return 'in a danger zone';
+    // The tank's walk out to it and back passes a live aggressive mob (those next to it count below).
+    // Mobs that con grey to us never aggro (StandardMobBrain.CanAggroTarget), as in aggroZones and planBase.
+    const onTheWay = live.find(o => {
+        if (o.objectId === c.objectId || conLevel(opts.level, o.level) <= Math.max(-3, s.aggroTolerance)) return false;
+        const a = aggroAt(opts.regionId, o.name, o);
+        return !!a && dist(o, c) >= a.range + s.aggroPad && segDist(o, opts.base, c) < a.range + s.aggroPad;
+    });
+    if (onTheWay) return `aggressive on the way: ${onTheWay.name}`;
     const near = live.filter(o => {
-        if (o.objectId === c.objectId) return false;
+        if (o.objectId === c.objectId || conLevel(opts.level, o.level) <= Math.max(-3, s.aggroTolerance)) return false;
         const a = aggroAt(opts.regionId, o.name, o);
         return !!a && dist(o, c) < a.range + s.aggroPad;
     });
@@ -138,14 +172,14 @@ export function rejectPull(c: Contact, live: Contact[], opts: { base: Point; reg
 }
 
 /** The best monster to pull: in the con window, near the base, not fighting someone else, away from aggressive mobs. */
-export function pickPullTarget(contacts: Contact[], opts: { base: Point; regionId: number; level: number; exclude: Set<number>; settings: PveSettings }): { target: Contact | null; rejected: Record<string, number> } {
+export function pickPullTarget(contacts: Contact[], opts: { base: Point; regionId: number; level: number; exclude: Set<number>; settings: PveSettings; plan?: BasePlan | null }): { target: Contact | null; rejected: Record<string, number> } {
     const live = contacts.filter(c => c.kind === 'npc' && !c.stale && c.hp > 0 && c.regionId === opts.regionId);
     const rejected: Record<string, number> = {};
     const pool: Contact[] = [];
     for (const c of live) {
         const why = rejectPull(c, live, opts);
         if (!why) { pool.push(c); continue; }
-        const key = why.replace(/^near aggressive .*/, 'near aggressive mobs');
+        const key = why.replace(/^near aggressive .*/, 'near aggressive mobs').replace(/^(aggressive on the way|unsafe spawn).*/, '$1');
         rejected[key] = (rejected[key] ?? 0) + 1;
     }
     const con = (c: Contact) => conLevel(opts.level, c.level);
@@ -239,19 +273,35 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     if (!mem.camp || (!s.camp && mem.campLevel !== level)) {
         found = s.camp
             ? { ...s.camp, zone: '', count: 0, names: 'given camp' }
-            : findCamp(regionId, leader, Math.max(0, level + s.campLevelBand[0]), level + s.campLevelBand[1], { avoid: mem.avoidCamps, aggressiveWeight: s.campAggressiveWeight, clear: { radius: s.campClearance, level: level - 2 } });
+            : findCamp(regionId, leader, Math.max(0, level + s.campLevelBand[0]), level + s.campLevelBand[1], { avoid: mem.avoidCamps, aggressiveWeight: s.campAggressiveWeight, aggressiveMaxLevel: tolerated(level, s), clear: { radius: s.campClearance, level: level - 2 } });
         if (!found && !mem.camp) return { phase: 'idle', anchor: null, focus: null, reason: `no camp for level ${level} in region ${regionId}` };
         mem.campLevel = level;
     }
     if (found) {
         mem.camp = found;
-        mem.base = chooseBase(regionId, level, found, leader, s.baseClearance);
+        mem.plan = null;
+        if (s.basePlan) {
+            // A camp without a safe base (every spot in aggressive reach): try the next camps, else keep this one with chooseBase.
+            const opts = { level, minCon: s.minCon, maxCon: s.maxCon, pullAggressive: s.pullAggressive, huntRadius: s.huntRadius, roles: p.members.map(m => m.role), formation: s.formation, avoid: mem.avoidCamps, tolerateCon: s.aggroTolerance };
+            const tried: Point[] = [];
+            for (let next: Camp | null = found; next && tried.length < 3; ) {
+                mem.plan = planBase(regionId, next, opts);
+                if (mem.plan) { mem.camp = next; break; }
+                tried.push(next);
+                next = s.camp ? null : findCamp(regionId, leader, Math.max(0, level + s.campLevelBand[0]), level + s.campLevelBand[1], { avoid: [...(mem.avoidCamps ?? []), ...tried], aggressiveWeight: s.campAggressiveWeight, aggressiveMaxLevel: tolerated(level, s), clear: { radius: s.campClearance, level: level - 2 } });
+            }
+        }
+        mem.base = mem.plan?.base ?? chooseBase(regionId, level, mem.camp, leader, s.baseClearance);
+        mem.facing = mem.plan?.facing ?? null;
         mem.route = null;
         mem.leg = null;
     }
     const camp: Camp = mem.camp;
     const base: Point3 = mem.base;
-    const objective = `hunt ${camp.names || 'monsters'} (con ${s.minCon}..${s.maxCon}) from base (${base.x}, ${base.y})`;
+    const plan: BasePlan | null = mem.plan ?? null;
+    const facing: Point = mem.facing ?? camp;
+    const reach = plan?.targets.length ? `: ${plan.targets.length} targets ${plan.targets[0]!.d}-${plan.targets.at(-1)!.d} away` : '';
+    const objective = `hunt ${camp.names || 'monsters'} (con ${s.minCon}..${s.maxCon}) from base (${base.x}, ${base.y})${reach}`;
     const calm = { focus: null, puller: null, cc: [], retreatTo: null, waiting: [], objective };
 
     // ── A pull in progress goes on (also when time is up: a mob already hit would follow us) ──
@@ -261,7 +311,7 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
         if (c) mem.exclude.add(o.focus);
     }
 
-    if (ctx.windingDown) return { ...calm, phase: 'recover', anchor: base, facing: camp, reason: 'time is up: no more pulls' };
+    if (ctx.windingDown) return { ...calm, phase: 'recover', anchor: base, facing, reason: 'time is up: no more pulls' };
 
     // ── Travel: most of the group is far from the base. Legs of travelLeg, regrouping at each (or after 30 s). ──
     const away = here.filter(m => dist(m, base) > s.gatherRadius);
@@ -286,39 +336,40 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     mem.leg = null;
 
     // ── Gather and recover ──
-    if (away.length) return { ...calm, phase: 'gather', anchor: base, facing: camp, waiting: away.map(m => ({ name: m.name, why: 'away' })), reason: `waiting for ${names(away)}` };
+    if (away.length) return { ...calm, phase: 'gather', anchor: base, facing, waiting: away.map(m => ({ name: m.name, why: 'away' })), reason: `waiting for ${names(away)}` };
     const deadMembers = p.members.filter(m => m.isDead);
-    if (deadMembers.length) return { ...calm, phase: 'recover', anchor: base, facing: camp, waiting: deadMembers.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadMembers)} to release and come back` };
+    if (deadMembers.length) return { ...calm, phase: 'recover', anchor: base, facing, waiting: deadMembers.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadMembers)} to release and come back` };
     const waiting = alive.flatMap(m => [
         ...(m.hp < s.ready.hp ? [{ name: m.name, why: 'health' }] : []),
         ...(usesMana(m) && m.mana < s.ready.mana ? [{ name: m.name, why: 'power' }] : []),
     ]);
-    if (waiting.length) return { ...calm, phase: 'recover', anchor: base, facing: camp, waiting, reason: `waiting for ${waiting.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)` };
+    if (waiting.length) return { ...calm, phase: 'recover', anchor: base, facing, waiting, reason: `waiting for ${waiting.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)` };
 
     // ── Pull ──
-    if (!tank) return { ...calm, phase: 'recover', anchor: base, facing: camp, reason: 'no living tank to pull' };
-    const { target, rejected } = pickPullTarget(p.contacts, { base, regionId, level, exclude: mem.exclude, settings: s });
+    if (!tank) return { ...calm, phase: 'recover', anchor: base, facing, reason: 'no living tank to pull' };
+    const { target, rejected } = pickPullTarget(p.contacts, { base, regionId, level, exclude: mem.exclude, settings: s, plan });
     if (target) {
         mem.pullStart = now;
         mem.idleSince = undefined;
-        return { ...calm, phase: 'pull', anchor: base, facing: camp, focus: target.objectId, puller: tank.name, reason: `pull ${target.name} L${target.level} (con ${conLevel(level, target.level)})` };
+        return { ...calm, phase: 'pull', anchor: base, facing, focus: target.objectId, puller: tank.name, reason: `pull ${target.name} L${target.level} (con ${conLevel(level, target.level)}) ${Math.round(dist(target, base))} away` };
     }
 
     // ── Nothing in reach: wander the camp, then try another ──
     mem.idleSince ??= now;
     if (now - mem.idleSince > s.newCampMs && !s.camp) {
-        (mem.avoidCamps ??= []).push({ x: camp.x, y: camp.y });
+        (mem.avoidCamps ??= []).push({ x: camp.x, y: camp.y }, ...(plan ? [{ x: base.x, y: base.y }] : []));
         mem.camp = null;
         mem.idleSince = undefined;
-        return { ...calm, phase: 'idle', anchor: base, facing: camp, reason: `nothing to pull at ${camp.names}: choosing another camp` };
+        return { ...calm, phase: 'idle', anchor: base, facing, reason: `nothing to pull at ${camp.names}: choosing another camp` };
     }
-    if (now - (mem.roamAt ?? mem.idleSince) > s.roamMs) {
+    // A planned base is already next to every safe target: wait there for respawns.
+    if (!plan && now - (mem.roamAt ?? mem.idleSince) > s.roamMs) {
         mem.roamAt = now;
         const a = Math.random() * Math.PI * 2;
         mem.base = { x: Math.round(camp.x + Math.cos(a) * 900), y: Math.round(camp.y + Math.sin(a) * 900), z: camp.z };
     }
     const seen = Object.entries(rejected).map(([k, v]) => `${v} ${k}`).join(', ');
-    return { ...calm, phase: 'idle', anchor: mem.base, facing: camp, reason: `no target in reach${seen ? ` (${seen})` : ''}` };
+    return { ...calm, phase: 'idle', anchor: mem.base, facing, reason: `no target in reach${seen ? ` (${seen})` : ''}` };
 }
 
 export const pveLeveling: GroupStrategy<PveSettings> = {

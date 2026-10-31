@@ -79,6 +79,78 @@ describe('GroupObserver', () => {
         expect(o.report().members.Menta!.failures['cc:duplicate']).toBe(1);
     });
 
+    // T9
+    const act = (kind: string, since = 0) => ({ activity: { kind, targetId: kind === 'idle' ? null : 7, detail: '', since } });
+    const wolf = contact(7, { target: 'Tank', threat: true, x: 0 });
+    const calm = (o: GroupObserver, from: number) => { for (let i = 0; i < 3; i++) o.sample(picture(members(), [], { seq: 9, phase: 'recover' }, T0 + (from + i) * 1000)); };
+
+    test('a nuker moving in 30% of engaged time gets a positioning finding; openerMs is its first nuke after the engage', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 });
+        // Engage from 1 s: Menta walks 3 of 10 samples and starts nuking at 3.7 s. The tank's walks don't count.
+        for (let i = 1; i <= 10; i++) {
+            const Menta = i <= 3 ? act('move', T0 + i * 1000) : act('nuke', T0 + 3700);
+            o.sample(picture(members({ Menta, Tank: act(i <= 5 ? 'move' : 'melee') }), [wolf], { seq: 2, phase: 'engage', focus: 7 }, T0 + i * 1000));
+        }
+        calm(o, 11);
+        const r = o.report();
+        expect(r.members.Menta!.movingInFights).toBe(30);
+        expect(r.members.Druid!.movingInFights).toBe(0);
+        expect(r.members.Tank!.movingInFights).toBeNull();
+        const pos = r.findings.filter(f => f.topic === 'positioning');
+        expect(pos.map(f => f.member)).toEqual(['Menta']);
+        expect(pos[0]!.issue).toContain('moving 30%');
+        expect(pos[0]!.suggestion).toContain('slotSlack');
+        // Healers that never nuke have no opener entry.
+        expect(r.fights[0]!.openerMs).toEqual({ Menta: 2700 });
+        expect(r.members.Menta!.openerMs).toBe(2700);
+        expect(r.members.Menta!.fightsWithoutNuke).toBe(0);
+        expect(r.members.Druid!.openerMs).toBeNull();
+        const md = formatReport(r);
+        expect(md).toContain('| 30% | 2.7 s |');
+        expect(md).toContain('first nuke: Menta 2.7 s');
+    });
+
+    test('openerMs: median per member, exact from activity events, and fights without a nuke', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 });
+        const fight = (from: number, menta: (i: number) => ReturnType<typeof act>, events: [number, string][] = []) => {
+            for (let i = from; i < from + 6; i++) {
+                for (const [at, member] of events) if (at < T0 + i * 1000 && at >= T0 + (i - 1) * 1000) o.handle({ at, kind: 'activity', member, targetId: 7, text: 'nuke Moon Blast', data: { activity: 'nuke' } });
+                o.sample(picture(members({ Menta: menta(i) }), [wolf], { seq: 2, phase: 'engage', focus: 7 }, T0 + i * 1000));
+            }
+            calm(o, from + 6);
+        };
+        // 1: seen in a sample, begun 2 s after the engage.
+        fight(10, i => i >= 13 ? act('nuke', T0 + 12_000) : act('idle'));
+        // 2: a short cast no sample shows (4.4 s); the later sampled nuke doesn't move it.
+        fight(20, i => i >= 25 ? act('nuke', T0 + 24_900) : act('idle'), [[T0 + 24_400, 'Menta']]);
+        // 3: no nuke at all.
+        fight(30, () => act('idle'));
+        const r = o.report();
+        expect(r.fights.map(f => f.openerMs.Menta)).toEqual([2000, 4400, null]);
+        expect(r.members.Menta!.openerMs).toBe(3200);
+        expect(r.members.Menta!.fightsWithoutNuke).toBe(1);
+        const md = formatReport(r);
+        expect(md).toContain('3.2 s, 1 fights without');
+        expect(md).toContain('first nuke: Menta none');
+    });
+
+    test('a nuke ahead of the first engage sample opens at 0; a passive watch records no openers', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 });
+        // The fight opens during the pull; the nuke event beats the sampler to the engage order.
+        o.sample(picture(members(), [wolf], { seq: 1, phase: 'pull', focus: 7 }, T0 + 1000));
+        o.handle({ at: T0 + 1500, kind: 'activity', member: 'Menta', targetId: 7, text: 'nuke', data: { activity: 'nuke' } });
+        o.sample(picture(members({ Menta: act('nuke', T0 + 1500) }), [wolf], { seq: 2, phase: 'engage', focus: 7 }, T0 + 2000));
+        calm(o, 3);
+        // Observe mode: no orders, the phase is inferred, activities are unknown.
+        for (let i = 10; i < 15; i++) o.sample(picture(members(), [wolf], {}, T0 + i * 1000));
+        calm(o, 15);
+        const r = o.report();
+        expect(r.fights.length).toBe(2);
+        expect(r.fights[0]!.openerMs).toEqual({ Menta: 0 });
+        expect(r.fights[1]!.openerMs).toEqual({});
+        expect(r.members.Menta!.fightsWithoutNuke).toBe(0);
+    });
+
     test('saveReport writes json/md/log and compares with the previous run', () => {
         const dir = mkdtempSync(join(tmpdir(), 'group-'));
         const run = (kills: number) => {
