@@ -16,6 +16,12 @@ export interface PveSettings extends TacticsSettings {
     /** Pull targets in this con window relative to the group's lowest level (-3 grey .. 3 purple). */
     minCon: number;
     maxCon: number;
+    /**
+     * Never pull a mob more than this many levels above the group's lowest level (99 = off).
+     * Con stops at purple (3), so maxCon 3 alone lets in anything above: camelot run 20261031-004507
+     * (L11) pulled Granddaddy Longlegs L24 as "con 3" and all five died.
+     */
+    maxLevelAbove: number;
     /** Hunt here instead of searching static data for a camp. */
     camp: Point3 | null;
     /** Camp search: spawn levels from group level + band[0] to + band[1]. */
@@ -107,6 +113,7 @@ export const PVE_SETTINGS: PveSettings = {
     guard: { guard: 'healer', protect: 'nuker' },
     minCon: -1,
     maxCon: 1,
+    maxLevelAbove: 99,
     camp: null,
     campLevelBand: [-1, 2],
     campAggressiveWeight: 1,
@@ -149,6 +156,7 @@ export function rejectPull(c: Contact, live: Contact[], opts: { base: Point; reg
     if (c.targetId !== null && c.target === null) return 'fighting someone else';
     const con = conLevel(opts.level, c.level);
     if (con < s.minCon || con > s.maxCon) return `con ${con}`;
+    if (c.level - opts.level > s.maxLevelAbove) return `${c.level - opts.level} levels above`;
     if (dist(c, opts.base) > s.huntRadius) return 'too far';
     const unsafe = opts.plan ? planRejects(opts.plan, c) : null;
     if (unsafe) return unsafe;

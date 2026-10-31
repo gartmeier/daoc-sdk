@@ -160,6 +160,14 @@ describe('decidePve', () => {
 });
 
 describe('rejectPull (static data, Lough Derg)', () => {
+    test('maxLevelAbove rejects a mob far above the group that con still calls purple', () => {
+        // camelot run 20261031-004507: Granddaddy Longlegs L24 at group level 11 conned 3 (purple).
+        const longlegs = contact(53, { regionId: 200, name: 'red wolfhound', level: 24, x: 348300, y: 520700 });
+        const at = (maxLevelAbove: number) => rejectPull(longlegs, [longlegs], { base: { x: 348800, y: 520300 }, regionId: 200, level: 11, exclude: new Set<number>(), settings: mergeSettings(PVE_SETTINGS, { huntRadius: 3500, maxCon: 3, maxLevelAbove } as any) });
+        expect(at(4)).toBe('13 levels above');
+        expect(at(99)).not.toBe('13 levels above');
+    });
+
     test('a wolf whose pull walks past a live aggressive lucradan is rejected', () => {
         // Hunt 195452 / 201202: wolves west of the clearance base were pulled past a wild lucradan, which joined.
         const settings = mergeSettings(PVE_SETTINGS, { huntRadius: 3500, pullAggressive: false } as any);
