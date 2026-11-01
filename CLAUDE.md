@@ -52,9 +52,11 @@ bun groups/create-group.ts <group> <bot> <bot> ...    # groups/<group>/: group.j
 bun client/swarm.ts <bot> <bot> ...                   # one process with every member's client
 bun sdk/group/cli.ts <group>                          # shared picture, observe only (--watch=60 scores whatever runs)
 bun groups/<group>/hunt.ts 180                        # coordinated hunt; report in groups/<group>/runs/<stamp>.md
+bun sdk/group/cli.ts <group> --live                   # the running hunt as the gateway sees it: phase, orders, members, events
+bun sdk/group/cli.ts <group> --wind-down              # end the hunt after the current fight (report saved)
 ```
 
-The loop is the session loop at group scale: run, read the report (findings name the setting to change), change one thing in `strategy.ts`, run again and compare, note it in the group's `lab_log.md`. A group run controls every member, so don't drive a member separately meanwhile.
+The loop is the session loop at group scale: run, read the report (findings name the setting to change), change one thing in `strategy.ts`, run again and compare, note it in the group's `lab_log.md`. A group run controls every member, so don't drive a member separately meanwhile: taking control of one member aborts the whole run. To stop a hunt early, wind it down (`--wind-down`, or the button on the group page). The browser view is `http://localhost:7780/viewer/group/<group>`: every member on one map, orders, base plan, enemies, events, deaths and recent runs.
 
 ## MCP tools
 
@@ -131,7 +133,7 @@ From `sdk.*`, the common calls are `getState`, `getPlayer`, `getInventory`, `fin
 - **A character name is taken or invalid:** names are unique server-wide, letters only, at least 3. Set `CHAR_NAME=` in bot.env.
 - **Character creation fails for some classes:** Valkyrie, Bainshee, Heretic, Warlock, Vampiir and the Maulers can't be created. With `start_as_base_class` on, advanced classes start as their base class; promote at the advanced-class trainer at level 5 (learnings/npc-dialog.md). Base classes have no styles.
 - **A Guardian (or Blademaster, Hero, Champion) dies to level-1 mobs:** it starts without armour, because its starter armour templates are missing from the DB. Hibernia's default is Naturalist for that reason (learnings/classes-and-races.md).
-- **Gateway answers 403, 401 or 415:** 403 is a browser `Origin` that is neither loopback nor the gateway's own, or a non-loopback `Host` on the default 127.0.0.1 bind. 401 means `GATEWAY_AUTH=botenv` is on and the password doesn't match `bots/<name>/bot.env`. 415 means a POST to `/say`, `/dm` or `/bots/<bot>/auth` lacked `Content-Type: application/json`.
+- **Gateway answers 403, 401 or 415:** 403 is a browser `Origin` that is neither loopback nor the gateway's own, or a non-loopback `Host` on the default 127.0.0.1 bind. 401 means `GATEWAY_AUTH=botenv` is on and the password doesn't match `bots/<name>/bot.env`. 415 means a POST to `/say`, `/dm`, `/bots/<bot>/auth` or `/groups/<group>/...` lacked `Content-Type: application/json`.
 - **Everything succeeds and nothing happens:** you used a raw `send*` that the server silently ignored (out of range, wrong target, dead). Use the `bot.*` method, or check `sdk.getGameMessages()` for the server's answer.
 
 The game server is the source of truth and is well tested. When something fails, question your assumptions (range, target, z, state) before blaming the game. If the SDK really is wrong, find a workaround, then note it under "Possible SDK Bugs" in the bot's `lab_log.md`.

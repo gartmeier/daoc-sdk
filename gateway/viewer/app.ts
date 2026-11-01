@@ -6,6 +6,7 @@
 
 import { CON_HEX, conColor } from './con-level';
 import { authHeaders, shouldLoadRegion } from './logic';
+import type { GroupBadge } from '../group-types';
 import type {
     ActionResult, BotAction, BotWorldState, CombatEvent, GameMessage, InventoryItem,
     NearbyNpc, NearbyObject, NearbyPlayer, PlayerState, Vec3,
@@ -38,7 +39,8 @@ const REALM_HEX: Record<string, string> = { albion: '#ff5a5a', midgard: '#5a9bff
 
 let state: State | null = null;
 let stateReceivedAt = 0;
-let botStatus: { status?: string; controllers?: string[]; observers?: string[] } | null = null;
+/** GET /status/<bot>; `group` is missing on gateways older than the group views. */
+let botStatus: { status?: string; controllers?: string[]; observers?: string[]; group?: GroupBadge | null } | null = null;
 let regionData: RegionData | null = null;
 let regionLoading: number | null = null;
 let regionFailure: { regionId: number; at: number } | null = null;
@@ -159,6 +161,7 @@ async function pollFallback() {
     } catch {
         botStatus = null;
     }
+    updateGroupLink();
     if (!obsConnected) {
         try {
             const res = await fetch(`/state/${encodeURIComponent(BOT)}`, { cache: 'no-store', headers: authHeaders(passwordInput.value) });
@@ -186,6 +189,17 @@ function updateConn() {
     el.textContent = text;
     el.className = `pill ${cls}`;
     el.title = obsError ?? '';
+}
+
+/** The topbar link to the bot's group page, when it belongs to a group. */
+function updateGroupLink() {
+    const link = document.getElementById('grouplink') as HTMLAnchorElement | null;
+    const g = botStatus?.group;
+    if (!link) return;
+    link.hidden = !g;
+    if (!g) return;
+    link.href = `/viewer/group/${encodeURIComponent(g.id)}`;
+    link.textContent = `group: ${g.name}${g.run ? ` (${g.run.phase ?? g.run.state})` : ''}`;
 }
 
 // ── Control connection ──────────────────────────────────────────────────────
@@ -233,7 +247,13 @@ async function enableControl() {
         return;
     }
     const others = arr(botStatus?.controllers).length;
-    if (others > 0 && !confirm(`${BOT} already has ${others} controlling SDK (a running script?). Taking control disconnects it. Continue?`)) {
+    // A group run holds a controller on every member: pre-empting one aborts the run for all of them.
+    const group = botStatus?.group;
+    const runState = group?.run?.state;
+    const question = group && (runState === 'starting' || runState === 'live' || runState === 'stale' || runState === 'ending')
+        ? `${BOT} is in the ${group.name} group run (${group.run!.phase ?? runState}). Taking control pre-empts the run's connection and aborts the run for every member. Use Wind down on the group page to end it after the current fight. Take control anyway?`
+        : others > 0 ? `${BOT} already has ${others} controlling SDK (a running script?). Taking control disconnects it. Continue?` : null;
+    if (question && !confirm(question)) {
         controlBox.checked = false;
         return;
     }
@@ -1015,8 +1035,10 @@ function renderPanel() {
 
     // Group
     const group = arr(s?.group);
-    setSection('s-group', group.length ? `
+    const badge = botStatus?.group ?? null;
+    setSection('s-group', group.length || badge ? `
         <h3>Group <span>${group.length}</span></h3>
+        ${badge ? `<div><a href="/viewer/group/${encodeURIComponent(badge.id)}">open group page</a> <span class="muted">${esc(badge.name)}${badge.run ? ` · run ${esc(badge.run.state)}` : ''}</span></div>` : ''}
         ${group.map(g => `<div><b>${esc(g.name)}</b> <span class="muted">L${esc(g.level)} ${esc(g.className)}${g.isDead ? ' · dead' : ''}${g.inOtherRegion ? ' · away' : ''}</span>
             ${bar('HP', num(g.healthPercent), 100, 'var(--hp)', `${num(g.healthPercent)}%`)}</div>`).join('')}` : '');
 

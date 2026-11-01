@@ -8,7 +8,8 @@
 // last-controller-wins, takeover via save_and_disconnect, 8 s staleness, HTTP
 // /status /state /chat /say /dm). No engine coupling, traffic metering, direct
 // port, outdated-client lookup or login server: auth is a pluggable hook that
-// allows everything by default.
+// allows everything by default. Beyond rs-sdk: the browser viewer
+// (gateway/viewer/routes.ts) and group views over HTTP (gateway/groups.ts).
 //
 // Exposure: it listens on 127.0.0.1 unless GATEWAY_HOSTNAME says otherwise,
 // refuses browser requests from foreign origins (and, on a loopback bind,
@@ -34,6 +35,8 @@ import { ChatHistory, isPlayerChat } from '../sdk/chat-history';
 import { chunkMessage, DEFAULT_MAX_MESSAGE_LENGTH } from '../sdk/chunking';
 import { repeatsLastFanout } from './state-fanout';
 import { handleViewerRequest } from './viewer/routes';
+import { createGroupStore, type GroupLimits, type GroupStore } from './groups';
+import type { GroupBadge } from './group-types';
 import { botEnvAuth, checkRequestSource, corsHeadersFor, isJsonRequest, isLoopbackHostname, resolveAuthMode } from './security';
 import { join } from 'node:path';
 import type { Server, ServerWebSocket } from 'bun';
@@ -122,6 +125,12 @@ export interface GatewayOptions {
     maxBotSessions?: number;
     /** Silence console logging (tests). */
     quiet?: boolean;
+    /**
+     * Group views (gateway/groups.ts), on by default: groups/<id>/group.json and
+     * bots/<name>/bot.env under each root (default the working directory, then
+     * this repo), groupsDir first (default DAOC_GROUPS_DIR). false turns them off.
+     */
+    groups?: false | { roots?: string[]; groupsDir?: string; now?: () => number; limits?: Partial<GroupLimits> };
 }
 
 export interface Gateway {
@@ -276,6 +285,27 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     const sweepTimer = setInterval(sweep, Math.max(10, Math.min(60_000, deadSessionRetentionMs)));
     sweepTimer.unref?.(); // the server keeps the process alive, not the sweep
 
+    // Reads the session maps only; it never sends on a socket (gateway/groups.ts).
+    let groups: GroupStore | null = null;
+    if (options.groups !== false) {
+        const opts = options.groups ?? {};
+        try {
+            groups = createGroupStore({
+                roots: opts.roots ?? [...new Set([process.cwd(), join(import.meta.dir, '..')])],
+                groupsDir: opts.groupsDir ?? process.env.DAOC_GROUPS_DIR,
+                sessions: botSessions,
+                sdkSessions,
+                sessionStatus,
+                auth,
+                log,
+                now: opts.now,
+                limits: opts.limits,
+            });
+        } catch (error) {
+            log('Group views are off:', error);
+        }
+    }
+
     function completeBotConnection(ws: WS, clientId: string, username: string, preserved?: BotSession | null, maxMessageLength?: number) {
         const now = Date.now();
         const session: BotSession = {
@@ -387,6 +417,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
             const state = message.state;
             session.lastState = state;
             session.lastStateReceivedAt = Date.now();
+            try { groups?.onState(session.username, state); } catch {}
             if (Array.isArray(state.gameMessages) && state.gameMessages.length) {
                 chatHistoryFor(session.username).record(state.gameMessages);
             }
@@ -650,7 +681,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
         try { return decodeURIComponent(match[1]); } catch { return match[1]; }
     };
 
-    function botStatusBody(username: string): BotStatus & { maxMessageLength: number | null } {
+    function botStatusBody(username: string): BotStatus & { maxMessageLength: number | null; group: GroupBadge | null } {
         const bot = botSessions.get(username);
         const connected = !!bot?.ws;
         const p = connected ? bot?.lastState?.player : null;
@@ -662,6 +693,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
             controllers: sdksForBot(username).filter(s => s.mode === 'control').map(s => s.sessionId),
             observers: sdksForBot(username).filter(s => s.mode === 'observe').map(s => s.sessionId),
             player: p ? { name: p.name, regionId: p.regionId, x: p.x, y: p.y, z: p.z } : null,
+            group: groups?.badge(username) ?? null,
         };
     }
 
@@ -695,8 +727,10 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     async function route(req: Request, url: URL, srv: Server<unknown>): Promise<Response> {
         if (req.method === 'OPTIONS') return new Response(null, { status: 204 });
 
-        const viewer = await handleViewerRequest(req, url, { botSessions, sdkSessions, sessionStatus, auth });
+        const viewer = await handleViewerRequest(req, url, { botSessions, sdkSessions, sessionStatus, auth, groupOf: u => groups?.badge(u) ?? null });
         if (viewer) return viewer;
+        const group = await groups?.handle(req, url);
+        if (group) return group;
 
         const statusUser = routeUser(url.pathname, 'status');
         if (statusUser !== null) return json(botStatusBody(statusUser));
@@ -762,6 +796,12 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
             'POST /say/:username       {"text": "..."}',
             'POST /dm/:username        {"to": "...", "text": "..."}',
             'GET  /viewer              browser viewer (GET /bots, /zones/:regionId)',
+            'GET  /groups              groups/<id>/group.json groups, their members and runs',
+            'GET  /groups/:id/live     one group: members, what they see, the run (leader password)',
+            'POST /groups/:id/publish  a group run\'s snapshot (sdk/group/publish.ts)',
+            'POST /groups/:id/control  {"kind": "windDown", "runId": "..."} (leader bot.env password)',
+            'GET  /groups/:id/runs     run history, report files, campaign log (/runs/:stamp?part=json|md|log)',
+            'GET  /viewer/group/:id    browser group view',
             '',
         ].join('\n'), { headers: { 'Content-Type': 'text/plain' } });
     }
@@ -813,6 +853,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
         url: `ws://localhost:${port}`,
         async stop() {
             clearInterval(sweepTimer);
+            groups?.stop();
             for (const t of timers) clearTimeout(t);
             timers.clear();
             for (const pending of pendingHttpActions.values()) clearTimeout(pending.timeout);

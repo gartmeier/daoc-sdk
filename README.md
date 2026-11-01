@@ -74,7 +74,7 @@ The guarded `export default main` lets MCP run the same file: `execute_code({ bo
 
 - **The SDK never speaks the DAoC protocol.** It sends `BotAction` JSON and gets `BotWorldState` snapshots ([sdk/types.ts](sdk/types.ts)).
 - **The headless client** (`client/`) owns the TCP session (protocol 1.127, no encryption), the world model, and the mover. DAoC has no click-to-walk, so the client streams position updates itself. It also answers the server's line-of-sight checks with "clear".
-- **The gateway** routes between scripts and clients by username, like rs-sdk's. It also serves `/status`, `/state/<bot>`, `/chat/<bot>`, `POST /say/<bot>`, `POST /dm/<bot>` and a browser viewer at `/viewer`. See [Gateway access](#gateway-access).
+- **The gateway** routes between scripts and clients by username, like rs-sdk's. It also serves `/status`, `/state/<bot>`, `/chat/<bot>`, `POST /say/<bot>`, `POST /dm/<bot>` and a browser viewer at `/viewer`, for one bot or a whole group (`/viewer/group/<group>`). A group run publishes its coordinator's picture there once a second. See [Gateway access](#gateway-access).
 - **Static world data** (`data/`) is parsed from the OpenDAoC DB dump: NPC spawns, merchants' item lists, items, spells, styles, zones, classes and races. It also includes a ground-height estimate, because the server ships no terrain or navmesh. Navmeshes can be generated from a local DAoC client with `bun run navmesh:build` (Windows; `server/buildnav`, output in `server/navmesh/`, not redistributable); `walkTo` then routes over them (learnings/walking.md).
 
 ### Gateway access
@@ -84,7 +84,8 @@ The gateway has no login server of its own, so by default it is reachable only f
 - **Bind address:** `GATEWAY_HOSTNAME` (default `127.0.0.1`). `0.0.0.0` exposes it to the network. The port is `AGENT_PORT` (default 7780).
 - **Passwords:** `GATEWAY_AUTH=botenv` makes clients, SDKs and HTTP callers present the `PASSWORD` from the bot's `bots/<name>/bot.env` (or any `bot.env` whose `BOT_USERNAME` matches); unknown bots are refused. `botenv` is the default when `GATEWAY_HOSTNAME` is not a loopback address, and `GATEWAY_AUTH=none` turns it off. On the default loopback bind there is no password check. The startup log states the mode. Under `botenv`, the viewer asks for the password even to observe, and HTTP callers pass it as `Authorization: Bearer <password>` or a `password` field in the JSON body.
 - **Browsers:** requests with a foreign `Origin` are refused with 403, including WebSocket upgrades. Only loopback origins (any port) and the gateway's own origin are allowed, and only they get CORS headers. On a loopback bind, a non-loopback `Host` header is also refused, which blocks DNS rebinding. The SDK, the headless client and curl send no `Origin`.
-- **POST bodies must be JSON:** `/say/<bot>`, `/dm/<bot>` and `/bots/<bot>/auth` answer 415 unless the request has `Content-Type: application/json`, for example `curl -X POST -H 'Content-Type: application/json' -d '{"text":"hi"}' localhost:7780/say/mybot`.
+- **Groups:** `/groups` lists the `groups/*/group.json` groups on the gateway's own disk (others don't exist for it). `/groups/<group>/live`, `/groups/<group>/runs[/<stamp>]` and the runner's `POST /groups/<group>/publish` take the group leader's password under `botenv`, as a bearer token only (never `?password=`), and it reads the whole group. `POST /groups/<group>/control` (wind down a run) needs the leader's bot.env password even on loopback, like the viewer's control mode.
+- **POST bodies must be JSON:** `/say/<bot>`, `/dm/<bot>`, `/bots/<bot>/auth` and the `/groups/<group>/...` POSTs answer 415 unless the request has `Content-Type: application/json`, for example `curl -X POST -H 'Content-Type: application/json' -d '{"text":"hi"}' localhost:7780/say/mybot`.
 
 Design notes and protocol research: [docs/DESIGN.md](docs/DESIGN.md), [docs/research/](docs/research/). Server operation: [docs/SERVER.md](docs/SERVER.md).
 
@@ -93,7 +94,7 @@ Design notes and protocol research: [docs/DESIGN.md](docs/DESIGN.md), [docs/rese
 ```
 bots/            create-bot.ts, _template/, examples/, and one folder per bot (each bot folder, including bot.env, scripts and lab_log.md, is gitignored)
 client/          headless DAoC client: net/, protocol/, model/, movement.ts, session.ts, runner.ts, swarm.ts
-gateway/         gateway.ts (rs-sdk-compatible router), viewer/
+gateway/         gateway.ts (rs-sdk-compatible router), groups.ts (group views), viewer/
 sdk/             index.ts (BotSDK), actions.ts (BotActions), runner.ts, cli.ts, chat.ts, API.md
 mcp/             server.ts (execute_code, list_bots, disconnect_bot), api/ (BotManager)
 data/            DB dump parsers and query helpers; generated/ is a cache

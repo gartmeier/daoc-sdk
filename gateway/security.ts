@@ -1,5 +1,6 @@
 // Request checks for the gateway: which hosts and browser origins may talk to
-// it, and an auth hook that checks a bot's bots/<name>/bot.env PASSWORD.
+// it, an auth hook that checks a bot's bots/<name>/bot.env PASSWORD, and the
+// stricter password check before control (control mode, a group wind-down).
 //
 // The gateway has no login of its own, so by default it listens on 127.0.0.1
 // only. Two more doors stay open on loopback and are closed here:
@@ -131,10 +132,40 @@ export function findBotPassword(username: string, roots: string[]): string | nul
     return null;
 }
 
+/**
+ * Who a bot folder plays as: bots/<bot>/bot.env BOT_USERNAME (else the folder)
+ * and CHAR_NAME. Null when no root has that bot.env. Never the password.
+ */
+export function botIdentity(bot: string, roots: string[]): { username: string; charName: string | null } | null {
+    if (!BOT_NAME.test(bot)) return null;
+    for (const root of roots) {
+        const env = readEnvFile(join(root, 'bots', bot, 'bot.env'));
+        if (env) return { username: env.BOT_USERNAME || bot, charName: env.CHAR_NAME || null };
+    }
+    return null;
+}
+
 function samePassword(a: string, b: string): boolean {
     const x = Buffer.from(a, 'utf8');
     const y = Buffer.from(b, 'utf8');
     return x.length === y.length && timingSafeEqual(x, y);
+}
+
+/**
+ * The check before anything that can take a bot away from its controller (the
+ * viewer's control mode, a group wind-down). Stricter than the hook alone: a
+ * password is always required, even with no auth configured, and when the
+ * username has a bot.env PASSWORD it must match it.
+ */
+export async function checkControlPassword(username: string, password: string, roots: string[], auth?: GatewayAuthHook): Promise<{ ok: boolean; error?: string; botEnv: boolean }> {
+    if (!password) return { ok: false, error: 'Password required', botEnv: false };
+    const expected = findBotPassword(username, roots);
+    if (expected !== null && !samePassword(password, expected)) return { ok: false, error: 'Password does not match bots/' + username + '/bot.env', botEnv: true };
+    if (auth) {
+        const result = await auth({ kind: 'sdk', username, password });
+        if (!result.success) return { ok: false, error: result.error ?? 'Authentication failed', botEnv: expected !== null };
+    }
+    return { ok: true, botEnv: expected !== null };
 }
 
 /**

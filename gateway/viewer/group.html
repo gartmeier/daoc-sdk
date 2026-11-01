@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{GROUP}} · group · daoc-sdk viewer</title>
+<link rel="stylesheet" href="/viewer/assets/viewer.css">
+</head>
+<body data-group="{{GROUP}}">
+<div class="viewer">
+    <header class="topbar">
+        <a href="/viewer">← viewer</a>
+        <span class="title" id="title">{{GROUP}}</span>
+        <span id="run" class="pill">loading</span>
+        <span id="age" class="muted mono"></span>
+        <span class="spacer"></span>
+        <label title="What the map keeps centred">follow <select id="follow"><option value="group">group</option><option value="off">off</option></select></label>
+        <label title="Draw NPC and player names"><input type="checkbox" id="labels" checked> labels</label>
+        <details class="layers">
+            <summary>layers</summary>
+            <div class="layers-box">
+                <label title="Anchor, engage and gather rings, facing, retreat point, focus, puller, crowd control"><input type="checkbox" id="l-orders" checked> orders</label>
+                <label title="Camp, base, hunt radius, safe and unsafe spawns, travel route"><input type="checkbox" id="l-plan" checked> plan</label>
+                <label>NPCs <select id="l-npcs"><option value="all">all</option><option value="threats">threats only</option><option value="off">none</option></select></label>
+                <label title="Where each member walks"><input type="checkbox" id="l-paths" checked> paths</label>
+                <label title="Member deaths the gateway noticed in the last 2 h"><input type="checkbox" id="l-deaths" checked> deaths</label>
+                <label><input type="checkbox" id="l-zones" checked> zones</label>
+            </div>
+        </details>
+        <input type="password" id="password" placeholder="leader bot.env password" autocomplete="current-password" size="16" hidden>
+        <button id="unlock" hidden>unlock</button>
+    </header>
+    <div class="map-wrap" id="mapwrap">
+        <canvas id="map"></canvas>
+        <div class="legend" id="legend"></div>
+        <div class="map-tools">
+            <button id="zoomin" title="Zoom in">+</button>
+            <button id="zoomout" title="Zoom out">−</button>
+            <button id="center" title="Follow the group">◎</button>
+            <button id="fit" title="Fit the members in view">⤢</button>
+        </div>
+        <div class="map-hud mono" id="hud"></div>
+        <div class="tooltip" id="tooltip"></div>
+        <div class="toast" id="toast"></div>
+        <div class="banner" id="banner"></div>
+    </div>
+    <aside class="side" id="side">
+        <section class="section" id="g-run">
+            <div id="g-run-body"></div>
+            <div class="control-row" id="g-run-ctl" hidden>
+                <button id="winddown">Wind down…</button>
+                <span id="g-run-req" class="muted"></span>
+            </div>
+        </section>
+        <section class="section" id="g-members"></section>
+        <section class="section" id="g-contacts"></section>
+        <section class="section" id="g-fight"></section>
+        <section class="section" id="g-plan"></section>
+        <section class="section" id="g-events">
+            <h3>Events <span id="g-events-count"></span></h3>
+            <div id="g-events-filters"></div>
+            <div id="g-events-feed"></div>
+        </section>
+        <section class="section" id="g-runs"></section>
+        <section class="section" id="g-report"></section>
+    </aside>
+</div>
+<script type="module" src="/viewer/assets/group.js"></script>
+</body>
+</html>

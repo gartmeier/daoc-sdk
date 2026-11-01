@@ -2,17 +2,23 @@
 // blackboard, one agent per member, the coordinator and the observer, and stop
 // after `seconds` once the current fight is over. Saves the observer's report
 // under groups/<name>/runs/ and returns its summary.
+//
+// The run publishes itself to the gateway for the viewer's group page
+// (publish.ts), which can also ask it to wind down early: the timed end, sooner.
 
+import { basename } from 'path';
 import { abortable, executionContext } from '../execution-context';
 import type { BotActions } from '../actions';
-import type { BotSDK } from '../index';
+import { gatewayHttpBase, type BotSDK } from '../index';
 import { BotDisconnectedError, BotPreemptedError, runScript, type ScriptContext } from '../runner';
 import { Blackboard } from './blackboard';
-import { MemberAgent } from './member';
-import { formatReport, GroupObserver, saveReport, type Finding, type RunReport } from './observer';
+import { MemberAgent, type Behavior, type Member } from './member';
+import { formatReport, GroupObserver, saveReport, stampOf, type Finding, type RunReport } from './observer';
+import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type PublisherDeps } from './publish';
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
 import { Coordinator, mergeSettings, type GroupStrategy } from './strategy';
-import type { GroupEvent } from './types';
+import type { GroupDefinition } from './types';
+import { isLoggedEvent, type ControlRequest, type RunMeta, type RunResultView } from './wire';
 
 export interface GroupRunOptions<S> {
     /** The group folder: groups/<name>/ with group.json (runs/ is written there). */
@@ -30,6 +36,11 @@ export interface GroupRunOptions<S> {
     /** Write runs/<stamp>.json/.md (default true). */
     save?: boolean;
     log?: (line: string) => void;
+    /**
+     * Publish the run to the gateway for its group page (/viewer/group/<name>), which
+     * can also wind it down (default on; false or DAOC_GROUP_PUBLISH=0 turns it off).
+     */
+    publish?: false | GroupPublishOptions;
 }
 
 export interface GroupRunResult {
@@ -42,10 +53,12 @@ export interface GroupRunResult {
     /** Markdown report path (null when not saved). */
     report: string | null;
     previous?: Record<string, string>;
+    /** 'viewer': wound down from the group page before its time. */
+    stoppedBy: 'time' | 'viewer';
 }
 
 const stamp = () => new Date().toISOString().slice(11, 19);
-const LOGGED: ReadonlySet<GroupEvent['kind']> = new Set(['orders', 'death', 'kill', 'level', 'note']);
+const errorText = (e: unknown) => e instanceof Error ? e.message : String(e);
 
 /** Print lines with a time stamp, folding repeats into one "(×N)" line; keep them all for runs/<stamp>.log. */
 function lineLog(print: (line: string) => void) {
@@ -71,7 +84,17 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     const { members, opened } = await connectGroup(def, opts.have, strategy.roleOf);
     const board = new Blackboard();
     const agents: MemberAgent<S>[] = [];
-    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name });
+    const startedAt = Date.now();
+    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name, startedAt });
+    const graceMs = opts.graceMs ?? 60_000;
+    // Planned until the main loop starts; a wind-down from the viewer only moves them earlier.
+    let deadline = startedAt + opts.seconds * 1000;
+    let hardStop = deadline + graceMs;
+    // Set from the publisher's answer handler (a cast: TS would narrow a plain `= null` to null for good).
+    let windDown = null as ControlRequest | null;
+    let stoppedBy: 'time' | 'viewer' = 'time';
+    const behaviorsOf = (m: Member) => strategy.memberBehaviors?.[m.bot] ?? strategy.behaviors[m.role] ?? strategy.behaviors.melee;
+    let publisher: GroupPublisher | null = null;
     const parent = executionContext.getStore()?.signal;
     const run = new AbortController();
     const onParent = () => run.abort(parent!.reason);
@@ -82,7 +105,19 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     }));
     let failure: unknown = null;
     let started = false;
+    // Set just before the normal end's own abort, so the abort below can tell it from a failure.
+    let finished = false;
     try {
+        // In here, so the finally always ends it (its timer would publish 'starting' for as long as the process lives).
+        publisher = groupPublisher(opts, def, members, { settings, startedAt, graceMs, behaviorsOf }, {
+            board, observer, log,
+            timing: () => ({ windingDown: false, deadline, hardStop }),
+            // Applied once the coordinator exists, before it first decides, and then by the main loop.
+            onControl: req => { windDown ??= req; return true; },
+        });
+        // The finally is not enough: under MCP a cancelled call's invite in formGroup never settles, so
+        // runGroup never gets there. End the publish at the abort itself (the finally's ending() is then a no-op).
+        run.signal.addEventListener('abort', () => { if (!finished) publisher?.ending(errorText(run.signal.reason)); }, { once: true });
         const players = members.map(m => m.sdk.getPlayer()!);
         const realms = new Set(players.map(p => p.realm));
         if (realms.size > 1) throw new Error(`members are in different realms: ${players.map(p => `${p.name} ${p.realm}`).join(', ')}`);
@@ -92,30 +127,48 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         if (opts.form !== false) for (const line of await formGroup(members, def.leader)) log(`group: ${line}`);
 
         board.onEvent(e => {
-            if (LOGGED.has(e.kind) || (e.kind === 'result' && !e.data?.success && e.data?.reason !== 'interrupted')) log(`${e.member ? `${e.member}: ` : ''}${e.kind === 'orders' ? '» ' : ''}${e.text}`);
+            if (isLoggedEvent(e)) log(`${e.member ? `${e.member}: ` : ''}${e.kind === 'orders' ? '» ' : ''}${e.text}`);
         });
-        for (const m of members) agents.push(new MemberAgent(m, board, strategy.memberBehaviors?.[m.bot] ?? strategy.behaviors[m.role] ?? strategy.behaviors.melee, settings));
+        for (const m of members) agents.push(new MemberAgent(m, board, behaviorsOf(m), settings));
         observer.start();
         started = true;
         const coordinator = new Coordinator(board, strategy, settings);
+        // A wind-down from the viewer is the timed end, sooner.
+        const applyWindDown = (now: number) => {
+            if (!windDown) return;
+            if (!coordinator.windingDown) {
+                coordinator.windingDown = true;
+                ({ deadline, hardStop } = windDownClock({ deadline, hardStop }, now, graceMs));
+                stoppedBy = 'viewer';
+                log(`wind-down requested from the viewer${windDown.reason ? ` (${windDown.reason})` : ''}: finishing the current fight`);
+            }
+            windDown = null;
+        };
+        deadline = Date.now() + opts.seconds * 1000;
+        hardStop = deadline + graceMs;
+        // One asked for while starting (the page allows it): before the first tick, which could start a pull.
+        applyWindDown(Date.now());
+        publisher?.running(() => coordinator.memory, () => ({ windingDown: coordinator.windingDown, deadline, hardStop }));
         const loops = [coordinator.run(run.signal), ...agents.map(a => a.run(run.signal))].map(p => p.catch(e => { if (!run.signal.aborted) run.abort(e); }));
 
-        const deadline = Date.now() + opts.seconds * 1000;
-        const hardStop = deadline + (opts.graceMs ?? 60_000);
         while (!run.signal.aborted) {
             await abortable(Bun.sleep(500), run.signal).catch(() => {});
             const now = Date.now();
+            applyWindDown(now);
             if (now >= deadline && !coordinator.windingDown) { coordinator.windingDown = true; log('time is up: finishing the current fight'); }
             const phase = board.getOrders().phase;
             if (coordinator.windingDown && (now >= hardStop || !['engage', 'retreat', 'pull'].includes(phase))) break;
         }
         if (run.signal.aborted) failure = run.signal.reason;
-        else run.abort(new Error('group run finished'));
+        else { finished = true; run.abort(new Error('group run finished')); }
         await Promise.allSettled(loops);
     } catch (e) {
         failure = e;
         run.abort(e);
     } finally {
+        // First: under MCP the cleanup below can stall on an aborted call's SDK, and the viewer should still hear the run is ending.
+        // An error only for a failure; a normal end says how in result.stoppedBy.
+        publisher?.ending(failure ? errorText(failure) : null);
         parent?.removeEventListener('abort', onParent);
         for (const off of offConn) off();
         for (const a of agents) a.dispose();
@@ -127,18 +180,69 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         })));
     }
     await Promise.allSettled(opened.map(s => s.disconnect()));
-    if (!started) throw failure;
-    const report = observer.stop();
-    out.flush();
-    const path = opts.save === false ? null : saveReport(opts.dir, report, out.lines);
+    if (!started) {
+        await publisher?.finish({ error: failure });
+        throw failure;
+    }
+    let made: { report: RunReport; path: string | null };
+    try {
+        const report = observer.stop();
+        out.flush();
+        made = { report, path: opts.save === false ? null : saveReport(opts.dir, report, out.lines) };
+    } catch (e) {
+        // No report (runs/ not writable, a full disk): the viewer must not show a clean end.
+        await publisher?.finish({ error: failure ?? e });
+        throw e;
+    }
+    const { report, path } = made;
     if (path) log(`report: ${path}`);
+    const findings = report.findings.map(f => `${f.severity} ${f.topic}: ${f.issue}`);
+    const result: RunResultView = { totals: report.totals, findings, stamp: path ? stampOf(report.startedAt) : null, stoppedBy: failure ? 'error' : stoppedBy };
+    await publisher?.finish(failure ? { error: failure, result } : { result });
     if (failure) throw failure;
     return {
         group: def.name, strategy: strategy.name, seconds: Math.round(report.durationMs / 1000), totals: report.totals,
         members: Object.fromEntries(Object.entries(report.members).map(([n, m]) => [n, `${m.className} L${m.level}, ${m.xpPerHour} xp/h, ${m.deaths} deaths, idle ${m.idleInFights}% in fights`])),
-        findings: report.findings.map(f => `${f.severity} ${f.topic}: ${f.issue}`),
-        report: path, previous: report.previous,
+        findings, report: path, previous: report.previous, stoppedBy,
     };
+}
+
+/**
+ * The run's publisher, or null when publishing is off or can't be set up (that
+ * never fails the run). Everything it needs from the members is read here, as
+ * plain data: under MCP a member's SDK methods stall once its call aborts, and
+ * `config` is a plain property the MCP proxy passes through.
+ */
+function groupPublisher<S>(opts: GroupRunOptions<S>, def: GroupDefinition, members: Member[],
+    run: { settings: S; startedAt: number; graceMs: number; behaviorsOf: (m: Member) => Behavior<S>[] | undefined },
+    deps: Pick<PublisherDeps, 'board' | 'observer' | 'timing' | 'onControl' | 'log'>): GroupPublisher | null {
+    if (opts.publish === false) return null;
+    try {
+        const leaderBot = def.leader ?? def.members[0]!.bot;
+        const leader = members.find(m => m.bot === leaderBot) ?? members[0]!;
+        const meta: RunMeta = {
+            strategy: opts.strategy.name, description: opts.strategy.description ?? null, startedAt: run.startedAt,
+            stamp: opts.save === false ? null : stampOf(run.startedAt), seconds: opts.seconds, graceMs: run.graceMs,
+            members: members.map(m => {
+                const p = m.sdk.getPlayer();
+                return { bot: m.bot, username: m.sdk.config.botUsername, name: p?.name ?? m.bot, role: m.role, className: p?.className ?? '', level: p?.level ?? 0, behaviors: (run.behaviorsOf(m) ?? []).map(b => b.name) };
+            }),
+            settings: jsonSafe(run.settings, 16 * 1024), pid: process.pid, control: opts.publish?.control !== false,
+        };
+        // Its answers come in on its own timer, outside any execution, where MCP's console capture sends
+        // a line to the server's stderr: print them in the run's execution, so the call shows the viewer link.
+        const store = executionContext.getStore();
+        const log = store ? (line: string) => executionContext.run(store, () => deps.log(line)) : deps.log;
+        return new GroupPublisher({
+            ...deps, log, meta, group: basename(opts.dir),
+            leader: { bot: leader.bot, username: leader.sdk.config.botUsername, password: leader.sdk.config.password },
+            url: gatewayHttpBase(leader.sdk.config.gatewayUrl),
+            roster: members.map(m => ({ bot: m.bot, username: m.sdk.config.botUsername })),
+        }, opts.publish ?? {});
+    } catch (e) {
+        deps.log(`group publish off: ${errorText(e)}`);
+        return null;
+    }
 }
 
 /** { 'ready.hp': 70 } → { ready: { hp: 70 } }, so flags can reach nested settings. */
