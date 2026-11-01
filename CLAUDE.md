@@ -56,6 +56,7 @@ bun sdk/group/cli.ts <group> --live                   # the running hunt as the 
 bun sdk/group/cli.ts <group> --wind-down              # end the hunt after the current fight (report saved)
 bun groups/<group>/battleground.ts [--via=x,y,z]      # into Thidranki (levels 20-24): portal keep, bind, medallion, port
 bun groups/<group>/rvr.ts 300                         # roam the battleground and fight the other realms (learnings/rvr.md)
+bun groups/<group>/cloak-trip.ts [--stay]              # out of the battleground, capital, a cloak each, back in; --stay stops in the capital
 ```
 
 The loop is the session loop at group scale: run, read the report (findings name the setting to change), change one thing in `strategy.ts`, run again and compare, note it in the group's `lab_log.md`. A group run controls every member, so don't drive a member separately meanwhile: taking control of one member aborts the whole run. To stop a hunt early, wind it down (`--wind-down`, or the button on the group page). The browser view is `http://localhost:7780/viewer/group/<group>`: every member on one map, orders, base plan, enemies, events, deaths and recent runs.

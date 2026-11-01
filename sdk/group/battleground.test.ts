@@ -2,8 +2,10 @@
 // and action stubs that change it the way the server would, recording every call. The static
 // spawn data is real: the town teleporters, the portal keeps and Atlantis.
 import { describe, expect, test } from 'bun:test';
+import { getZonePoint, type ZonePoint } from '../../data/index';
 import type { InventoryItem, PlayerState, Realm } from '../types';
-import { BATTLEGROUNDS, enterBattleground, PORTAL_KEEPS, toPortalKeep, townTeleporter, viaWalkers, walkTogether, wearMedallion } from './battleground';
+import { BATTLEGROUNDS, battlegroundExit, CAPITALS, enterBattleground, leaveBattleground, PORTAL_KEEPS, toPortalKeep, townTeleporter, viaWalkers, waitForPort, walkTogether, wearMedallion } from './battleground';
+import { BATTLEGROUND_LAYOUTS } from './keeps';
 import type { Member } from './member';
 
 const BG = BATTLEGROUNDS[252]!;
@@ -19,7 +21,7 @@ const VISUR = { regionId: 1, x: 560297 + 100, y: 511737 };
 const FIELD = { regionId: 1, x: 560000, y: 520000 };
 
 type State = { player: PlayerState; inventory: InventoryItem[]; equipment: InventoryItem[] };
-type Stubs = Partial<Record<'buyItem' | 'equipItem' | 'unequipItem' | 'walkTo' | 'whisper', (...a: any[]) => Promise<unknown>>>;
+type Stubs = Partial<Record<'buyItem' | 'equipItem' | 'unequipItem' | 'walkTo' | 'whisper' | 'useZonePoint' | 'releaseAndRespawn', (...a: any[]) => Promise<unknown>>>;
 interface Fake {
     member: Member;
     state: State;
@@ -58,6 +60,9 @@ function fake(name: string, where: Partial<PlayerState>, opts: { inventory?: Inv
         walkToObject: async (target: string) => { calls.push(`walkToObject ${target}`); return ok(); },
         talkTo: async (npc: string) => { calls.push(`talkTo ${npc}`); return ok(); },
         whisper: async (npc: string, keyword: string) => { calls.push(`whisper ${npc} ${keyword}`); return ok(); },
+        useZonePoint: async (zp: ZonePoint) => { calls.push(`zone point ${zp.id}`); f.set({ regionId: zp.targetRegion, x: zp.targetX, y: zp.targetY }); return ok(); },
+        // bg_release_to_portal_keep: the realm's portal keep inside the battleground.
+        releaseAndRespawn: async () => { calls.push('release'); f.set({ isDead: false, x: 37301, y: 52362 }); return ok(); },
     };
     Object.assign(actions, opts.stubs?.(f));
     const sdk = {
@@ -109,7 +114,33 @@ describe('wearMedallion', () => {
     });
 });
 
+describe('waitForPort', () => {
+    test('outside the keep\'s region there is no walk: the teleporter\'s coordinates mean nothing there', async () => {
+        const f = fake('Galahad', { regionId: 252, x: 38000, y: 53500 }, { equipment: [item(37, 'Medallion of City Passage')] });
+        expect(await waitForPort(f.member, ALB, CAPITALS.albion)).toBe('not at Castle Sauvage: r252 (38000, 53500)');
+        expect(f.calls).toEqual([]);
+    });
+});
+
 describe('enterBattleground', () => {
+    const FULL = { buyItem: async () => ({ success: false, reason: 'inventory_full', message: 'Backpack is full' }) };
+
+    test('a medallion for elsewhere that won\'t come off stops the group before anyone buys', async () => {
+        const stuck = { unequipItem: async () => ({ success: false, reason: 'inventory_full', message: 'Backpack is full' }) };
+        const group = [fake('Galahad', KEEP, { equipment: [item(37, 'Medallion of City Passage')], stubs: () => stuck }), fake('Nimue', KEEP)];
+        const r = await enterBattleground(group.map(f => f.member), { bind: false });
+        expect(r.message).toStartWith('medallion for elsewhere still on: Galahad r1');
+        expect(r.report.Galahad).toContain('unequip: inventory_full Backpack is full');
+        expect(group.flatMap(f => f.calls)).toEqual([]);
+    });
+
+    test('a real Mythical item is no medallion: it stays on until the medallion swaps it out', async () => {
+        const f = fake('Galahad', KEEP, { equipment: [item(37, 'Mythirian of Ektaton')], stubs: () => FULL });
+        await enterBattleground([f.member], { bind: false });
+        expect(f.calls).toEqual([]);
+        expect(f.state.equipment).toHaveLength(1);
+    });
+
     test('a member without a medallion stops the group before anyone puts one on or waits for the port', async () => {
         const full = { buyItem: async () => ({ success: false, reason: 'inventory_full', message: 'Backpack is full' }) };
         const group = [fake('Galahad', KEEP), fake('Nimue', KEEP, { stubs: () => full }), fake('Merlin', KEEP, { inventory: [item(41)] })];
@@ -155,6 +186,103 @@ describe('enterBattleground', () => {
         expect(walked(group[0]!).length).toBeGreaterThan(0);
         expect(walked(group[0]!).every(c => !c.includes('z='))).toBe(true);
         expect(group.slice(1).flatMap(f => f.calls)).toEqual([]);
+    });
+});
+
+describe('leaveBattleground', () => {
+    const EXIT = getZonePoint(63)!;
+    const MIDDLE = { regionId: 252, x: 31000, y: 33000 };
+    const atExit = (f: Fake) => Math.hypot(f.state.player.x - EXIT.sourceX, f.state.player.y - EXIT.sourceY);
+    const rest = (f: Fake) => f.calls.filter(c => !c.startsWith('walkTo '));
+
+    test('each realm has an exit in its own portal keep, landing at the portal keep outside', () => {
+        for (const [realm, id] of [['albion', 63], ['midgard', 64], ['hibernia', 65]] as const) {
+            const f = fake('X', { regionId: 252 }, { realm });
+            const exit = battlegroundExit(f.member, BG)!;
+            const keep = PORTAL_KEEPS[realm], inside = BATTLEGROUND_LAYOUTS[252]!.keeps.find(k => k.portal && k.owner === realm)!;
+            expect(exit.id).toBe(id);
+            expect(Math.hypot(exit.sourceX - inside.x, exit.sourceY - inside.y)).toBeLessThan(2000);
+            expect(exit.targetRegion).toBe(keep.regionId);
+            expect(Math.hypot(exit.targetX - keep.teleporter.x, exit.targetY - keep.teleporter.y)).toBeLessThan(3000);
+        }
+    });
+
+    test('walks the group to the exit, then everyone takes it', async () => {
+        const group = [fake('Galahad', MIDDLE), fake('Nimue', { ...MIDDLE, x: MIDDLE.x + 300 })];
+        const r = await leaveBattleground(group.map(f => f.member));
+        expect(r.success).toBe(true);
+        for (const f of group) {
+            expect(walked(f).at(-1)).toBe(`walkTo ${EXIT.sourceX},${EXIT.sourceY} z=${EXIT.sourceZ}`);
+            expect(rest(f)).toEqual(['zone point 63']);
+            expect(f.state.player).toMatchObject({ regionId: 1, x: EXIT.targetX, y: EXIT.targetY });
+        }
+        expect(r.report.Galahad!.at(-1)).toBe(`out: r1 (${EXIT.targetX}, ${EXIT.targetY})`);
+    });
+
+    test('nobody takes the exit before all stand by it, even for walkers who started apart', async () => {
+        const order: string[] = [];
+        const group = [MIDDLE, { regionId: 252, x: 37301, y: 52362 }].map((where, i) => fake(i ? 'Merlin' : 'Galahad', where, {
+            stubs: f => ({ useZonePoint: async (zp: ZonePoint) => { order.push(`${f.state.player.name} ${Math.round(atExit(f))} ${group.map(atExit).every(d => d <= 300)}`); f.set({ regionId: zp.targetRegion }); return ok(); } }),
+        }));
+        expect((await leaveBattleground(group.map(f => f.member))).success).toBe(true);
+        expect(order).toEqual(['Galahad 0 true', 'Merlin 0 true']);
+        // Two clusters, two routes: the far one has legs the near one doesn't.
+        expect(walked(group[0]!).length).toBeGreaterThan(walked(group[1]!).length);
+    });
+
+    test('a member that can\'t reach the exit keeps everyone in the battleground', async () => {
+        const stuck = { walkTo: async () => ({ success: false, reason: 'stuck', message: 'no progress' }) };
+        const group = [fake('Galahad', { regionId: 252, x: EXIT.sourceX, y: EXIT.sourceY }), fake('Nimue', MIDDLE, { stubs: () => stuck })];
+        const r = await leaveBattleground(group.map(f => f.member));
+        expect(r.success).toBe(false);
+        expect(r.message).toContain('Nimue: stuck no progress');
+        expect(group.flatMap(rest)).toEqual([]);
+    });
+
+    test('the dead are released first, then walk from where that left them', async () => {
+        const f = fake('Galahad', { ...MIDDLE, isDead: true });
+        const r = await leaveBattleground([f.member]);
+        expect(r.success).toBe(true);
+        expect(rest(f)).toEqual(['release', 'zone point 63']);
+        expect(walked(f).length).toBe(1);
+    });
+
+    test('a release that fails stops everyone', async () => {
+        const group = [fake('Galahad', { ...MIDDLE, isDead: true }, { stubs: () => ({ releaseAndRespawn: async () => ({ success: false, reason: 'timeout', message: 'Still dead' }) }) }), fake('Nimue', MIDDLE)];
+        const r = await leaveBattleground(group.map(f => f.member));
+        expect(r.message).toBe('still dead: Galahad r252 (31000, 33000)');
+        expect(walked(group[1]!)).toEqual([]);
+    });
+
+    test('an attack on the way does not stop the walk', async () => {
+        const hit = (f: Fake) => ({ walkTo: async (x: number, y: number) => { f.calls.push(`walkTo ${x},${y}`); f.set({ x, y, inCombat: true, healthPercent: f.state.player.healthPercent - 1 }); return ok(); } });
+        const lines: string[] = [];
+        const f = fake('Galahad', MIDDLE, { stubs: hit });
+        expect((await leaveBattleground([f.member], { log: l => lines.push(l) })).success).toBe(true);
+        expect(lines.some(l => l.startsWith('attacked on leg 1/'))).toBe(true);
+    });
+
+    test('a refused exit is reported per member, and the run says it failed', async () => {
+        const no = { useZonePoint: async () => ({ success: false, reason: 'timeout', message: 'No jump' }) };
+        const f = fake('Galahad', { regionId: 252, x: EXIT.sourceX, y: EXIT.sourceY }, { stubs: () => no });
+        const r = await leaveBattleground([f.member]);
+        expect(r.success).toBe(false);
+        expect(r.report.Galahad).toEqual(['zone point 63: timeout No jump']);
+    });
+
+    test('members already out are left alone, so it can simply run again', async () => {
+        const group = [fake('Galahad', KEEP), fake('Nimue', { ...KEEP, isDead: true })];
+        expect(await leaveBattleground(group.map(f => f.member))).toMatchObject({ success: true });
+        expect(group.flatMap(f => f.calls)).toEqual([]);
+    });
+
+    test('routes stay out of enemy keeps: a Hibernian walking past the Faste goes round it', async () => {
+        const faste = BATTLEGROUND_LAYOUTS[252]!.keeps.find(k => k.name === 'Thidranki Faste')!;
+        const f = fake('Cuchulainn', { regionId: 252, x: 40_000, y: 45_000 }, { realm: 'hibernia' });
+        expect((await leaveBattleground([f.member])).success).toBe(true);
+        const legs = walked(f).map(c => c.slice('walkTo '.length).split(' ')[0]!.split(',').map(Number));
+        expect(Math.min(...legs.map(([x, y]) => Math.hypot(x! - faste.x, y! - faste.y)))).toBeGreaterThan(2500);
+        expect(f.calls.at(-1)).toBe('zone point 65');
     });
 });
 

@@ -14,7 +14,7 @@ bun groups/camelot/rvr.ts 300                                      # roam and fi
 ```
 
 - **Watch** at `http://localhost:7780/viewer/region/252`: every bot in Thidranki on one map in realm colours, each group's run (phase, reason, focus, score), its anchor and route, and the keeps. `/viewer/group/<group>` has one group's picture, with the enemies it sees.
-- `groups/_template/` has both scripts, so `create-group.ts` gives every new group a `battleground.ts` and an `rvr.ts`. Run each group's `rvr.ts` in its own process: every group plans alone, on what its own members see.
+- `groups/_template/` has the scripts, so `create-group.ts` gives every new group a `battleground.ts`, an `rvr.ts` and a `cloak-trip.ts`. Run each group's `rvr.ts` in its own process: every group plans alone, on what its own members see.
 - `bun run server:setup` turns on `bg_release_to_portal_keep` (see Deaths below). It restarts the gameserver when it changes anything.
 
 ## Getting in (`sdk/group/battleground.ts`)
@@ -33,6 +33,25 @@ Verified live for all three realms (`enterBattleground`, about 2.5 minutes from 
 - **A worn medallion is in the equipment** (`sdk.getEquipmentItem(37)`), not in the backpack list, and `equipItem` succeeds a snapshot before it shows there: wait for the slot before checking it.
 - **The merchants stand about 500 from the teleporter** (Gwulla 499, Sall Fadri 535, Araisa 507), inside its port radius: `enterBattleground` buys every medallion into the backpack first and has everyone put it on only once all five have one, so a member without one never splits the group across two regions.
 - **Bind at the portal keep's stone first** (`bindAtPortalKeep`): a death outside the battleground then lands next to the medallion merchant. The recall stone doesn't work at a portal keep or in a battleground (`GatewayPersonalBind.cs:24`: RvR zones).
+
+## Getting out (`sdk/group/battleground.ts`, `cloak-trip.ts`)
+
+**Verified live (2026-11-01):** Camelot, Hibernia and Midgard each ran `cloak-trip.ts` from Thidranki to their capital and back, about 7 minutes a group, and all 15 came back wearing a cloak. It rests on `bot.useZonePoint` ([regions-and-zones.md](regions-and-zones.md)).
+
+A battleground has no merchants, and the recall stone doesn't work there. The way out is a zone point of the realm's own, inside its portal keep there (`zonepoint` rows):
+
+| Realm | Zone point | Source in Thidranki | Lands at (the portal keep outside) | City medallion takes it to |
+|---|---|---|---|---|
+| Albion | 63 | (38116, 53679, 4154) | r1 (585039, 477305, 2600) | Camelot, r10 (36226, 29820, 7971) |
+| Midgard | 64 | (54842, 24053, 4320) | r100 (766160, 669487, 5736) | Jordheim, r101 (31746, 27429, 8792) |
+| Hibernia | 65 | (18187, 17522, 4320) | r200 (334435, 419941, 5184) | Tir na Nog, r201 (34140, 32058, 8047) |
+
+- **`leaveBattleground(members)`:** the dead released first (with `bg_release_to_portal_keep` that lands them next to the exit), each cluster of members walking together (`walkTogether`, round aggressive mobs and enemy keeps), on through an attack since the exit stands in our own keep. Nobody jumps before all stand within 300 of the exit. After an RvR run members stand all over: on 2026-11-01 Albion had three at the middle, one dead there and one released at the keep. Members already out are left alone.
+- **`bun groups/<g>/cloak-trip.ts [--stay]`** (`cloakTrip`): out, the free Medallion of City Passage from the keep's merchant (`portTogether`: the steps `enterBattleground` uses, everyone's into the backpack before anyone wears one), the OFTeleporter's next cast to the capital, a cloak for each member lacking one, `wearAccessories`, the capital's town teleporter, `enterBattleground`. Each step looks at where each member stands now, so it can run again after a stop.
+- **A medallion for another destination comes off before the buy queue** (`portTogether`): the cast goes by whatever is in slot 37 (`OFTeleporters.cs:193`, `:673`), so a stopped run's leftover would otherwise take its wearer away while the others buy.
+- **A member holding a cloak needs no trip:** inside it stays inside, at the portal keep it waits for the rest, in the capital it buys nothing. With `--stay` everyone goes to the capital, cloak or not. A dead holder is still released, inside too: the dead can't put a backpack cloak on (`GamePlayerInventory.cs:653-661`).
+- **Sellers:** Radek Silven in Camelot (1,215 from the landing), Hyndla Gunderson in Jordheim (8,931), Dierdra in Tir na Nog (6,201). From Dierdra the group walks back to Channeler Glasny (5,652); Hyndla stands 1,826 from Jordheim's second Stor Gothi Annark.
+- **Before anyone leaves,** everyone alive who must come back is checked against the battleground's levels and realm points: a member at level 25 keeps the group inside rather than stranding itself.
 
 ## What the server allows
 
