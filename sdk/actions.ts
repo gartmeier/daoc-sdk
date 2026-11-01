@@ -44,7 +44,8 @@ import {
     type Point,
 } from './actions-helpers';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
-import { findNpcSpawns, getSpell, getSpells, type NpcSpawnMatch, type SpellInfo } from '../data/index';
+import { isDelveOf, parseDelve } from './delve';
+import { findNpcSpawns, getSpell, getSpells, getZonePoint, realmId, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
 import type {
     ActionResult,
     BotWorldState,
@@ -52,6 +53,7 @@ import type {
     GameMessage,
     GroupMember,
     InventoryItem,
+    ItemBonus,
     MerchantItem,
     NearbyNpc,
     NearbyObject,
@@ -64,6 +66,7 @@ import type {
 } from './types';
 
 export { conLevel, conColor, isKillable } from './actions-helpers';
+export { parseDelve } from './delve';
 export type { ConColor, LivingTarget, NpcTarget, ObjectTarget, PlayerTarget, Point } from './actions-helpers';
 export { StraightLinePathProvider, NavmeshPathProvider, getDefaultPathProvider, setDefaultPathProvider, navmeshGroundZ } from './pathfinding';
 export type { PathProvider, PathRequest, PathResult } from './pathfinding';
@@ -335,6 +338,19 @@ export interface ItemResult extends ActionResult {
     messages: GameMessage[];
 }
 
+export interface DelveResult extends ActionResult {
+    item: InventoryItem | null;
+    /** The delve window as the server sent it, blank lines included. Empty unless it answered. */
+    lines: string[];
+    bonuses: ItemBonus[];
+    /** Lines that are neither a bonus nor known layout: spell text, descriptions, new formats. */
+    unknown: string[];
+    /** "Bonus Level: N". Nothing enforces it. */
+    bonusLevel: number | null;
+    /** "Level Requirement: N Level". It gates the item's spells, not its bonuses. */
+    levelRequirement: number | null;
+}
+
 export interface MerchantResult extends ActionResult {
     merchant: NearbyNpc | null;
     items: MerchantItem[];
@@ -368,6 +384,23 @@ export interface TrainResult extends ActionResult {
 
 export interface TravelResult extends WalkResult {
     spawn: NpcSpawnMatch | null;
+}
+
+export interface UseZonePointOptions {
+    /** Walk to the source when farther than this (default 200). */
+    tolerance?: number;
+    /** How long to watch for the jump after the request, ms (default 20000). */
+    timeout?: number;
+}
+
+export interface ZonePointResult extends ActionResult {
+    /** The zone point used; null when the id names none. */
+    zonePoint: ZonePoint | null;
+    /** Where we stand now. */
+    regionId: number | null;
+    position: Vec3 | null;
+    /** Server messages since the request. */
+    messages: string[];
 }
 
 export interface ChatResult extends ActionResult {
@@ -489,6 +522,11 @@ interface Foe<T extends NearbyNpc | NearbyPlayer> {
 
 /** Message types that are combat/loot spam, never an answer to a skill or item use. */
 const COMBAT_CHAT_TYPES = new Set<GameMessage['type']>(['youHit', 'otherCombat', 'damaged', 'resisted', 'yourDeath', 'otherDeath', 'spellPulse', 'loot', 'say', 'send', 'group', 'guild', 'broadcast', 'chat', 'emote']);
+
+/** How near a zone point's source a stopped walk still asks for it: the server checks no distance. */
+const ZONE_POINT_RANGE = 400;
+/** What the server says when it won't take a zone point (RegionChangeRequestHandler.cs:69, 129, 162; the jump point handlers). */
+const ZONE_POINT_REFUSALS = [/region has been disabled/i, /not supported by your client type/i, /exception in jump point/i, /do not meet the requirements/i, /proper mission/i, /another instance/i];
 
 const fail = <T extends object>(message: string, reason: string, extra: T): ActionResult & T =>
     ({ success: false, message, reason, ...extra });
@@ -1532,10 +1570,19 @@ export class BotActions {
 
     // ============ Items ============
 
-    /** Equip a backpack item; the server picks its slot. Observed in state.equipment. */
-    async equipItem(target: InventoryItem | NamePattern | number): Promise<ItemResult> {
+    /**
+     * Equip a backpack item; the server picks its slot, or takes `options.slot` when given (a worn
+     * item there swaps into the backpack). Observed in state.equipment: with a slot, that slot must
+     * hold this item, so an equal-named item already worn elsewhere doesn't count.
+     */
+    async equipItem(target: InventoryItem | NamePattern | number, options: { slot?: number } = {}): Promise<ItemResult> {
         const item = this.helpers.resolveInventoryItem(target);
         if (!item) return fail(`Item not found in backpack: ${describeTarget(target)}`, 'not_found', { item: null, messages: [] });
+        const { slot } = options;
+        if (slot !== undefined) {
+            const same = (i: InventoryItem) => i.name === item.name && i.level === item.level;
+            return this.moveObserved(item, slot, s => s.equipment.some(e => e.slot === slot && same(e)) && !s.inventory.some(i => i.slot === item.slot && same(i)), `Equipped ${item.name} in slot ${slot}`);
+        }
         return this.moveObserved(item, PAPER_DOLL_SLOT, s => s.equipment.some(e => e.name === item.name) && !s.inventory.some(i => i.slot === item.slot && i.name === item.name), `Equipped ${item.name}`);
     }
 
@@ -1600,6 +1647,33 @@ export class BotActions {
         } finally {
             watch.dispose();
         }
+    }
+
+    /**
+     * Read an item's real bonuses: a backpack or equipped item, by item, name or slot. Reason
+     * 'empty_slot' for an empty slot asked by number, 'not_found' for a name nothing matches,
+     * 'no_response' when no window named after the item came within `timeout`: only the caption says
+     * a 0xC4 window is ours (NPC text and commands send them too, DetailDisplayHandler.cs:114), and
+     * the snapshot holds only the latest one, so another window landing right after it loses the answer.
+     */
+    async delveItem(target: InventoryItem | NamePattern | number, options: { timeout?: number } = {}): Promise<DelveResult> {
+        const none = (item: InventoryItem | null) => ({ item, lines: [], ...parseDelve([]) });
+        const item = this.resolveUsableItem(target);
+        if (!item) {
+            return typeof target === 'number'
+                ? fail(`No item in slot ${target}`, 'empty_slot', none(null))
+                : fail(`Item not found: ${describeTarget(target)}`, 'not_found', none(null));
+        }
+        const before = this.sdk.getTextWindow()?.receivedAt ?? 0;
+        const r = await this.sdk.sendDelve(item.slot);
+        if (!r.success) return { ...r, ...none(item) };
+        const window = await this.helpers.waitFor(s => {
+            const w = s.textWindow;
+            return w && w.receivedAt !== before && isDelveOf(w.caption, item.name) ? w : null;
+        }, options.timeout ?? 3000);
+        if (!window) return fail(`No delve answer for ${item.name} in slot ${item.slot}`, 'no_response', none(item));
+        const parsed = parseDelve(window.lines);
+        return { success: true, message: `Delved ${item.name}: ${parsed.bonuses.length} bonuses`, item, lines: window.lines, ...parsed };
     }
 
     /** A backpack item, else an equipped one (by equipment slot 10-37, name or a stale snapshot item). */
@@ -1794,6 +1868,59 @@ export class BotActions {
             return { ...fail(`Destination is in region ${destination.regionId}, we are in ${p.regionId}`, 'other_region', {}), position: this.position(), distance: Infinity, reissues: 0, spawn: null };
         }
         return { ...(await this.walkTo(destination.x, destination.y, { z: destination.z, ...options })), spawn: null };
+    }
+
+    /**
+     * Use a zone point, by its id or as static data (getZonePointsFrom): walk to its source when
+     * farther than `tolerance`, send 0x90 and watch for the jump. Reasons: 'not_found' (no such id),
+     * 'wrong_region', 'wrong_realm', 'refused' (a server message said so), 'timeout' (no jump and
+     * no word: the server ignores a request it won't take, RegionChangeRequestHandler.cs:41-45),
+     * 'dead', and the walk's own ('stuck', 'died', ...).
+     *
+     * The server checks no distance (the handler reads only the id), so the walk is ours: a real
+     * client asks when it steps on the zone point, and a walk that stopped within 400 still asks.
+     * The realm is the zone point's in the DB, as for a PrivLevel-1 account (:33-37), and an id with
+     * a row per realm means our realm's row. The one other rule (:28, Trials of Atlantis regions go
+     * by the zone's realm) has no zone point in the dump.
+     */
+    async useZonePoint(target: number | ZonePoint, options: UseZonePointOptions = {}): Promise<ZonePointResult> {
+        const zonePoint = typeof target === 'number' ? getZonePoint(target, this.helpers.player()?.realm) ?? null : target;
+        const where = (messages: string[] = []) => ({ zonePoint, regionId: this.helpers.player()?.regionId ?? null, position: this.position(), messages });
+        if (!zonePoint) return fail(`No zone point with id ${String(target)}`, 'not_found', where());
+        const p = this.helpers.player();
+        if (!p) return fail('Not in game', 'not_in_game', where());
+        if (p.isDead) return fail('Cannot use a zone point while dead', 'dead', where());
+        const { id, sourceRegion, sourceX, sourceY, sourceZ, targetRegion, targetX, targetY, realm } = zonePoint;
+        if (p.regionId !== sourceRegion) return fail(`Zone point ${id} is in region ${sourceRegion}, we are in ${p.regionId}`, 'wrong_region', where());
+        if (realm !== 0 && realm !== realmId(p.realm)) return fail(`Zone point ${id} is for realm ${realm}, we are ${p.realm}`, 'wrong_realm', where());
+
+        const tolerance = options.tolerance ?? 200;
+        // The session can go during the walk (a relogin starts with no player, client.ts:218): then the walk's reason stands.
+        const away = () => { const q = this.helpers.player(); return q ? Math.hypot(q.x - sourceX, q.y - sourceY) : Infinity; };
+        if (away() > tolerance) {
+            const walk = await this.walkTo(sourceX, sourceY, { z: sourceZ, tolerance });
+            const stopped = walk.reason === 'died' || walk.reason === 'region_changed' || away() > ZONE_POINT_RANGE;
+            if (!walk.success && stopped) return fail(`Walk to zone point ${id}: ${walk.message}`, walk.reason ?? 'stuck', where());
+        }
+
+        const watch = this.helpers.watch();
+        try {
+            const r = await this.sdk.sendRegionChangeRequest(id);
+            if (!r.success) return fail(r.message, r.reason ?? 'dispatch_failed', where());
+            // Done once the client is back in the game: other actions are refused during its region change.
+            const outcome = await this.helpers.waitFor(s => {
+                if (watch.find(ZONE_POINT_REFUSALS)) return 'refused';
+                const q = s.player;
+                // One zone point in the dump stays in its region: the jump shows at the target.
+                return s.inGame && q && (q.regionId !== sourceRegion || Math.hypot(q.x - targetX, q.y - targetY) < 500) ? 'jumped' : null;
+            }, options.timeout ?? 20_000);
+            const messages = watch.messages().map(m => m.text);
+            if (outcome === 'refused') return fail(watch.findText(ZONE_POINT_REFUSALS)!, 'refused', where(messages));
+            if (!outcome) return fail(`No jump after asking for zone point ${id} (to region ${targetRegion}), and no answer from the server`, 'timeout', where(messages));
+            return { success: true, message: `Zone point ${id}: now in region ${this.helpers.player()!.regionId}`, ...where(messages) };
+        } finally {
+            watch.dispose();
+        }
     }
 
     // ============ Social ============

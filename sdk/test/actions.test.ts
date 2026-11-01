@@ -1247,6 +1247,37 @@ describe('items', () => {
         expect((await bot.equipItem('nothing')).reason).toBe('not_found');
     });
 
+    test('equip into a named slot swaps what is there and watches that slot', async () => {
+        const { w, bot } = world();
+        const ring = { ...w.state.inventory[0]!, slot: 45, name: 'Empowering Ring', level: 15 };
+        const worn = { ...ring, name: 'Empowering Ring', level: 10, slot: 35 };
+        w.state.inventory = [...w.state.inventory, ring];
+        w.state.equipment = [...w.state.equipment, worn];
+        w.publish();
+        w.handlers.moveItem = (a, world) => {
+            if (a.type !== 'moveItem') return;
+            const s = world.state;
+            s.inventory = [...s.inventory.filter(i => i.slot !== a.fromSlot), { ...worn, slot: a.fromSlot }];
+            s.equipment = [...s.equipment.filter(e => e.slot !== a.toSlot), { ...ring, slot: a.toSlot }];
+        };
+        const r = await bot.equipItem(ring, { slot: 35 });
+        expect(r.success).toBeTrue();
+        expect(w.sentOf('moveItem').at(-1)).toMatchObject({ fromSlot: 45, toSlot: 35 });
+        expect(w.state.equipment.find(e => e.slot === 35)?.level).toBe(15);
+    });
+
+    test('an equal-named item worn elsewhere is no success for a named slot', async () => {
+        const { w, bot } = world();
+        const ring = { ...w.state.inventory[0]!, slot: 45, name: 'Empowering Ring', level: 15 };
+        w.state.inventory = [...w.state.inventory, ring];
+        w.state.equipment = [...w.state.equipment, { ...ring, slot: 35 }];
+        w.publish();
+        // The server moves nothing (a refusal without a message we match).
+        const r = await bot.equipItem(ring, { slot: 36 });
+        expect(r.success).toBeFalse();
+        expect(r.reason).toBe('timeout');
+    });
+
     test('drop, destroy and use', async () => {
         const { w, bot } = world();
         const remove = (a: BotAction, world: FakeWorld) => {
@@ -1302,6 +1333,76 @@ describe('items', () => {
         };
         expect(await bot.useItem('healing potion')).toMatchObject({ success: true });
     }, 15_000);
+});
+
+describe('delveItem', () => {
+    const answer = (world: FakeWorld, caption: string, lines: string[]) => setTimeout(() => {
+        world.state.textWindow = { caption, lines, receivedAt: Date.now() };
+    }, 15);
+    const delved = ['Usable by:', '- Paladin', ' ', 'Magical Bonuses:', '4.67 | Strength: 7 pts', '6.00 | Heat: 3 %', ' ', 'Total utility: 10.67', ' ', ' ', 'Bonus Level: 12'];
+
+    test('sends the slot and returns the parsed answer', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = (_a, world) => { answer(world, 'minor healing potion', delved); };
+        const r = await bot.delveItem('potion');
+        expect(r).toMatchObject({ success: true, item: { slot: 40 }, lines: delved, bonusLevel: 12, unknown: [] });
+        expect(r.bonuses.map(b => [b.category, b.value])).toEqual([['stat', 7], ['resist', 3]]);
+        expect(w.sentOf('delve').map(a => a.slot)).toEqual([40]);
+    });
+
+    test('takes an item, a slot or a name, in the backpack or worn', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = (a, world) => {
+            if (a.type !== 'delve') return;
+            answer(world, [...world.state.inventory, ...world.state.equipment].find(i => i.slot === a.slot)!.name, ['Total utility: 0.00']);
+        };
+        expect((await bot.delveItem(w.state.inventory[0]!)).item?.slot).toBe(40);
+        expect((await bot.delveItem(10)).item?.slot).toBe(10);
+        expect((await bot.delveItem(/training sw/)).item?.slot).toBe(10);
+    });
+
+    test('an empty slot and a name nothing matches have their own reasons and send nothing', async () => {
+        const { w, bot } = world();
+        expect(await bot.delveItem(79)).toMatchObject({ success: false, reason: 'empty_slot', item: null, bonuses: [], lines: [] });
+        expect(await bot.delveItem(30)).toMatchObject({ success: false, reason: 'empty_slot' });
+        expect(await bot.delveItem('no such thing')).toMatchObject({ success: false, reason: 'not_found' });
+        expect(w.sentOf('delve')).toEqual([]);
+    });
+
+    test('no answer is a reason, not a hang', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = () => {};
+        expect(await bot.delveItem('potion', { timeout: 60 })).toMatchObject({ success: false, reason: 'no_response', item: { slot: 40 }, lines: [] });
+    });
+
+    test('a window about something else is not the answer: an NPC text, or the last delve of another item', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = (_a, world) => { answer(world, 'Player Statistics', ['4.67 | Strength: 7 pts']); };
+        expect((await bot.delveItem('potion', { timeout: 60 })).reason).toBe('no_response');
+    });
+
+    test('a window from before the request is not the answer, even of the same name', async () => {
+        const { w, bot } = world({ textWindow: { caption: 'minor healing potion', lines: delved, receivedAt: Date.now() - 1000 } });
+        w.handlers.delve = () => {};
+        expect((await bot.delveItem('potion', { timeout: 60 })).reason).toBe('no_response');
+        w.handlers.delve = (_a, world) => { answer(world, 'minor healing potion', ['Total utility: 0.00']); };
+        expect(await bot.delveItem('potion')).toMatchObject({ success: true, bonuses: [] });
+    });
+
+    test('another window before the answer is waited out', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = (_a, world) => {
+            answer(world, 'Some NPC', ['text']);
+            setTimeout(() => { world.state.textWindow = { caption: 'minor healing potion', lines: delved, receivedAt: Date.now() + 1 }; }, 60);
+        };
+        expect((await bot.delveItem('potion')).lines).toEqual(delved);
+    });
+
+    test('a client refusal passes through: one too old to know delve answers unknown_action', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = () => ({ success: false, message: "unknown action type 'delve'", reason: 'unknown_action', phase: 'validation' });
+        expect(await bot.delveItem('potion')).toMatchObject({ success: false, reason: 'unknown_action', item: { slot: 40 }, bonuses: [] });
+    });
 });
 
 describe('merchants', () => {
@@ -1564,6 +1665,149 @@ describe('grind', () => {
         expect(r.stopReason).toBe('duration');
         expect(w.sentOf('sit').length).toBeGreaterThanOrEqual(1);
         expect(w.player.healthPercent).toBeGreaterThanOrEqual(90);
+    });
+});
+
+describe('useZonePoint', () => {
+    // The region and realm of makePlayer: 500 east of it, out to region 2.
+    const ZP = { id: 111, sourceRegion: 1, sourceX: 560500, sourceY: 511000, sourceZ: 2500, targetRegion: 2, targetX: 1000, targetY: 2000, targetZ: 30, targetHeading: 0, realm: 0, classType: '' };
+    /** What the server does with 0x90: a jump, seen in the snapshots after a region change. */
+    const jumps = (w: { player: { regionId: number; x: number; y: number } }) => (a: BotAction) => {
+        if (a.type === 'regionChangeRequest') { w.player.regionId = 2; w.player.x = ZP.targetX; w.player.y = ZP.targetY; }
+    };
+
+    test('at the source it asks at once, by id, and reports the new region', async () => {
+        const { w, bot } = world({ player: makePlayer({ x: ZP.sourceX - 100, y: ZP.sourceY }) });
+        w.handlers.regionChangeRequest = jumps(w);
+        const r = await bot.useZonePoint(ZP);
+        expect(r).toMatchObject({ success: true, regionId: 2, zonePoint: { id: 111 }, position: { x: 1000, y: 2000 } });
+        expect(w.sentOf('moveTo')).toEqual([]);
+        expect(w.sentOf('regionChangeRequest').map(a => a.zonePointId)).toEqual([111]);
+    });
+
+    test('farther than the tolerance it walks to the source first, with its z', async () => {
+        const { w, bot } = world();
+        const order: string[] = [];
+        w.handlers.regionChangeRequest = a => { order.push(`ask at ${Math.round(Math.hypot(w.player.x - ZP.sourceX, w.player.y - ZP.sourceY))}`); jumps(w)(a); };
+        const r = await bot.useZonePoint(ZP, { tolerance: 50 });
+        expect(r.success).toBe(true);
+        expect(w.sentOf('moveTo')[0]).toMatchObject({ x: ZP.sourceX, y: ZP.sourceY, z: ZP.sourceZ });
+        expect(order.length).toBe(1);
+        expect(Number(order[0]!.split(' ')[2])).toBeLessThanOrEqual(52);
+    });
+
+    test('it counts as done only once the client is back in the game', async () => {
+        const { w, bot } = world({ player: makePlayer({ x: ZP.sourceX, y: ZP.sourceY }) });
+        w.handlers.regionChangeRequest = a => {
+            jumps(w)(a);
+            w.state.inGame = false;
+            setTimeout(() => { w.state.inGame = true; }, 60);
+        };
+        const r = await bot.useZonePoint(ZP);
+        expect(r.success).toBe(true);
+        expect(w.state.inGame).toBe(true);
+    });
+
+    test('a zone point inside its own region shows at the target', async () => {
+        const inside = { ...ZP, targetRegion: 1, targetX: 570000, targetY: 511000 };
+        const { w, bot } = world({ player: makePlayer({ x: ZP.sourceX, y: ZP.sourceY }) });
+        w.handlers.regionChangeRequest = () => { w.player.x = inside.targetX; };
+        expect(await bot.useZonePoint(inside)).toMatchObject({ success: true, regionId: 1 });
+    });
+
+    test('an id looks up the static data: not_found, or the real zone point elsewhere', async () => {
+        const { w, bot } = world();
+        expect(await bot.useZonePoint(999_999)).toMatchObject({ success: false, reason: 'not_found', zonePoint: null });
+        // 63 is Thidranki's Albion exit, region 252.
+        expect(await bot.useZonePoint(63)).toMatchObject({ success: false, reason: 'wrong_region', zonePoint: { id: 63, sourceRegion: 252 } });
+        expect(w.sent).toEqual([]);
+    });
+
+    test('an id with a row per realm means ours, as on the server (84: Albion\'s row comes first)', async () => {
+        const mid = world({ player: makePlayer({ realm: 'midgard', regionId: 100, x: 760600, y: 700475 }) });
+        mid.w.handlers.regionChangeRequest = jumps(mid.w);
+        expect(await mid.bot.useZonePoint(84)).toMatchObject({ success: true, zonePoint: { id: 84, realm: 2 } });
+        expect(mid.w.sentOf('moveTo')).toEqual([]);
+
+        const hib = world({ player: makePlayer({ realm: 'hibernia', regionId: 100, x: 760606 - 1000, y: 700489 }) });
+        hib.w.handlers.regionChangeRequest = jumps(hib.w);
+        expect(await hib.bot.useZonePoint(84)).toMatchObject({ success: true, zonePoint: { id: 84, realm: 3 } });
+        expect(hib.w.sentOf('moveTo')[0]).toMatchObject({ x: 760606, y: 700489 });
+    });
+
+    test('an id whose one row is another realm\'s is still wrong_realm', async () => {
+        const { w, bot } = world({ player: makePlayer({ realm: 'midgard', regionId: 252 }) });
+        expect(await bot.useZonePoint(63)).toMatchObject({ success: false, reason: 'wrong_realm', zonePoint: { id: 63, realm: 1 } });
+        expect(w.sent).toEqual([]);
+    });
+
+    test('wrong region and another realm\'s zone point go nowhere: no walk, nothing sent', async () => {
+        const { w, bot } = world();
+        expect(await bot.useZonePoint({ ...ZP, sourceRegion: 51 })).toMatchObject({ success: false, reason: 'wrong_region' });
+        expect(await bot.useZonePoint({ ...ZP, realm: 2 })).toMatchObject({ success: false, reason: 'wrong_realm' });
+        expect(w.sent).toEqual([]);
+    });
+
+    test('the zone point of our own realm is fine', async () => {
+        const { w, bot } = world({ player: makePlayer({ x: ZP.sourceX, y: ZP.sourceY }) });
+        w.handlers.regionChangeRequest = jumps(w);
+        expect((await bot.useZonePoint({ ...ZP, realm: 1 })).success).toBe(true);
+    });
+
+    test('dead is its own reason', async () => {
+        const { w, bot } = world({ player: makePlayer({ isDead: true }) });
+        expect(await bot.useZonePoint(ZP)).toMatchObject({ success: false, reason: 'dead' });
+        expect(w.sent).toEqual([]);
+    });
+
+    test('a server message saying no is refused, and carries the message', async () => {
+        const { w, bot } = world({ player: makePlayer({ x: ZP.sourceX, y: ZP.sourceY }) });
+        w.handlers.regionChangeRequest = () => w.message('This region has been disabled!');
+        const r = await bot.useZonePoint(ZP);
+        expect(r).toMatchObject({ success: false, reason: 'refused', message: 'This region has been disabled!', regionId: 1 });
+        expect(r.messages).toEqual(['This region has been disabled!']);
+    });
+
+    test('no jump and no word is a timeout', async () => {
+        const { w, bot } = world({ player: makePlayer({ x: ZP.sourceX, y: ZP.sourceY }) });
+        const r = await bot.useZonePoint(ZP, { timeout: 60 });
+        expect(r).toMatchObject({ success: false, reason: 'timeout', regionId: 1 });
+        expect(w.sentOf('regionChangeRequest')).toHaveLength(1);
+    });
+
+    test('a request the client could not dispatch says why', async () => {
+        const { w, bot } = world({ player: makePlayer({ x: ZP.sourceX, y: ZP.sourceY }) });
+        w.handlers.regionChangeRequest = () => ({ success: false, message: 'not in game', reason: 'not_in_game' });
+        expect(await bot.useZonePoint(ZP)).toMatchObject({ success: false, reason: 'not_in_game' });
+    });
+
+    test('a walk that fails far away ends it with the walk\'s reason; within 400 it still asks', async () => {
+        const refused: Handler = () => ({ success: false, message: 'no', reason: 'stuck' });
+        const far = world();
+        far.w.handlers.moveTo = refused;
+        expect(await far.bot.useZonePoint(ZP, { tolerance: 50 })).toMatchObject({ success: false, reason: 'stuck' });
+        expect(far.w.sentOf('regionChangeRequest')).toEqual([]);
+
+        const near = world({ player: makePlayer({ x: ZP.sourceX - 300, y: ZP.sourceY }) });
+        near.w.handlers.moveTo = refused;
+        near.w.handlers.regionChangeRequest = jumps(near.w);
+        expect((await near.bot.useZonePoint(ZP, { tolerance: 50 })).success).toBe(true);
+    });
+
+    test('a session lost on the way ends it with the walk\'s reason, and throws nothing', async () => {
+        const { w, bot } = world({ player: makePlayer({ x: ZP.sourceX - 300, y: ZP.sourceY }) });
+        w.stepSize = 1;
+        w.onTick = world => { world.state.player = null; world.state.movement = { ...world.state.movement, moving: false }; };
+        expect(await bot.useZonePoint(ZP, { tolerance: 50 })).toMatchObject({ success: false, reason: 'not_in_game', regionId: null });
+        expect(w.sentOf('regionChangeRequest')).toEqual([]);
+    });
+
+    test('dying on the way ends it, whatever the distance', async () => {
+        const { w, bot } = world({ player: makePlayer({ x: ZP.sourceX - 300, y: ZP.sourceY }) });
+        w.stepSize = 1;
+        w.onTick = world => { world.player.isDead = true; };
+        expect(await bot.useZonePoint(ZP, { tolerance: 50 })).toMatchObject({ success: false, reason: 'died' });
+        expect(w.sentOf('regionChangeRequest')).toEqual([]);
     });
 });
 

@@ -1080,6 +1080,14 @@ export class BotSDK {
         return this.sendAction({ type: 'dropItem', slot, reason: 'SDK' });
     }
 
+    /**
+     * Ask the server to delve the item in a slot; the answer is the next text window (getTextWindow),
+     * and an empty slot gets none. bot.delveItem waits for it and parses the bonuses.
+     */
+    async sendDelve(slot: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'delve', slot, reason: 'SDK' });
+    }
+
     /** Destroy an item. */
     async sendDestroyItem(slot: number): Promise<ActionResult> {
         return this.sendAction({ type: 'destroyItem', slot, reason: 'SDK' });
@@ -1138,6 +1146,15 @@ export class BotSDK {
     /** Sit (true) or stand (false). */
     async sendSit(sit: boolean = true): Promise<ActionResult> {
         return this.sendAction({ type: 'sit', sit, reason: 'SDK' });
+    }
+
+    /**
+     * Ask the server to use a zone point, by its id (0x90). Success means dispatched: the server
+     * silently ignores a wrong id or another realm's zone point. bot.useZonePoint walks to the
+     * zone point and observes the jump.
+     */
+    async sendRegionChangeRequest(zonePointId: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'regionChangeRequest', zonePointId, reason: 'SDK' });
     }
 
     /**

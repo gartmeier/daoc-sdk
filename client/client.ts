@@ -503,6 +503,12 @@ export class DaocClient {
                 this.send(ClientOp.DestroyItemRequest, out.encodeDestroyItem(a.slot));
                 return ok(`destroying slot ${a.slot}`);
             }
+            case 'delve': {
+                // An empty slot gets no reply at all (DetailDisplayHandler.cs:72-77): don't ask.
+                if (!m.items.has(a.slot)) return fail('empty_slot', `no item in slot ${a.slot}`);
+                this.send(ClientOp.DetailRequest, out.encodeDetailRequest(1, 0, a.slot));
+                return ok(`delving slot ${a.slot}`);
+            }
             case 'buy': {
                 if (!m.merchant.isOpen) return fail('merchant_not_open', 'no merchant window open: interact with a merchant first');
                 const item = m.merchant.items.find(i => i.page === a.page && i.slot === a.slot);
@@ -580,6 +586,14 @@ export class DaocClient {
                 if (!(m.concentrationEffects ?? []).some(e => e.index === i)) return fail('not_found', `no concentration effect at index ${i}`);
                 this.send(ClientOp.RemoveConcentrationEffect, out.encodeRemoveConcentrationEffect(i));
                 return ok(`concentration effect ${i} removal requested`);
+            }
+            case 'regionChangeRequest': {
+                const id = a.zonePointId;
+                if (!Number.isInteger(id) || id < 0 || id > 0xffff) return fail('bad_args', 'zonePointId must be 0..65535');
+                // A refused request (wrong id or realm: RegionChangeRequestHandler.cs:41-45) is silent for a
+                // PrivLevel-1 account. A jump comes back as a region change like a teleporter's (session.ts).
+                this.send(ClientOp.PlayerRegionChangeRequest, out.encodeRegionChangeRequest(id));
+                return ok(`zone point ${id} requested`);
             }
             case 'release':
                 if (!m.self.isDead) return fail('not_dead', 'release only works while dead');

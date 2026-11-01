@@ -52,6 +52,7 @@
 | `freeBackpackSlots(): number` | Free backpack slots (of 40). |
 | `findNpcSpawn(pattern: NamePattern, options: { regionId?: number; guild?: NamePattern } = {}): NpcSpawnMatch \| null` | Nearest static spawn (DB `mob` table) in our region matching a name, or null. |
 | `async travelTo(destination: NamePattern \| (Point & { regionId?: number }), options: WalkOptions = {}): Promise<TravelResult>` | Walk (same region, through walkTo: navmesh route when built, else a straight line) to a named spawn from static data or to a point. |
+| `async useZonePoint(target: number \| ZonePoint, options: UseZonePointOptions = {}): Promise<ZonePointResult>` | Use a zone point, by its id or as static data (getZonePointsFrom): walk to its source when farther than `tolerance`, send 0x90 and watch for the jump. Reasons: 'not_found' (no such id), 'wrong_region', 'wrong_realm', 'refused' (a server message said so), 'timeout' (no jump and no word: the server ignores a request it won't take, RegionChangeRequestHandler.cs:41-45), 'dead', and the walk's own ('stuck', 'died', ...). The server checks no distance (the handler reads only the id), so the walk is ours: a real client asks when it steps on the zone point, and a walk that stopped within 400 still asks. The realm is the zone point's in the DB, as for a PrivLevel-1 account (:33-37), and an id with a row per realm means our realm's row. The one other rule (:28, Trials of Atlantis regions go by the zone's realm) has no zone point in the dump. |
 | `async say(text: string): Promise<ChatResult>` | Say text (chunked) and observe our echo. Spaces calls SAY_SPACING_MS apart: the server drops a say < 500 ms after the last accepted one with "Slow down! Think before you say each word!" (commands/playercommands/say.cs:49-53); that answer retries once, then fails with 'rate_limited'. |
 | `async send(to: string, text: string): Promise<ChatResult>` | Private message a player ('/send'); fails on "not online"-style answers. |
 | `async grind(options: GrindOptions = {}): Promise<GrindResult>` | Hunt around an anchor: pick a killable target (attackers first), kill, loot, rest when low, walk back when drifted. Stops on death unless `respawn` is set, and with stopReason 'no_targets' after `noTargetTimeoutMs` (default 60 s) without any candidate. |
@@ -70,11 +71,12 @@
 | Signature | Description |
 |---|---|
 | `async lootNearby(options: LootOptions = {}): Promise<LootResult>` | Pick up loot on the ground within `radius` and report what changed in the backpack and purse (autoloot usually already took it during the kill). |
-| `async equipItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Equip a backpack item; the server picks its slot. Observed in state.equipment. |
+| `async equipItem(target: InventoryItem \| NamePattern \| number, options: { slot?: number } = {}): Promise<ItemResult>` | Equip a backpack item; the server picks its slot, or takes `options.slot` when given (a worn item there swaps into the backpack). Observed in state.equipment: with a slot, that slot must hold this item, so an equal-named item already worn elsewhere doesn't count. |
 | `async unequipItem(target: number \| NamePattern): Promise<ItemResult>` | Move an equipped item (by slot or name) back into the backpack. |
 | `async dropItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Drop a backpack item on the ground. |
 | `async destroyItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Destroy a backpack item. |
 | `async useItem(target: InventoryItem \| NamePattern \| number, options: { useType?: number } = {}): Promise<ItemResult>` | Use (right-click) a backpack or equipped item: potions, charged items. A number is a backpack (40-79) or equipment (10-37) slot. Success needs evidence about this item: a message naming it ("You attempt to use <item>.", GamePlayer.cs:6564), its stack count changing, or a new effect, and no refusal in the following ~400 ms. |
+| `async delveItem(target: InventoryItem \| NamePattern \| number, options: { timeout?: number } = {}): Promise<DelveResult>` | Read an item's real bonuses: a backpack or equipped item, by item, name or slot. Reason 'empty_slot' for an empty slot asked by number, 'not_found' for a name nothing matches, 'no_response' when no window named after the item came within `timeout`: only the caption says a 0xC4 window is ours (NPC text and commands send them too, DetailDisplayHandler.cs:114), and the snapshot holds only the latest one, so another window landing right after it loses the answer. |
 | `findInventoryItem(pattern: NamePattern): InventoryItem \| null` | Backpack item by name (shortest match wins). |
 | `async buyItem(merchant: NpcTarget, item: NamePattern \| { page: number; slot: number }, count: number = 1): Promise<BuyResult>` | Buy `count` of an item (name or page/slot) and observe the backpack and purse. |
 | `async sellItem(merchant: NpcTarget, item: InventoryItem \| NamePattern \| number): Promise<SellResult>` | Sell one backpack item (whole stack) to a merchant and observe the purse. |
@@ -229,6 +231,7 @@
 | `async sendUseItem(slot: number, useType?: number): Promise<ActionResult>` | Use an item in a slot (potions, charged items). |
 | `async sendMoveItem(fromSlot: number, toSlot: number, count?: number): Promise<ActionResult>` | Move an item between slots (equip, unequip, stack split, vault). |
 | `async sendDropItem(slot: number): Promise<ActionResult>` | Drop an item on the ground. |
+| `async sendDelve(slot: number): Promise<ActionResult>` | Ask the server to delve the item in a slot; the answer is the next text window (getTextWindow), and an empty slot gets none. bot.delveItem waits for it and parses the bonuses. |
 | `async sendDestroyItem(slot: number): Promise<ActionResult>` | Destroy an item. |
 | `async sendBuy(page: number, slot: number, count: number = 1): Promise<ActionResult>` | Buy from the open merchant by page/slot (see getMerchant). |
 | `async sendSell(slot: number): Promise<ActionResult>` | Sell a backpack item to the open merchant. |
@@ -241,6 +244,7 @@
 | `async sendGroupSay(text: string): Promise<ActionResult>` | Group chat. |
 | `async sendCommand(command: string): Promise<ActionResult>` | Slash command sent verbatim, e.g. '&stick', '/bind' ('/' becomes '&'). |
 | `async sendSit(sit: boolean = true): Promise<ActionResult>` | Sit (true) or stand (false). |
+| `async sendRegionChangeRequest(zonePointId: number): Promise<ActionResult>` | Ask the server to use a zone point, by its id (0x90). Success means dispatched: the server silently ignores a wrong id or another realm's zone point. bot.useZonePoint walks to the zone point and observes the jump. |
 | `async sendRemoveConcentrationEffect(index: number): Promise<ActionResult>` | Drop one of our concentration buffs (frees its concentration), by its `index` in `state.concentrationEffects`. Observe the effect leaving that list. |
 | `async sendRelease(): Promise<ActionResult>` | Release after death (back to bind point). |
 | `async sendQuit(): Promise<ActionResult>` | Quit to the character screen ('&quit'; the server timer is 20 s+). |
@@ -592,6 +596,43 @@ interface DialogBox {
   type: number;
   text: string;
   receivedAt: number;
+}
+```
+
+### ItemBonus
+
+One bonus line of an item delve (sdk/delve.ts).
+
+```typescript
+interface ItemBonus {
+  category: BonusCategory;
+  /** The server's name for it: "Strength", "Body Magic Focus". */
+  name: string;
+  /** Negative for a penalty. */
+  value: number;
+  unit: 'pts' | '%' | 'lvls' | null;
+  /** category 'stat'. */
+  stat?: 'STR' | 'DEX' | 'CON' | 'QUI' | 'INT' | 'PIE' | 'EMP' | 'CHR' | 'ACU';
+  /** category 'skill' and 'focus': the specialization's name in classes.json, null when no class has one. */
+  spec?: string | null;
+  /** category 'skill': its ePropertyType group; 'skillGroup': the group it raises, null for "All Skills". */
+  group?: SkillGroup | null;
+  /** The line as the server sent it. */
+  text: string;
+}
+```
+
+### ParsedDelve
+
+```typescript
+interface ParsedDelve {
+  bonuses: ItemBonus[];
+  /** Non-blank lines that are neither a bonus nor known layout: proc spell text, descriptions, new formats. */
+  unknown: string[];
+  /** "Bonus Level: N" (GameInventoryItem.cs:478-482). Nothing enforces it: only the delve and spellcrafting read it. */
+  bonusLevel: number | null;
+  /** "Level Requirement: N Level" (:564). It gates the item's spells (GamePlayer.cs:7045), not its bonuses. */
+  levelRequirement: number | null;
 }
 ```
 
@@ -1170,6 +1211,23 @@ interface ItemResult {
 }
 ```
 
+### DelveResult
+
+```typescript
+interface DelveResult {
+  item: InventoryItem | null;
+  /** The delve window as the server sent it, blank lines included. Empty unless it answered. */
+  lines: string[];
+  bonuses: ItemBonus[];
+  /** Lines that are neither a bonus nor known layout: spell text, descriptions, new formats. */
+  unknown: string[];
+  /** "Bonus Level: N". Nothing enforces it. */
+  bonusLevel: number | null;
+  /** "Level Requirement: N Level". It gates the item's spells, not its bonuses. */
+  levelRequirement: number | null;
+}
+```
+
 ### MerchantResult
 
 ```typescript
@@ -1226,6 +1284,31 @@ interface TrainResult {
 ```typescript
 interface TravelResult {
   spawn: NpcSpawnMatch | null;
+}
+```
+
+### UseZonePointOptions
+
+```typescript
+interface UseZonePointOptions {
+  /** Walk to the source when farther than this (default 200). */
+  tolerance?: number;
+  /** How long to watch for the jump after the request, ms (default 20000). */
+  timeout?: number;
+}
+```
+
+### ZonePointResult
+
+```typescript
+interface ZonePointResult {
+  /** The zone point used; null when the id names none. */
+  zonePoint: ZonePoint | null;
+  /** Where we stand now. */
+  regionId: number | null;
+  position: Vec3 | null;
+  /** Server messages since the request. */
+  messages: string[];
 }
 ```
 

@@ -148,6 +148,11 @@ describe('targeting / combat / interaction encoders', () => {
         expect(H(o.encodeGroundTarget(1, 2, 3))).toBe('00 00 00 01 00 00 00 02 00 00 00 03 01 00 00 00');
     });
 
+    test('0x90 RegionChangeRequest: u16 LE zone point id', () => {
+        expect(H(o.encodeRegionChangeRequest(63))).toBe('3F 00');
+        expect(H(o.encodeRegionChangeRequest(0x0102))).toBe('02 01');
+    });
+
     test('0xC7 Sit', () => {
         expect(H(o.encodeSit(true))).toBe('01');
         expect(H(o.encodeSit(false))).toBe('00');
@@ -171,6 +176,7 @@ describe('item / merchant / trainer / ui encoders', () => {
 
     test('0x80 DestroyItem: 4 skipped, u16 slot', () => {
         expect(H(o.encodeDestroyItem(45))).toBe('00 00 00 00 00 2D');
+        expect(H(o.encodeDetailRequest(1, 0, 40))).toBe('00 01 00 00 00 00 00 28');
     });
 
     test('0x78 Buy: x, y, id, itemSlot, count, menuId', () => {

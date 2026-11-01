@@ -161,8 +161,15 @@ export function getZonePointsFrom(regionId: number): ZonePoint[] {
     return getZonePoints().filter(z => z.sourceRegion === regionId);
 }
 
-export function getZonePoint(id: number): ZonePoint | undefined {
-    return getZonePoints().find(z => z.id === id);
+/**
+ * A zone point by id. 20 ids have a row per realm, and the server takes the row of the player's
+ * realm or of realm 0 (RegionChangeRequestHandler.cs:33-39). With `realm`, that row; without one,
+ * or with no such row, the id's first.
+ */
+export function getZonePoint(id: number, realm?: Realm | number): ZonePoint | undefined {
+    const rows = getZonePoints().filter(z => z.id === id);
+    const mine = realmId(realm ?? 0);
+    return rows.find(z => z.realm === 0 || z.realm === mine) ?? rows[0];
 }
 
 /** Teleport destinations (whisper `teleportId` to a teleporter of that realm). */

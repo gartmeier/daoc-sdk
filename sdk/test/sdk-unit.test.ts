@@ -121,6 +121,7 @@ describe('BotSDK.sendAction dispatch failures', () => {
             moveItem: s => s.sendMoveItem(40, 41, 2),
             dropItem: s => s.sendDropItem(40),
             destroyItem: s => s.sendDestroyItem(40),
+            delve: s => s.sendDelve(40),
             buy: s => s.sendBuy(0, 1, 2),
             sell: s => s.sendSell(40),
             openTrainer: s => s.sendOpenTrainer(),
@@ -133,6 +134,7 @@ describe('BotSDK.sendAction dispatch failures', () => {
             command: s => s.sendCommand('&stick'),
             sit: s => s.sendSit(true),
             removeConcentration: s => s.sendRemoveConcentrationEffect(0),
+            regionChangeRequest: s => s.sendRegionChangeRequest(63),
             release: s => s.sendRelease(),
             quit: s => s.sendQuit(),
         };
@@ -142,10 +144,10 @@ describe('BotSDK.sendAction dispatch failures', () => {
             face: { heading: 1024 }, faceObject: { objectId: 7 }, setTarget: { objectId: null }, interact: { objectId: 7 },
             whisper: { objectId: 7, text: 'kw' }, pickup: { objectId: 7 }, attack: { on: false }, useSkill: { skillIndex: 3 },
             castSpell: { lineIndex: 1, spellIndex: 2 }, setGroundTarget: { x: 1, y: 2, z: 3 }, useItem: { slot: 40, useType: 1 },
-            moveItem: { fromSlot: 40, toSlot: 41, count: 2 }, dropItem: { slot: 40 }, destroyItem: { slot: 40 },
+            moveItem: { fromSlot: 40, toSlot: 41, count: 2 }, dropItem: { slot: 40 }, destroyItem: { slot: 40 }, delve: { slot: 40 },
             buy: { page: 0, slot: 1, count: 2 }, sell: { slot: 40 }, trainSpec: { specIndex: 0, levels: 2 },
             respondDialog: { accept: true }, say: { text: 'hi' }, send: { to: 'Ann', text: 'hi' }, groupSay: { text: 'hi' },
-            command: { command: '&stick' }, sit: { sit: true },
+            command: { command: '&stick' }, sit: { sit: true }, regionChangeRequest: { zonePointId: 63 },
         };
         for (const [type, call] of Object.entries(calls) as [BotActionType, (sdk: BotSDK) => Promise<ActionResult>][]) {
             const { sdk, sent } = stubSdk(5000);

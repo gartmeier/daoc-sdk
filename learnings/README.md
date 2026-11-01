@@ -9,13 +9,13 @@ Notes from live runs against the local OpenDAoC server. Each topic file says wha
 | [spells.md](spells.md) | castSpell, buffs, interrupts, caster tactics |
 | [npc-dialog.md](npc-dialog.md) | talkTo, [keywords], whisper, trainers, promotion, teleporters |
 | [merchants.md](merchants.md) | open, buy, sell, merchant data offline |
-| [looting.md](looting.md) | autoloot, lootNearby, inventory deltas |
+| [looting.md](looting.md) | autoloot, lootNearby, inventory deltas, cloaks and jewellery, delve and gear scoring per class |
 | [death-and-rest.md](death-and-rest.md) | rest, death, release, quitting |
 | [grouping-and-chat.md](grouping-and-chat.md) | invite/accept, shared XP, follow, chat helpers, chat CLI, untrusted chat |
 | [group-coordination.md](group-coordination.md) | groups of bots: shared picture, coordinator, role behaviours, strategies, observer reports |
-| [rvr.md](rvr.md) | battlegrounds: getting in, PvP rules, killPlayer, the rvr-roam strategy, three groups fighting each other |
+| [rvr.md](rvr.md) | battlegrounds: getting in and out, PvP rules, killPlayer, the rvr-roam strategy, three groups fighting each other |
 | [classes-and-races.md](classes-and-races.md) | what can be created, start points per class |
-| [regions-and-zones.md](regions-and-zones.md) | coordinates, regions, zones, teleporters, static data |
+| [regions-and-zones.md](regions-and-zones.md) | coordinates, regions, zones, teleporters, zone points, static data |
 
 ## Two environments
 

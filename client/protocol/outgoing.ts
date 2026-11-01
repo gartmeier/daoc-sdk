@@ -271,6 +271,11 @@ export function encodeRemoveConcentrationEffect(index: number): Uint8Array {
     return Uint8Array.of(index & 0xff);
 }
 
+/** 0x90 PlayerRegionChangeRequest: u16 LE zone point id for >=1126 (RegionChangeRequestHandler.cs:23). */
+export function encodeRegionChangeRequest(zonePointId: number): Uint8Array {
+    return new PacketWriter(2).u16le(zonePointId).toBytes();
+}
+
 /** 0xC7 PlayerSitRequest: u8 status (PlayerSitRequest.cs:8). */
 export function encodeSit(sit: boolean): Uint8Array {
     return Uint8Array.of(sit ? 1 : 0);
@@ -296,6 +301,14 @@ export function encodeCreateObjectRequest(objectId: number): Uint8Array {
 /** 0xDD PlayerMoveItem: u16 (ignored), u16 toSlot, u16 fromSlot, u16 count (PlayerMoveItemRequestHandler.cs:15-18). */
 export function encodeMoveItem(toSlot: number, fromSlot: number, count = 0, objectId = 0): Uint8Array {
     return new PacketWriter(8).u16(objectId).u16(toSlot).u16(fromSlot).u16(count).toBytes();
+}
+
+/**
+ * 0xD8 DetailRequest, delve (DetailDisplayHandler.cs:28-30): u16 objectType, u32 extraId, u16 objectId,
+ * big-endian (PacketIn.cs:34,58). Type 1 is an inventory item with objectId = its slot (:63-69).
+ */
+export function encodeDetailRequest(objectType: number, extraId: number, objectId: number): Uint8Array {
+    return new PacketWriter(8).u16(objectType).u32(extraId).u16(objectId).toBytes();
 }
 
 /** 0x80 DestroyItemRequest: 4 skipped, u16 slot (DestroyItemRequestHandler.cs:10-11). */
