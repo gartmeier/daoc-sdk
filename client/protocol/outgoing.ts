@@ -303,6 +303,14 @@ export function encodeMoveItem(toSlot: number, fromSlot: number, count = 0, obje
     return new PacketWriter(8).u16(objectId).u16(toSlot).u16(fromSlot).u16(count).toBytes();
 }
 
+/**
+ * 0xD8 DetailRequest, delve (DetailDisplayHandler.cs:28-30): u16 objectType, u32 extraId, u16 objectId,
+ * big-endian (PacketIn.cs:34,58). Type 1 is an inventory item with objectId = its slot (:63-69).
+ */
+export function encodeDetailRequest(objectType: number, extraId: number, objectId: number): Uint8Array {
+    return new PacketWriter(8).u16(objectType).u32(extraId).u16(objectId).toBytes();
+}
+
 /** 0x80 DestroyItemRequest: 4 skipped, u16 slot (DestroyItemRequestHandler.cs:10-11). */
 export function encodeDestroyItem(slot: number): Uint8Array {
     return new PacketWriter(6).u32(0).u16(slot).toBytes();

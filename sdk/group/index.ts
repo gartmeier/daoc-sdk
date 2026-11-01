@@ -10,7 +10,8 @@ export { Coordinator, defineStrategy, roleForClass, type CoordinatorContext, typ
 export { pveLeveling, decidePve, pickPullTarget, pickFocus, assignCc, PVE_SETTINGS, type PveSettings } from './pve';
 export { PORTAL_KEEPS, BATTLEGROUNDS, CAPITALS, portalKeepOf, capitalOf, inBattleground, inCapital, atPortalKeep, entryProblem, townTeleporter, viaWalkers, walkTogether, toPortalKeep, bindAtPortalKeep, wearsMedallion, getMedallion, wearMedallion, waitForPort, portTogether, enterBattleground, battlegroundExit, leaveBattleground, type MedallionResult, type PortalKeep, type Battleground, type Passage, type EnterResult } from './battleground';
 export { cloakTrip, CAPITAL_RADIUS } from './cloak-trip';
-export { accessorySlots, nextAccessory, wearAccessories, nearestCloakSeller, holdsCloak, buyCloak, CLOAK_RADIUS, CLOAK_RESERVE, CLOAK_TOWN_RANGE, type AccessoryMove, type CloakSeller, type GearMember } from './gear';
+export { accessorySlots, nextAccessory, wearAccessories, nearestCloakSeller, holdsCloak, buyCloak, GearDelves, armorUpgradeGain, upgradeGains, UPGRADE_MARGIN, MAX_DELVES, CLOAK_RADIUS, CLOAK_RESERVE, CLOAK_TOWN_RANGE, type AccessoryMove, type CloakSeller, type GearMember, type GearScore } from './gear';
+export { statScore, statWeight, bonusCap, armorValue, armorGain, armorSwing, STAT_WEIGHTS, SIDE_STAT_WEIGHT, BONUS_WEIGHTS, ARMOR_STAT_RATE, ARMOR_STAT_SWING } from './gear-score';
 export { rvrRoaming, decideRvr, rvrBehaviors, rvrFindings, pickRvrFocus, homeOf, keepDangers, defaultPatrol, realmOfGroup, BATTLEGROUND_LAYOUTS, THIDRANKI, RVR_SETTINGS, type RvrSettings, type BattlegroundLayout, type Keep, type PlayerRealm } from './rvr';
 export { GroupObserver, findingsFor, formatReport, saveReport, stampOf, inferPhase, type Finding, type FightSummary, type MemberStats, type RunReport } from './observer';
 export { loadGroup, connectBot, connectGroup, formGroup } from './roster';

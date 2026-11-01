@@ -9,7 +9,7 @@ Notes from live runs against the local OpenDAoC server. Each topic file says wha
 | [spells.md](spells.md) | castSpell, buffs, interrupts, caster tactics |
 | [npc-dialog.md](npc-dialog.md) | talkTo, [keywords], whisper, trainers, promotion, teleporters |
 | [merchants.md](merchants.md) | open, buy, sell, merchant data offline |
-| [looting.md](looting.md) | autoloot, lootNearby, inventory deltas, cloaks and jewellery |
+| [looting.md](looting.md) | autoloot, lootNearby, inventory deltas, cloaks and jewellery, delve and gear scoring per class |
 | [death-and-rest.md](death-and-rest.md) | rest, death, release, quitting |
 | [grouping-and-chat.md](grouping-and-chat.md) | invite/accept, shared XP, follow, chat helpers, chat CLI, untrusted chat |
 | [group-coordination.md](group-coordination.md) | groups of bots: shared picture, coordinator, role behaviours, strategies, observer reports |

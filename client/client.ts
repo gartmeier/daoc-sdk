@@ -503,6 +503,12 @@ export class DaocClient {
                 this.send(ClientOp.DestroyItemRequest, out.encodeDestroyItem(a.slot));
                 return ok(`destroying slot ${a.slot}`);
             }
+            case 'delve': {
+                // An empty slot gets no reply at all (DetailDisplayHandler.cs:72-77): don't ask.
+                if (!m.items.has(a.slot)) return fail('empty_slot', `no item in slot ${a.slot}`);
+                this.send(ClientOp.DetailRequest, out.encodeDetailRequest(1, 0, a.slot));
+                return ok(`delving slot ${a.slot}`);
+            }
             case 'buy': {
                 if (!m.merchant.isOpen) return fail('merchant_not_open', 'no merchant window open: interact with a merchant first');
                 const item = m.merchant.items.find(i => i.page === a.page && i.slot === a.slot);

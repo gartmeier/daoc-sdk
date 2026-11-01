@@ -333,6 +333,44 @@ export interface DialogBox {
     receivedAt: number;
 }
 
+export type BonusCategory =
+    | 'stat' | 'hits' | 'power' | 'powerPool' | 'resist' | 'skill' | 'skillGroup' | 'focus'
+    | 'armorFactor' | 'absorption' | 'castingSpeed' | 'fatigue'
+    /** "(PvE Only)" lines (GameInventoryItem.cs:859-863). */
+    | 'pve'
+    /** A real property that says nothing about these categories: "Evade chance", "Slash cap". */
+    | 'other';
+
+export type SkillGroup = 'melee' | 'magic' | 'dual' | 'archery' | 'other';
+
+/** One bonus line of an item delve (sdk/delve.ts). */
+export interface ItemBonus {
+    category: BonusCategory;
+    /** The server's name for it: "Strength", "Body Magic Focus". */
+    name: string;
+    /** Negative for a penalty. */
+    value: number;
+    unit: 'pts' | '%' | 'lvls' | null;
+    /** category 'stat'. */
+    stat?: 'STR' | 'DEX' | 'CON' | 'QUI' | 'INT' | 'PIE' | 'EMP' | 'CHR' | 'ACU';
+    /** category 'skill' and 'focus': the specialization's name in classes.json, null when no class has one. */
+    spec?: string | null;
+    /** category 'skill': its ePropertyType group; 'skillGroup': the group it raises, null for "All Skills". */
+    group?: SkillGroup | null;
+    /** The line as the server sent it. */
+    text: string;
+}
+
+export interface ParsedDelve {
+    bonuses: ItemBonus[];
+    /** Non-blank lines that are neither a bonus nor known layout: proc spell text, descriptions, new formats. */
+    unknown: string[];
+    /** "Bonus Level: N" (GameInventoryItem.cs:478-482). Nothing enforces it: only the delve and spellcrafting read it. */
+    bonusLevel: number | null;
+    /** "Level Requirement: N Level" (:564). It gates the item's spells (GamePlayer.cs:7045), not its bonuses. */
+    levelRequirement: number | null;
+}
+
 /** Server 0xC4 custom text window. */
 export interface TextWindow {
     caption: string;
@@ -515,6 +553,7 @@ export type BotAction = ActionBase & (
     | { type: 'moveItem'; fromSlot: number; toSlot: number; count?: number }
     | { type: 'dropItem'; slot: number }
     | { type: 'destroyItem'; slot: number }
+    | { type: 'delve'; slot: number }
 
     // Merchants / trainers
     | { type: 'buy'; page: number; slot: number; count: number }

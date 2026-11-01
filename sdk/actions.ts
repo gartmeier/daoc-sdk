@@ -44,6 +44,7 @@ import {
     type Point,
 } from './actions-helpers';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
+import { isDelveOf, parseDelve } from './delve';
 import { findNpcSpawns, getSpell, getSpells, getZonePoint, realmId, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
 import type {
     ActionResult,
@@ -52,6 +53,7 @@ import type {
     GameMessage,
     GroupMember,
     InventoryItem,
+    ItemBonus,
     MerchantItem,
     NearbyNpc,
     NearbyObject,
@@ -64,6 +66,7 @@ import type {
 } from './types';
 
 export { conLevel, conColor, isKillable } from './actions-helpers';
+export { parseDelve } from './delve';
 export type { ConColor, LivingTarget, NpcTarget, ObjectTarget, PlayerTarget, Point } from './actions-helpers';
 export { StraightLinePathProvider, NavmeshPathProvider, getDefaultPathProvider, setDefaultPathProvider, navmeshGroundZ } from './pathfinding';
 export type { PathProvider, PathRequest, PathResult } from './pathfinding';
@@ -333,6 +336,19 @@ export interface RespawnResult extends ActionResult {
 export interface ItemResult extends ActionResult {
     item: InventoryItem | null;
     messages: GameMessage[];
+}
+
+export interface DelveResult extends ActionResult {
+    item: InventoryItem | null;
+    /** The delve window as the server sent it, blank lines included. Empty unless it answered. */
+    lines: string[];
+    bonuses: ItemBonus[];
+    /** Lines that are neither a bonus nor known layout: spell text, descriptions, new formats. */
+    unknown: string[];
+    /** "Bonus Level: N". Nothing enforces it. */
+    bonusLevel: number | null;
+    /** "Level Requirement: N Level". It gates the item's spells, not its bonuses. */
+    levelRequirement: number | null;
 }
 
 export interface MerchantResult extends ActionResult {
@@ -1631,6 +1647,33 @@ export class BotActions {
         } finally {
             watch.dispose();
         }
+    }
+
+    /**
+     * Read an item's real bonuses: a backpack or equipped item, by item, name or slot. Reason
+     * 'empty_slot' for an empty slot asked by number, 'not_found' for a name nothing matches,
+     * 'no_response' when no window named after the item came within `timeout`: only the caption says
+     * a 0xC4 window is ours (NPC text and commands send them too, DetailDisplayHandler.cs:114), and
+     * the snapshot holds only the latest one, so another window landing right after it loses the answer.
+     */
+    async delveItem(target: InventoryItem | NamePattern | number, options: { timeout?: number } = {}): Promise<DelveResult> {
+        const none = (item: InventoryItem | null) => ({ item, lines: [], ...parseDelve([]) });
+        const item = this.resolveUsableItem(target);
+        if (!item) {
+            return typeof target === 'number'
+                ? fail(`No item in slot ${target}`, 'empty_slot', none(null))
+                : fail(`Item not found: ${describeTarget(target)}`, 'not_found', none(null));
+        }
+        const before = this.sdk.getTextWindow()?.receivedAt ?? 0;
+        const r = await this.sdk.sendDelve(item.slot);
+        if (!r.success) return { ...r, ...none(item) };
+        const window = await this.helpers.waitFor(s => {
+            const w = s.textWindow;
+            return w && w.receivedAt !== before && isDelveOf(w.caption, item.name) ? w : null;
+        }, options.timeout ?? 3000);
+        if (!window) return fail(`No delve answer for ${item.name} in slot ${item.slot}`, 'no_response', none(item));
+        const parsed = parseDelve(window.lines);
+        return { success: true, message: `Delved ${item.name}: ${parsed.bonuses.length} bonuses`, item, lines: window.lines, ...parsed };
     }
 
     /** A backpack item, else an equipped one (by equipment slot 10-37, name or a stale snapshot item). */

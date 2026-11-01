@@ -3,7 +3,8 @@
 import { describe, expect, test } from 'bun:test';
 import { DaocClient } from './client';
 import { DaocSession } from './session';
-import { ClientOp } from './protocol/opcodes';
+import { PacketWriter } from './protocol/buffer';
+import { ClientOp, ServerOp } from './protocol/opcodes';
 
 const ME = { x: 574797, y: 530161, z: 2896 }; // Camelot Hills, region 1
 
@@ -78,6 +79,26 @@ describe('DaocClient regionChangeRequest', () => {
             expect(await client.execute({ type: 'regionChangeRequest', zonePointId })).toMatchObject({ success: false, reason: 'bad_args' });
         }
         expect(sent).toEqual([]);
+    });
+});
+
+describe('DaocClient delve', () => {
+    const ring = { slot: 40, name: 'Arcane Ring' } as never;
+
+    test('asks only about a slot holding something: an empty one gets no reply', async () => {
+        const { client, s, sent } = playingClient();
+        expect(await client.execute({ type: 'delve', slot: 40 })).toMatchObject({ success: false, reason: 'empty_slot' });
+        expect(sent).toEqual([]);
+        s.model.items.set(40, ring);
+        expect((await client.execute({ type: 'delve', slot: 40 })).success).toBe(true);
+        expect(sent).toEqual([ClientOp.DetailRequest]);
+    });
+
+    test('the answer reaches the snapshot, blank lines included', () => {
+        const { client, s } = playingClient();
+        const w = new PacketWriter().u8(0).u8(0).pascal('Arcane Ring').u8(1).pascal(' ').u8(2).pascal('Magical Bonuses:').u8(3).pascal('4.67 | Intelligence: 7 pts').u8(0);
+        s.model.handle(ServerOp.DetailWindow, w.toBytes());
+        expect(client.collectState().textWindow).toMatchObject({ caption: 'Arcane Ring', lines: [' ', 'Magical Bonuses:', '4.67 | Intelligence: 7 pts'] });
     });
 });
 

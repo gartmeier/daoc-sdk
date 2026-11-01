@@ -1080,6 +1080,14 @@ export class BotSDK {
         return this.sendAction({ type: 'dropItem', slot, reason: 'SDK' });
     }
 
+    /**
+     * Ask the server to delve the item in a slot; the answer is the next text window (getTextWindow),
+     * and an empty slot gets none. bot.delveItem waits for it and parses the bonuses.
+     */
+    async sendDelve(slot: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'delve', slot, reason: 'SDK' });
+    }
+
     /** Destroy an item. */
     async sendDestroyItem(slot: number): Promise<ActionResult> {
         return this.sendAction({ type: 'destroyItem', slot, reason: 'SDK' });

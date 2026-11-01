@@ -112,6 +112,7 @@ A new call for the same bot cancels the one still running. Every result includes
 | `openMerchant` / `buyItem` / `sellItem` / `sellItems(m, filter)` | Shops (sell price is 50 % of value) |
 | `trainSpec(trainer, spec, levels)` | Spend specialization points |
 | `equipItem` / `unequipItem` / `useItem` / `dropItem` / `destroyItem` | Items |
+| `delveItem(item \| name \| slot)` | An item's real bonuses: `lines`, `bonuses`, `unknown`; reason `empty_slot`, `not_found`, `no_response` (learnings/looting.md) |
 | `invite` / `acceptGroupInvite` / `groupSay` / `follow` / `say` / `send` | Social |
 
 From `sdk.*`, the common calls are `getState`, `getPlayer`, `getInventory`, `findNearbyNpc(s)`, `getNearbyLoot`, `getSkills`, `findSpell`, `getMerchant`, `getGroup`, `getChat`, `waitForChat`, `waitForCondition`. The full list is in sdk/API.md.

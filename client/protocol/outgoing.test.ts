@@ -176,6 +176,7 @@ describe('item / merchant / trainer / ui encoders', () => {
 
     test('0x80 DestroyItem: 4 skipped, u16 slot', () => {
         expect(H(o.encodeDestroyItem(45))).toBe('00 00 00 00 00 2D');
+        expect(H(o.encodeDetailRequest(1, 0, 40))).toBe('00 01 00 00 00 00 00 28');
     });
 
     test('0x78 Buy: x, y, id, itemSlot, count, menuId', () => {

@@ -3,7 +3,8 @@
 // server would. The merchant data is real too.
 import { describe, expect, test } from 'bun:test';
 import type { InventoryItem, PlayerState, Realm } from '../types';
-import { accessorySlots, buyCloak, CLOAK_RESERVE, CLOAK_TOWN_RANGE, holdsCloak, nearestCloakSeller, nextAccessory, wearAccessories, type GearMember } from './gear';
+import { parseDelve } from '../delve';
+import { accessorySlots, armorUpgradeGain, buyCloak, CLOAK_RESERVE, CLOAK_TOWN_RANGE, GearDelves, holdsCloak, MAX_DELVES, nearestCloakSeller, nextAccessory, upgradeGains, wearAccessories, type GearMember } from './gear';
 
 const MAGICAL = 41;
 const slotsOf = (name: string, objectType = MAGICAL) => accessorySlots({ name, objectType });
@@ -89,6 +90,44 @@ describe('nextAccessory', () => {
     });
 });
 
+describe('nextAccessory by score', () => {
+    const by = (scores: Record<string, number | null>) => (i: InventoryItem) => scores[i.name] ?? null;
+    const cloakA = acc(40, 'Edgebender Cloak', 5), cloakB = acc(26, 'Heatbender Mantle', 30);
+
+    test('a lower level with a higher score wins; an equal score does not replace', () => {
+        expect(nextAccessory([cloakA], [cloakB], by({ 'Edgebender Cloak': 7, 'Heatbender Mantle': 2 }))).toMatchObject({ slot: 26, replaces: { name: 'Heatbender Mantle' } });
+        expect(nextAccessory([cloakA], [cloakB], by({ 'Edgebender Cloak': 2, 'Heatbender Mantle': 2 }))).toBeNull();
+        expect(nextAccessory([acc(40, 'Edgebender Cloak', 50)], [cloakB], by({ 'Edgebender Cloak': 1, 'Heatbender Mantle': 2 }))).toBeNull();
+    });
+
+    test('the best score goes first', () => {
+        expect(nextAccessory([cloakA, acc(41, 'Heatbender Mantle', 30)], [], by({ 'Edgebender Cloak': 7, 'Heatbender Mantle': 2 }))).toMatchObject({ item: { name: 'Edgebender Cloak' } });
+    });
+
+    test('an empty slot takes a useless item, not a net negative', () => {
+        expect(nextAccessory([cloakA], [], by({ 'Edgebender Cloak': 0 }))).toMatchObject({ slot: 26 });
+        expect(nextAccessory([cloakA], [], by({ 'Edgebender Cloak': -3 }))).toBeNull();
+        expect(nextAccessory([cloakA, acc(41, 'Heatbender Mantle', 1)], [], by({ 'Edgebender Cloak': -3, 'Heatbender Mantle': 0 }))).toMatchObject({ item: { name: 'Heatbender Mantle' } });
+    });
+
+    test('a plain cloak scores 0: a looted one with something useful replaces it, a useless one does not', () => {
+        const plain = acc(26, 'cloak', 0);
+        expect(nextAccessory([cloakA], [plain], by({ 'Edgebender Cloak': 4, cloak: 0 }))).toMatchObject({ slot: 26 });
+        expect(nextAccessory([cloakA], [plain], by({ 'Edgebender Cloak': 0, cloak: 0 }))).toBeNull();
+    });
+
+    test('of a pair, the lower score goes, whatever the levels', () => {
+        const worn = [acc(35, 'a', 30), acc(36, 'b', 5)];
+        expect(nextAccessory([acc(40, 'Empowering Ring', 10)], worn, by({ 'Empowering Ring': 5, a: 1, b: 9 }))).toMatchObject({ slot: 35, replaces: { name: 'a' } });
+    });
+
+    test('without a score on either side, level decides that comparison', () => {
+        expect(nextAccessory([acc(40, 'Edgebender Cloak', 40)], [cloakB], by({ 'Heatbender Mantle': 100 }))).toMatchObject({ slot: 26 });
+        expect(nextAccessory([cloakA], [cloakB], by({ 'Edgebender Cloak': 100 }))).toBeNull();
+        expect(nextAccessory([acc(40, 'Edgebender Cloak', 40)], [], by({}))).toMatchObject({ slot: 26 });
+    });
+});
+
 // ── Fake member ─────────────────────────────────────────────────────────────
 
 const CAMELOT_LANDING = { regionId: 10, x: 36039, y: 30870 };
@@ -97,6 +136,8 @@ const FORT_ATLA = { regionId: 100, x: 749218, y: 817547 };
 const CONNLA = { regionId: 200, x: 295765, y: 642599 };
 
 type Result = { success: boolean; message: string; reason?: string; spent?: number };
+/** An item with its own delve lines, for two of one name: they move with the item. */
+type Delved = InventoryItem & { delve?: string[] };
 interface Fake {
     inventory: InventoryItem[];
     equipment: InventoryItem[];
@@ -117,6 +158,9 @@ interface FakeOptions {
     walk?: Result;
     /** Whose member shape: a party's `bot` or a group's `actions`. */
     shape?: 'bot' | 'actions';
+    /** A member that can delve: an item's delve lines by name (a missing one has no answer), as this class. */
+    delve?: Record<string, string[]>;
+    className?: string;
 }
 
 function fake(o: FakeOptions = {}): Fake {
@@ -124,7 +168,7 @@ function fake(o: FakeOptions = {}): Fake {
     const f: Fake = {
         inventory: o.inventory ?? [],
         equipment: o.equipment ?? [],
-        player: { name: 'Galahad', level: 20, realm: o.realm ?? 'albion', className: 'Sorcerer', isDead: false, money: { totalCopper: o.copper ?? 10_000 }, ...where } as unknown as PlayerState,
+        player: { name: 'Galahad', level: 20, realm: o.realm ?? 'albion', className: o.className ?? 'Sorcerer', isDead: false, money: { totalCopper: o.copper ?? 10_000 }, ...where } as unknown as PlayerState,
         calls: [],
         member: null!,
     };
@@ -144,6 +188,15 @@ function fake(o: FakeOptions = {}): Fake {
         },
         closeMerchant: async () => { f.calls.push('close'); return { success: true, message: 'ok' }; },
         walkTo: async (x: number, y: number): Promise<Result> => { f.calls.push(`walk ${x},${y}`); return o.walk ?? { success: true, message: 'ok' }; },
+        ...(o.delve ? {
+            delveItem: async (item: InventoryItem) => {
+                f.calls.push(`delve ${item.slot} ${item.name}`);
+                const lines = (item as Delved).delve ?? o.delve![item.name];
+                return lines
+                    ? { success: true, message: 'ok', item, lines, ...parseDelve(lines) }
+                    : { success: false, message: 'No delve answer', reason: 'no_response', item, lines: [], ...parseDelve([]) };
+            },
+        } : {}),
     };
     const sdk = { getEquipment: () => f.equipment, getInventory: () => f.inventory, getPlayer: () => f.player };
     f.member = (o.shape === 'bot' ? { sdk, bot: actions } : { sdk, actions }) as unknown as GearMember;
@@ -190,6 +243,201 @@ describe('wearAccessories', () => {
     test("a party member's `bot` works like a group member's `actions`", async () => {
         const f = fake({ inventory: [acc(40, 'cloak', 0)], shape: 'bot' });
         expect(await wearAccessories(f.member)).toEqual(['wear cloak (was nothing)']);
+    });
+});
+
+describe('wearAccessories with delve', () => {
+    const lines = (...bonuses: string[]) => ['Magical Bonuses:', ...bonuses, ' ', 'Total utility: 0.00', ' '];
+    const plain = lines();
+    const INT = '4.67 | Intelligence: 7 pts', STR = '4.67 | Strength: 7 pts', HITS = (n: number) => `1.00 | Hits: ${n} pts`;
+
+    test('a caster passes on the higher-level strength item for its own stat', async () => {
+        const f = fake({
+            inventory: [acc(40, 'Mighty Bracer', 30), acc(41, 'Arcane Ring', 10)],
+            equipment: [acc(33, 'plain bracer', 1), acc(34, 'Heatbender Bracelet', 25), acc(35, 'Sundering Wrap', 5), acc(36, 'Withering Wrap', 5)],
+            delve: { 'Mighty Bracer': lines(STR), 'plain bracer': plain, 'Heatbender Bracelet': lines('6.00 | Heat: 3 %'), 'Arcane Ring': lines(INT), 'Sundering Wrap': plain, 'Withering Wrap': lines('5.00 | Hits: 20 pts') },
+        });
+        expect(await wearAccessories(f.member)).toEqual(['wear Arcane Ring (was Sundering Wrap, score 7 over 0)']);
+        expect(f.equipment.find(e => e.slot === 35)?.name).toBe('Arcane Ring');
+        expect(f.inventory.map(i => i.name)).toContain('Mighty Bracer');
+    });
+
+    test('a tank takes the same strength item', async () => {
+        const f = fake({
+            className: 'Armsman',
+            inventory: [acc(40, 'Mighty Bracer', 1)],
+            equipment: [acc(33, 'plain bracer', 30), acc(34, 'Arcane Bracer', 30)],
+            delve: { 'Mighty Bracer': lines(STR), 'plain bracer': plain, 'Arcane Bracer': lines(INT) },
+        });
+        await wearAccessories(f.member);
+        expect(f.calls.at(-1)).toBe('equip Mighty Bracer -> 33');
+    });
+
+    test('a plain cloak goes for a looted cloak with something useful, a useless one stays out', async () => {
+        const useful = fake({ inventory: [acc(40, 'Edgebender Cloak', 3)], equipment: [acc(26, 'cloak', 0)], delve: { 'Edgebender Cloak': lines('2.00 | Slash: 1 %'), cloak: plain } });
+        expect(await wearAccessories(useful.member)).toEqual(['wear Edgebender Cloak (was cloak, score 2 over 0)']);
+        const useless = fake({ inventory: [acc(40, 'Mighty Cloak', 30)], equipment: [acc(26, 'cloak', 0)], delve: { 'Mighty Cloak': lines(STR), cloak: plain } });
+        expect(await wearAccessories(useless.member)).toEqual([]);
+        expect(useless.equipment[0]!.name).toBe('cloak');
+    });
+
+    test('an empty slot is filled with what does no harm, not with a net negative', async () => {
+        const f = fake({ inventory: [acc(40, 'Mighty Cloak', 3), acc(41, 'Cursed Belt', 3)], delve: { 'Mighty Cloak': lines(STR), 'Cursed Belt': lines('-3.33 | Intelligence: -5 pts') } });
+        expect(await wearAccessories(f.member)).toEqual(['wear Mighty Cloak (was nothing, score 0)']);
+        expect(f.inventory.map(i => i.name)).toEqual(['Cursed Belt']);
+    });
+
+    test('a failed delve falls back to level for that comparison, and says so', async () => {
+        const f = fake({ inventory: [acc(40, 'Edgebender Cloak', 30)], equipment: [acc(26, 'Heatbender Mantle', 12)], delve: { 'Heatbender Mantle': lines(INT, INT) } });
+        expect(await wearAccessories(f.member)).toEqual([
+            'delve Edgebender Cloak: no_response No delve answer; old rule for it',
+            'wear Edgebender Cloak (was Heatbender Mantle)',
+        ]);
+        const lower = fake({ inventory: [acc(40, 'Edgebender Cloak', 5)], equipment: [acc(26, 'Heatbender Mantle', 12)], delve: {} });
+        expect((await wearAccessories(lower.member)).filter(l => l.startsWith('wear'))).toEqual([]);
+    });
+
+    test('a delve problem can\'t strip or swap in circles: what came off stays off in this call', async () => {
+        // Empowering has no delve, so level decides against it: Withering beats Battering by score,
+        // Empowering beats Withering by level, Battering beats Empowering by level.
+        const f = fake({
+            inventory: [acc(40, 'Battering Cloak', 20), acc(41, 'Empowering Cloak', 15)],
+            equipment: [acc(26, 'Withering Cloak', 10)],
+            delve: { 'Withering Cloak': lines(INT), 'Battering Cloak': lines('5.00 | Hits: 20 pts') },
+        });
+        await wearAccessories(f.member);
+        expect(f.calls.filter(c => c.startsWith('equip')).length).toBeLessThanOrEqual(2);
+        expect(f.equipment).toHaveLength(1);
+        expect(f.inventory).toHaveLength(2);
+    });
+
+    test('three failures stop the delving for the call', async () => {
+        const f = fake({ inventory: [40, 41, 42, 43, 44, 45].map(s => acc(s, `Ring${s} Ring`, s)), delve: {} });
+        const log = await wearAccessories(f.member);
+        expect(f.calls.filter(c => c.startsWith('delve'))).toHaveLength(3);
+        expect(log).toContain('no more delves: 3 failures in a row');
+        expect(f.equipment.map(e => e.level).sort()).toEqual([44, 45]);
+    });
+
+    test('each item is delved once per call however often it is compared; nothing to wear, nothing delved', async () => {
+        const f = fake({
+            inventory: [acc(40, 'Empowering Ring', 15), acc(41, 'Withering Wrap', 15)],
+            equipment: [acc(35, 'a ring', 1), acc(36, 'b ring', 1)],
+            delve: { 'Empowering Ring': lines(HITS(2)), 'Withering Wrap': lines(HITS(4)), 'a ring': plain, 'b ring': plain },
+        });
+        await wearAccessories(f.member);
+        const delves = f.calls.filter(c => c.startsWith('delve'));
+        expect(new Set(delves).size).toBe(delves.length);
+        const none = fake({ inventory: [acc(40, 'Arachite Potion', 30)], equipment: [acc(26, 'cloak', 0)], delve: {} });
+        await wearAccessories(none.member);
+        expect(none.calls).toEqual([]);
+    });
+
+    test('two of one name: the better one on, its score goes with it, and the next swap takes the right ring', async () => {
+        const int = (n: number) => lines(`1.00 | Intelligence: ${n} pts`);
+        const ring = (slot: number, name: string, n: number): Delved => ({ ...acc(slot, name, 10), delve: int(n) });
+        const f = fake({
+            inventory: [ring(40, 'Arcane Ring', 12), ring(41, 'Withering Wrap', 8)],
+            equipment: [ring(35, 'Arcane Ring', 4), ring(36, 'Sundering Ring', 5)],
+            delve: {},
+        });
+        expect(await wearAccessories(f.member)).toEqual([
+            'wear Arcane Ring (was Arcane Ring, score 12 over 4)',
+            'wear Withering Wrap (was Sundering Ring, score 8 over 5)',
+        ]);
+        expect(f.equipment.map(e => [e.slot, e.name, (e as Delved).delve])).toEqual([[35, 'Arcane Ring', int(12)], [36, 'Withering Wrap', int(8)]]);
+        expect(f.calls.filter(c => c.startsWith('delve'))).toHaveLength(4);
+    });
+
+    test('an empty single slot needs no delve of anything worn', async () => {
+        const f = fake({ inventory: [acc(40, 'Edgebender Cloak', 3)], equipment: [acc(32, 'Icebender Belt', 3)], delve: { 'Edgebender Cloak': plain, 'Icebender Belt': plain } });
+        await wearAccessories(f.member);
+        expect(f.calls.filter(c => c.includes('Belt'))).toEqual([]);
+    });
+
+    test('an unknown class falls back to level, in one line', async () => {
+        const f = fake({ className: 'Bogus', inventory: [acc(40, 'Edgebender Cloak', 3)], delve: {} });
+        expect(await wearAccessories(f.member)).toEqual(['no more delves: no class data for Bogus', 'wear Edgebender Cloak (was nothing)']);
+    });
+});
+
+describe('GearDelves', () => {
+    test('stops at the limit, and old rules take the rest', async () => {
+        const items = Array.from({ length: MAX_DELVES + 3 }, (_, n) => acc(40 + n, `item ${n}`, 1));
+        const f = fake({ delve: Object.fromEntries(items.map(i => [i.name, ['Total utility: 0.00']])) });
+        const d = new GearDelves(f.member);
+        const scores = await Promise.all(items.map(i => d.score(i)));
+        expect(scores.slice(0, MAX_DELVES).every(s => s === 0)).toBe(true);
+        expect(scores.slice(MAX_DELVES)).toEqual([null, null, null]);
+        expect(d.flush()).toEqual([`no more delves: ${MAX_DELVES} this pass`]);
+    });
+
+    test('a member with no delveItem scores nothing and says nothing', async () => {
+        const d = new GearDelves(fake().member);
+        expect(await d.score(acc(40, 'x', 1))).toBeNull();
+        expect(d.flush()).toEqual([]);
+    });
+});
+
+describe('armour with delve', () => {
+    const armor = (slot: number, name: string, af: number, abs = 0, quality = 100) => ({ slot, name, level: 20, count: 1, objectType: abs ? 36 : 32, value1: af, value2: abs, quality }) as InventoryItem;
+    const lines = (...b: string[]) => ['Magical Bonuses:', ...b, ' '];
+    const weaponScore = (i: InventoryItem) => i.value1;
+
+    test('a caster takes a little less AF for its stat, not a lot', async () => {
+        const f = fake({ delve: { good: lines('10.00 | Intelligence: 15 pts'), cur: ['Total utility: 0.00'] } });
+        const d = new GearDelves(f.member);
+        const cur = armor(25, 'cur', 20);
+        expect(await armorUpgradeGain(d, armor(40, 'good', 19), cur, 20)).toBeCloseTo(-1 + 3);
+        expect(await armorUpgradeGain(d, armor(41, 'good', 16), cur, 20)).toBeCloseTo(-4);
+    });
+
+    test('a piece bonuses can\'t save is not delved', async () => {
+        const f = fake({ delve: {} });
+        const gain = await armorUpgradeGain(new GearDelves(f.member), armor(40, 'bad', 5), armor(25, 'cur', 20), 20);
+        expect(gain).toBeCloseTo(-15);
+        expect(f.calls).toEqual([]);
+    });
+
+    test('a better piece still can\'t be delved away from: the AF rule stands when the delve fails', async () => {
+        const f = fake({ delve: {} });
+        const d = new GearDelves(f.member);
+        expect(await armorUpgradeGain(d, armor(40, 'new', 20), armor(25, 'cur', 15), 20)).toBeCloseTo(5);
+        expect(d.flush()).toHaveLength(2);
+    });
+
+    test('an empty slot delves only the candidate, and takes it', async () => {
+        const f = fake({ delve: { new: lines('-3.33 | Intelligence: -5 pts') } });
+        const gain = await armorUpgradeGain(new GearDelves(f.member), armor(40, 'new', 20), undefined, 20);
+        expect(gain).toBeGreaterThan(0.5);
+        expect(f.calls).toEqual(['delve 40 new']);
+    });
+
+    test('two of one name: after moved(), the next piece compares with what is worn now, undelved again', async () => {
+        const int = (n: number) => lines(`1.00 | Intelligence: ${n} pts`);
+        const sleeves = (slot: number, name: string, n: number): Delved => ({ ...armor(slot, name, 20), delve: int(n) });
+        const worn = sleeves(28, 'Studded Sleeves', 4), better = sleeves(40, 'Studded Sleeves', 16), third = sleeves(41, 'Mail Sleeves', 10);
+        const f = fake({ delve: {} });
+        const d = new GearDelves(f.member);
+        expect(await armorUpgradeGain(d, better, worn, 20)).toBeCloseTo(3);
+        expect(await armorUpgradeGain(d, third, worn, 20)).toBeCloseTo(1.5);
+        d.moved(better, 28, worn);
+        const nowWorn = { ...better, slot: 28 }, cameOff = { ...worn, slot: 40 };
+        expect(d.known(nowWorn)).toBe(16);
+        expect(d.known(cameOff)).toBe(4);
+        expect(await armorUpgradeGain(d, third, nowWorn, 20)).toBeCloseTo(-1.5);
+        expect(f.calls).toEqual(['delve 40 Studded Sleeves', 'delve 28 Studded Sleeves', 'delve 41 Mail Sleeves']);
+    });
+
+    test('weapons and shields stay on the caller\'s score, undelved', async () => {
+        const f = fake({ delve: {} });
+        const weapon = { ...armor(40, 'sword', 30), objectType: 3 }, shield = { ...armor(41, 'shield', 2), objectType: 42 };
+        const rows = await upgradeGains(new GearDelves(f.member), [
+            { item: weapon, cur: { ...armor(10, 'old sword', 10), objectType: 3 } },
+            { item: shield },
+        ], 20, weaponScore);
+        expect(rows.map(r => r.gain)).toEqual([20, 2]);
+        expect(f.calls).toEqual([]);
     });
 });
 

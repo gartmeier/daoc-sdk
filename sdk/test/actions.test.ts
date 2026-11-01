@@ -1335,6 +1335,76 @@ describe('items', () => {
     }, 15_000);
 });
 
+describe('delveItem', () => {
+    const answer = (world: FakeWorld, caption: string, lines: string[]) => setTimeout(() => {
+        world.state.textWindow = { caption, lines, receivedAt: Date.now() };
+    }, 15);
+    const delved = ['Usable by:', '- Paladin', ' ', 'Magical Bonuses:', '4.67 | Strength: 7 pts', '6.00 | Heat: 3 %', ' ', 'Total utility: 10.67', ' ', ' ', 'Bonus Level: 12'];
+
+    test('sends the slot and returns the parsed answer', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = (_a, world) => { answer(world, 'minor healing potion', delved); };
+        const r = await bot.delveItem('potion');
+        expect(r).toMatchObject({ success: true, item: { slot: 40 }, lines: delved, bonusLevel: 12, unknown: [] });
+        expect(r.bonuses.map(b => [b.category, b.value])).toEqual([['stat', 7], ['resist', 3]]);
+        expect(w.sentOf('delve').map(a => a.slot)).toEqual([40]);
+    });
+
+    test('takes an item, a slot or a name, in the backpack or worn', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = (a, world) => {
+            if (a.type !== 'delve') return;
+            answer(world, [...world.state.inventory, ...world.state.equipment].find(i => i.slot === a.slot)!.name, ['Total utility: 0.00']);
+        };
+        expect((await bot.delveItem(w.state.inventory[0]!)).item?.slot).toBe(40);
+        expect((await bot.delveItem(10)).item?.slot).toBe(10);
+        expect((await bot.delveItem(/training sw/)).item?.slot).toBe(10);
+    });
+
+    test('an empty slot and a name nothing matches have their own reasons and send nothing', async () => {
+        const { w, bot } = world();
+        expect(await bot.delveItem(79)).toMatchObject({ success: false, reason: 'empty_slot', item: null, bonuses: [], lines: [] });
+        expect(await bot.delveItem(30)).toMatchObject({ success: false, reason: 'empty_slot' });
+        expect(await bot.delveItem('no such thing')).toMatchObject({ success: false, reason: 'not_found' });
+        expect(w.sentOf('delve')).toEqual([]);
+    });
+
+    test('no answer is a reason, not a hang', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = () => {};
+        expect(await bot.delveItem('potion', { timeout: 60 })).toMatchObject({ success: false, reason: 'no_response', item: { slot: 40 }, lines: [] });
+    });
+
+    test('a window about something else is not the answer: an NPC text, or the last delve of another item', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = (_a, world) => { answer(world, 'Player Statistics', ['4.67 | Strength: 7 pts']); };
+        expect((await bot.delveItem('potion', { timeout: 60 })).reason).toBe('no_response');
+    });
+
+    test('a window from before the request is not the answer, even of the same name', async () => {
+        const { w, bot } = world({ textWindow: { caption: 'minor healing potion', lines: delved, receivedAt: Date.now() - 1000 } });
+        w.handlers.delve = () => {};
+        expect((await bot.delveItem('potion', { timeout: 60 })).reason).toBe('no_response');
+        w.handlers.delve = (_a, world) => { answer(world, 'minor healing potion', ['Total utility: 0.00']); };
+        expect(await bot.delveItem('potion')).toMatchObject({ success: true, bonuses: [] });
+    });
+
+    test('another window before the answer is waited out', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = (_a, world) => {
+            answer(world, 'Some NPC', ['text']);
+            setTimeout(() => { world.state.textWindow = { caption: 'minor healing potion', lines: delved, receivedAt: Date.now() + 1 }; }, 60);
+        };
+        expect((await bot.delveItem('potion')).lines).toEqual(delved);
+    });
+
+    test('a client refusal passes through: one too old to know delve answers unknown_action', async () => {
+        const { w, bot } = world();
+        w.handlers.delve = () => ({ success: false, message: "unknown action type 'delve'", reason: 'unknown_action', phase: 'validation' });
+        expect(await bot.delveItem('potion')).toMatchObject({ success: false, reason: 'unknown_action', item: { slot: 40 }, bonuses: [] });
+    });
+});
+
 describe('merchants', () => {
     const merchant = makeNpc({ objectId: 203, name: 'Lady Grynoch', role: 'merchant', realm: 'albion', isPeaceful: true, x: 560100, y: 511000 });
     const items = [

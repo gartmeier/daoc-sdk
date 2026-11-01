@@ -76,6 +76,7 @@
 | `async dropItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Drop a backpack item on the ground. |
 | `async destroyItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Destroy a backpack item. |
 | `async useItem(target: InventoryItem \| NamePattern \| number, options: { useType?: number } = {}): Promise<ItemResult>` | Use (right-click) a backpack or equipped item: potions, charged items. A number is a backpack (40-79) or equipment (10-37) slot. Success needs evidence about this item: a message naming it ("You attempt to use <item>.", GamePlayer.cs:6564), its stack count changing, or a new effect, and no refusal in the following ~400 ms. |
+| `async delveItem(target: InventoryItem \| NamePattern \| number, options: { timeout?: number } = {}): Promise<DelveResult>` | Read an item's real bonuses: a backpack or equipped item, by item, name or slot. Reason 'empty_slot' for an empty slot asked by number, 'not_found' for a name nothing matches, 'no_response' when no window named after the item came within `timeout`: only the caption says a 0xC4 window is ours (NPC text and commands send them too, DetailDisplayHandler.cs:114), and the snapshot holds only the latest one, so another window landing right after it loses the answer. |
 | `findInventoryItem(pattern: NamePattern): InventoryItem \| null` | Backpack item by name (shortest match wins). |
 | `async buyItem(merchant: NpcTarget, item: NamePattern \| { page: number; slot: number }, count: number = 1): Promise<BuyResult>` | Buy `count` of an item (name or page/slot) and observe the backpack and purse. |
 | `async sellItem(merchant: NpcTarget, item: InventoryItem \| NamePattern \| number): Promise<SellResult>` | Sell one backpack item (whole stack) to a merchant and observe the purse. |
@@ -230,6 +231,7 @@
 | `async sendUseItem(slot: number, useType?: number): Promise<ActionResult>` | Use an item in a slot (potions, charged items). |
 | `async sendMoveItem(fromSlot: number, toSlot: number, count?: number): Promise<ActionResult>` | Move an item between slots (equip, unequip, stack split, vault). |
 | `async sendDropItem(slot: number): Promise<ActionResult>` | Drop an item on the ground. |
+| `async sendDelve(slot: number): Promise<ActionResult>` | Ask the server to delve the item in a slot; the answer is the next text window (getTextWindow), and an empty slot gets none. bot.delveItem waits for it and parses the bonuses. |
 | `async sendDestroyItem(slot: number): Promise<ActionResult>` | Destroy an item. |
 | `async sendBuy(page: number, slot: number, count: number = 1): Promise<ActionResult>` | Buy from the open merchant by page/slot (see getMerchant). |
 | `async sendSell(slot: number): Promise<ActionResult>` | Sell a backpack item to the open merchant. |
@@ -594,6 +596,43 @@ interface DialogBox {
   type: number;
   text: string;
   receivedAt: number;
+}
+```
+
+### ItemBonus
+
+One bonus line of an item delve (sdk/delve.ts).
+
+```typescript
+interface ItemBonus {
+  category: BonusCategory;
+  /** The server's name for it: "Strength", "Body Magic Focus". */
+  name: string;
+  /** Negative for a penalty. */
+  value: number;
+  unit: 'pts' | '%' | 'lvls' | null;
+  /** category 'stat'. */
+  stat?: 'STR' | 'DEX' | 'CON' | 'QUI' | 'INT' | 'PIE' | 'EMP' | 'CHR' | 'ACU';
+  /** category 'skill' and 'focus': the specialization's name in classes.json, null when no class has one. */
+  spec?: string | null;
+  /** category 'skill': its ePropertyType group; 'skillGroup': the group it raises, null for "All Skills". */
+  group?: SkillGroup | null;
+  /** The line as the server sent it. */
+  text: string;
+}
+```
+
+### ParsedDelve
+
+```typescript
+interface ParsedDelve {
+  bonuses: ItemBonus[];
+  /** Non-blank lines that are neither a bonus nor known layout: proc spell text, descriptions, new formats. */
+  unknown: string[];
+  /** "Bonus Level: N" (GameInventoryItem.cs:478-482). Nothing enforces it: only the delve and spellcrafting read it. */
+  bonusLevel: number | null;
+  /** "Level Requirement: N Level" (:564). It gates the item's spells (GamePlayer.cs:7045), not its bonuses. */
+  levelRequirement: number | null;
 }
 ```
 
@@ -1169,6 +1208,23 @@ interface RespawnResult {
 interface ItemResult {
   item: InventoryItem | null;
   messages: GameMessage[];
+}
+```
+
+### DelveResult
+
+```typescript
+interface DelveResult {
+  item: InventoryItem | null;
+  /** The delve window as the server sent it, blank lines included. Empty unless it answered. */
+  lines: string[];
+  bonuses: ItemBonus[];
+  /** Lines that are neither a bonus nor known layout: spell text, descriptions, new formats. */
+  unknown: string[];
+  /** "Bonus Level: N". Nothing enforces it. */
+  bonusLevel: number | null;
+  /** "Level Requirement: N Level". It gates the item's spells, not its bonuses. */
+  levelRequirement: number | null;
 }
 ```
 

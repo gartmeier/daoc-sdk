@@ -32,6 +32,7 @@ export const ClientOp = {
     CheckLosRequest: 0xD0,
     WorldInitRequest: 0xD4,
     CreatePlayerRequest: 0xD5,
+    DetailRequest: 0xD8,
     PlayerMoveItem: 0xDD,
     PlayerInitRequest: 0xE8,
     PlayerGroundTarget: 0xEC,
