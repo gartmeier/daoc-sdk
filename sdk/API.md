@@ -30,13 +30,15 @@
 | Signature | Description |
 |---|---|
 | `async target(target: ObjectTarget \| null): Promise<TargetResult>` | Select a target (NPC, player, object, or our own objectId) and observe it in player.targetObjectId. |
-| `async attack(npc: NpcTarget, options: { timeout?: number } = {}): Promise<AttackResult>` | Approach, target, face and switch melee on; observed via attack mode or a swing. |
-| `async killNpc(target: NpcTarget, options: KillOptions = {}): Promise<KillResult>` | Fight an NPC to the death: walk into melee range (adopting its z), face, target, attack, re-approach when it moves, use styles, and wait for the death (remove packet / 0 HP). Reports XP, RP, money, items and duration. |
-| `async castSpell(spell: NamePattern \| Spell, target?: ObjectTarget \| null, options: CastOptions = {}): Promise<CastResult>` | Cast a spell (name, RegExp or Spell) on a target, or on the current target when none is given. Selects the target every time (the server drops it on death without telling the client) and re-selects and retries once on "You must select a target" while that target is still there (CastOptions.retryNoTarget). Observes the cast start ("You begin casting", cast animation) and completion ("You cast a <spell> spell!", or an effect/damage/resist once the cast time is up). Reason 'died' when we die mid-cast; 'dead' when already dead before casting. |
+| `async attack(target: LivingTarget, options: { timeout?: number } = {}): Promise<AttackResult>` | Approach, target, face and switch melee on against an NPC or a player (enemy players are named by race: pass the objectId); observed via attack mode or a swing. Reason 'immune' (with retryAfterMs) when PvP immunity, ours or the target's, refuses the swing, and 'crowd_controlled' (with retryAfterMs) when we are mezzed or stunned. |
+| `async killNpc(target: NpcTarget, options: KillOptions = {}): Promise<KillResult>` | Fight an NPC to the death: walk into melee range (adopting its z), face, target, attack, re-approach when it moves, use styles, and wait for the death (remove packet / 0 HP). Reports XP, RP, money, items and duration. Reason 'crowd_controlled' (with retryAfterMs) when a mezz or stun refuses our swing. |
+| `async killPlayer(target: PlayerTarget, options: KillPlayerOptions = {}): Promise<KillPlayerResult>` | Fight an enemy player to the death, like killNpc: walk into melee range (adopting its z), face, target, attack, chase while it moves (players are not extrapolated: we follow the latest position) and use styles. Enemy players are named by race, so pass the objectId (or the NearbyPlayer); a name is only a fallback. Success on its death: the death event or isDead, never 0 % health, which is truncated (GameLiving.cs:2621): a living player with a few hit points reads 0 %. Reasons: 'not_found', 'already_dead', 'not_attackable' (our realm), 'immune' (PvP immunity, ours or its; retryAfterMs), 'crowd_controlled' (we are mezzed or stunned; retryAfterMs), 'target_lost' (left view alive: stealth, range), 'out_of_reach' (beyond maxChaseDistance), 'refused', 'died', 'timeout'. Does not wait for XP after the kill: rpGained counts the realm points that arrived by then. |
+| `async castSpell(spell: NamePattern \| Spell, target?: ObjectTarget \| null, options: CastOptions = {}): Promise<CastResult>` | Cast a spell (name, RegExp or Spell) on a target, or on the current target when none is given. Selects the target every time (the server drops it on death without telling the client) and re-selects and retries once on "You must select a target" while that target is still there (CastOptions.retryNoTarget). Observes the cast start ("You begin casting", cast animation) and completion ("You cast a <spell> spell!", or an effect/damage/resist once the cast time is up). Reason 'died' when we die mid-cast; 'dead' when already dead before casting; 'crowd_controlled' (with retryAfterMs) when we are mezzed, stunned or silenced. A cast whose target is immune to its effect succeeds with effectImmune. |
 | `async useStyle(name: NamePattern): Promise<SkillUseResult>` | Queue a combat style for the next swing; observed by "You prepare to perform a ...". |
 | `findKillableNpc(options: FindKillableOptions = {}): NearbyNpc \| null` | Best monster to fight nearby: killable, not engaged with someone else, within the con (or level-difference) window, nearest first. |
 | `findKillableNpcs(options: FindKillableOptions = {}): NearbyNpc[]` | All candidates findKillableNpc considers, best first. |
 | `getAttackers(): NearbyNpc[]` | NPCs currently targeting us, nearest first. |
+| `getPlayerAttackers(windowMs: number = PLAYER_AIM_MS): NearbyPlayer[]` | Enemy-realm players whose melee swing or spell effect landed on us within `windowMs` (default 6 s, longer than a two-handed weapon's or a bow's swing), nearest first. The server never sends a player's target, so these combat events are the evidence. |
 
 ### Other
 
@@ -44,7 +46,7 @@
 |---|---|
 | `async interactWith(target: ObjectTarget, options: InteractOptions = {}): Promise<InteractResult>` | Walk within ~150 of an NPC/object and interact (right-click). Success needs a response: merchant/trainer window, NPC dialog, dialog box, text window or a message from the NPC. |
 | `async useAbility(name: NamePattern): Promise<SkillUseResult>` | Use an ability (e.g. Sprint); success when the server answers without a refusal or an effect appears. |
-| `isInCombat(): boolean` | In combat: attack mode on, recently hit, or an NPC targets us. |
+| `isInCombat(): boolean` | In combat: attack mode on, recently hit, an NPC targets us or an enemy player hit us (getPlayerAttackers). |
 | `getSpellInfo(spell: NamePattern \| Spell): SpellInfo \| null` | Static data for a known spell (type, target, range, cast time, power), from the DB dump; null when unknown. |
 | `isDead(): boolean` | Our character is dead. |
 | `freeBackpackSlots(): number` | Free backpack slots (of 40). |
@@ -166,6 +168,7 @@
 | `findNearbyNpcs(pattern: NamePattern = /.*/, options: FindNpcOptions = {}): NearbyNpc[]` | All NPCs matching a name and filters, nearest first. |
 | `findNearbyNpc(pattern: NamePattern, options: FindNpcOptions = {}): NearbyNpc \| null` | Best NPC by name (shortest name, then nearest) after filters: maxDistance, minLevel, maxLevel, attackable. |
 | `getNearbyPlayers(): NearbyPlayer[]` | Nearby players. |
+| `getNearbyPlayer(objectId: number): NearbyPlayer \| null` | Nearby player by object id (enemy players are named by race, so their names are not unique). |
 | `findNearbyPlayer(pattern: NamePattern, options: FindOptions = {}): NearbyPlayer \| null` | Nearby player by name (shortest name, then nearest). |
 | `getNearbyObjects(): NearbyObject[]` | Nearby static objects, doors and loot. |
 | `findNearbyObject(pattern: NamePattern, options: FindOptions & { loot?: boolean } = {}): NearbyObject \| null` | Nearby object by name (shortest name, then nearest). |
@@ -403,7 +406,9 @@ interface NearbyPlayer {
   lastName: string;
   level: number;
   realm: Realm;
+  /** Rounded down by the server (GameLiving.cs:2621): a living player with a few hit points reads 0. */
   healthPercent: number;
+  /** The death signal: set by the death event (0xAE) and kept until the player shows health again; never inferred from 0 %. */
   isDead: boolean;
   isSitting: boolean;
   inCombat: boolean;
@@ -680,6 +685,8 @@ interface CombatEvent {
   targetHealthPercent?: number;
   /** Spell cast time in ms for kind 'spellCast'. */
   castTimeMs?: number;
+  /** For kinds 'spellCast' and 'spellEffect': the spell's client effect id (Spell.ClientEffect, SpellHandler.cs:1273/:1290), not its spell id. */
+  effectId?: number;
   receivedAt: number;
 }
 ```
@@ -745,7 +752,7 @@ interface BotWorldState {
   textWindow: TextWindow | null;
   merchant: MerchantState;
   trainer: TrainerState;
-  /** Last 50 combat events, oldest first. */
+  /** Last 200 combat events in view (ours and everyone else's), oldest first. */
   combatEvents: CombatEvent[];
   /** Concentration effects we maintain (server 0x75). */
   concentrationEffects?: ConcentrationEffect[];
@@ -960,7 +967,12 @@ interface RespondDialogResult {
 
 ```typescript
 interface AttackResult {
+  /** The target when it is an NPC (null for a player). */
   npc: NearbyNpc | null;
+  /** The resolved target, NPC or player. */
+  target: NearbyNpc | NearbyPlayer | null;
+  /** For reason 'immune' (PvP immunity, ours or the target's) and 'crowd_controlled' (we are mezzed or stunned): ms until trying again makes sense. */
+  retryAfterMs?: number;
 }
 ```
 
@@ -996,6 +1008,29 @@ interface KillResult {
   durationMs: number;
   levelsGained: number;
   stylesUsed: number;
+  /** For reason 'immune' (PvP immunity, ours or the target's) and 'crowd_controlled' (we are mezzed or stunned): ms until trying again makes sense. */
+  retryAfterMs?: number;
+}
+```
+
+### KillPlayerOptions
+
+killPlayer's options: KillOptions' timeout, styles, chase and maxChaseDistance, with a style chooser for players.
+
+```typescript
+interface KillPlayerOptions {
+  /** Pick the style per swing instead of rotating `styles`. */
+  useStyle?: PlayerStyleChooser;
+}
+```
+
+### KillPlayerResult
+
+KillResult's numbers for an enemy player. A player kill gives realm points: rpGained counts those that arrived by the time the death did (killPlayer does not wait for the award).
+
+```typescript
+interface KillPlayerResult {
+  player: NearbyPlayer | null;
 }
 ```
 
@@ -1024,10 +1059,12 @@ interface CastResult {
   /** The server reported the cast finished ("You cast a <spell> spell!", or an effect, damage or resist once the cast time is up). */
   completed: boolean;
   resisted: boolean;
+  /** The cast went off (success, power spent) but its effect did not land: "Your target is immune to this effect!" (CCSpellHandler.cs:173/288, SpellHandler.cs:571). A player already mezzed or stunned, or within the 60 s immunity that follows one (CrowdControlECSEffect.cs), an NPC's mezz immunity, a snare immunity. `resisted` stays false: the target did not resist, nothing could have landed. */
+  effectImmune?: boolean;
   /** Damage from "You hit X for N damage!" / "Your <this spell> hits X for N damage!" lines that arrived once the cast time was up. Other spells' DoT ticks and "extra damage" lines are left out; a damage shield's "You hit X for N damage!" in the same moment cannot be told apart. */
   damage: number;
   messages: GameMessage[];
-  /** For reason 'must_wait' / 'interrupted': ms until casting is allowed again ("You must wait N seconds"). */
+  /** For reason 'must_wait' / 'interrupted' / 'immune' / 'crowd_controlled': ms until casting is allowed again ("You must wait N seconds"). */
   retryAfterMs?: number;
 }
 ```

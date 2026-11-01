@@ -139,13 +139,20 @@ export class Spellbook {
         return best(this.all().filter(s => HEAL_TYPES.test(s.type) && (s.target === 'Realm' || s.target === 'Group') && s.radius === 0 && this.ready(s)));
     }
 
-    mezz(): SpellPick | null {
-        return best(this.all().filter(s => isMezz(s) && s.target === 'Enemy' && this.ready(s)));
+    /**
+     * A mezz cast at a target: single-target first; an area mezz (it also mezzes the focus next to
+     * the add) only with `aoe`; never a point-blank one (range 0, centred on us: the Spiritmaster's
+     * Dark Wave, the Cleric's Heavenly Visions). The highest level used to win, so live RvR runs
+     * (20261101-0903xx) cast Dark Wave at enemies 1500 away: "No cast observed", 22 times.
+     */
+    mezz(opts: { aoe?: boolean } = {}): SpellPick | null {
+        const ok = this.all().filter(s => isMezz(s) && s.target === 'Enemy' && s.range > 0 && this.ready(s));
+        return best(ok.filter(s => s.radius === 0)) ?? (opts.aoe ? best(ok) : null);
     }
 
-    /** Crowd control for an add: a mezz when one is ready, else a root. */
-    cc(): (SpellPick & { kind: 'mezz' | 'root' }) | null {
-        const m = this.mezz();
+    /** Crowd control for an add: a mezz when one is ready (area ones only with `aoe`), else a root. */
+    cc(opts: { aoe?: boolean } = {}): (SpellPick & { kind: 'mezz' | 'root' }) | null {
+        const m = this.mezz(opts);
         if (m) return { ...m, kind: 'mezz' };
         const r = best(this.all().filter(s => isRoot(s) && s.target === 'Enemy' && this.ready(s)));
         return r ? { ...r, kind: 'root' } : null;
@@ -189,7 +196,8 @@ export class Spellbook {
         const buffs = this.buffs();
         return {
             heal: all.some(s => HEAL_TYPES.test(s.type) && s.target !== 'Enemy'),
-            cc: all.some(s => s.target === 'Enemy' && (isMezz(s) || isRoot(s))),
+            // What cc() casts at an add without aoe (crowd control is assigned by this): a single-target mezz or a root.
+            cc: all.some(s => s.target === 'Enemy' && s.range > 0 && ((isMezz(s) && s.radius === 0) || isRoot(s))),
             nuke: all.some(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type)),
             buffs: buffs.map(s => s.spell.name),
             buffSpells: buffs.map(s => ({ name: s.spell.name, slot: s.slot, target: s.target, concentration: s.concentration })),

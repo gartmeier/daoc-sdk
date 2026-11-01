@@ -62,6 +62,8 @@ export interface MemberReport {
     level: number;
     /** Cumulative experience (for XP rates). */
     experience: number;
+    /** Cumulative realm points (for RvR); absent in reports from before RvR. */
+    realmPoints?: number;
     objectId: number;
     regionId: number;
     x: number;
@@ -101,6 +103,14 @@ export interface Sighting {
     inCombat: boolean;
     /** It swung at someone in the last ~2 s (a mezz on it is broken). */
     swinging: boolean;
+    /**
+     * Players: it started a cast in the last few seconds (0x72 spell cast animation). The
+     * server never sends an enemy player's target, so `targetId` for a player is inferred
+     * from its latest melee swing or hostile spell effect on someone.
+     */
+    casting?: boolean;
+    /** Players: it cast a spell on a player of its own realm in the last few seconds (a heal or buff). */
+    helped?: boolean;
 }
 
 /** The group's merged knowledge of one enemy. May be outdated: check lastSeen / stale. */
@@ -133,6 +143,16 @@ export interface Contact extends Sighting {
     hostileSince: number;
     /** Crowd control a member put on it, until `until` (ms epoch). */
     cc: { by: string; kind: string; until: number } | null;
+    /**
+     * A mezz can't land on it before this (ms epoch): a member's mezz got "Your target is immune to this
+     * effect!" (a player is immune for a while after one ends). Nobody is assigned it meanwhile. A root's
+     * immunity is the server's separate snare immunity and stays with the member who cast it.
+     */
+    ccImmuneUntil?: number;
+    /** Players: seen helping its own realm (Sighting.helped) since the group first saw it. Sticky: a healer to focus first. */
+    healer?: boolean;
+    /** Players: seen casting (Sighting.casting) since the group first saw it. Sticky: a caster, not a melee fighter. */
+    caster?: boolean;
 }
 
 export type Phase = 'idle' | 'gather' | 'travel' | 'recover' | 'pull' | 'engage' | 'retreat';
@@ -180,6 +200,7 @@ export interface GroupEvent {
      * 'level' a member levelled, 'note' free text.
      */
     kind: 'orders' | 'activity' | 'result' | 'death' | 'kill' | 'level' | 'note';
+    // 'kill' data: { name, level, kind: 'npc' | 'player', realm }. 'death' data: { killer: { name, kind: 'npc' | 'player', realm } | null }.
     member?: string;
     targetId?: number | null;
     text: string;

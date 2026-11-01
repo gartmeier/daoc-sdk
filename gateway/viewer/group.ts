@@ -11,7 +11,7 @@
 
 import { CON_HEX, conColor } from './con-level';
 import {
-    appendBySeq, canWindDown, ccSeen, conReference, CURRENT_STATES, deathContext, eventVisible, gatewayRestarted, isGroupFrame, isThreat,
+    appendBySeq, canWindDown, ccSeen, conReference, CURRENT_STATES, deathContext, enemyTags, eventVisible, gatewayRestarted, isGroupFrame, isThreat,
     listedContacts, logLineKind, mapRegion, mergeEvents, npcShown, phaseClass, retryRuns, roleLetter, runFailed, runPill, runRegion, timeLeft,
     type FeedFilters, type FeedLine,
 } from './group-logic';
@@ -978,7 +978,7 @@ function showTooltip(hit: MapItem | null, sx: number, sy: number) {
         rows.push(`<div class="muted">seen by ${esc(arr(c.seenBy).join(', ') || 'nobody')}</div>`);
         if (c.board) {
             const cc = c.board.cc ? ` · ${esc(c.board.cc.kind)} by ${esc(c.board.cc.by)}` : '';
-            rows.push(`<div class="muted">board: ${c.board.threat ? '<span class="bad">threat</span>' : 'calm'}${c.board.stale ? ' · stale' : ''}${cc}</div>`);
+            rows.push(`<div class="muted">board: ${c.board.threat ? '<span class="bad">threat</span>' : 'calm'}${c.board.stale ? ' · stale' : ''}${cc}${enemyTags(c).map(t => ` · ${esc(t)}`).join('')}</div>`);
         }
         rows.push(`<div class="muted">${Math.round(num(c.nearest))} from the nearest member · #${esc(c.objectId)} · ${Math.round(c.x)}, ${Math.round(c.y)}</div>`);
     } else if (hit.kind === 'death') {
@@ -1287,9 +1287,10 @@ function renderContacts() {
     const items = listed.slice(0, 40).map(c => {
         const key = `c:${c.key}`;
         const cc = c.board?.cc ? `<span class="chip" style="color:var(--conc)">${esc(c.board.cc.kind)}</span> ` : '';
+        const tags = enemyTags(c).map(t => `<span class="chip">${esc(t)}</span> `).join('');
         return `<li class="${selected === key ? 'sel' : ''}" data-act="select" data-key="${esc(key)}">
             <span>${focus === c.objectId ? '<span style="color:#ffe14a" title="focus">★</span> ' : ''}<span class="${isThreat(c) ? 'bad' : ''}">${esc(c.name)}</span> <span class="muted">L${esc(c.level)}</span> ${esc(Math.round(num(c.hp, 100)))}%${c.target ? ` → ${esc(c.target)}` : ''}</span>
-            <span class="r">${cc}${c.board?.stale ? 'stale · ' : ''}<span title="${esc(arr(c.seenBy).join(', '))}">seen ${arr(c.seenBy).length}</span> · ${esc(Math.round(num(c.nearest)))}</span></li>`;
+            <span class="r">${tags}${cc}${c.board?.stale ? 'stale · ' : ''}<span title="${esc(arr(c.seenBy).join(', '))}">seen ${arr(c.seenBy).length}</span> · ${esc(Math.round(num(c.nearest)))}</span></li>`;
     }).join('');
     const why = 'threats, monsters the group could fight and enemy players, of everything the members see; peaceful NPCs, pets, friendly players and the dead are on the map only';
     const count = `<span title="${esc(why)}"><b class="count">${listed.length}</b> of ${arr(f.world).length}</span>`;
@@ -1311,6 +1312,7 @@ function renderFight() {
     setSection('g-fight', `<h3>Score so far <span>${r.openFight ? 'fight open · ' : ''}${esc(dur(num(r.durationMs)))}</span></h3>
         <div>Kills ${fmtInt(t.kills)} (${fmtInt(t.killsPerHour)}/h) · XP/h ${fmtInt(t.xpPerHour)} · deaths ${fmtInt(t.deaths)} · wipes ${fmtInt(t.wipes)}</div>
         <div class="muted">fights ${fmtInt(t.fights)} · avg ${(num(t.avgFightMs) / 1000).toFixed(1)} s · downtime ${fmtInt(t.downtime)}% · tank hold ${t.tankHold === null || t.tankHold === undefined ? '-' : `${fmtInt(t.tankHold)}%`}</div>
+        ${num(t.enemiesSeen) || num(t.playerKills) ? `<div>RvR: enemies seen ${fmtInt(t.enemiesSeen)} · player kills ${fmtInt(t.playerKills)} · deaths to players ${fmtInt(t.deathsToPlayers)} · RP ${fmtInt(t.realmPoints)} (${fmtInt(t.rpPerHour)}/h)</div>` : ''}
         ${last ? `<div style="margin-top:4px">${r.openFight ? 'Open' : 'Last'} fight: ${esc(arr(last.focus).join(' / ') || '?')} · ${esc(r.openFight ? 'in progress' : last.outcome)} · ${(num(last.durationMs) / 1000).toFixed(0)} s · adds ${esc(num(last.adds))} · max ${esc(num(last.maxAttackers))} attackers${arr(last.deaths).length ? ` · <span class="bad">died: ${esc(arr(last.deaths).join(', '))}</span>` : ''}</div>` : ''}
         ${findings.length ? `<div class="chips">${findings.map(x => `<span class="chip sev-${esc(x?.severity)}" title="${esc(`${x?.issue ?? ''}. Evidence: ${x?.evidence ?? ''}. Try: ${x?.suggestion ?? ''}`)}">${esc(x?.severity)} ${esc(x?.topic)}${x?.member ? ` · ${esc(x.member)}` : ''}</span>`).join('')}</div>` : ''}
         ${members.length ? `<table class="mini"><tr><th>Member</th><th>XP/h</th><th>Idle</th><th>Group waited for</th></tr>${members.map(([name, m]) => `

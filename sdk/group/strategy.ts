@@ -3,8 +3,8 @@
 // objects so an agent can copy one and change a threshold, a rule or a role.
 
 import { abortable } from '../execution-context';
-import type { Blackboard } from './blackboard';
-import type { Behavior } from './member';
+import type { Blackboard, BlackboardOptions } from './blackboard';
+import type { Behavior, MemberAgentOptions } from './member';
 import type { GroupPicture, Orders, OrdersUpdate, Role } from './types';
 import type { Finding, RunReport } from './observer';
 
@@ -33,6 +33,10 @@ export interface GroupStrategy<S = any> {
     decide(ctx: CoordinatorContext<S>): OrdersUpdate;
     /** Extra observer rules for this strategy. */
     findings?(report: RunReport, settings: S): Finding[];
+    /** Blackboard timings for runs of this strategy (default: BlackboardOptions' defaults). */
+    board?: BlackboardOptions;
+    /** Member agent options for runs of this strategy (sightRadius: how far members report enemies). */
+    agent?: MemberAgentOptions;
 }
 
 type DeepPartial<T> = { [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? DeepPartial<T[K]> : T[K] };
@@ -57,6 +61,8 @@ export function defineStrategy<S>(base: GroupStrategy<S>, override: {
     decide?: GroupStrategy<S>['decide'];
     roleOf?: GroupStrategy<S>['roleOf'];
     findings?: GroupStrategy<S>['findings'];
+    board?: BlackboardOptions;
+    agent?: MemberAgentOptions;
 } = {}): GroupStrategy<S> {
     return {
         ...base,

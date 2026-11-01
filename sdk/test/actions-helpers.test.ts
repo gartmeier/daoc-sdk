@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { BotSDK } from '../index';
 import { ChatHistory } from '../chat-history';
-import { conColor, conLevel, diffInventory, experienceFromMessages, isKillable, MessageWatch } from '../actions-helpers';
+import { ATTACK_REFUSALS, CAST_REFUSALS, conColor, conLevel, diffInventory, experienceFromMessages, isCrowdControlled, isFatalAttackRefusal, isKillable, isPvpImmunity, MessageWatch, USE_ITEM_REFUSALS } from '../actions-helpers';
 import { castFailureReason } from '../actions';
 import { StraightLinePathProvider, getDefaultPathProvider, setDefaultPathProvider } from '../pathfinding';
 import type { InventoryItem } from '../types';
@@ -73,6 +73,52 @@ describe('deltas', () => {
         expect(castFailureReason('That target is too far away!')).toBe('out_of_range');
         expect(castFailureReason('Your target is not visible!')).toBe('not_visible');
         expect(castFailureReason('You must select a target for this spell!')).toBe('no_target');
+    });
+
+    test('PvP immunity is its own reason, though ours also reads like a fatal refusal (AbstractServerRules.cs:350-375)', () => {
+        const ours = "You can't attack players until your PvP invulnerability timer wears off!";
+        const theirs = ['Norseman is temporarily immune to PvP attacks!', 'Norseman is entering the game and cannot be attacked!'];
+        for (const text of [ours, ...theirs]) {
+            expect(isPvpImmunity(text)).toBeTrue();
+            expect(castFailureReason(text)).toBe('immune');
+            expect(ATTACK_REFUSALS.some(r => text.toLowerCase().includes(r))).toBeTrue();
+        }
+        expect(isPvpImmunity("You can't attack a friendly NPC!")).toBeFalse();
+    });
+
+    test('a mezz, stun or silence on us is reason crowd_controlled, for melee and spells (GamePlayer.txt:36-37, Spells.txt:18-20)', () => {
+        const melee = ["You can't attack when you are mesmerized!", "You can't attack when you are stunned!"];
+        const cast = ["You can't cast while mesmerized!", "You can't cast while stunned!", 'You are fumbling for your words, and cannot cast!'];
+        for (const text of [...melee, ...cast]) {
+            expect(isCrowdControlled(text)).toBeTrue();
+            expect(castFailureReason(text)).toBe('crowd_controlled');
+        }
+        for (const text of melee) expect(isFatalAttackRefusal(text)).toBeTrue();
+        // Before this, castSpell waited 3 s for these and reported no_response.
+        for (const text of cast) expect(CAST_REFUSALS.some(r => text.toLowerCase().includes(r))).toBeTrue();
+        // Our mezz on someone else, and its immunity, are no refusals of ours.
+        for (const text of ['Norseman is mesmerized!', 'Your target is immune to this effect!', "You can't rest when you are stunned!"]) {
+            expect(isCrowdControlled(text)).toBeFalse();
+        }
+    });
+
+    test('the notice that our immunity ended matches no refusal (AbstractServerRules.cs:301)', () => {
+        const notice = 'Your temporary PvP invulnerability timer has expired.';
+        expect(isPvpImmunity(notice)).toBeFalse();
+        expect(castFailureReason(notice)).toBe('refused');
+        for (const list of [ATTACK_REFUSALS, CAST_REFUSALS, USE_ITEM_REFUSALS]) {
+            expect(list.some(r => notice.toLowerCase().includes(r))).toBeFalse();
+        }
+    });
+
+    test('range and view refusals are retryable, the rest of ATTACK_REFUSALS fatal', () => {
+        for (const text of ['Norseman is too far away to attack!', 'Norseman is not in view!', "You can't see your target!"]) {
+            expect(isFatalAttackRefusal(text)).toBeFalse();
+        }
+        for (const text of ["You can't attack when you are stunned!", 'Norseman is already dead!', "You can't attack players until your PvP invulnerability timer wears off!"]) {
+            expect(isFatalAttackRefusal(text)).toBeTrue();
+        }
+        expect(isFatalAttackRefusal('You hit Norseman for 12 damage!')).toBeFalse();
     });
 });
 

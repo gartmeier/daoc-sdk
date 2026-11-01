@@ -219,6 +219,18 @@ describe('GroupPublisher', () => {
         expect(h.board.picture().contacts.length).toBe(250);
     });
 
+    test('RvR on the wire: an enemy player\'s flags, a member\'s realm points and its killer', async () => {
+        const h = harness();
+        const troll = sighting(301, { kind: 'player', name: 'Troll', realm: 'midgard', targetId: 100, helped: true, casting: true });
+        h.board.publish(obs(report('Tank', { objectId: 100, realmPoints: 25 }), [troll]));
+        h.board.publish({ ...obs(report('Tank', { objectId: 100, realmPoints: 25, isDead: true }), [troll]), killer: { name: 'Troll', kind: 'player', realm: 'midgard' } });
+        await until(() => h.calls.length >= 1, 'a publish');
+        const body = h.calls[0]!.body;
+        expect(body.picture.members[0]!.realmPoints).toBe(25);
+        expect(body.picture.contacts[0]).toMatchObject({ kind: 'player', target: 'Tank', casting: true, helped: true, healer: true, caster: true });
+        expect(body.events.find(e => e.kind === 'death')!.data).toEqual({ killer: { name: 'Troll', kind: 'player', realm: 'midgard' } });
+    });
+
     test('a hanging gateway: one request in flight, ticks skipped, nothing thrown, finish() within its cap', async () => {
         const h = harness(() => new Promise<Response>(() => {}));
         await until(() => h.calls.length >= 1, 'a publish');

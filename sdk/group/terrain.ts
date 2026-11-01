@@ -193,11 +193,11 @@ class CircleIndex {
 
 const indexCache = new Map<string, CircleIndex>();
 
-/** Everything a route keeps out of: aggro zones (aggroZones) and danger circles (dangers). */
-function avoidIndex(regionId: number, level: number): CircleIndex {
-    const key = `${regionId}:${level}`;
+/** Everything a route keeps out of: aggro zones (aggroZones), danger circles (dangers) and `extra` circles. */
+function avoidIndex(regionId: number, level: number, extra: readonly Danger[]): CircleIndex {
+    const key = `${regionId}:${level}${extra.map(d => `:${Math.round(d.x)},${Math.round(d.y)},${Math.round(d.r)}`).join('')}`;
     let idx = indexCache.get(key);
-    if (!idx) indexCache.set(key, idx = new CircleIndex([...aggroZones(regionId, level), ...dangers(regionId, level)]));
+    if (!idx) indexCache.set(key, idx = new CircleIndex([...aggroZones(regionId, level), ...dangers(regionId, level), ...extra]));
     return idx;
 }
 
@@ -209,9 +209,11 @@ const INSIDE_COST = 30;
  * (aggroZones, plus the wider danger circles): just [to] when the straight line is clear.
  * Coarse grid A* (400-unit cells) where a cell inside a zone costs INSIDE_COST times more,
  * so a route always exists and crosses zones only where there is no way around.
+ * `avoid` adds circles to keep out of as well (the guards of an enemy keep: keepDangers
+ * in rvr.ts); the index for each set of them is cached by their positions and radii.
  */
-export function safePath(regionId: number, level: number, from: Point, to: Point): Point[] {
-    const idx = avoidIndex(regionId, level);
+export function safePath(regionId: number, level: number, from: Point, to: Point, avoid: readonly Danger[] = []): Point[] {
+    const idx = avoidIndex(regionId, level, avoid);
     const clear = (a: Point, b: Point) => {
         const n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 100);
         for (let i = 1; i < n; i++) if (idx.inside(a.x + (b.x - a.x) * i / n, a.y + (b.y - a.y) * i / n)) return false;

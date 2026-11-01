@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { ckey, holdState, needsSlot, openingOf } from './behaviors';
-import { contact } from './fixtures';
+import { beyondLeash, ckey, holdState, needsSlot, openingOf } from './behaviors';
+import { contact, enemy } from './fixtures';
 import type { MemberContext } from './member';
 import { PVE_SETTINGS } from './pve';
 
@@ -79,6 +79,37 @@ describe('PvE defaults stay consistent', () => {
             if (!f || !band) continue;
             expect(f.back).toBeGreaterThanOrEqual(band[0]);
             expect(f.back).toBeLessThanOrEqual(band[1]);
+        }
+    });
+});
+
+describe('beyondLeash: tank and melee stay with the fight', () => {
+    const ctxWith = (chaseLeash: number | undefined, anchor: { x: number; y: number; z: number } | null) =>
+        ({ settings: { ...PVE_SETTINGS, chaseLeash }, orders: () => ({ anchor }), me: () => ({ regionId, realm: 'hibernia' }) }) as unknown as MemberContext<typeof PVE_SETTINGS>;
+    // Region 9999 has no keeps; 252's Faste is Albion's.
+    let regionId = 9999;
+    const anchor = { x: 10_000, y: 10_000, z: 0 };
+    test('an enemy player farther than chaseLeash from the anchor is let go; nearer ones and monsters are not', () => {
+        expect(beyondLeash(ctxWith(2000, anchor), enemy(7, 'albion', { x: 12_500, y: 10_000 }))).toBe(true);
+        expect(beyondLeash(ctxWith(2000, anchor), enemy(7, 'albion', { x: 11_500, y: 10_000 }))).toBe(false);
+        expect(beyondLeash(ctxWith(2000, anchor), contact(8, { x: 12_500, y: 10_000 }))).toBe(false);
+    });
+    test('no leash (PvE settings) or no anchor: never', () => {
+        expect(beyondLeash(ctxWith(undefined, anchor), enemy(7, 'albion', { x: 20_000, y: 10_000 }))).toBe(false);
+        expect(beyondLeash(ctxWith(2000, null), enemy(7, 'albion', { x: 20_000, y: 10_000 }))).toBe(false);
+    });
+    test('an enemy player under the guards of a keep not ours is let go, leash or not (review: tank into the Faste)', () => {
+        regionId = 252;
+        try {
+            const faste = { x: 33_089, y: 38_271 };
+            // 1700 west of the Faste's centre (its circle is 3000) and 500 from the anchor: inside the leash, under the guards.
+            const near = { x: faste.x - 1700, y: faste.y, z: 0 };
+            expect(beyondLeash(ctxWith(2000, { x: near.x - 500, y: near.y, z: 0 }), enemy(7, 'albion', { regionId: 252, ...near }))).toBe(true);
+            expect(beyondLeash(ctxWith(undefined, null), enemy(7, 'albion', { regionId: 252, ...near }))).toBe(true);
+            // Outside the circle: only the leash counts.
+            expect(beyondLeash(ctxWith(2000, { x: faste.x - 4000, y: faste.y, z: 0 }), enemy(7, 'albion', { regionId: 252, x: faste.x - 3500, y: faste.y }))).toBe(false);
+        } finally {
+            regionId = 9999;
         }
     });
 });

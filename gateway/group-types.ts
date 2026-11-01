@@ -103,6 +103,8 @@ export interface RunMemberView {
     activity: Activity;
     effects: string[];
     can: { heal: boolean; cc: boolean; nuke: boolean };
+    /** Cumulative realm points (MemberReport.realmPoints), when the runner reports them. */
+    realmPoints?: number;
     /** Runner clock. */
     at: number;
 }
@@ -173,6 +175,11 @@ export interface WorldContact {
         seenBy: string[];
         /** Runner clock. */
         lastSeen: number;
+        /** Players: casting or helping its own realm in the last few seconds, and ever seen doing so (Contact.caster, Contact.healer). */
+        casting?: boolean;
+        helped?: boolean;
+        healer?: boolean;
+        caster?: boolean;
     } | null;
 }
 
@@ -287,6 +294,13 @@ export interface HistoryEntry {
     avgFightMs: number;
     downtime: number;
     tankHold: number | null;
+    /** RvR runs only (RunReport.totals). */
+    playerKills?: number;
+    deathsToPlayers?: number;
+    realmPoints?: number;
+    rpPerHour?: number;
+    enemiesSeen?: number;
+    engagements?: number;
     /** Finding topics, with repeats. */
     findings: string[];
 }

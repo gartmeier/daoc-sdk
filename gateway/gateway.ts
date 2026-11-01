@@ -9,7 +9,8 @@
 // /status /state /chat /say /dm). No engine coupling, traffic metering, direct
 // port, outdated-client lookup or login server: auth is a pluggable hook that
 // allows everything by default. Beyond rs-sdk: the browser viewer
-// (gateway/viewer/routes.ts) and group views over HTTP (gateway/groups.ts).
+// (gateway/viewer/routes.ts), group views over HTTP (gateway/groups.ts) and
+// region views on top of both (gateway/regions.ts).
 //
 // Exposure: it listens on 127.0.0.1 unless GATEWAY_HOSTNAME says otherwise,
 // refuses browser requests from foreign origins (and, on a loopback bind,
@@ -727,7 +728,9 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     async function route(req: Request, url: URL, srv: Server<unknown>): Promise<Response> {
         if (req.method === 'OPTIONS') return new Response(null, { status: 204 });
 
-        const viewer = await handleViewerRequest(req, url, { botSessions, sdkSessions, sessionStatus, auth, groupOf: u => groups?.badge(u) ?? null });
+        const viewer = await handleViewerRequest(req, url, {
+            botSessions, sdkSessions, sessionStatus, auth, groupOf: u => groups?.badge(u) ?? null, activeRuns: () => groups?.activeRuns() ?? [],
+        });
         if (viewer) return viewer;
         const group = await groups?.handle(req, url);
         if (group) return group;
@@ -802,6 +805,9 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
             'POST /groups/:id/control  {"kind": "windDown", "runId": "..."} (leader bot.env password)',
             'GET  /groups/:id/runs     run history, report files, campaign log (/runs/:stamp?part=json|md|log)',
             'GET  /viewer/group/:id    browser group view',
+            'GET  /regions             regions with an in-game bot',
+            'GET  /regions/:id/live    one region: its bots, group runs, enemy players, keeps (per-bot auth)',
+            'GET  /viewer/region/:id   browser region view (battlegrounds)',
             '',
         ].join('\n'), { headers: { 'Content-Type': 'text/plain' } });
     }

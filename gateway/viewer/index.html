@@ -12,6 +12,9 @@
     <div class="muted">Groups from <span class="mono">groups/&lt;name&gt;/group.json</span> and bots with a headless client attached to this gateway. Pick one to watch it.</div>
     <h2>Groups</h2>
     <div id="groups" class="bot-list"><div class="muted">Loading…</div></div>
+    <h2>Regions</h2>
+    <div class="muted">Every in-game bot of one region on one map, each group's run beside it: a battleground fight between groups.</div>
+    <div id="regions" class="bot-list"><div class="muted">Loading…</div></div>
     <h2>Bots</h2>
     <div id="bots" class="bot-list"><div class="muted">Loading…</div></div>
     <p class="muted" style="margin-top:16px">Or open <span class="mono">/viewer/&lt;bot&gt;</span> directly; the page waits for the client to attach.</p>
@@ -19,6 +22,7 @@
 <script>
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 const RUN_PILL = { live: 'active', starting: 'stale', stale: 'stale', ending: 'stale', lost: 'dead', ended: '' };
+const REALM_HEX = { albion: '#ff5a5a', midgard: '#5a9bff', hibernia: '#59d46b', none: '#cccccc' };
 function groupCard(g) {
     const members = Array.isArray(g.members) ? g.members : [];
     const run = g.run;
@@ -52,6 +56,36 @@ async function refreshGroups() {
         el.innerHTML = `<div class="bad">Groups unavailable: ${esc(e.message || e)}</div>`;
     }
 }
+function regionCard(r) {
+    const realms = r.realms && typeof r.realms === 'object' ? r.realms : {};
+    const dots = ['albion', 'midgard', 'hibernia', 'none'].filter(k => realms[k]).map(k => `<span class="member-dot"><i class="dot" style="background:${REALM_HEX[k]}"></i>${esc(realms[k])} ${esc(k)}</span>`).join('');
+    const groups = (Array.isArray(r.groups) ? r.groups : []).map(g => esc(g.name)).join(', ');
+    const zones = Array.isArray(r.zones) ? r.zones : [];
+    return `<a class="bot-card group-card" href="/viewer/region/${encodeURIComponent(r.regionId)}">
+        <span class="name">${esc(zones.join(', ') || `region ${r.regionId}`)}</span>
+        <span class="muted">region ${esc(r.regionId)}</span>
+        <span class="dots">${dots}</span>
+        <span class="muted">${esc(r.bots)} in game${groups ? ` · ${groups}` : ''}</span>
+    </a>`;
+}
+async function refreshRegions() {
+    // Like the groups list: an older gateway answers /regions with its plain-text help page.
+    const el = document.getElementById('regions');
+    try {
+        const res = await fetch('/regions', { cache: 'no-store' });
+        let body = null;
+        try { body = await res.json(); } catch {}
+        if (!body || !Array.isArray(body.regions)) {
+            el.innerHTML = '<div class="muted">Region views need a newer gateway.</div>';
+            return;
+        }
+        el.innerHTML = body.regions.length
+            ? body.regions.map(regionCard).join('')
+            : '<div class="muted">No bot is in game.</div>';
+    } catch (e) {
+        el.innerHTML = `<div class="bad">Regions unavailable: ${esc(e.message || e)}</div>`;
+    }
+}
 async function refreshBots() {
     const el = document.getElementById('bots');
     try {
@@ -81,6 +115,7 @@ async function refreshBots() {
 }
 function refresh() {
     refreshGroups();
+    refreshRegions();
     refreshBots();
 }
 refresh();

@@ -191,6 +191,105 @@ describe('GroupObserver', () => {
         expect(after).toEqual({ ...final, openFight: false });
     });
 
+    const rvrRun = (strategy = 'rvr', startedAt = T0, rpGain = 1) => {
+        const o = new GroupObserver(null, { group: 'g', strategy, startedAt });
+        const at = (i: number) => startedAt + i * 1000;
+        const rp = (tank: number, druid: number) => members({ Tank: { realmPoints: tank }, Druid: { realmPoints: druid }, Menta: { realmPoints: 0 } });
+        const enemy = (objectId: number, over: Parameters<typeof contact>[1] = {}) => contact(objectId, { kind: 'player', name: 'Norseman', realm: 'midgard', threat: true, ...over });
+        // Roaming with an enemy far off, a 10 s skirmish with two Midgard players and a Hibernian, roaming again.
+        for (let i = 1; i <= 10; i++) o.sample(picture(rp(100, 50), [enemy(300, { threat: false, x: 9000 })], { seq: 1, phase: 'travel' }, at(i)));
+        for (let i = 11; i <= 20; i++) {
+            const enemies = [enemy(300, { target: 'Druid' }), enemy(301, { target: 'Menta' }), enemy(310, { name: 'Celt', realm: 'hibernia' })];
+            o.sample(picture(rp(100, 50), enemies, { seq: 2, phase: 'engage', focus: 300 }, at(i)));
+        }
+        o.handle({ at: at(15), kind: 'kill', member: 'Tank', targetId: 300, text: 'Norseman (L20) died', data: { name: 'Norseman', level: 20, kind: 'player', realm: 'midgard' } });
+        o.handle({ at: at(18), kind: 'death', member: 'Druid', text: 'Druid died', data: { killer: { name: 'Celt', kind: 'player', realm: 'hibernia' } } });
+        o.handle({ at: at(19), kind: 'death', member: 'Menta', text: 'Menta died', data: { killer: { name: 'mature boar', kind: 'npc', realm: 'none' } } });
+        for (let i = 21; i <= 30; i++) o.sample(picture(rp(100 + 300 * rpGain, 150), [], { seq: 3, phase: 'travel' }, at(i)));
+        return o.report();
+    };
+
+    test('RvR: player kills, deaths to players, realm points, enemies seen and engagements; killers per member', () => {
+        const r = rvrRun();
+        expect(r.totals).toMatchObject({ kills: 1, playerKills: 1, deathsToPlayers: 1, realmPoints: 400, rpPerHour: 48_000, enemiesSeen: 3, engagements: 1 });
+        expect(r.fights.map(f => [f.enemyPlayers, f.enemyRealms])).toEqual([[3, ['hibernia', 'midgard']]]);
+        expect(Object.fromEntries(Object.entries(r.members).map(([n, m]) => [n, [m.realmPoints, m.killedBy]]))).toEqual({
+            Tank: [300, undefined], Druid: [100, { 'player:hibernia': 1 }], Menta: [0, { 'npc:mature boar': 1 }],
+        });
+        const md = formatReport(r);
+        expect(md).toContain('RvR: 3 enemy players seen, 1 engagements, 1 player kills, 1 deaths to players, 400 realm points (48000/h).');
+        expect(md).toContain('- Druid: 100 RP, killed by player:hibernia (1)');
+        expect(md).toContain('- Tank: 300 RP\n');
+        expect(md).toContain('3 enemy players (hibernia, midgard)');
+    });
+
+    test('RvR: the PvE-only findings stay out; deaths name the killers', () => {
+        const r = rvrRun();
+        const topics = r.findings.map(f => f.topic);
+        // As PvE, this run would have aggro (the focus on the Druid), adds (two more attackers) and downtime (20 s of 30 roaming).
+        expect(topics).not.toContain('aggro');
+        expect(topics).not.toContain('adds');
+        expect(topics).not.toContain('downtime');
+        expect(topics.filter(t => t === 'deaths').length).toBe(2);
+        expect(r.findings.find(f => f.member === 'Druid')!.evidence).toStartWith('killed by player:hibernia (1); ');
+    });
+
+    test('a PvE run gets no RvR fields, even with realm points in the reports; killedBy lists every death', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 });
+        for (let i = 1; i <= 5; i++) o.sample(picture(members({ Tank: { realmPoints: 70 } }), [contact(7, { target: 'Tank', threat: true })], { seq: 1, phase: 'engage', focus: 7 }, T0 + i * 1000));
+        o.handle({ at: T0 + 3000, kind: 'death', member: 'Druid', text: 'Druid died', data: { killer: { name: 'wolf', kind: 'npc', realm: 'none' } } });
+        o.handle({ at: T0 + 4000, kind: 'death', member: 'Menta', text: 'Menta died' });
+        const r = o.report();
+        for (const k of ['playerKills', 'deathsToPlayers', 'realmPoints', 'rpPerHour', 'enemiesSeen', 'engagements']) expect(k in r.totals).toBe(false);
+        expect('enemyPlayers' in r.fights[0]!).toBe(false);
+        expect('realmPoints' in r.members.Tank!).toBe(false);
+        expect(r.members.Druid!.killedBy).toEqual({ 'npc:wolf': 1 });
+        expect(r.members.Menta!.killedBy).toEqual({ unknown: 1 });
+        expect(r.findings.find(f => f.member === 'Druid')!.evidence).not.toContain('killed by');
+        const md = formatReport(r);
+        expect(md).not.toContain('RvR');
+        expect(md).not.toContain('RP');
+    });
+
+    test('a retreat counts once however many legs it runs, and once more only after it ended for a while', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        const orders = (s: number, phase: string) => o.handle({ at: T0 + s * 1000, kind: 'orders', text: `${phase}: r`, data: { phase } });
+        o.sample(picture(members(), [], { seq: 1, phase: 'engage' }, T0 + 1000));
+        // One retreat, four legs (decideRvr re-issues retreatTo 3000 further each time), a tick of engage, more legs.
+        orders(1, 'engage');
+        for (const s of [2, 4, 6, 8]) orders(s, 'retreat');
+        orders(9, 'engage');
+        orders(10, 'retreat');
+        expect(o.report().totals.retreats).toBe(1);
+        // Over: travel for a minute, then outnumbered again.
+        orders(12, 'travel');
+        orders(70, 'retreat');
+        orders(72, 'retreat');
+        expect(o.report().totals.retreats).toBe(2);
+    });
+
+    test('a death to an enemy realm\'s pet or keep guard is a death to players: pet:<realm>', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        o.sample(picture(members(), [contact(300, { kind: 'player', name: 'Norseman', realm: 'midgard' })], { seq: 1, phase: 'engage' }, T0 + 1000));
+        // A Spiritmaster's pet lands the blow: the 0xAE killer is the pet (GamePlayer.cs:5901-5905).
+        o.handle({ at: T0 + 1500, kind: 'death', member: 'Druid', text: 'Druid died', data: { killer: { name: 'earthen spirit', kind: 'npc', realm: 'midgard' } } });
+        o.handle({ at: T0 + 1600, kind: 'death', member: 'Menta', text: 'Menta died', data: { killer: { name: 'mature boar', kind: 'npc', realm: 'none' } } });
+        const r = o.report();
+        expect(r.totals.deathsToPlayers).toBe(1);
+        expect(r.members.Druid!.killedBy).toEqual({ 'pet:midgard': 1 });
+        expect(r.members.Menta!.killedBy).toEqual({ 'npc:mature boar': 1 });
+    });
+
+    test('the strategy\'s findings join the report; one that throws becomes a finding itself', () => {
+        const sample = (o: GroupObserver) => { o.sample(picture(members(), [], { seq: 1, phase: 'recover' }, T0 + 1000)); return o; };
+        const own = { severity: 'low' as const, topic: 'roam', issue: 'Roamed 1 s', evidence: '1 sample', suggestion: 'Roam longer.' };
+        const r = sample(new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0, findings: rep => [{ ...own, evidence: `${rep.durationMs} ms` }] })).report();
+        expect(r.findings.at(-1)).toEqual({ ...own, evidence: '1000 ms' });
+        expect(formatReport(r)).toContain('[roam] Roamed 1 s.');
+        const broken = sample(new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0, findings: () => { throw new Error('no settings'); } })).report();
+        expect(broken.findings.at(-1)).toMatchObject({ topic: 'strategy', issue: 'The strategy\'s findings() threw: no settings' });
+    });
+
     test('stampOf names a run by its start in UTC, the same from ms and from ISO text', () => {
         const at = Date.UTC(2026, 9, 31, 13, 37, 19, 450);
         expect(stampOf(at)).toBe('20261031-133719');
@@ -223,6 +322,22 @@ describe('GroupObserver', () => {
             expect(files.filter(f => f.endsWith('.json')).length).toBe(2);
             expect(files.filter(f => f.endsWith('.log')).length).toBe(1);
             expect(readFileSync(join(dir, 'runs', 'history.jsonl'), 'utf-8').trim().split('\n').length).toBe(2);
+            // PvE against PvE: no RvR keys.
+            expect(Object.keys(second.previous!)).not.toContain('playerKills');
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    test('an RvR run compares player kills, deaths to players and realm points per hour with the previous one', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'group-'));
+        try {
+            saveReport(dir, rvrRun('rvr', T0, 1));
+            const second = rvrRun('rvr', T0 + 100_000, 2);
+            const md = saveReport(dir, second);
+            expect(second.previous).toMatchObject({ playerKills: '1→1', deathsToPlayers: '1→1', rpPerHour: '48000→84000' });
+            expect(readFileSync(md, 'utf-8')).toContain('rpPerHour 48000→84000');
+            expect(JSON.parse(readFileSync(join(dir, 'runs', 'history.jsonl'), 'utf-8').trim().split('\n')[1]!)).toMatchObject({ playerKills: 1, rpPerHour: 84_000, enemiesSeen: 3 });
         } finally {
             rmSync(dir, { recursive: true, force: true });
         }

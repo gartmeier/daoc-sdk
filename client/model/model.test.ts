@@ -3,7 +3,7 @@ import { encodeCp1252, PacketWriter } from '../protocol/buffer';
 import { ServerOp } from '../protocol/opcodes';
 import { getRacesForClass, getStartingClasses } from '../../data/index';
 import { creationPoints, planCharacter, RACE_MODELS } from './classes';
-import { WorldModel } from './world-model';
+import { MAX_COMBAT_EVENTS, WorldModel } from './world-model';
 
 const W = () => new PacketWriter();
 const ME = { x: 574797, y: 530161, z: 2896 };
@@ -301,5 +301,110 @@ describe('WorldModel fixes', () => {
             m.cull({ ...ME, x: ME.x + 600 });
             expect(m.trainer.isOpen).toBe(false);
         });
+    });
+});
+
+describe('WorldModel combat events', () => {
+    /** 0x4B PlayerCreate (objects.ts decodePlayerCreate): realm in flag bits 2-3. */
+    const playerCreate = (oid: number, session: number, name: string, realm: number) =>
+        W().f32le(ME.x + 50).f32le(ME.y).f32le(ME.z).u16(session).u16(oid).u16(0).u16(32).u8(20).u8(realm << 2).fill(0, 10)
+            .pascal(name).pascal('').pascal('').pascal('').pascal('').u8(0).toBytes();
+    const combatAnimation = (attacker: number, defender: number, healthPercent: number) =>
+        W().u16(attacker).u16(defender).u16(3).u16(0).u16le(0).u8(0).u8(10).u8(healthPercent).u8(0).toBytes();
+
+    test('0xBC sets the health of a player defender too (WeaponAction.cs:369), not only of an NPC', () => {
+        const m = new WorldModel();
+        m.self.objectId = 123;
+        m.handle(ServerOp.PlayerCreate172, playerCreate(301, 9, 'Norseman', 2));
+        m.handle(ServerOp.PlayerCreate172, playerCreate(302, 10, 'Ally', 1));
+        m.handle(ServerOp.NPCCreate, npcCreate(500, 'rat', ME.x + 100, ME.y));
+        m.handle(ServerOp.CombatAnimation, combatAnimation(302, 301, 61));
+        m.handle(ServerOp.CombatAnimation, combatAnimation(301, 500, 40));
+        expect(m.nearbyPlayers(ME).find(pl => pl.objectId === 301)).toMatchObject({ realm: 'midgard', healthPercent: 61, isDead: false });
+        expect(m.nearbyNpcs(ME)[0]).toMatchObject({ objectId: 500, healthPercent: 40 });
+        expect(m.combatEvents.map(e => [e.kind, e.attackerObjectId, e.targetObjectId, e.targetHealthPercent])).toEqual([['melee', 302, 301, 61], ['melee', 301, 500, 40]]);
+    });
+
+    test("our own swing at a player leaves its health alone: an intercepted blow carries the interceptor's (WeaponAction.cs:363-369)", () => {
+        const m = new WorldModel();
+        m.self.objectId = 123;
+        m.handle(ServerOp.PlayerCreate172, playerCreate(301, 9, 'Spiritmaster', 2));
+        m.handle(ServerOp.CombatAnimation, combatAnimation(302, 301, 60));
+        m.handle(ServerOp.CombatAnimation, combatAnimation(123, 301, 90)); // the pet's health
+        m.handle(ServerOp.CombatAnimation, combatAnimation(123, 301, 0)); // the blow that killed the pet
+        expect(m.nearbyPlayers(ME)[0]).toMatchObject({ objectId: 301, healthPercent: 60, isDead: false });
+    });
+
+    test('our own swing still sets an NPC defender\'s health', () => {
+        const m = new WorldModel();
+        m.self.objectId = 123;
+        m.handle(ServerOp.NPCCreate, npcCreate(500, 'rat', ME.x + 100, ME.y));
+        m.handle(ServerOp.CombatAnimation, combatAnimation(123, 500, 35));
+        expect(m.nearbyNpcs(ME)[0]).toMatchObject({ objectId: 500, healthPercent: 35 });
+    });
+
+    test('another player dies only by 0xAE or a dead flag, and stays dead until it shows health again', () => {
+        let now = 1000;
+        const m = new WorldModel({}, () => now);
+        m.self.objectId = 123;
+        m.handle(ServerOp.PlayerCreate172, playerCreate(301, 9, 'Norseman', 2));
+        /** 0xA9 relayed for session 9 (objects.ts decodePlayerPosition): state 0x14 is DEAD, the health byte's low 7 bits. */
+        const a9 = (hp: number, state = 0) => W().f32le(ME.x + 50).f32le(ME.y).f32le(ME.z).f32le(0).f32le(0).u16(9).u16(301).u16(0)
+            .u8(state).u8(0).u16(0).u16(0).u8(0).u8(0).u8(0).u8(hp).u8(100).u8(100).u16(0).toBytes();
+        const norseman = () => m.nearbyPlayers(ME)[0]!;
+        // Health is rounded down (GameLiving.cs:2621): a living player with a few hit points reads 0.
+        m.handle(ServerOp.PlayerPosition, a9(0));
+        m.handle(ServerOp.CombatAnimation, combatAnimation(302, 301, 0));
+        expect(norseman()).toMatchObject({ healthPercent: 0, isDead: false });
+        m.handle(ServerOp.PlayerDeath, W().u16(301).u16(302).fill(0, 4).toBytes());
+        expect(norseman()).toMatchObject({ healthPercent: 0, isDead: true });
+        // Our headless clients never send DEAD: its relays carry health 0 and no flag, and it stays dead.
+        now += 1000;
+        m.handle(ServerOp.PlayerPosition, a9(0));
+        expect(norseman().isDead).toBe(true);
+        // A relay sent before the death and delivered after it carries the old health: no revive yet.
+        m.handle(ServerOp.PlayerPosition, a9(3));
+        expect(norseman()).toMatchObject({ healthPercent: 3, isDead: true });
+        // Rezzed (0x89 goes to it alone, ResurrectSpellHandler.cs:179): health again is the revive.
+        now += 5000;
+        m.handle(ServerOp.PlayerPosition, a9(10));
+        expect(norseman()).toMatchObject({ healthPercent: 10, isDead: false });
+        // A DEAD state from a real client holds (the server strips it only from the living).
+        m.handle(ServerOp.PlayerPosition, a9(0, 0x14));
+        expect(norseman().isDead).toBe(true);
+    });
+
+    test('a dead player gone quiet is culled: it released out of our view and its corpse is gone', () => {
+        let now = 1000;
+        const m = new WorldModel({}, () => now);
+        m.self.objectId = 123;
+        m.handle(ServerOp.PlayerCreate172, playerCreate(301, 9, 'Norseman', 2));
+        m.handle(ServerOp.PlayerCreate172, playerCreate(302, 10, 'Ally', 1));
+        m.handle(ServerOp.PlayerDeath, W().u16(301).u16(302).fill(0, 4).toBytes());
+        now += 30_000;
+        m.cull(ME);
+        expect(m.players.size).toBe(2);
+        now += 31_000;
+        m.cull(ME);
+        // The living one standing still stays (it may just be idle).
+        expect([...m.players.keys()]).toEqual([302]);
+    });
+
+    test('spell cast and effect events keep the client effect id', () => {
+        const m = new WorldModel();
+        m.handle(ServerOp.SpellCastAnimation, W().u16(301).u16(5208).u16(30).u16(0).toBytes());
+        m.handle(ServerOp.SpellEffectAnimation, W().u16(301).u16(5208).u16(123).u16(0).u8(0).u8(1).toBytes());
+        expect(m.combatEvents).toMatchObject([
+            { kind: 'spellCast', attackerObjectId: 301, targetObjectId: null, castTimeMs: 3000, effectId: 5208 },
+            { kind: 'spellEffect', attackerObjectId: 301, targetObjectId: 123, effectId: 5208 },
+        ]);
+    });
+
+    test(`the buffer keeps the newest ${MAX_COMBAT_EVENTS} events (a group fight is many swings a second)`, () => {
+        expect(MAX_COMBAT_EVENTS).toBe(200);
+        const m = new WorldModel();
+        for (let i = 0; i < 250; i++) m.handle(ServerOp.CombatAnimation, combatAnimation(301, 123, 100 - (i % 100)));
+        expect(m.combatEvents).toHaveLength(200);
+        expect(m.combatEvents[0]!.id).toBe(m.combatEvents.at(-1)!.id - 199);
     });
 });

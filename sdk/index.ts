@@ -719,6 +719,11 @@ export class BotSDK {
         return this.state?.nearbyPlayers ?? [];
     }
 
+    /** Nearby player by object id (enemy players are named by race, so their names are not unique). */
+    getNearbyPlayer(objectId: number): NearbyPlayer | null {
+        return this.state?.nearbyPlayers.find(p => p.objectId === objectId) ?? null;
+    }
+
     /** Nearby player by name (shortest name, then nearest). */
     findNearbyPlayer(pattern: NamePattern, options: FindOptions = {}): NearbyPlayer | null {
         return bestNameMatch((this.state?.nearbyPlayers ?? []).filter(p => options.maxDistance === undefined || p.distance <= options.maxDistance), pattern);

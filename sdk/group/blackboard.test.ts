@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
-import { Blackboard, isMaterialChange, emptyOrders } from './blackboard';
+import { makePlayer, makePlayerObj, makeState } from '../test/fixtures';
+import type { CombatEvent, NearbyPlayer } from '../types';
+import { Blackboard, isMaterialChange, emptyOrders, observeState, type MemberSelf } from './blackboard';
 import { obs, report, sighting } from './fixtures';
 import type { GroupEvent } from './types';
 
@@ -232,5 +234,256 @@ describe('Blackboard: orders', () => {
         expect(isMaterialChange(a, { ...a, cc: [{ targetId: 8, by: 'Bard' }] })).toBe(true);
         expect(isMaterialChange(a, { ...a, reason: 'other words' })).toBe(false);
         expect(isMaterialChange({ ...a, retreatTo: { x: 0, y: 0, z: 0 } }, { ...a, retreatTo: { x: 500, y: 0, z: 0 } })).toBe(true);
+    });
+});
+
+describe('enemy players', () => {
+    const T = 1_800_000_000_000;
+    const self: MemberSelf = { bot: 'testbot', role: 'tank', activity: { kind: 'idle', targetId: null, detail: '', since: 0 }, capabilities: { heal: false, cc: false, nuke: false, buffs: [], buffSpells: [] } };
+    let id = 0;
+    /** A combat event `ago` ms before the snapshot. */
+    const ev = (kind: CombatEvent['kind'], attacker: number, target: number | null, ago: number, extra: Partial<CombatEvent> = {}): CombatEvent =>
+        ({ id: ++id, kind, attackerObjectId: attacker, targetObjectId: target, receivedAt: T - ago, ...extra });
+    // We are Testbot (100, albion), 302 is a friend; 300 and 301 are Midgard, 303 and 304 Hibernia.
+    const players = [
+        makePlayerObj({ objectId: 300, name: 'Norseman', realm: 'midgard', inCombat: true }),
+        makePlayerObj({ objectId: 301, name: 'Troll', realm: 'midgard' }),
+        makePlayerObj({ objectId: 302, name: 'Friend', realm: 'albion' }),
+        makePlayerObj({ objectId: 303, name: 'Celt', realm: 'hibernia' }),
+        makePlayerObj({ objectId: 304, name: 'Elf', realm: 'hibernia' }),
+    ];
+    const state = (combatEvents: CombatEvent[], player = {}) =>
+        makeState({ timestamp: T, player: makePlayer({ objectId: 100, realmPoints: 1234, ...player }), nearbyNpcs: [], nearbyPlayers: players, combatEvents });
+    const seen = (o: ReturnType<typeof observeState>, objectId: number) => o!.sightings.find(s => s.objectId === objectId)!;
+    /** Our observation `ms` after T, for stepping the board through time. */
+    const later = (ms: number, combatEvents: CombatEvent[], nearbyPlayers = players) =>
+        observeState(makeState({ timestamp: T + ms, player: makePlayer({ objectId: 100 }), nearbyNpcs: [], nearbyPlayers, combatEvents }), self)!;
+
+    test('observeState infers a player\'s target from its latest swing or hostile spell, and reads its casts and heals', () => {
+        const o = observeState(state([
+            ev('melee', 300, 302, 3500),
+            ev('melee', 300, 100, 500),
+            // 301 heals 300 and is casting again: a heal is no target and no swing.
+            ev('spellEffect', 301, 300, 2600),
+            ev('spellCast', 301, null, 2500, { castTimeMs: 2500 }),
+            // 303 nukes us from range: its target, though the effect is older than the swing window.
+            ev('spellCast', 303, null, 5500, { castTimeMs: 2500 }),
+            ev('spellEffect', 303, 100, 3000),
+            // 304 buffed itself and swung 6.5 s ago, longer than a slow weapon's round: nothing it did is recent.
+            ev('spellEffect', 304, 304, 1000),
+            ev('melee', 304, 100, 6500),
+        ]), self)!;
+        expect(o.sightings.map(s => s.objectId)).toEqual([300, 301, 303, 304]);
+        expect(seen(o, 300)).toMatchObject({ kind: 'player', realm: 'midgard', targetId: 100, swinging: true, casting: false, helped: false, inCombat: true });
+        expect(seen(o, 301)).toMatchObject({ targetId: null, swinging: false, casting: true, helped: true });
+        expect(seen(o, 303)).toMatchObject({ targetId: 100, swinging: false, casting: false, helped: false });
+        expect(seen(o, 304)).toMatchObject({ targetId: null, swinging: false, casting: false, helped: false });
+        expect(o.report.realmPoints).toBe(1234);
+        expect(o.killer).toBeNull();
+    });
+
+    test('a player\'s cast start or hostile spell in the swing window counts as a swing (a mezzed player does neither)', () => {
+        const o = observeState(state([ev('spellCast', 301, null, 500, { castTimeMs: 0 }), ev('spellEffect', 303, 100, 1500)]), self)!;
+        expect(seen(o, 301)).toMatchObject({ swinging: true, casting: true });
+        expect(seen(o, 303)).toMatchObject({ swinging: true, targetId: 100 });
+        // A cast lasts its cast time, at least 3 s.
+        expect(seen(observeState(state([ev('spellCast', 301, null, 4000, { castTimeMs: 4500 })]), self)!, 301).casting).toBe(true);
+        expect(seen(observeState(state([ev('spellCast', 301, null, 3200, { castTimeMs: 1000 })]), self)!, 301).casting).toBe(false);
+    });
+
+    test('a dead member\'s killer: the death event\'s, else the newest foe that hit it, never a friend\'s heal', () => {
+        const dead = { isDead: true, healthPercent: 0 };
+        expect(observeState(state([ev('melee', 303, 100, 4000), ev('death', 300, 100, 100)], dead), self)!.killer).toEqual({ name: 'Norseman', kind: 'player', realm: 'midgard' });
+        expect(observeState(state([ev('melee', 303, 100, 4000), ev('spellEffect', 302, 100, 1000)], dead), self)!.killer).toEqual({ name: 'Celt', kind: 'player', realm: 'hibernia' });
+        // The killer left view and nobody else hit it, or the hit is too old.
+        expect(observeState(state([ev('death', 999, 100, 100)], dead), self)!.killer).toBeNull();
+        expect(observeState(state([ev('melee', 303, 100, 20_000)], dead), self)!.killer).toBeNull();
+    });
+
+    test('a player meleeing a member is a threat on that member; so is a caster nuking one', () => {
+        const b = new Blackboard();
+        const now = Date.now();
+        const fresh = (o: ReturnType<typeof observeState>) => ({ ...o!, report: { ...o!.report, at: now, regionId: 200 } });
+        b.publish(obs(report('Friend', { objectId: 302, at: now })), now);
+        b.publish(fresh(observeState(state([ev('melee', 300, 100, 500), ev('spellEffect', 303, 302, 800)]), self)), now);
+        const c = (objectId: number) => b.picture(now).contacts.find(x => x.objectId === objectId)!;
+        expect(c(300)).toMatchObject({ kind: 'player', target: 'Testbot', targetId: 100, threat: true, hostileSince: now });
+        expect(c(303)).toMatchObject({ target: 'Friend', targetId: 302, threat: true });
+        expect(c(301)).toMatchObject({ target: null, threat: false, healer: false, caster: false });
+    });
+
+    test('a player in attack mode that stops hitting loses its target, then its threat: no hold as for a running mob', () => {
+        const b = new Blackboard({ hostileMs: 4000 });
+        // The Norseman (inCombat: attack mode on) swings at us once, then hits nobody we see.
+        const swing = [ev('melee', 300, 100, 0)];
+        const norseman = (ms: number) => {
+            b.publish(later(ms, swing), T + ms);
+            return b.picture(T + ms).contacts.find(c => c.objectId === 300)!;
+        };
+        expect(norseman(500)).toMatchObject({ inCombat: true, target: 'Testbot', targetId: 100, threat: true });
+        expect(norseman(3000)).toMatchObject({ target: 'Testbot', threat: true });
+        // A two-handed weapon swings every 4.4-5.5 s: the target holds between two swings (PLAYER_AIM_MS).
+        expect(norseman(5500)).toMatchObject({ target: 'Testbot', targetId: 100, targetSince: T + 500, threat: true });
+        expect(norseman(6500)).toMatchObject({ inCombat: true, target: null, targetId: null, targetSince: T + 6500, threat: true });
+        for (let ms = 7500; ms < 40_000; ms += 1000) norseman(ms);
+        expect(norseman(40_000)).toMatchObject({ inCombat: true, target: null, threat: false, hostileSince: 0, movedAt: 0 });
+    });
+
+    test('healer and caster stick to the contact once any member saw it heal or cast', () => {
+        const b = new Blackboard();
+        const t0 = Date.now();
+        const troll = (over: Parameters<typeof sighting>[1]) => sighting(301, { kind: 'player', name: 'Troll', realm: 'midgard', ...over });
+        b.publish(obs(report('Tank', { at: t0 }), [troll({})]), t0);
+        expect(b.picture(t0).contacts[0]).toMatchObject({ healer: false, caster: false });
+        b.publish(obs(report('Healer', { at: t0 + 100, x: 1200 }), [troll({ helped: true, casting: true })]), t0 + 100);
+        b.publish(obs(report('Tank', { at: t0 + 2000 }), [troll({ helped: false, casting: false })]), t0 + 2000);
+        expect(b.picture(t0 + 2000).contacts[0]).toMatchObject({ helped: false, casting: false, healer: true, caster: true });
+        // Monsters carry no such flags.
+        b.publish(obs(report('Tank', { at: t0 + 2100 }), [troll({}), sighting(7)]), t0 + 2100);
+        expect('healer' in b.picture(t0 + 2100).contacts.find(c => c.objectId === 7)!).toBe(false);
+    });
+
+    test('a kill names the enemy\'s kind and realm; a member\'s death names its killer', () => {
+        const b = new Blackboard();
+        const events: GroupEvent[] = [];
+        b.onEvent(e => events.push(e));
+        const t0 = Date.now();
+        const norseman = sighting(300, { kind: 'player', name: 'Norseman', realm: 'midgard', level: 20, targetId: 11 });
+        b.publish(obs(report('Tank', { at: t0, objectId: 11 }), [norseman, sighting(7, { targetId: 11 })]), t0);
+        b.publish(obs(report('Tank', { at: t0 + 100, objectId: 11 }), [], [300, 7]), t0 + 100);
+        expect(events.filter(e => e.kind === 'kill').map(e => e.data)).toEqual([
+            { name: 'Norseman', level: 20, kind: 'player', realm: 'midgard' },
+            { name: 'water beetle', level: 6, kind: 'npc', realm: 'none' },
+        ]);
+        const killer = { name: 'Celt', kind: 'player', realm: 'hibernia' } as const;
+        b.publish({ ...obs(report('Tank', { at: t0 + 200, objectId: 11, isDead: true })), killer }, t0 + 200);
+        b.publish(obs(report('Healer', { at: t0 + 200 })), t0 + 200);
+        b.publish(obs(report('Healer', { at: t0 + 300, isDead: true })), t0 + 300);
+        expect(events.filter(e => e.kind === 'death').map(e => [e.member, e.data])).toEqual([['Tank', { killer }], ['Healer', { killer: null }]]);
+    });
+
+    test('an enemy another realm killed is our kill only if we hit it; by our realm or a killer out of view, it is', () => {
+        const outcome = (killer: number, weHit: boolean) => {
+            const b = new Blackboard();
+            const events: GroupEvent[] = [];
+            b.onEvent(e => events.push(e));
+            // The Norseman swings at us (engaged), maybe we hit back; a second later the death event names `killer`.
+            const fight = [ev('melee', 300, 100, 1000), ...(weHit ? [ev('melee', 100, 300, 500)] : [])];
+            b.publish(later(0, fight), T);
+            const corpse = players.map(o => (o.objectId === 300 ? { ...o, isDead: true, healthPercent: 0 } : o));
+            b.publish(later(1000, [...fight, ev('death', killer, 300, -1000)], corpse), T + 1000);
+            expect(b.picture(T + 1000).contacts.some(c => c.objectId === 300)).toBe(false);
+            return events.filter(e => e.kind === 'kill' || e.kind === 'note').map(e => `${e.kind}: ${e.text}`);
+        };
+        // The Celt (Hibernia) finished a Norseman we never hit: Hibernia's kill, not ours.
+        expect(outcome(303, false)).toEqual(['note: Norseman (L10) died to someone else']);
+        // We hit it: the server shares the kill among all who damaged it.
+        expect(outcome(303, true)).toEqual(['kill: Norseman (L10) died']);
+        expect(outcome(302, false)).toEqual(['kill: Norseman (L10) died']);
+        expect(outcome(999, false)).toEqual(['kill: Norseman (L10) died']);
+        expect(later(1000, [ev('melee', 100, 300, 500), ev('death', 303, 300, -1000), ev('death', 302, 301, -1000)])).toMatchObject({ foeKills: [300], hits: [300] });
+    });
+
+    test('a killed player seen alive again after a few seconds was rezzed: a contact at once', () => {
+        const b = new Blackboard();
+        const t0 = Date.now();
+        const norseman = (hp: number) => sighting(300, { kind: 'player', name: 'Norseman', realm: 'midgard', hp, targetId: 11 });
+        b.publish(obs(report('Tank', { at: t0, objectId: 11 }), [norseman(5)]), t0);
+        b.publish(obs(report('Tank', { at: t0 + 100, objectId: 11 }), [], [300]), t0 + 100);
+        // A member's late snapshot of it alive: ignored.
+        b.publish(obs(report('Healer', { at: t0 + 500, x: 1200 }), [norseman(5)]), t0 + 500);
+        expect(b.picture(t0 + 500).contacts).toEqual([]);
+        // Rezzed at its corpse with a little health; the death members still report is the old one.
+        b.publish(obs(report('Tank', { at: t0 + 4000, objectId: 11 }), [norseman(10)], [300]), t0 + 4000);
+        expect(b.picture(t0 + 4000).contacts).toMatchObject([{ objectId: 300, hp: 10 }]);
+    });
+});
+
+describe('enemy players: who is hostile to us, and who died', () => {
+    const T = 1_800_000_000_000;
+    const self: MemberSelf = { bot: 'testbot', role: 'tank', activity: { kind: 'idle', targetId: null, detail: '', since: 0 }, capabilities: { heal: false, cc: false, nuke: false, buffs: [], buffSpells: [] } };
+    let id = 0;
+    const ev = (kind: CombatEvent['kind'], attacker: number, target: number | null, ago: number, extra: Partial<CombatEvent> = {}): CombatEvent =>
+        ({ id: ++id, kind, attackerObjectId: attacker, targetObjectId: target, receivedAt: T - ago, ...extra });
+    // We are Testbot (100, albion) at x 560000; 300 is Midgard, 303 Hibernia, both `dx` east of us.
+    const enemies = (dx: number, over: Partial<NearbyPlayer> = {}) => [
+        makePlayerObj({ objectId: 300, name: 'Norseman', realm: 'midgard', x: 560000 + dx, distance: dx, distance2d: dx, ...over }),
+        makePlayerObj({ objectId: 303, name: 'Celt', realm: 'hibernia', x: 560000 + dx + 50, distance: dx + 50, distance2d: dx + 50 }),
+    ];
+    const look = (ms: number, combatEvents: CombatEvent[], nearbyPlayers: NearbyPlayer[]) =>
+        observeState(makeState({ timestamp: T + ms, player: makePlayer({ objectId: 100 }), nearbyNpcs: [], nearbyPlayers, combatEvents }), self, 5000)!;
+
+    test('two other realms fighting each other far off are no threat to us; within hostileRadius of a member they are', () => {
+        const b = new Blackboard();
+        // The Norseman melees the Celt, who starts a cast: the rvr strategy's members report enemies to 5000.
+        const fight = [ev('melee', 300, 303, 500), ev('spellCast', 303, null, 800, { castTimeMs: 2500 })];
+        const c = (ms: number, objectId: number) => b.picture(T + ms).contacts.find(x => x.objectId === objectId)!;
+        b.publish(look(0, fight, enemies(4500)), T);
+        expect(c(0, 300)).toMatchObject({ targetId: 303, target: null, swinging: true, threat: false, hostileSince: 0 });
+        expect(c(0, 303)).toMatchObject({ swinging: true, casting: true, threat: false });
+        // The same fight 2000 from us: it may turn on us any moment (a cast's target is unknown until it lands).
+        b.publish(look(1000, fight, enemies(2000)), T + 1000);
+        expect(c(1000, 300)).toMatchObject({ threat: true, hostileSince: T + 1000 });
+        expect(c(1000, 303).threat).toBe(true);
+    });
+
+    test('a far enemy is hostile when it is on a member or we hit it', () => {
+        const b = new Blackboard();
+        // A Celt's bolt lands on us from 4500; our arrow lands on the Norseman.
+        b.publish(look(0, [ev('spellEffect', 303, 100, 500), ev('melee', 100, 300, 300, { result: 'hit' })], enemies(4500)), T);
+        const threat = (objectId: number) => b.picture(T).contacts.find(x => x.objectId === objectId)!.threat;
+        expect(threat(303)).toBe(true);
+        expect(threat(300)).toBe(true);
+    });
+
+    test('the broad swing flag still breaks a mezz, though a far swing is no threat', () => {
+        const b = new Blackboard();
+        const events: GroupEvent[] = [];
+        b.onEvent(e => events.push(e));
+        b.publish(look(0, [], enemies(4500)), T);
+        b.markCc(300, 1, 'Bard', 'mezz', 30_000, T);
+        b.publish(look(3000, [ev('melee', 300, 303, -2500)], enemies(4500)), T + 3000);
+        expect(b.picture(T + 3000).contacts.find(x => x.objectId === 300)).toMatchObject({ cc: null, threat: false });
+        expect(events.map(e => e.text)).toContain('mezz on Norseman broke');
+    });
+
+    test('our landed swing is a hit (a share of the kill); a miss, parry, block or evade is not', () => {
+        const hits = (result: CombatEvent['result']) => look(0, [ev('melee', 100, 300, 500, { result })], enemies(100)).hits;
+        for (const r of ['miss', 'parry', 'block', 'evade', 'fumble'] as const) expect(hits(r)).toEqual([]);
+        expect(hits('hit')).toEqual([300]);
+        expect(hits('styledHit')).toEqual([300]);
+        // A missed swing still shows whom it was aimed at.
+        expect(look(0, [ev('melee', 300, 100, 500, { result: 'miss' })], enemies(100)).sightings.find(s => s.objectId === 300)!.targetId).toBe(100);
+    });
+
+    test('a living player at 0 % (health is rounded down) is a sighting and a threat, not a death', () => {
+        const o = look(0, [ev('melee', 300, 100, 500)], enemies(100, { healthPercent: 0 }));
+        expect(o.deaths).toEqual([]);
+        expect(o.sightings.find(s => s.objectId === 300)).toMatchObject({ hp: 0, targetId: 100 });
+        const b = new Blackboard();
+        const events: GroupEvent[] = [];
+        b.onEvent(e => events.push(e));
+        b.publish(o, T);
+        expect(b.picture(T).contacts.find(c => c.objectId === 300)).toMatchObject({ hp: 0, target: 'Testbot', threat: true });
+        expect(events.filter(e => e.kind === 'kill')).toEqual([]);
+    });
+
+    test('a dead entry is a death only while fresh: a corpse left in one member\'s model kills no live contact', () => {
+        const corpse = (lastSeenAgo: number) => enemies(500, { isDead: true, healthPercent: 0, lastSeenAgo });
+        expect(look(0, [], corpse(500)).deaths).toEqual([300]);
+        expect(look(0, [], corpse(60_000)).deaths).toEqual([]);
+        expect(look(0, [], corpse(60_000)).sightings.map(s => s.objectId)).toEqual([303]);
+        // The death event itself still counts for 5 s, however old the entry.
+        expect(look(0, [ev('death', 303, 300, 1000)], corpse(60_000)).deaths).toEqual([300]);
+
+        // The Norseman released, walked back and hits the Healer 8000 east; Testbot still holds its corpse.
+        const b = new Blackboard();
+        const events: GroupEvent[] = [];
+        b.onEvent(e => events.push(e));
+        const back = sighting(300, { kind: 'player', name: 'Norseman', realm: 'midgard', x: 568100, y: 511000, targetId: 11 });
+        b.publish(obs(report('Healer', { at: T, objectId: 11, regionId: 1, x: 568000, y: 511000 }), [back]), T);
+        b.publish(look(100, [], corpse(60_000)), T + 100);
+        expect(b.picture(T + 100).contacts.find(c => c.objectId === 300)).toMatchObject({ hp: 100, target: 'Healer' });
+        expect(events.filter(e => e.kind === 'kill')).toEqual([]);
     });
 });

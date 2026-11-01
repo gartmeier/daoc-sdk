@@ -28,6 +28,7 @@
 
 import { conLevel } from '../actions-helpers';
 import { MOB_ROAM_REACH, PLAN_PADS } from './baseplan';
+import { isAlive } from './blackboard';
 import { aggroZones, type Danger } from './terrain';
 import type { Contact, Point } from './types';
 
@@ -83,7 +84,7 @@ export interface DangerStop extends Point {
 export function dangerStops(threats: readonly Contact[], members: readonly { name: string; x: number; y: number }[], me: { name: string }, now: number): DangerStop[] {
     const out: DangerStop[] = [];
     for (const c of threats) {
-        if (c.stale || c.hp <= 0 || c.target === me.name) continue;
+        if (c.stale || !isAlive(c) || c.target === me.name) continue;
         if (c.cc && c.cc.until - now >= CC_ENDING_MS) continue;
         const m = c.target ? members.find(x => x.name === c.target) : undefined;
         out.push(m && dist(c, m) > RUNNING_AT

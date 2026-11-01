@@ -6,7 +6,7 @@ import { createGateway, type Gateway, type GatewayOptions } from '../gateway';
 import { makeState } from '../../sdk/test/fixtures';
 import { conColor, conLevel } from './con-level';
 import {
-    appendBySeq, canWindDown, ccSeen, conReference, contactListed, deathContext, eventVisible, gatewayRestarted, isGroupFrame, isThreat,
+    appendBySeq, canWindDown, ccSeen, conReference, contactListed, deathContext, enemyTags, eventVisible, gatewayRestarted, isGroupFrame, isThreat,
     listedContacts, logLineKind, mapRegion, mergeEvents, npcShown, phaseClass, retryRuns, roleLetter, runFailed, runPill, runRegion, timeLeft,
     type FeedFilters,
 } from './group-logic';
@@ -116,6 +116,65 @@ describe('viewer routes', () => {
         expect(text).not.toContain('WebSocket');
         expect(text).not.toContain('sdk_connect');
     }, 20_000);
+
+    test('GET /viewer/region/<id> serves the region page; /viewer/region alone stays a bot page', async () => {
+        start();
+        const page = await http('/viewer/region/252');
+        expect(page.status).toBe(200);
+        expect(page.headers.get('content-type')).toContain('text/html');
+        const html = await page.text();
+        expect(html).toContain('data-region="252"');
+        expect(html).toContain('/viewer/assets/region.js');
+        expect(html).not.toContain('{{REGION}}');
+        expect(await (await http('/viewer/region/0252/')).text()).toContain('data-region="252"');
+        // Region ids are digits only, so nothing that needs escaping reaches the page.
+        for (const bad of ['abc', encodeURIComponent('<x>"'), '1'.repeat(10), '252/x']) {
+            const res = await http(`/viewer/region/${bad}`);
+            expect(res.status).toBe(404);
+            expect(await res.text()).not.toContain('<x>');
+        }
+        expect(await (await http('/viewer/region')).text()).toContain('data-bot="region"');
+    });
+
+    test('GET /viewer/assets/region.js bundles the region page with no imports and no sockets', async () => {
+        start();
+        const js = await http('/viewer/assets/region.js');
+        expect(js.status).toBe(200);
+        expect(js.headers.get('content-type')).toContain('javascript');
+        const text = await js.text();
+        expect(text).toContain('/regions/');
+        expect(text).not.toContain('import ');
+        // Observe-only by construction, like the group page: no socket, so it can never pre-empt a controller.
+        expect(text).not.toContain('WebSocket');
+        expect(text).not.toContain('sdk_connect');
+        // Bun's bundle prints strings in double quotes: match either quote style.
+        expect(text).not.toMatch(/method:\s*["']POST["']/);
+    }, 20_000);
+
+    test('GET /regions and /regions/<id>/live: the region\'s in-game bots; an auth hook shows only those the bearer password opens', async () => {
+        start({ auth: ({ kind, password }) => (kind === 'bot' || password === 'pw' ? { success: true } : { success: false, error: 'bad password' }) });
+        expect(await (await http('/regions')).json()).toEqual({ regions: [] });
+        await attachBot('vbot');
+        // No more than /bots says, so no password.
+        expect(await (await http('/regions')).json()).toEqual({ regions: [{ regionId: 1, zones: ['Camelot Hills'], bots: 1, realms: { albion: 1 }, groups: [] }] });
+        const hidden = await http('/regions/1/live');
+        expect(hidden.status).toBe(200);
+        expect(hidden.headers.get('content-type')).toContain('application/json');
+        expect(await hidden.json()).toMatchObject({ v: 1, regionId: 1, layout: null, bots: [], runs: [], enemies: [], keeps: [], hidden: { bots: 1, runs: 0 } });
+        // Never a password from the query string.
+        expect((await (await http('/regions/1/live?password=pw')).json() as any).hidden.bots).toBe(1);
+        const shown = await (await http('/regions/1/live', { headers: authHeaders('pw') })).json() as any;
+        expect(shown.hidden).toEqual({ bots: 0, runs: 0 });
+        expect(shown.bots).toHaveLength(1);
+        expect(shown.bots[0]).toMatchObject({ username: 'vbot', name: 'Testbot', realm: 'albion', status: 'active', x: 560000, y: 511000 });
+        // makeState's nearby player is an Albion stranger: same realm, so no enemy marker.
+        expect(shown.enemies).toEqual([]);
+        const bg = await (await http('/regions/252/live')).json() as any;
+        expect(bg.layout).toEqual({ name: 'Thidranki', levels: [20, 24] });
+        expect(bg.keeps.map((k: any) => k.name)).toEqual(['Thidranki Faste', 'Hibernia Portal Keep', 'Midgard Portal Keep', 'Albion Portal Keep']);
+        expect(bg.keeps[0].clearance).toBe(3000);
+        expect(bg.bots).toEqual([]);
+    });
 
     test('GET /viewer/assets serves the bundled app and css', async () => {
         start();
@@ -538,6 +597,15 @@ describe('group page logic', () => {
         ];
         expect(listedContacts(world, members).map(c => c.name)).toEqual(['Enemy', 'wolf', 'rat', 'cat']);
         expect(listedContacts([], members)).toEqual([]);
+    });
+
+    test('enemyTags: what the board saw an enemy player do; nothing for monsters or without a run', () => {
+        const enemy = (b: Partial<NonNullable<WorldContact['board']>>) => contact({ kind: 'player', npc: null, realm: 'midgard', enemy: true, board: board(b) });
+        expect(enemyTags(enemy({ healer: true, caster: true, casting: false }))).toEqual(['healer', 'caster']);
+        expect(enemyTags(enemy({ caster: true }))).toEqual(['caster']);
+        expect(enemyTags(enemy({}))).toEqual([]);
+        expect(enemyTags(contact({ kind: 'player', npc: null, realm: 'midgard', enemy: true }))).toEqual([]);
+        expect(enemyTags(contact({ board: board({ healer: true }) }))).toEqual([]);
     });
 
     test('retryRuns: a runs list refused before the stored password unlocked /live is asked for again, once', () => {

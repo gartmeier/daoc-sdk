@@ -5,16 +5,22 @@
 // It only reads: board pictures (sampled once a second) and board events. It
 // works the same for a coordinated run and for a passive watch over observe-mode
 // connections (no orders: the phase is inferred from the picture).
+//
+// A run that met enemy players (RvR) also gets player kills, deaths to players,
+// realm points and engagements, and leaves out the findings that only fit PvE.
 
 import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import type { Blackboard } from './blackboard';
+import { isAlive, type Blackboard } from './blackboard';
 import type { GroupEvent, GroupPicture, Phase } from './types';
 import type { LiveReport } from './wire';
 
 export interface Finding {
     severity: 'high' | 'medium' | 'low';
-    /** 'aggro', 'deaths', 'interrupts', 'idle', 'downtime', 'adds', 'positioning', 'duplicates', 'pace', 'retreats', 'no-kills'. */
+    /**
+     * 'aggro', 'deaths', 'interrupts', 'idle', 'downtime', 'adds', 'positioning', 'duplicates', 'pace', 'retreats', 'no-kills';
+     * a strategy's findings() adds its own ('strategy' when it threw).
+     */
     topic: string;
     member?: string;
     issue: string;
@@ -47,6 +53,9 @@ export interface FightSummary {
     deaths: string[];
     retreated: boolean;
     outcome: 'won' | 'retreated' | 'wiped' | 'lost' | 'unfinished';
+    /** RvR: distinct enemy players among the fight's focus and attackers, and their realms. */
+    enemyPlayers?: number;
+    enemyRealms?: string[];
 }
 
 export interface MemberStats {
@@ -76,6 +85,10 @@ export interface MemberStats {
     minHp: number;
     /** % of run time the group waited for this member, by reason (health, power, dead, away). */
     waitedFor: Record<string, number>;
+    /** RvR: realm points gained in the run. */
+    realmPoints?: number;
+    /** Deaths by killer: 'player:<realm>', 'pet:<realm>' (an NPC of another player realm: a pet or a keep guard), 'npc:<name>' or 'unknown'. */
+    killedBy?: Record<string, number>;
 }
 
 export interface RunReport {
@@ -89,6 +102,17 @@ export interface RunReport {
         /** % of time not fighting or pulling. */
         downtime: number;
         tankHold: number | null;
+        /**
+         * RvR: enemy players killed, members killed by players (their pets and keep guards too),
+         * realm points gained (group total) and per hour.
+         */
+        playerKills?: number;
+        deathsToPlayers?: number;
+        realmPoints?: number;
+        rpPerHour?: number;
+        /** RvR: distinct enemy players the group saw, and fights with at least one enemy player. */
+        enemiesSeen?: number;
+        engagements?: number;
     };
     /** % of run time per phase. */
     phases: Partial<Record<Phase, number>>;
@@ -106,12 +130,17 @@ interface Track {
     deaths: number; actions: Record<string, number>; failures: Record<string, number>;
     fightSamples: number; engageSamples: number; idle: number; idleReasons: Record<string, number>; targeted: number; inMelee: number; moving: number; minHp: number;
     waitMs: Record<string, number>;
+    /** Realm points at the first report that carried them (null until one did), and the highest since. */
+    rp0: number | null; rp1: number;
+    killedBy: Record<string, number>;
 }
 
-interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outcome' | 'adds' | 'openerMs'> {
+interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outcome' | 'adds' | 'openerMs' | 'enemyPlayers' | 'enemyRealms'> {
     at: number; attackers: Set<number>; holdSamples: number; heldSamples: number;
     /** The first sample under the coordinator's engage order; members alive in such samples; each member's first nuke. */
     engageAt: number | null; engaged: Set<string>; firstNuke: Map<string, number>;
+    /** Enemy players among the focus and attackers: realm by region:objectId. */
+    enemies: Map<string, string>;
 }
 
 const pct = (a: number, b: number) => b > 0 ? Math.round(100 * a / b) : 0;
@@ -122,6 +151,10 @@ const median = (xs: number[]): number | null => {
     return s.length % 2 ? s[h]! : Math.round((s[h - 1]! + s[h]!) / 2);
 };
 const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+/** Realms of players: an NPC of one (a pet, a keep guard) that kills a member is an RvR death. Monsters are 'none'. */
+const PLAYER_REALMS = new Set(['albion', 'midgard', 'hibernia']);
+/** A retreat ordered again this soon after the last one ended goes on with it. */
+const RETREAT_RESUME_MS = 5000;
 
 /** Note a member's nuke in the open fight, keeping the earliest. */
 function nuked(f: OpenFight, name: string, at: number): void {
@@ -149,11 +182,19 @@ export class GroupObserver {
     private calm = 0;
     private kills = 0;
     private retreats = 0;
+    /** The last orders event's phase, and when a retreat last ended: each retreat counts once (handle). */
+    private ordersPhase: unknown = null;
+    private retreatEndedAt = -Infinity;
     private wipes = 0;
+    private playerKills = 0;
+    private deathsToPlayers = 0;
+    /** Enemy player contacts ever seen, by region:objectId. */
+    private readonly enemies = new Set<string>();
     private timer: ReturnType<typeof setInterval> | null = null;
     private unsubscribe: (() => void) | null = null;
 
-    constructor(private readonly board: Blackboard | null, private readonly meta: { group: string; strategy: string; sampleMs?: number; startedAt?: number }) {
+    /** `findings`: the strategy's own rules (GroupStrategy.findings), added to every report's. */
+    constructor(private readonly board: Blackboard | null, private readonly meta: { group: string; strategy: string; sampleMs?: number; startedAt?: number; findings?: (r: RunReport) => Finding[] }) {
         this.started = meta.startedAt ?? Date.now();
         this.last = this.started;
     }
@@ -190,14 +231,19 @@ export class GroupObserver {
         for (const m of p.members) {
             let t = this.members.get(m.name);
             if (!t) {
-                t = { role: m.role, className: m.className, level0: m.level, level1: m.level, xp0: m.experience, xp1: m.experience, deaths: 0, actions: {}, failures: {}, fightSamples: 0, engageSamples: 0, idle: 0, idleReasons: {}, targeted: 0, inMelee: 0, moving: 0, minHp: m.hp, waitMs: {} };
+                t = { role: m.role, className: m.className, level0: m.level, level1: m.level, xp0: m.experience, xp1: m.experience, deaths: 0, actions: {}, failures: {}, fightSamples: 0, engageSamples: 0, idle: 0, idleReasons: {}, targeted: 0, inMelee: 0, moving: 0, minHp: m.hp, waitMs: {}, rp0: null, rp1: 0, killedBy: {} };
                 this.members.set(m.name, t);
             }
             t.className = m.className;
             t.level1 = m.level;
             if (m.experience >= t.xp1) t.xp1 = m.experience;
+            if (typeof m.realmPoints === 'number') {
+                t.rp0 ??= m.realmPoints;
+                t.rp1 = Math.max(t.rp1, m.realmPoints);
+            }
             t.minHp = Math.min(t.minHp, m.hp);
         }
+        for (const c of p.contacts) if (c.kind === 'player') this.enemies.add(`${c.regionId}:${c.objectId}`);
         for (const w of p.orders.waiting ?? []) {
             const t = this.members.get(w.name);
             if (t) inc(t.waitMs, w.why, dt);
@@ -208,7 +254,7 @@ export class GroupObserver {
         if (fighting && !this.fight) {
             this.fight = {
                 start: Math.round((p.at - this.started) / 1000), at: p.at, focus: [], kills: [], maxAttackers: 0, deaths: [], retreated: false, attackers: new Set(), holdSamples: 0, heldSamples: 0,
-                engageAt: null, engaged: new Set(), firstNuke: new Map(),
+                engageAt: null, engaged: new Set(), firstNuke: new Map(), enemies: new Map(),
             };
         }
         if (this.calm >= 3 && this.fight) this.closeFight(p.at, p);
@@ -226,9 +272,10 @@ export class GroupObserver {
         const tank = p.members.find(m => m.role === 'tank' && !m.isDead);
         const focus = p.contacts.find(c => c.objectId === p.orders.focus) ?? (tank ? p.contacts.find(c => c.objectId === tank.targetId) : undefined);
         if (focus && !f.focus.includes(focus.name)) f.focus.push(focus.name);
+        for (const c of focus ? [focus, ...threats] : threats) if (c.kind === 'player') f.enemies.set(`${c.regionId}:${c.objectId}`, c.realm);
         // Only samples where the mob's target is known. The board keeps the last one while the mob
         // runs or is out of reach (the server sends none then), so those count; a reset clears it.
-        if (phase === 'engage' && tank && focus && focus.hp > 0 && !focus.cc && focus.target !== null) {
+        if (phase === 'engage' && tank && focus && isAlive(focus) && !focus.cc && focus.target !== null) {
             f.holdSamples++;
             if (focus.target === tank.name) f.heldSamples++;
         }
@@ -266,12 +313,17 @@ export class GroupObserver {
                 else if (this.members.get(name)?.role === 'nuker') openerMs[name] = null;
             }
         }
-        this.fights.push({
+        const fight: FightSummary = {
             start: f.start, durationMs: (at === Infinity ? this.last : at) - f.at, focus: f.focus, kills: f.kills,
             adds: Math.max(0, f.attackers.size - 1), maxAttackers: f.maxAttackers,
             tankHold: f.holdSamples ? pct(f.heldSamples, f.holdSamples) : null, openerMs,
             deaths: f.deaths, retreated: f.retreated, outcome,
-        });
+        };
+        if (f.enemies.size) {
+            fight.enemyPlayers = f.enemies.size;
+            fight.enemyRealms = [...new Set(f.enemies.values())].sort();
+        }
+        this.fights.push(fight);
     }
 
     /** Feed one board event. */
@@ -279,14 +331,34 @@ export class GroupObserver {
         this.recent.push(e);
         if (this.recent.length > 400) this.recent.splice(0, this.recent.length - 400);
         const t = e.member ? this.members.get(e.member) : undefined;
-        if (e.kind === 'kill') { this.kills++; this.fight?.kills.push(String(e.data?.name ?? e.text)); }
+        if (e.kind === 'kill') {
+            this.kills++;
+            if (e.data?.kind === 'player') this.playerKills++;
+            this.fight?.kills.push(String(e.data?.name ?? e.text));
+        }
         if (e.kind === 'death') {
-            if (t) t.deaths++;
+            const k = e.data?.killer;
+            const killer = k && typeof k === 'object' ? k as { name?: unknown; kind?: unknown; realm?: unknown } : null;
+            // A pet's kill names the pet (GamePlayer.Die → SendPlayerDied with the killer, GamePlayer.cs:5901-5905),
+            // and a keep guard is an NPC of its realm too: a death to another realm all the same (killingBlowByEnemyRealm, :5741).
+            const realmNpc = killer?.kind === 'npc' && PLAYER_REALMS.has(String(killer.realm));
+            const by = !killer ? 'unknown' : killer.kind === 'player' ? `player:${String(killer.realm)}` : realmNpc ? `pet:${String(killer.realm)}` : `npc:${String(killer.name)}`;
+            if (killer?.kind === 'player' || realmNpc) this.deathsToPlayers++;
+            if (t) { t.deaths++; inc(t.killedBy, by); }
             if (e.member) this.fight?.deaths.push(e.member);
             const p = this.latest;
             if (p && p.members.length && p.members.every(m => m.isDead || m.name === e.member)) this.wipes++;
         }
-        if (e.kind === 'orders' && e.data?.phase === 'retreat') { this.retreats++; if (this.fight) this.fight.retreated = true; }
+        if (e.kind === 'orders') {
+            // One retreat however many orders it takes: every leg's new retreatTo is a material change,
+            // and a retreat that paused a moment (following dropped for a tick) and went on is the same one.
+            const phase = e.data?.phase;
+            if (phase === 'retreat') {
+                if (this.ordersPhase !== 'retreat' && e.at - this.retreatEndedAt > RETREAT_RESUME_MS) this.retreats++;
+                if (this.fight) this.fight.retreated = true;
+            } else if (this.ordersPhase === 'retreat') this.retreatEndedAt = e.at;
+            this.ordersPhase = phase;
+        }
         if (e.kind === 'result' && t) {
             const action = String(e.data?.action ?? 'action');
             if (e.data?.success) inc(t.actions, action);
@@ -315,12 +387,16 @@ export class GroupObserver {
         const hours = durationMs / 3_600_000;
         const members: Record<string, MemberStats> = {};
         let xpTotal = 0, deaths = 0;
+        const rpOf = (t: Track) => t.rp0 === null ? 0 : Math.max(0, t.rp1 - t.rp0);
+        const rpTotal = [...this.members.values()].reduce((a, t) => a + rpOf(t), 0);
+        // RvR fields only where there was RvR: a PvE report stays as it was (killedBy is for any death).
+        const rvr = this.enemies.size > 0 || this.playerKills > 0 || this.deathsToPlayers > 0 || rpTotal > 0;
         for (const [name, t] of this.members) {
             const xp = Math.max(0, t.xp1 - t.xp0);
             xpTotal += xp;
             deaths += t.deaths;
             const openers = this.fights.map(f => f.openerMs[name]).filter(v => v !== undefined);
-            members[name] = {
+            const stats: MemberStats = {
                 role: t.role, className: t.className, level: t.level0 === t.level1 ? `${t.level1}` : `${t.level0}→${t.level1}`,
                 xp, xpPerHour: Math.round(xp / hours), deaths: t.deaths, actions: t.actions, failures: t.failures,
                 idleInFights: pct(t.idle, t.engageSamples), idleReasons: t.idleReasons,
@@ -330,6 +406,9 @@ export class GroupObserver {
                 minHp: t.minHp,
                 waitedFor: Object.fromEntries(Object.entries(t.waitMs).map(([k, v]) => [k, pct(v, durationMs)]).filter(([, v]) => (v as number) > 0)),
             };
+            if (rvr) stats.realmPoints = rpOf(t);
+            if (t.deaths) stats.killedBy = { ...t.killedBy };
+            members[name] = stats;
         }
         const phases: Partial<Record<Phase, number>> = {};
         for (const [k, v] of Object.entries(this.phaseMs)) phases[k as Phase] = pct(v!, durationMs);
@@ -346,7 +425,20 @@ export class GroupObserver {
             },
             phases, members, fights: this.fights, findings: [], timeline: this.timelineEvents.slice(-60),
         };
+        if (rvr) {
+            Object.assign(report.totals, {
+                playerKills: this.playerKills, deathsToPlayers: this.deathsToPlayers, realmPoints: rpTotal, rpPerHour: Math.round(rpTotal / hours),
+                enemiesSeen: this.enemies.size, engagements: this.fights.filter(f => f.enemyPlayers).length,
+            });
+        }
         report.findings = findingsFor(report);
+        if (this.meta.findings) {
+            try {
+                report.findings.push(...this.meta.findings(report));
+            } catch (e) {
+                report.findings.push({ severity: 'low', topic: 'strategy', issue: `The strategy's findings() threw: ${e instanceof Error ? e.message : String(e)}`, evidence: '', suggestion: 'Fix findings() in strategy.ts; the observer\'s own findings are complete.' });
+            }
+        }
         return report;
     }
 
@@ -367,19 +459,31 @@ export class GroupObserver {
 
 const top = (r: Record<string, number>, n = 2) => Object.entries(r).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k} (${v})`).join(', ');
 
+/** The group met enemy players: the report has the RvR totals. */
+const isRvr = (r: RunReport) => (r.totals.enemiesSeen ?? 0) > 0 || (r.totals.playerKills ?? 0) > 0;
+
 /** Rule-based findings: what went wrong and which setting or behaviour to look at. */
 export function findingsFor(r: RunReport): Finding[] {
     const out: Finding[] = [];
     const t = r.totals;
-    if (t.kills === 0 && r.durationMs > 60_000) {
+    // Against players, the PvE rules about camps, tank hold, adds, downtime and pace are noise:
+    // players don't stay on the tank, a roam is not downtime and a skirmish has no pulls.
+    const rvr = isRvr(r);
+    if (!rvr && t.kills === 0 && r.durationMs > 60_000) {
         out.push({ severity: 'high', topic: 'no-kills', issue: 'No kills in the whole run', evidence: `phases ${JSON.stringify(r.phases)}; last events: ${r.timeline.slice(-3).join(' | ')}`, suggestion: 'Check the camp (settings.camp, campLevelBand), the con window (minCon/maxCon) and huntRadius; the orders log says why nothing was pulled.' });
     }
-    if (t.tankHold !== null && t.tankHold < 75) {
+    if (!rvr && t.tankHold !== null && t.tankHold < 75) {
         const loose = Object.entries(r.members).filter(([, m]) => m.role !== 'tank').sort((a, b) => b[1].targeted - a[1].targeted)[0];
         out.push({ severity: t.tankHold < 50 ? 'high' : 'medium', topic: 'aggro', issue: `The tank held the focus only ${t.tankHold}% of fight time`, evidence: loose ? `${loose[0]} was targeted ${loose[1].targeted}% of fight time` : '', suggestion: 'Raise holdMs so damage dealers open later, open with DoTs (less burst aggro), or keep healers out of range of adds (combatRange).' });
     }
     for (const [name, m] of Object.entries(r.members)) {
-        if (m.deaths) out.push({ severity: 'high', topic: 'deaths', member: name, issue: `${name} died ${m.deaths}×`, evidence: r.timeline.filter(l => l.includes(`${name} died`) || l.includes(`${name}:`)).slice(-4).join(' | '), suggestion: m.role === 'tank' ? 'Lower the con window or heal the tank earlier (heal.tank); retreat sooner (retreat.tankHp).' : 'Stand farther back (combatRange), flee to the tank earlier, or mezz adds sooner.' });
+        if (m.deaths) {
+            const lines = r.timeline.filter(l => l.includes(`${name} died`) || l.includes(`${name}:`)).slice(-4).join(' | ');
+            const evidence = rvr && m.killedBy ? [`killed by ${top(m.killedBy, 3)}`, lines].filter(Boolean).join('; ') : lines;
+            const suggestion = rvr ? 'Focus the enemy healers and casters first (Contact.healer, Contact.caster), mezz or peel the enemies on it, or retreat sooner when outnumbered.'
+                : m.role === 'tank' ? 'Lower the con window or heal the tank earlier (heal.tank); retreat sooner (retreat.tankHp).' : 'Stand farther back (combatRange), flee to the tank earlier, or mezz adds sooner.';
+            out.push({ severity: 'high', topic: 'deaths', member: name, issue: `${name} died ${m.deaths}×`, evidence, suggestion });
+        }
         const interrupts = Object.entries(m.failures).filter(([k]) => k.endsWith(':interrupted')).reduce((a, [, v]) => a + v, 0);
         if (interrupts >= 2) out.push({ severity: 'medium', topic: 'interrupts', member: name, issue: `${name} was interrupted ${interrupts}×`, evidence: `targeted ${m.targeted}% of fight time, in melee range ${m.inMelee}%`, suggestion: 'Wait longer for the tank (holdMs), stand farther (combatRange), or let flee() run before casting.' });
         // Healers and supports idle when nobody needs them; that is fine.
@@ -402,14 +506,14 @@ export function findingsFor(r: RunReport): Finding[] {
         const dups = Object.entries(m.failures).filter(([k]) => k.endsWith(':duplicate')).reduce((a, [, v]) => a + v, 0);
         if (dups >= 3) out.push({ severity: 'low', topic: 'duplicates', member: name, issue: `${name} duplicated another member's heal or mezz ${dups}×`, evidence: top(m.failures, 3), suggestion: 'Check the claim windows in heal()/crowdControl(), or assign the work in decide() (orders.cc).' });
     }
-    if (t.downtime > 60 && t.fights > 0) {
+    if (!rvr && t.downtime > 60 && t.fights > 0) {
         const waits = Object.entries(r.phases).filter(([k]) => !['engage', 'pull', 'retreat'].includes(k)).map(([k, v]) => `${k} ${v}%`).join(', ');
         out.push({ severity: 'medium', topic: 'downtime', issue: `Downtime ${t.downtime}% (not fighting or pulling)`, evidence: waits, suggestion: 'Lower ready.hp/ready.mana, let healers top up out of combat (heal.outOfCombat), or pull higher cons for more XP per pull.' });
     }
     const adds = r.fights.reduce((a, f) => a + f.adds, 0);
-    if (r.fights.length && adds / r.fights.length > 0.5) out.push({ severity: 'medium', topic: 'adds', issue: `${adds} adds in ${r.fights.length} fights`, evidence: r.fights.filter(f => f.adds).slice(0, 3).map(f => `${f.focus.join('/')}: +${f.adds}`).join(', '), suggestion: 'Pull targets farther from others (avoidAggressive, huntRadius), a base with more room (chooseBase), or more crowd control.' });
+    if (!rvr && r.fights.length && adds / r.fights.length > 0.5) out.push({ severity: 'medium', topic: 'adds', issue: `${adds} adds in ${r.fights.length} fights`, evidence: r.fights.filter(f => f.adds).slice(0, 3).map(f => `${f.focus.join('/')}: +${f.adds}`).join(', '), suggestion: 'Pull targets farther from others (avoidAggressive, huntRadius), a base with more room (chooseBase), or more crowd control.' });
     if (t.retreats) out.push({ severity: 'low', topic: 'retreats', issue: `${t.retreats} retreat(s)`, evidence: r.timeline.filter(l => l.includes('retreat')).slice(-3).join(' | '), suggestion: 'If the retreats saved the group, keep them; if they ran from winnable fights, relax retreat.* thresholds.' });
-    if (t.avgFightMs > 45_000) out.push({ severity: 'low', topic: 'pace', issue: `Fights take ${Math.round(t.avgFightMs / 1000)} s on average`, evidence: `${t.fights} fights`, suggestion: 'Lower maxCon, or check that every damage dealer actually casts (actions per member).' });
+    if (!rvr && t.avgFightMs > 45_000) out.push({ severity: 'low', topic: 'pace', issue: `Fights take ${Math.round(t.avgFightMs / 1000)} s on average`, evidence: `${t.fights} fights`, suggestion: 'Lower maxCon, or check that every damage dealer actually casts (actions per member).' });
     return out;
 }
 
@@ -421,6 +525,8 @@ export function formatReport(r: RunReport): string {
         `Kills ${t.kills} (${t.killsPerHour}/h), XP ${t.xpPerHour}/h for the group, deaths ${t.deaths}, wipes ${t.wipes}, retreats ${t.retreats}.`,
         `Fights ${t.fights}, avg ${Math.round(t.avgFightMs / 1000)} s, tank held the focus ${t.tankHold ?? '-'}%. Downtime ${t.downtime}%: ${Object.entries(r.phases).map(([k, v]) => `${k} ${v}%`).join(', ')}.`,
     ];
+    const rvr = isRvr(r);
+    if (rvr) lines.push(`RvR: ${t.enemiesSeen ?? 0} enemy players seen, ${t.engagements ?? 0} engagements, ${t.playerKills ?? 0} player kills, ${t.deathsToPlayers ?? 0} deaths to players, ${t.realmPoints ?? 0} realm points (${t.rpPerHour ?? 0}/h).`);
     if (r.previous) lines.push(`Against the previous run: ${Object.entries(r.previous).map(([k, v]) => `${k} ${v}`).join(', ')}.`);
     lines.push('', '## Findings', '');
     if (!r.findings.length) lines.push('None.');
@@ -432,10 +538,14 @@ export function formatReport(r: RunReport): string {
         const opener = [m.openerMs != null ? secs(m.openerMs) : '', m.fightsWithoutNuke ? `${m.fightsWithoutNuke} fights without` : ''].filter(Boolean).join(', ');
         lines.push(`| ${n} | ${m.role} | ${m.level} | ${m.xpPerHour} | ${m.deaths} | ${top(m.actions, 4)} | ${top(m.failures, 3)} | ${m.idleInFights}%${m.idleInFights ? ` (${top(m.idleReasons, 1)})` : ''} | ${m.movingInFights != null ? `${m.movingInFights}%` : '-'} | ${opener || '-'} | ${m.targeted}% | ${m.inMelee}% | ${m.minHp}% | ${waited || '-'} |`);
     }
+    if (rvr) {
+        lines.push('', 'Realm points, and deaths by killer:', '');
+        for (const [n, m] of Object.entries(r.members)) lines.push(`- ${n}: ${m.realmPoints ?? 0} RP${m.killedBy ? `, killed by ${top(m.killedBy, 4)}` : ''}`);
+    }
     lines.push('', '## Fights', '');
     for (const f of r.fights) {
         const openers = Object.entries(f.openerMs ?? {}).map(([n, ms]) => `${n} ${ms === null ? 'none' : secs(ms)}`).join(', ');
-        lines.push(`- ${String(Math.floor(f.start / 60)).padStart(2, '0')}:${String(f.start % 60).padStart(2, '0')} ${f.focus.join(' / ') || '?'}: ${f.outcome} in ${Math.round(f.durationMs / 1000)} s, kills ${f.kills.length}, adds ${f.adds}, tank hold ${f.tankHold ?? '-'}%${openers ? `, first nuke: ${openers}` : ''}${f.deaths.length ? `, died: ${f.deaths.join(', ')}` : ''}`);
+        lines.push(`- ${String(Math.floor(f.start / 60)).padStart(2, '0')}:${String(f.start % 60).padStart(2, '0')} ${f.focus.join(' / ') || '?'}: ${f.outcome} in ${Math.round(f.durationMs / 1000)} s, kills ${f.kills.length}, adds ${f.adds}, tank hold ${f.tankHold ?? '-'}%${f.enemyPlayers ? `, ${f.enemyPlayers} enemy players (${(f.enemyRealms ?? []).join(', ')})` : ''}${openers ? `, first nuke: ${openers}` : ''}${f.deaths.length ? `, died: ${f.deaths.join(', ')}` : ''}`);
     }
     lines.push('', '## Timeline (last events)', '', '```', ...r.timeline, '```', '');
     return lines.join('\n');
@@ -464,7 +574,8 @@ export function saveReport(groupDir: string, r: RunReport, log?: string[]): stri
                     const a = prev[k], b = (summary as any)[k];
                     return typeof a === 'number' && typeof b === 'number' ? `${a}→${b}` : null;
                 };
-                r.previous = Object.fromEntries(['xpPerHour', 'killsPerHour', 'deaths', 'downtime', 'tankHold', 'avgFightMs'].map(k => [k, delta(k)]).filter(([, v]) => v) as [string, string][]);
+                // The RvR totals only where both runs have them.
+                r.previous = Object.fromEntries(['xpPerHour', 'killsPerHour', 'deaths', 'downtime', 'tankHold', 'avgFightMs', 'playerKills', 'deathsToPlayers', 'rpPerHour'].map(k => [k, delta(k)]).filter(([, v]) => v) as [string, string][]);
             } catch {}
         }
     }

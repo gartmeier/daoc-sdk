@@ -3,19 +3,25 @@
 //   GET  /viewer                 bot and group index (HTML)
 //   GET  /viewer/<bot>           single-page viewer for one bot (HTML)
 //   GET  /viewer/group/<id>      group page: every member on one map, the run's orders (HTML)
-//   GET  /viewer/assets/<file>   app.js and group.js (app.ts, group.ts bundled with Bun.build on request), viewer.css
+//   GET  /viewer/region/<id>     region page: every bot in one region, each group's run, the keeps (HTML)
+//   GET  /viewer/assets/<file>   app.js, group.js and region.js (app.ts, group.ts, region.ts bundled with Bun.build on request), viewer.css
 //   GET  /bots                   JSON list of the gateway's bot sessions, each with its group
 //   GET  /zones/<regionId>       JSON zone rects, zone points and bind points for a region
+//   GET  /regions                JSON list of regions with an in-game bot (gateway/regions.ts)
+//   GET  /regions/<id>/live      RegionFrame: the region's bots, runs, enemy players and keeps (per-bot auth)
 //   POST /bots/<bot>/auth        {"password"} → checks it before the page enables control mode
 //
 // The bot page talks to the gateway WebSocket as an observe-mode SDK and, only
 // when control is ticked, opens a second control-mode socket. The group page
-// opens no socket: it polls /groups/<id>/live (gateway/groups.ts).
+// opens no socket: it polls /groups/<id>/live (gateway/groups.ts). Nor does the
+// region page: it polls /regions/<id>/live and offers no actions at all.
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BotWorldState, GatewayAuthHook } from '../types';
 import type { GroupBadge } from '../group-types';
+import type { ActiveRun } from '../groups';
+import { listRegions, regionFrame, regionLayout } from '../regions';
 import { checkControlPassword, isJsonRequest } from '../security';
 
 const DIR = import.meta.dir;
@@ -41,6 +47,8 @@ export interface ViewerContext {
     repoRoot?: string;
     /** The group a username plays in (gateway/groups.ts badge). */
     groupOf?(username: string): GroupBadge | null;
+    /** Every group's current run (gateway/groups.ts activeRuns), for the region page. */
+    activeRuns?(): readonly ActiveRun[];
 }
 
 export interface BotListEntry {
@@ -127,7 +135,7 @@ export function sourceKey(dir: string): string {
  * `dir` changes. Any change to the key counts, so one future-dated file cannot
  * hide edits to the others. `dir` is for tests, which build a copy.
  */
-export async function buildBundle(entry: 'app.ts' | 'group.ts', dir: string = DIR): Promise<string> {
+export async function buildBundle(entry: 'app.ts' | 'group.ts' | 'region.ts', dir: string = DIR): Promise<string> {
     const key = sourceKey(dir);
     const cacheKey = `${dir}|${entry}`;
     const cached = bundles.get(cacheKey);
@@ -167,6 +175,24 @@ function bundleResponse(build: Promise<string>): Promise<Response> {
 
 const decode = (s: string) => { try { return decodeURIComponent(s); } catch { return s; } };
 
+/** The Authorization bearer password; the region frame never reads one from the query string. */
+function bearer(req: Request): string {
+    const header = req.headers.get('authorization') ?? '';
+    return header.startsWith('Bearer ') ? header.slice(7) : '';
+}
+
+/** GET /regions/<id>/live: the auth hook decides per bot and per run leader (gateway/regions.ts). */
+async function regionLive(req: Request, regionId: number, ctx: ViewerContext): Promise<Response> {
+    const bg = await regionLayout(regionId);
+    let runs: readonly ActiveRun[] = [];
+    try { runs = ctx.activeRuns?.() ?? []; } catch {}
+    const frame = await regionFrame(regionId, {
+        sessions: ctx.botSessions, sessionStatus: ctx.sessionStatus, groupOf: ctx.groupOf, runs,
+        layout: bg?.layout ?? null, keepClearance: bg?.keepClearance,
+    }, ctx.auth, bearer(req));
+    return json(frame);
+}
+
 /** Handles viewer routes; returns null for anything else so the gateway carries on. */
 export async function handleViewerRequest(req: Request, url: URL, ctx: ViewerContext): Promise<Response | null> {
     const path = url.pathname;
@@ -183,6 +209,16 @@ export async function handleViewerRequest(req: Request, url: URL, ctx: ViewerCon
         return json(result, result.ok ? 200 : 401);
     }
 
+    if (req.method === 'GET' && (path === '/regions' || path === '/regions/')) return json({ regions: listRegions({ sessions: ctx.botSessions, groupOf: ctx.groupOf }) });
+    const regionLiveMatch = path.match(/^\/regions\/(\d{1,9})\/live\/?$/);
+    if (regionLiveMatch && req.method === 'GET') {
+        try {
+            return await regionLive(req, parseInt(regionLiveMatch[1]!, 10), ctx);
+        } catch (error) {
+            return json({ error: `region view unavailable: ${error instanceof Error ? error.message : error}` }, 500);
+        }
+    }
+
     const zoneMatch = path.match(/^\/zones\/(\d+)$/);
     if (zoneMatch && req.method === 'GET') {
         try {
@@ -197,14 +233,17 @@ export async function handleViewerRequest(req: Request, url: URL, ctx: ViewerCon
 
     if (path === '/viewer/assets/app.js') return bundleResponse(buildBundle('app.ts'));
     if (path === '/viewer/assets/group.js') return bundleResponse(buildBundle('group.ts'));
+    if (path === '/viewer/assets/region.js') return bundleResponse(buildBundle('region.ts'));
     if (path === '/viewer/assets/viewer.css') {
         return new Response(readFileSync(join(DIR, 'viewer.css'), 'utf8'), { headers: { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store' } });
     }
 
     // Before the bot page, which would take /viewer/group as a bot named "group"
-    // (it still does: only the two-segment form is the group page).
+    // (it still does: only the two-segment form is the group page; /viewer/region likewise).
     const groupMatch = path.match(/^\/viewer\/group\/([A-Za-z0-9_-]{1,64})\/?$/);
     if (groupMatch) return htmlPage('group.html', { GROUP: groupMatch[1]! });
+    const regionMatch = path.match(/^\/viewer\/region\/(\d{1,9})\/?$/);
+    if (regionMatch) return htmlPage('region.html', { REGION: String(parseInt(regionMatch[1]!, 10)) });
     const botMatch = path.match(/^\/viewer\/([^/]+)\/?$/);
     if (botMatch) return htmlPage('bot.html', { BOT: decode(botMatch[1]!) });
     return new Response('Not found', { status: 404 });

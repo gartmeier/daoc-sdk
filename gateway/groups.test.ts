@@ -515,7 +515,21 @@ describe('group run publishes', () => {
         // group.json has no role for nuke1: the run's wins over its class.
         expect(body.members[2].role).toBe('support');
         expect(body.world[0].board).toMatchObject({ threat: true, stale: false, cc: { by: 'Nuky', kind: 'mezz' }, seenBy: ['Tanky'] });
+        // A monster's board entry has no player flags, a PvE member no realm points.
+        expect('healer' in body.world[0].board || 'realmPoints' in body.members[0].run).toBe(false);
         expect((await http('/groups')).body.groups[0].run).toMatchObject({ runId: RUN, state: 'live', strategy: 'test-pve', phase: 'engage', windingDown: false });
+    });
+
+    test('RvR: an enemy player\'s board flags and the members\' realm points reach the frame', async () => {
+        start();
+        await attachBot('tankuser', tankState({ nearbyPlayers: [makePlayerObj({ objectId: 700, name: 'Troll', realm: 'midgard', x: 1500, y: 1000 })] }));
+        const body = makePublish();
+        body.picture.members[0]!.realmPoints = 1250;
+        body.picture.contacts = [contact(700, { regionId: 1, kind: 'player', name: 'Troll', realm: 'midgard', threat: true, casting: true, helped: false, healer: true, caster: true })];
+        await publish(body);
+        const frame = (await live()).body;
+        expect(frame.members[0].run.realmPoints).toBe(1250);
+        expect(frame.world.find((w: any) => w.objectId === 700)).toMatchObject({ enemy: true, board: { threat: true, casting: true, helped: false, healer: true, caster: true } });
     });
 
     test('events: resends are skipped, holes counted, ackSeq follows; ?events= pages', async () => {
@@ -951,6 +965,36 @@ describe('badges on /bots and /status', () => {
         expect((await http('/status/tankuser')).body.group).toBeNull();
         const res = await http('/groups');
         expect(res.headers.get('content-type')).toContain('text/plain');
+        // The region page still shows the bots, with no groups and no runs.
+        await attachBot('tankuser', tankState());
+        expect((await http('/regions/1/live')).body).toMatchObject({ bots: [{ username: 'tankuser', group: null }], runs: [] });
+    });
+});
+
+describe('runs on the region page', () => {
+    test('activeRuns hands the current run to /regions/<id>/live; under a hook a bot needs its own password, a run its leader\'s', async () => {
+        start({ auth: hook });
+        await attachBot('tankuser', tankState());
+        await attachBot('healuser', healState());
+        const report = { totals: { kills: 3, deaths: 1, playerKills: 2, deathsToPlayers: 1, engagements: 1 } };
+        expect((await publish(makePublish({ reportRev: 1, report: report as any }), bearer('tank-secret-1'))).body.ok).toBe(true);
+        expect((await http('/regions/1/live')).body.hidden).toEqual({ bots: 2, runs: 1 });
+        const heal = (await http('/regions/1/live', { headers: bearer('heal-secret-2') })).body;
+        expect(heal.bots.map((b: any) => b.username)).toEqual(['healuser']);
+        expect(heal.hidden).toEqual({ bots: 1, runs: 1 });
+        const tank = (await http('/regions/1/live', { headers: bearer('tank-secret-1') })).body;
+        expect(tank.bots.map((b: any) => b.username)).toEqual(['tankuser']);
+        expect(tank.bots[0].group).toEqual({ id: 'alpha', name: 'Alpha Team' });
+        expect(tank.hidden).toEqual({ bots: 1, runs: 0 });
+        expect(tank.runs).toEqual([expect.objectContaining({
+            group: 'alpha', name: 'Alpha Team', realm: 'albion', runId: RUN, state: 'live', strategy: 'test-pve', phase: 'engage', reason: 'rat attacks the group',
+            focus: { objectId: 500, name: 'water beetle', realm: 'none', hp: 100, ours: false },
+            totals: { kills: 3, deaths: 1, playerKills: 2, deathsToPlayers: 1, engagements: 1 },
+            members: ['healuser', 'tankuser'], alive: 3, size: 3,
+        })]);
+        // A lost run speaks for nobody.
+        clock += 31_000;
+        expect((await http('/regions/1/live', { headers: bearer('tank-secret-1') })).body.runs).toEqual([]);
     });
 });
 
@@ -958,7 +1002,8 @@ describe('runs files', () => {
     function writeRuns() {
         const lines = [
             { startedAt: '2026-10-31T10:00:00.000Z', strategy: 'test-pve', seconds: 900, kills: 10, deaths: 1, wipes: 0, retreats: 0, fights: 10, killsPerHour: 40, xpPerHour: 1000, avgFightMs: 9000, downtime: 30, tankHold: null, findings: ['waiting', 'deaths'] },
-            { startedAt: '2026-10-31T11:00:00.000Z', strategy: 'test-pve', seconds: 900, kills: 12, deaths: 0, wipes: 0, retreats: 0, fights: 12, killsPerHour: 48, xpPerHour: 1200, avgFightMs: 8000, downtime: 25, tankHold: 88, findings: [] },
+            { startedAt: '2026-10-31T11:00:00.000Z', strategy: 'test-pve', seconds: 900, kills: 12, deaths: 0, wipes: 0, retreats: 0, fights: 12, killsPerHour: 48, xpPerHour: 1200, avgFightMs: 8000, downtime: 25, tankHold: 88, findings: [],
+                playerKills: 3, deathsToPlayers: 1, rpPerHour: 5000, enemiesSeen: 'many' },
         ];
         write('groups/alpha/runs/history.jsonl', `${JSON.stringify(lines[0])}\nnot json\n${JSON.stringify(lines[1])}\n`);
         write('groups/alpha/runs/20261031-100000.json', JSON.stringify({ group: 'alpha', totals: { kills: 10 } }));
@@ -977,6 +1022,9 @@ describe('runs files', () => {
         expect(status).toBe(200);
         expect(body.history.map((h: any) => [h.stamp, h.xpPerHour, h.tankHold])).toEqual([['20261031-110000', 1200, 88], ['20261031-100000', 1000, null]]);
         expect(body.history[1].findings).toEqual(['waiting', 'deaths']);
+        // An RvR run's numbers when they are numbers; a PvE line has none.
+        expect(body.history[0]).toMatchObject({ playerKills: 3, deathsToPlayers: 1, rpPerHour: 5000 });
+        expect('enemiesSeen' in body.history[0] || 'playerKills' in body.history[1]).toBe(false);
         expect((await http('/groups/alpha/runs?limit=1')).body.history).toHaveLength(1);
         expect(body.files.map((f: any) => [f.stamp, f.json, f.md, f.log])).toEqual([['20261031-110000', true, false, false], ['20261031-100000', true, true, true]]);
         expect(body.files[1].size).toBeGreaterThan(100);
@@ -1046,6 +1094,32 @@ describe('sanitizePublish', () => {
         expect(clean.notes.join(' ')).toContain('settings');
         expect(clean.notes.join(' ')).toContain('report');
         expect(JSON.stringify(v)).not.toContain('tank-secret-1');
+    });
+
+    test('RvR fields pass when they have the right type; absent ones stay absent', () => {
+        const raw: any = makePublish({ state: 'ended' });
+        raw.picture.members[0].realmPoints = 300;
+        raw.picture.members[1].realmPoints = 'lots';
+        raw.picture.contacts.push(contact(700, { regionId: 1, kind: 'player', realm: 'midgard', casting: true, helped: false, healer: true }));
+        raw.picture.contacts[1].caster = 'yes';
+        raw.result = {
+            totals: { kills: 2, playerKills: 2, deathsToPlayers: 1, realmPoints: 400, rpPerHour: 1600, enemiesSeen: 7, engagements: Infinity, junk: 1 },
+            findings: [], stamp: null, stoppedBy: 'time',
+        };
+        const clean = sanitizePublish(JSON.parse(JSON.stringify(raw)));
+        if (!clean.ok) throw new Error(clean.error);
+        const [tank, heal] = clean.value.picture.members;
+        expect(tank!.realmPoints).toBe(300);
+        expect('realmPoints' in heal!).toBe(false);
+        const [rat, troll] = clean.value.picture.contacts;
+        expect(['casting', 'helped', 'healer', 'caster'].filter(k => k in rat!)).toEqual([]);
+        expect(troll).toMatchObject({ kind: 'player', casting: true, helped: false, healer: true });
+        expect('caster' in troll!).toBe(false);
+        // JSON turns Infinity into null: not a number, so left out.
+        expect(clean.value.result!.totals).toEqual({
+            kills: 2, deaths: 0, wipes: 0, retreats: 0, fights: 0, killsPerHour: 0, xpPerHour: 0, avgFightMs: 0, downtime: 0, tankHold: null,
+            playerKills: 2, deathsToPlayers: 1, realmPoints: 400, rpPerHour: 1600, enemiesSeen: 7,
+        });
     });
 
     test('blobs nested deeper than 32 levels are dropped however small; 32 still fit', () => {

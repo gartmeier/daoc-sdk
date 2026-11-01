@@ -82,10 +82,12 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     const strategy = opts.strategy;
     const settings = mergeSettings(strategy.settings, unflatten(opts.settings ?? {}) as any) as S;
     const { members, opened } = await connectGroup(def, opts.have, strategy.roleOf);
-    const board = new Blackboard();
+    const board = new Blackboard(strategy.board);
     const agents: MemberAgent<S>[] = [];
     const startedAt = Date.now();
-    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name, startedAt });
+    // The strategy's own rules join the observer's, in the live score and the saved report.
+    const strategyFindings = strategy.findings && ((r: RunReport) => strategy.findings!(r, settings));
+    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name, startedAt, findings: strategyFindings });
     const graceMs = opts.graceMs ?? 60_000;
     // Planned until the main loop starts; a wind-down from the viewer only moves them earlier.
     let deadline = startedAt + opts.seconds * 1000;
@@ -129,7 +131,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         board.onEvent(e => {
             if (isLoggedEvent(e)) log(`${e.member ? `${e.member}: ` : ''}${e.kind === 'orders' ? '» ' : ''}${e.text}`);
         });
-        for (const m of members) agents.push(new MemberAgent(m, board, behaviorsOf(m), settings));
+        for (const m of members) agents.push(new MemberAgent(m, board, behaviorsOf(m), settings, strategy.agent));
         observer.start();
         started = true;
         const coordinator = new Coordinator(board, strategy, settings);
@@ -202,7 +204,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     if (failure) throw failure;
     return {
         group: def.name, strategy: strategy.name, seconds: Math.round(report.durationMs / 1000), totals: report.totals,
-        members: Object.fromEntries(Object.entries(report.members).map(([n, m]) => [n, `${m.className} L${m.level}, ${m.xpPerHour} xp/h, ${m.deaths} deaths, idle ${m.idleInFights}% in fights`])),
+        members: Object.fromEntries(Object.entries(report.members).map(([n, m]) => [n, `${m.className} L${m.level}, ${m.xpPerHour} xp/h${m.realmPoints !== undefined ? `, ${m.realmPoints} rp` : ''}, ${m.deaths} deaths, idle ${m.idleInFights}% in fights`])),
         findings, report: path, previous: report.previous, stoppedBy,
     };
 }

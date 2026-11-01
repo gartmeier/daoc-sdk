@@ -1,5 +1,6 @@
 // Test fixtures for group coordination: member reports, sightings, pictures.
 
+import type { Realm } from '../types';
 import type { Observation } from './blackboard';
 import { emptyOrders } from './blackboard';
 import type { Contact, GroupPicture, MemberReport, Orders, Sighting } from './types';
@@ -29,6 +30,12 @@ export function contact(objectId: number, over: Partial<Contact> = {}): Contact 
         ...sighting(objectId), regionId: 200, target: null, targetSince: now, engagedAt: 0, movedAt: 0, seenBy: ['Tank'], firstSeen: now, lastSeen: now,
         stale: false, threat: false, hostileSince: 0, cc: null, ...over,
     };
+}
+
+/** An enemy player as a contact, named by its race as the server names enemy players (NormalServerRules.GetPlayerName). */
+export function enemy(objectId: number, realm: Realm = 'midgard', over: Partial<Contact> = {}): Contact {
+    const race: Record<Realm, string> = { albion: 'Briton', midgard: 'Norseman', hibernia: 'Celt', none: 'Player' };
+    return contact(objectId, { kind: 'player', name: race[realm], level: 20, realm, ...over });
 }
 
 export function picture(members: MemberReport[], contacts: Contact[] = [], orders: Partial<Orders> = {}, at = Date.now()): GroupPicture {

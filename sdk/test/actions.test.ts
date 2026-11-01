@@ -4,8 +4,8 @@ import { BotActions, castFailureReason } from '../actions';
 import { ChatHistory } from '../chat-history';
 import { setDefaultPathProvider, StraightLinePathProvider, type PathProvider } from '../pathfinding';
 import { executionContext, throwIfExecutionAborted } from '../execution-context';
-import type { ActionResult, BotAction, BotWorldState, GameMessage, NearbyNpc } from '../types';
-import { makeMessage, makeNpc, makeObject, makePlayer, makeState } from './fixtures';
+import type { ActionResult, BotAction, BotWorldState, GameMessage, NearbyNpc, NearbyPlayer } from '../types';
+import { makeMessage, makeNpc, makeObject, makePlayer, makePlayerObj, makeState } from './fixtures';
 
 // Fixed straight-line paths: a locally built server/navmesh/zone000.nav would otherwise route every walk here.
 beforeAll(() => setDefaultPathProvider(new StraightLinePathProvider()));
@@ -830,6 +830,272 @@ describe('castSpell', () => {
         const r = await bot.castSpell('Ward Blow', 'sewer rat');
         expect(r.success).toBeTrue();
         expect(w.sentOf('moveTo')).toHaveLength(0);
+    });
+});
+
+// ── Enemy players ───────────────────────────────────────────────────────────
+
+/** An enemy (Midgard) player next to us; we are Albion. */
+const enemy = (overrides: Partial<NearbyPlayer> = {}) =>
+    makePlayerObj({ objectId: 301, name: 'Norseman', realm: 'midgard', x: 560050, y: 511000, distance: 50, distance2d: 50, ...overrides });
+
+/**
+ * Our swings take `dmg` % off the targeted player in melee range. At 0 the server's 0xAE marks it
+ * dead and sends the death to everyone in view; its body stays (GamePlayer.cs:5901-5905).
+ */
+function playerFightSim(w: FakeWorld, opts: { dmg?: number; rp?: number } = {}) {
+    w.onTick = world => {
+        const p = world.player;
+        const id = p.targetObjectId;
+        if (!p.attacking || id === null) return;
+        const pl = world.state.nearbyPlayers.find(o => o.objectId === id);
+        if (!pl || pl.isDead || Math.hypot(pl.x - p.x, pl.y - p.y, pl.z - p.z) > 128) return;
+        pl.healthPercent = Math.max(0, pl.healthPercent - (opts.dmg ?? 25));
+        world.combat({ kind: 'melee', attackerObjectId: p.objectId, targetObjectId: id, result: 'hit', targetHealthPercent: pl.healthPercent });
+        if (pl.healthPercent === 0) {
+            pl.isDead = true;
+            p.realmPoints += opts.rp ?? 0;
+            world.combat({ kind: 'death', attackerObjectId: p.objectId, targetObjectId: id });
+        }
+    };
+}
+
+const IMMUNE_OURS = "You can't attack players until your PvP invulnerability timer wears off!";
+
+describe('killPlayer', () => {
+    test('approaches with its z, fights to the death and reports realm points', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy({ x: 560600, z: 2200 })] });
+        playerFightSim(w, { rp: 120 });
+        const r = await bot.killPlayer(301);
+        expect(r).toMatchObject({ success: true, killed: true, rpGained: 120, player: { objectId: 301, name: 'Norseman' } });
+        expect(r.message).toContain('+120 rp');
+        expect(w.sentOf('moveTo')[0]!.z).toBe(2200);
+        expect(w.sentOf('setTarget').at(-1)!.objectId).toBe(301);
+        expect(w.sentOf('attack').map(a => a.on)).toEqual([true, false]);
+    });
+
+    test('a death event or isDead counts as the kill (someone else landed the blow)', async () => {
+        const first = world({ nearbyPlayers: [enemy()] });
+        setTimeout(() => first.w.combat({ kind: 'death', attackerObjectId: 999, targetObjectId: 301 }), 50);
+        expect(await first.bot.killPlayer(enemy())).toMatchObject({ success: true, killed: true });
+
+        const second = world({ nearbyPlayers: [enemy()] });
+        setTimeout(() => { const pl = second.w.state.nearbyPlayers[0]!; pl.isDead = true; pl.healthPercent = 0; }, 50);
+        expect(await second.bot.killPlayer(301)).toMatchObject({ success: true, killed: true });
+    });
+
+    test('refuses our own realm, the dead and the unknown', async () => {
+        const { bot } = world({ nearbyPlayers: [makePlayerObj(), enemy({ objectId: 302, isDead: true, healthPercent: 0 })] });
+        expect(await bot.killPlayer(300)).toMatchObject({ success: false, reason: 'not_attackable', player: { objectId: 300 } });
+        expect((await bot.killPlayer(302)).reason).toBe('already_dead');
+        expect(await bot.killPlayer(999)).toMatchObject({ success: false, reason: 'not_found', player: null });
+    });
+
+    test('PvP immunity ends the fight with reason immune and switches attack off', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy()] });
+        w.handlers.attack = (a, world) => {
+            if (a.type !== 'attack') return;
+            world.player.attacking = a.on;
+            if (a.on) setTimeout(() => world.message(IMMUNE_OURS, { type: 'youHit' }), 10);
+        };
+        const r = await bot.killPlayer(301, { timeout: 2000 });
+        expect(r).toMatchObject({ success: false, reason: 'immune', retryAfterMs: 2000, killed: false });
+        expect(w.sentOf('attack').map(a => a.on)).toEqual([true, false]);
+    });
+
+    test('target_lost when it leaves view alive (stealth, out of range)', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy()] });
+        playerFightSim(w, { dmg: 10 });
+        const inner = w.onTick!;
+        w.onTick = world => {
+            inner(world);
+            if ((world.state.nearbyPlayers[0]?.healthPercent ?? 100) <= 80) world.state.nearbyPlayers = [];
+        };
+        const r = await bot.killPlayer(301, { timeout: 2000 });
+        expect(r).toMatchObject({ success: false, reason: 'target_lost', killed: false });
+    });
+
+    test('out_of_reach when it runs beyond maxChaseDistance; the style chooser sees the player', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy()] });
+        playerFightSim(w, { dmg: 5 });
+        const seen: number[] = [];
+        const inner = w.onTick!;
+        w.onTick = world => {
+            inner(world);
+            const pl = world.state.nearbyPlayers[0]!;
+            if (pl.healthPercent <= 80) pl.x += 150; // runs as fast as we do
+        };
+        const r = await bot.killPlayer(301, { maxChaseDistance: 1500, timeout: 5000, useStyle: ({ target }) => { seen.push(target.objectId); return 'Backslash'; } });
+        expect(r).toMatchObject({ success: false, reason: 'out_of_reach' });
+        expect(seen).toContain(301);
+        expect(w.sentOf('moveTo').length).toBeGreaterThanOrEqual(1);
+    });
+});
+
+describe('attack / castSpell / attackers against players', () => {
+    test('attack takes an enemy player by objectId: npc null, target the player', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy()] });
+        playerFightSim(w, { dmg: 1 });
+        const r = await bot.attack(301);
+        expect(r).toMatchObject({ success: true, npc: null, target: { kind: 'player', objectId: 301 } });
+        expect(w.player.targetObjectId).toBe(301);
+        const npc = await bot.attack('rat');
+        expect(npc).toMatchObject({ success: true, npc: { objectId: 200 }, target: { objectId: 200 } });
+    });
+
+    test('attack reports immune when the refusal follows attack mode', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy()] });
+        w.handlers.attack = (a, world) => {
+            if (a.type !== 'attack') return;
+            world.player.attacking = a.on;
+            if (a.on) setTimeout(() => world.message('Norseman is temporarily immune to PvP attacks!', { type: 'youHit' }), 50);
+        };
+        expect(await bot.attack(301)).toMatchObject({ success: false, reason: 'immune', retryAfterMs: 2000, target: { objectId: 301 } });
+        w.state.nearbyPlayers[0]!.isDead = true;
+        w.publish();
+        expect((await bot.attack(301)).reason).toBe('already_dead');
+    });
+
+    test('after attack mode a range or view refusal is retryable and still attacking; a fatal one is refused', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy()] });
+        let refusal = 'Norseman is too far away to attack!';
+        w.handlers.attack = (a, world) => {
+            if (a.type !== 'attack') return;
+            world.player.attacking = a.on;
+            if (a.on) setTimeout(() => world.message(refusal, { type: 'system' }), 50);
+        };
+        expect(await bot.attack(301)).toMatchObject({ success: true, target: { objectId: 301 } });
+        refusal = 'Norseman is not in view!';
+        expect((await bot.attack(301)).success).toBeTrue();
+        refusal = 'You must have a target to attack!';
+        expect(await bot.attack(301)).toMatchObject({ success: false, reason: 'refused', message: refusal });
+        // A mezz or stun on us wears off: its own reason, with when to try again.
+        refusal = "You can't attack when you are stunned!";
+        expect(await bot.attack(301)).toMatchObject({ success: false, reason: 'crowd_controlled', retryAfterMs: 2000, message: refusal });
+    });
+
+    test('attack refused at once while mezzed (no attack mode: AttackComponent.cs:501-505) is crowd_controlled', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy()] });
+        w.handlers.attack = (a, world) => {
+            if (a.type === 'attack' && a.on) setTimeout(() => world.message("You can't attack when you are mesmerized!", { type: 'youHit' }), 10);
+        };
+        expect(await bot.attack(301)).toMatchObject({ success: false, reason: 'crowd_controlled', retryAfterMs: 2000, target: { objectId: 301 } });
+        expect(await bot.attack('rat')).toMatchObject({ success: false, reason: 'crowd_controlled', npc: { objectId: 200 } });
+    });
+
+    test('killNpc and killPlayer end with crowd_controlled when a mezz or stun refuses the swing, attack off', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy()] });
+        w.handlers.attack = (a, world) => {
+            if (a.type === 'attack' && a.on) setTimeout(() => world.message("You can't attack when you are stunned!", { type: 'youHit' }), 10);
+        };
+        const pl = await bot.killPlayer(301, { timeout: 3000 });
+        expect(pl).toMatchObject({ success: false, reason: 'crowd_controlled', retryAfterMs: 2000, killed: false });
+        expect(w.sentOf('attack').map(a => a.on)).toEqual([true, false]);
+        const npc = await bot.killNpc('rat', { timeout: 3000 });
+        expect(npc).toMatchObject({ success: false, reason: 'crowd_controlled', retryAfterMs: 2000, killed: false });
+    });
+
+    test('a living player at 0 % (health is rounded down, GameLiving.cs:2621) is fought on until isDead or its death event', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy({ healthPercent: 0 })] });
+        let swings = 0;
+        w.onTick = world => {
+            const p = world.player;
+            if (!p.attacking || p.targetObjectId !== 301) return;
+            if (++swings === 20) world.combat({ kind: 'death', attackerObjectId: p.objectId, targetObjectId: 301 });
+        };
+        const r = await bot.killPlayer(301, { timeout: 3000 });
+        expect(r).toMatchObject({ success: true, killed: true });
+        expect(swings).toBeGreaterThanOrEqual(20);
+        // attack() takes it too; only isDead makes it already dead.
+        const second = world({ nearbyPlayers: [enemy({ healthPercent: 0 })] });
+        expect((await second.bot.attack(301)).success).toBeTrue();
+        second.w.state.nearbyPlayers[0]!.isDead = true;
+        second.w.publish();
+        expect((await second.bot.killPlayer(301)).reason).toBe('already_dead');
+    });
+
+    test("the notice that our immunity ended is no refusal: the fight goes on (AbstractServerRules.cs:301)", async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy()] });
+        playerFightSim(w, { dmg: 10 });
+        setTimeout(() => w.message('Your temporary PvP invulnerability timer has expired.', { type: 'system' }), 50);
+        expect(await bot.killPlayer(301, { timeout: 5000 })).toMatchObject({ success: true, killed: true });
+    });
+
+    const drain = { name: 'Minor Vitality Drain', level: 1, internalId: 651, lineName: 'Path of Ice', lineIndex: 1, spellIndex: 0, cooldownRemaining: 0 };
+    /** Target 'Realm' in the static spell data. */
+    const realmBuff = { name: 'Minor Earthen Power', level: 1, internalId: 11, lineName: 'Path of Earth', lineIndex: 0, spellIndex: 1, cooldownRemaining: 0 };
+    const skills = { specializations: [], abilities: [], styles: [], spells: [drain, realmBuff] };
+
+    test('castSpell reports immune, and refuses a realm spell on an enemy player', async () => {
+        const { w, bot } = world({ skills, nearbyPlayers: [makePlayerObj(), enemy()] });
+        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('Norseman is entering the game and cannot be attacked!', { type: 'system' }), 10); };
+        expect(await bot.castSpell(drain, 301)).toMatchObject({ success: false, reason: 'immune', retryAfterMs: 2000 });
+        expect(await bot.castSpell(realmBuff, 301)).toMatchObject({ success: false, reason: 'invalid_target', target: { objectId: 301 } });
+        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('You cast a Minor Earthen Power spell!', { type: 'spell' }), 10); };
+        expect(await bot.castSpell(realmBuff, 300)).toMatchObject({ success: true, target: { objectId: 300 } });
+    });
+
+    test('castSpell: "You can\'t cast while mesmerized/stunned!" is crowd_controlled at once, not a 3 s no_response', async () => {
+        const { w, bot } = world({ skills, nearbyPlayers: [enemy()] });
+        for (const text of ["You can't cast while mesmerized!", "You can't cast while stunned!"]) {
+            w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message(text, { type: 'resisted' }), 10); };
+            const started = Date.now();
+            expect(await bot.castSpell(drain, 301)).toMatchObject({ success: false, reason: 'crowd_controlled', retryAfterMs: 2000, message: text });
+            expect(Date.now() - started).toBeLessThan(1500);
+        }
+    });
+
+    test('castSpell: "Your target is immune to this effect!" after "You cast" is a cast with effectImmune, not resisted', async () => {
+        const { w, bot } = world({ skills, nearbyPlayers: [enemy()] });
+        // CCSpellHandler.CheckSpellResist answers right behind FinishSpellCast's "You cast a" (SpellHandler.cs:1337).
+        w.handlers.castSpell = (_a, world) => {
+            setTimeout(() => world.combat({ kind: 'spellCast', attackerObjectId: world.player.objectId, targetObjectId: null, castTimeMs: 50 }), 10);
+            setTimeout(() => {
+                world.message('You cast a Minor Vitality Drain spell!', { type: 'spell' });
+                world.message('Your target is immune to this effect!', { type: 'resisted' });
+            }, 70);
+        };
+        const r = await bot.castSpell(drain, 301);
+        expect(r).toMatchObject({ success: true, completed: true, resisted: false, effectImmune: true, damage: 0 });
+        expect(r.message).toBe('Cast Minor Vitality Drain on Norseman (target immune)');
+        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('You cast a Minor Vitality Drain spell!', { type: 'spell' }), 10); };
+        expect(await bot.castSpell(drain, 301)).toMatchObject({ success: true, resisted: false, effectImmune: false });
+    });
+
+    test('getPlayerAttackers keeps a slow weapon\'s attacker between two swings (6 s window)', async () => {
+        const { w, bot } = world({ nearbyPlayers: [enemy()] });
+        // A two-handed swing 5 s ago: the next one is still to come.
+        w.state.combatEvents.push({ id: 98, kind: 'melee', attackerObjectId: 301, targetObjectId: w.player.objectId, result: 'hit', receivedAt: w.state.timestamp - 5000 });
+        w.publish();
+        expect(bot.getPlayerAttackers().map(p => p.objectId)).toEqual([301]);
+        expect(bot.getPlayerAttackers(4000)).toEqual([]);
+    });
+
+    test('getPlayerAttackers: enemy swings and spell effects on us within the window', async () => {
+        const { w, bot, sdk } = world({
+            nearbyPlayers: [
+                makePlayerObj(), // our realm
+                enemy({ objectId: 301, x: 560400, distance: 400 }),
+                enemy({ objectId: 302, realm: 'hibernia', name: 'Celt', x: 560100, distance: 100 }),
+                enemy({ objectId: 303, isDead: true, healthPercent: 0 }),
+                enemy({ objectId: 304, x: 560200 }),
+            ],
+        });
+        const me = w.player.objectId;
+        expect(bot.isInCombat()).toBeFalse();
+        w.combat({ kind: 'melee', attackerObjectId: 301, targetObjectId: me, result: 'miss' });
+        w.combat({ kind: 'spellEffect', attackerObjectId: 302, targetObjectId: me, effectId: 5208 });
+        w.combat({ kind: 'melee', attackerObjectId: 300, targetObjectId: me, result: 'hit' });
+        w.combat({ kind: 'melee', attackerObjectId: 303, targetObjectId: me, result: 'hit' });
+        w.combat({ kind: 'melee', attackerObjectId: 304, targetObjectId: 999, result: 'hit' });
+        w.state.combatEvents.push({ id: 99, kind: 'melee', attackerObjectId: 304, targetObjectId: me, result: 'hit', receivedAt: w.state.timestamp - 10_000 });
+        w.publish();
+        expect(bot.getPlayerAttackers().map(p => p.objectId)).toEqual([302, 301]);
+        expect(bot.getPlayerAttackers(60_000).map(p => p.objectId)).toEqual([302, 304, 301]);
+        expect(bot.isInCombat()).toBeTrue();
+        expect(bot.getAttackers()).toEqual([]);
+        expect(sdk.getNearbyPlayer(302)?.name).toBe('Celt');
+        expect(sdk.getNearbyPlayer(200)).toBeNull();
     });
 });
 

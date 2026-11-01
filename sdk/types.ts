@@ -153,7 +153,9 @@ export interface NearbyPlayer extends WorldObjectBase {
     lastName: string;
     level: number;
     realm: Realm;
+    /** Rounded down by the server (GameLiving.cs:2621): a living player with a few hit points reads 0. */
     healthPercent: number;
+    /** The death signal: set by the death event (0xAE) and kept until the player shows health again; never inferred from 0 %. */
     isDead: boolean;
     isSitting: boolean;
     inCombat: boolean;
@@ -402,6 +404,8 @@ export interface CombatEvent {
     targetHealthPercent?: number;
     /** Spell cast time in ms for kind 'spellCast'. */
     castTimeMs?: number;
+    /** For kinds 'spellCast' and 'spellEffect': the spell's client effect id (Spell.ClientEffect, SpellHandler.cs:1273/:1290), not its spell id. */
+    effectId?: number;
     receivedAt: number;
 }
 
@@ -466,7 +470,7 @@ export interface BotWorldState {
     textWindow: TextWindow | null;
     merchant: MerchantState;
     trainer: TrainerState;
-    /** Last 50 combat events, oldest first. */
+    /** Last 200 combat events in view (ours and everyone else's), oldest first. */
     combatEvents: CombatEvent[];
     /** Concentration effects we maintain (server 0x75). */
     concentrationEffects?: ConcentrationEffect[];
