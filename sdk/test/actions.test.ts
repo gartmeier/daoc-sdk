@@ -1247,6 +1247,37 @@ describe('items', () => {
         expect((await bot.equipItem('nothing')).reason).toBe('not_found');
     });
 
+    test('equip into a named slot swaps what is there and watches that slot', async () => {
+        const { w, bot } = world();
+        const ring = { ...w.state.inventory[0]!, slot: 45, name: 'Empowering Ring', level: 15 };
+        const worn = { ...ring, name: 'Empowering Ring', level: 10, slot: 35 };
+        w.state.inventory = [...w.state.inventory, ring];
+        w.state.equipment = [...w.state.equipment, worn];
+        w.publish();
+        w.handlers.moveItem = (a, world) => {
+            if (a.type !== 'moveItem') return;
+            const s = world.state;
+            s.inventory = [...s.inventory.filter(i => i.slot !== a.fromSlot), { ...worn, slot: a.fromSlot }];
+            s.equipment = [...s.equipment.filter(e => e.slot !== a.toSlot), { ...ring, slot: a.toSlot }];
+        };
+        const r = await bot.equipItem(ring, { slot: 35 });
+        expect(r.success).toBeTrue();
+        expect(w.sentOf('moveItem').at(-1)).toMatchObject({ fromSlot: 45, toSlot: 35 });
+        expect(w.state.equipment.find(e => e.slot === 35)?.level).toBe(15);
+    });
+
+    test('an equal-named item worn elsewhere is no success for a named slot', async () => {
+        const { w, bot } = world();
+        const ring = { ...w.state.inventory[0]!, slot: 45, name: 'Empowering Ring', level: 15 };
+        w.state.inventory = [...w.state.inventory, ring];
+        w.state.equipment = [...w.state.equipment, { ...ring, slot: 35 }];
+        w.publish();
+        // The server moves nothing (a refusal without a message we match).
+        const r = await bot.equipItem(ring, { slot: 36 });
+        expect(r.success).toBeFalse();
+        expect(r.reason).toBe('timeout');
+    });
+
     test('drop, destroy and use', async () => {
         const { w, bot } = world();
         const remove = (a: BotAction, world: FakeWorld) => {

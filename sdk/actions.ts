@@ -1554,10 +1554,19 @@ export class BotActions {
 
     // ============ Items ============
 
-    /** Equip a backpack item; the server picks its slot. Observed in state.equipment. */
-    async equipItem(target: InventoryItem | NamePattern | number): Promise<ItemResult> {
+    /**
+     * Equip a backpack item; the server picks its slot, or takes `options.slot` when given (a worn
+     * item there swaps into the backpack). Observed in state.equipment: with a slot, that slot must
+     * hold this item, so an equal-named item already worn elsewhere doesn't count.
+     */
+    async equipItem(target: InventoryItem | NamePattern | number, options: { slot?: number } = {}): Promise<ItemResult> {
         const item = this.helpers.resolveInventoryItem(target);
         if (!item) return fail(`Item not found in backpack: ${describeTarget(target)}`, 'not_found', { item: null, messages: [] });
+        const { slot } = options;
+        if (slot !== undefined) {
+            const same = (i: InventoryItem) => i.name === item.name && i.level === item.level;
+            return this.moveObserved(item, slot, s => s.equipment.some(e => e.slot === slot && same(e)) && !s.inventory.some(i => i.slot === item.slot && same(i)), `Equipped ${item.name} in slot ${slot}`);
+        }
         return this.moveObserved(item, PAPER_DOLL_SLOT, s => s.equipment.some(e => e.name === item.name) && !s.inventory.some(i => i.slot === item.slot && i.name === item.name), `Equipped ${item.name}`);
     }
 

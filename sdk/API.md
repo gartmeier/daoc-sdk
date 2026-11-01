@@ -71,7 +71,7 @@
 | Signature | Description |
 |---|---|
 | `async lootNearby(options: LootOptions = {}): Promise<LootResult>` | Pick up loot on the ground within `radius` and report what changed in the backpack and purse (autoloot usually already took it during the kill). |
-| `async equipItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Equip a backpack item; the server picks its slot. Observed in state.equipment. |
+| `async equipItem(target: InventoryItem \| NamePattern \| number, options: { slot?: number } = {}): Promise<ItemResult>` | Equip a backpack item; the server picks its slot, or takes `options.slot` when given (a worn item there swaps into the backpack). Observed in state.equipment: with a slot, that slot must hold this item, so an equal-named item already worn elsewhere doesn't count. |
 | `async unequipItem(target: number \| NamePattern): Promise<ItemResult>` | Move an equipped item (by slot or name) back into the backpack. |
 | `async dropItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Drop a backpack item on the ground. |
 | `async destroyItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Destroy a backpack item. |
