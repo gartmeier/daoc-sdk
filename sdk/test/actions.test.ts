@@ -1335,6 +1335,36 @@ describe('items', () => {
     }, 15_000);
 });
 
+describe('delveMerchantItem', () => {
+    const eira = makeNpc({ objectId: 500, name: 'Eira', role: 'merchant', realm: 'albion', isPeaceful: true, x: 560100, y: 511000 });
+    const sword = { page: 0, slot: 3, name: 'long sword', level: 4, price: 375, model: 1, usable: true, objectType: 19, hand: 0, damageType: 'slash' as const, value1: 24, spdAbs: 35 };
+    function shop() {
+        const ctx = world({ nearbyNpcs: [eira] });
+        ctx.w.handlers.interact = (_a, world) => {
+            world.state.merchant = { isOpen: true, merchantObjectId: 500, windowType: 0, items: [sword] };
+        };
+        return ctx;
+    }
+
+    test('sends the page and slot and returns the parsed answer', async () => {
+        const { w, bot } = shop();
+        w.handlers.delveMerchantItem = (_a, world) => {
+            setTimeout(() => { world.state.textWindow = { caption: 'long sword', lines: ['Magical Bonuses:', '4.67 | Strength: 7 pts'], receivedAt: Date.now() }; }, 15);
+        };
+        const r = await bot.delveMerchantItem('Eira', /long sword/);
+        expect(r).toMatchObject({ success: true, item: { page: 0, slot: 3, value1: 24 } });
+        expect(r.bonuses.map(b => [b.category, b.value])).toEqual([['stat', 7]]);
+        expect(w.sentOf('delveMerchantItem')).toMatchObject([{ page: 0, slot: 3 }]);
+    });
+
+    test('names what it could not do', async () => {
+        const { bot } = shop();
+        expect(await bot.delveMerchantItem('Eira', /pike/)).toMatchObject({ success: false, reason: 'item_not_sold', item: null });
+        expect(await bot.delveMerchantItem('Nobody', /long sword/)).toMatchObject({ success: false, item: null });
+        expect(await bot.delveMerchantItem('Eira', /long sword/, { timeout: 50 })).toMatchObject({ success: false, reason: 'no_response', item: { slot: 3 } });
+    });
+});
+
 describe('delveItem', () => {
     const answer = (world: FakeWorld, caption: string, lines: string[]) => setTimeout(() => {
         world.state.textWindow = { caption, lines, receivedAt: Date.now() };
@@ -1408,8 +1438,8 @@ describe('delveItem', () => {
 describe('merchants', () => {
     const merchant = makeNpc({ objectId: 203, name: 'Lady Grynoch', role: 'merchant', realm: 'albion', isPeaceful: true, x: 560100, y: 511000 });
     const items = [
-        { page: 0, slot: 0, name: 'arrows', level: 1, price: 50, model: 1, usable: true },
-        { page: 0, slot: 1, name: 'heavy sword', level: 5, price: 999_999, model: 2, usable: true },
+        { page: 0, slot: 0, name: 'arrows', level: 1, price: 50, model: 1, usable: true, objectType: 0, hand: 0, damageType: null, value1: 0, spdAbs: 0 },
+        { page: 0, slot: 1, name: 'heavy sword', level: 5, price: 999_999, model: 2, usable: true, objectType: 0, hand: 0, damageType: null, value1: 0, spdAbs: 0 },
     ];
     function shop() {
         const ctx = world({ nearbyNpcs: [merchant] });
@@ -1479,7 +1509,7 @@ describe('trainSpec', () => {
         w.handlers.trainSpec = (a, world) => {
             if (a.type !== 'trainSpec') return;
             setTimeout(() => {
-                world.state.skills = { ...world.state.skills, specializations: [{ name: 'Slash', level: 2 + (a.levels ?? 1), internalId: 1 }] };
+                world.state.skills = { ...world.state.skills, specializations: [{ name: 'Slash', level: 2 + (a.levels ?? 1), internalId: 1, bonus: 0 }] };
                 world.player.specPoints = 0;
             }, 10);
         };

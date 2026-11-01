@@ -9,7 +9,7 @@
 - `sdk.send*` methods are low-level dispatches. A successful `ActionResult` means the headless client accepted and dispatched the action (packets written); it does **not** prove that the DAoC server applied it.
 - Methods whose signature returns `Promise<...>` are asynchronous and must be awaited. State reads (`get*`, `find*`) are synchronous reads of the last snapshot.
 - Coordinates are DAoC global region coordinates: `x`/`y` on the ground plane, `z` is height. Headings are 0..4095 (0 = +Y, clockwise). Distances are world units (~191 units/s at full run speed).
-- Backpack slots are 40-79, equipment slots 10-37 (`EquipmentSlot`). `getInventory()` lists occupied slots only: pass `item.slot`, never an array index.
+- Backpack slots are 40-79, equipment slots 10-37 (`EquipmentSlot`). `objectType` is an `ObjectType`. `getInventory()` lists occupied slots only: pass `item.slot`, never an array index.
 - `state.tick` is the client publish counter, not a server tick; `waitForTicks(n)` waits for n more published snapshots.
 
 ## BotActions (high-level)
@@ -76,7 +76,8 @@
 | `async dropItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Drop a backpack item on the ground. |
 | `async destroyItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Destroy a backpack item. |
 | `async useItem(target: InventoryItem \| NamePattern \| number, options: { useType?: number } = {}): Promise<ItemResult>` | Use (right-click) a backpack or equipped item: potions, charged items. A number is a backpack (40-79) or equipment (10-37) slot. Success needs evidence about this item: a message naming it ("You attempt to use <item>.", GamePlayer.cs:6564), its stack count changing, or a new effect, and no refusal in the following ~400 ms. |
-| `async delveItem(target: InventoryItem \| NamePattern \| number, options: { timeout?: number } = {}): Promise<DelveResult>` | Read an item's real bonuses: a backpack or equipped item, by item, name or slot. Reason 'empty_slot' for an empty slot asked by number, 'not_found' for a name nothing matches, 'no_response' when no window named after the item came within `timeout`: only the caption says a 0xC4 window is ours (NPC text and commands send them too, DetailDisplayHandler.cs:114), and the snapshot holds only the latest one, so another window landing right after it loses the answer. |
+| `async delveMerchantItem(merchant: NpcTarget, item: NamePattern \| { page: number; slot: number }, options: { timeout?: number } = {}): Promise<MerchantDelveResult>` | Read an item's real bonuses: a backpack or equipped item, by item, name or slot. Reason 'empty_slot' for an empty slot asked by number, 'not_found' for a name nothing matches, 'no_response' when no window named after the item came within `timeout`: only the caption says a 0xC4 window is ours (NPC text and commands send them too, DetailDisplayHandler.cs:114), and the snapshot holds only the latest one, so another window landing right after it loses the answer. |
+| `async delveItem(target: InventoryItem \| NamePattern \| number, options: { timeout?: number } = {}): Promise<DelveResult>` | _No description provided._ |
 | `findInventoryItem(pattern: NamePattern): InventoryItem \| null` | Backpack item by name (shortest match wins). |
 | `async buyItem(merchant: NpcTarget, item: NamePattern \| { page: number; slot: number }, count: number = 1): Promise<BuyResult>` | Buy `count` of an item (name or page/slot) and observe the backpack and purse. |
 | `async sellItem(merchant: NpcTarget, item: InventoryItem \| NamePattern \| number): Promise<SellResult>` | Sell one backpack item (whole stack) to a merchant and observe the purse. |
@@ -232,6 +233,7 @@
 | `async sendMoveItem(fromSlot: number, toSlot: number, count?: number): Promise<ActionResult>` | Move an item between slots (equip, unequip, stack split, vault). |
 | `async sendDropItem(slot: number): Promise<ActionResult>` | Drop an item on the ground. |
 | `async sendDelve(slot: number): Promise<ActionResult>` | Ask the server to delve the item in a slot; the answer is the next text window (getTextWindow), and an empty slot gets none. bot.delveItem waits for it and parses the bonuses. |
+| `async sendDelveMerchantItem(page: number, slot: number): Promise<ActionResult>` | Ask the server to delve an item in the open merchant window; the answer is the next text window. bot.delveMerchantItem opens the window, waits for the answer and parses it. |
 | `async sendDestroyItem(slot: number): Promise<ActionResult>` | Destroy an item. |
 | `async sendBuy(page: number, slot: number, count: number = 1): Promise<ActionResult>` | Buy from the open merchant by page/slot (see getMerchant). |
 | `async sendSell(slot: number): Promise<ActionResult>` | Sell a backpack item to the open merchant. |
@@ -465,6 +467,8 @@ interface Specialization {
   name: string;
   level: number;
   internalId: number;
+  /** Levels added on top of `level` by items and the like. */
+  bonus: number;
 }
 ```
 
@@ -477,6 +481,64 @@ interface Ability {
   internalId: number;
   /** Index to pass to the useSkill action. */
   skillIndex: number;
+  /** The server's tooltip fields as sent; a plain ability has little beyond Index and Name. */
+  details?: Record<string, string>;
+}
+```
+
+### StyleDetails
+
+A style as the server's tooltip describes it.
+
+```typescript
+interface StyleDetails {
+  /** Endurance cost as the style table lists it. */
+  fatigue: number;
+  /** To-hit and defence modifiers while the style lands. */
+  attackMod: number;
+  defensiveMod: number;
+  /** Damage growth: the style's GrowthRate * 200. */
+  openingDamage: number;
+  /** What it needs: his own last attack (offensive), the enemy's (defensive), or where he stands (positional). */
+  opening: 'offensive' | 'defensive' | 'positional';
+  /** The attack result `opening` asks for; null for any. 'styledHit' with `openingStyle` is a follow-up. */
+  result: CombatResult | null;
+  position: 'back' | 'side' | 'front' | null;
+  /** The style this one follows. */
+  openingStyle: string | null;
+  /** Styles that follow this one, learned or not. */
+  followUps: string[];
+  /** Weapon it needs, in the server's words. */
+  weapon: string | null;
+  /** Needs stealth. */
+  stealth: boolean;
+  /** Internal id of the spell it procs, and that spell's details when the server sent them. */
+  procSpellId: number | null;
+  procSpell?: SpellDetails;
+}
+```
+
+### SpellDetails
+
+A spell as the server's tooltip describes it.
+
+```typescript
+interface SpellDetails {
+  /** 0 when instant; null for a cast under 2 s, which the tooltip doesn't state. */
+  castTimeMs: number | null;
+  damageType: string | null;
+  powerCost: number;
+  costType: 'power' | 'health' | 'endurance';
+  range: number;
+  durationSeconds: number;
+  recastSeconds: number;
+  target: 'self' | 'enemy' | 'group' | 'pet' | 'realm' | 'corpse' | 'area';
+  radius: number;
+  concentration: number;
+  /** Time between pulses or ticks. */
+  frequencyMs: number;
+  /** The server's description; empty when it has none. */
+  description: string;
 }
 ```
 
@@ -490,8 +552,10 @@ interface Style {
   specName: string | null;
   /** Index to pass to the useSkill action. */
   skillIndex: number;
-  /** Raw prerequisite code from 0x16/01 (0x100 = none). */
+  /** Raw prerequisite code from 0x16/01 (0x100 = none). `details` says the same in words. */
   prerequisite: number;
+  /** From the 0xD8 tooltip the server pushes after the skills list. */
+  details?: StyleDetails;
 }
 ```
 
@@ -510,6 +574,8 @@ interface Spell {
   cooldownRemaining: number;
   /** Set for hybrid-class spells that live in the usable-skills list instead of a spell line (lineIndex/spellIndex are then -1): cast them with useSkill(skillIndex). */
   skillIndex?: number;
+  /** From the 0xD8 tooltip the server pushes after the skills list. */
+  details?: SpellDetails;
 }
 ```
 
@@ -658,7 +724,18 @@ interface MerchantItem {
   level: number;
   price: number;
   model: number;
+  /** The server's verdict: this character has the ability to use it. */
   usable: boolean;
+  /** See ObjectType (the same number as InventoryItem.objectType). */
+  objectType: number;
+  /** See ItemHand. */
+  hand: number;
+  /** Crush, slash or thrust for a weapon; null otherwise. */
+  damageType: 'crush' | 'slash' | 'thrust' | null;
+  /** DPS * 10 for a weapon, AF for armour, pack size for ammunition (PacketLib1125.cs:640-675). */
+  value1: number;
+  /** Speed in 0.1 s for a weapon, absorption for armour. */
+  spdAbs: number;
 }
 ```
 
@@ -1208,6 +1285,14 @@ interface RespawnResult {
 interface ItemResult {
   item: InventoryItem | null;
   messages: GameMessage[];
+}
+```
+
+### MerchantDelveResult
+
+```typescript
+interface MerchantDelveResult {
+  item: MerchantItem | null;
 }
 ```
 

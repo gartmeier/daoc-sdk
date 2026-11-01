@@ -200,7 +200,7 @@ function renderApiMarkdown(model: ApiModel): string {
         '- `sdk.send*` methods are low-level dispatches. A successful `ActionResult` means the headless client accepted and dispatched the action (packets written); it does **not** prove that the DAoC server applied it.',
         '- Methods whose signature returns `Promise<...>` are asynchronous and must be awaited. State reads (`get*`, `find*`) are synchronous reads of the last snapshot.',
         '- Coordinates are DAoC global region coordinates: `x`/`y` on the ground plane, `z` is height. Headings are 0..4095 (0 = +Y, clockwise). Distances are world units (~191 units/s at full run speed).',
-        '- Backpack slots are 40-79, equipment slots 10-37 (`EquipmentSlot`). `getInventory()` lists occupied slots only: pass `item.slot`, never an array index.',
+        '- Backpack slots are 40-79, equipment slots 10-37 (`EquipmentSlot`). `objectType` is an `ObjectType`. `getInventory()` lists occupied slots only: pass `item.slot`, never an array index.',
         '- `state.tick` is the client publish counter, not a server tick; `waitForTicks(n)` waits for n more published snapshots.',
         '',
         '## BotActions (high-level)',

@@ -16,11 +16,10 @@
 import { findItemTemplates, findNpcSpawns, getClass, getMerchantItems, realmId, type ClassInfo, type MerchantEntry, type NpcSpawnMatch } from '../../data/index';
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
-import { EquipmentSlot, type InventoryItem, type PlayerState } from '../types';
+import { EquipmentSlot, isArmor, ObjectType, type InventoryItem, type PlayerState } from '../types';
 import { armorGain, armorSwing, armorValue, statScore } from './gear-score';
 
 const { Jewelry, Cloak, Neck, Waist, LeftBracer, RightBracer, LeftRing, RightRing } = EquipmentSlot;
-const MAGICAL = 41;
 const BRACERS = [LeftBracer, RightBracer] as const;
 const RINGS = [LeftRing, RightRing] as const;
 
@@ -47,7 +46,7 @@ function magicalTemplateTypes(name: string): number[] {
     const key = name.toLowerCase();
     let types = templateTypes.get(key);
     if (!types) {
-        types = findItemTemplates(new RegExp(`^${escapeRe(name)}$`, 'i'), 200).filter(t => t.objectType === MAGICAL).map(t => t.itemType);
+        types = findItemTemplates(new RegExp(`^${escapeRe(name)}$`, 'i'), 200).filter(t => t.objectType === ObjectType.Magical).map(t => t.itemType);
         templateTypes.set(key, types);
     }
     return types;
@@ -60,7 +59,7 @@ function magicalTemplateTypes(name: string): number[] {
  * battleground.ts. Without a template (random loot) the name decides.
  */
 export function accessorySlots(item: Pick<InventoryItem, 'name' | 'objectType'>): readonly number[] {
-    if (item.objectType !== MAGICAL) return [];
+    if (item.objectType !== ObjectType.Magical) return [];
     const types = magicalTemplateTypes(item.name);
     if (types.length) return types.every(t => SLOTS_BY_TYPE[t]) ? SLOTS_BY_TYPE[types[0]!]! : [];
     return LOOT_NAMES.find(([re]) => re.test(item.name))?.[1] ?? [];
@@ -205,7 +204,6 @@ export async function armorUpgradeGain(delves: GearDelves, item: InventoryItem, 
     return armorGain(candidate, current, candidateStat, currentStat);
 }
 
-const isArmor = (i: InventoryItem) => i.objectType >= 32 && i.objectType <= 38;
 
 /**
  * Each candidate's gain over what its slot holds. Armour counts its bonuses (armorUpgradeGain);
@@ -214,7 +212,7 @@ const isArmor = (i: InventoryItem) => i.objectType >= 32 && i.objectType <= 38;
 export async function upgradeGains<T extends { item: InventoryItem; cur?: InventoryItem }>(delves: GearDelves, rows: T[], level: number, score: (i: InventoryItem, level: number) => number): Promise<(T & { gain: number })[]> {
     const out: (T & { gain: number })[] = [];
     for (const row of rows) {
-        const gain = isArmor(row.item)
+        const gain = isArmor(row.item.objectType)
             ? await armorUpgradeGain(delves, row.item, row.cur, level)
             : score(row.item, level) - (row.cur ? score(row.cur, level) : 0);
         out.push({ ...row, gain });

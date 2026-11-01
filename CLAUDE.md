@@ -65,7 +65,7 @@ The loop is the session loop at group scale: run, read the report (findings name
 
 | Tool | Use |
 |---|---|
-| `execute_code({ bot_name, code })` | Run TypeScript on a bot. Globals: `bot`, `sdk`, `args`, `EquipmentSlot`. `return` a JSON value. Starts the gateway and the client if needed (first login can take a minute). |
+| `execute_code({ bot_name, code })` | Run TypeScript on a bot. Globals: `bot`, `sdk`, `args`, `EquipmentSlot`, `ObjectType`, `ItemHand`. `return` a JSON value. Starts the gateway and the client if needed (first login can take a minute). |
 | `execute_code({ bot_name, script: 'bots/<name>/x.ts', args })` | Run a module whose default export is `async ({ bot, sdk, args }) => result`. A `runScript` file is accepted only in the guarded form above (`export default main; if (import.meta.main) runScript(main)`); the template and every example are written that way. |
 | `list_bots()` / `disconnect_bot(name)` | Connected bots / disconnect; a client that execute_code started quits cleanly. |
 
@@ -93,7 +93,8 @@ A new call for the same bot cancels the one still running. Every result includes
 - **State reads** (`get*`, `find*`) are synchronous reads of the last snapshot, which is refreshed about every 250 ms. Await every `Promise`.
 - **One controller per bot.** The newest control connection (a `runScript` file, MCP `execute_code`, `swarm-check`) wins, and the older one is cut off. `bun sdk/cli.ts` and `bun sdk/chat.ts <name> "text"` (`--to <player>`, `--watch`) only observe and never take over.
 - **Coordinates:** `x`/`y` are the ground plane in region coordinates and `z` is height. Headings run 0..4095. Full run speed is ~191 units/s.
-- **Slots:** backpack 40–79, equipment 10–37. Pass `item.slot`, never an array index.
+- **Slots:** backpack 40–79, equipment 10–37 (`EquipmentSlot`). Pass `item.slot`, never an array index.
+- **Item types:** `ObjectType` names `objectType` (`ObjectType.Blades`, `isWeapon`, `isArmor`), and `ItemHand` names a merchant item's `hand`. Use them, not raw numbers.
 
 ### bot.* quick reference
 
@@ -109,7 +110,7 @@ A new call for the same bot cancels the one still running. Every result includes
 | `rest({healthPercent, manaPercent})` / `releaseAndRespawn()` | Sit to regenerate / respawn at the bind point |
 | `lootNearby()` | Pick up ground loot (autoloot usually already did) |
 | `talkTo(npc)` / `whisper(npc, keyword)` / `navigateDialog(npc, [kw])` | NPC dialog and its [keywords] |
-| `openMerchant` / `buyItem` / `sellItem` / `sellItems(m, filter)` | Shops (sell price is 50 % of value) |
+| `openMerchant` / `buyItem` / `sellItem` / `sellItems(m, filter)` / `delveMerchantItem(m, item)` | Shops (sell price is 50 % of value); `shop.items` carry type, hand, DPS and speed |
 | `trainSpec(trainer, spec, levels)` | Spend specialization points |
 | `equipItem` / `unequipItem` / `useItem` / `dropItem` / `destroyItem` | Items |
 | `delveItem(item \| name \| slot)` | An item's real bonuses: `lines`, `bonuses`, `unknown`; reason `empty_slot`, `not_found`, `no_response` (learnings/looting.md) |

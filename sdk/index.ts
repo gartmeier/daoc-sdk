@@ -1088,6 +1088,14 @@ export class BotSDK {
         return this.sendAction({ type: 'delve', slot, reason: 'SDK' });
     }
 
+    /**
+     * Ask the server to delve an item in the open merchant window; the answer is the next text
+     * window. bot.delveMerchantItem opens the window, waits for the answer and parses it.
+     */
+    async sendDelveMerchantItem(page: number, slot: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'delveMerchantItem', page, slot, reason: 'SDK' });
+    }
+
     /** Destroy an item. */
     async sendDestroyItem(slot: number): Promise<ActionResult> {
         return this.sendAction({ type: 'destroyItem', slot, reason: 'SDK' });

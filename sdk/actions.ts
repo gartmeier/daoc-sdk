@@ -338,6 +338,10 @@ export interface ItemResult extends ActionResult {
     messages: GameMessage[];
 }
 
+export interface MerchantDelveResult extends Omit<DelveResult, 'item'> {
+    item: MerchantItem | null;
+}
+
 export interface DelveResult extends ActionResult {
     item: InventoryItem | null;
     /** The delve window as the server sent it, blank lines included. Empty unless it answered. */
@@ -1656,6 +1660,26 @@ export class BotActions {
      * a 0xC4 window is ours (NPC text and commands send them too, DetailDisplayHandler.cs:114), and
      * the snapshot holds only the latest one, so another window landing right after it loses the answer.
      */
+    async delveMerchantItem(merchant: NpcTarget, item: NamePattern | { page: number; slot: number }, options: { timeout?: number } = {}): Promise<MerchantDelveResult> {
+        const none = (wanted: MerchantItem | null) => ({ item: wanted, lines: [], ...parseDelve([]) });
+        const open = await this.openMerchant(merchant);
+        if (!open.success) return fail(open.message, open.reason ?? 'no_merchant', none(null));
+        const wanted = typeof item === 'object' && !(item instanceof RegExp)
+            ? open.items.find(i => i.page === item.page && i.slot === item.slot) ?? null
+            : bestNameMatch(open.items, item);
+        if (!wanted) return fail(`${open.merchant?.name} does not sell ${describeTarget(item)}`, 'item_not_sold', none(null));
+        const before = this.sdk.getTextWindow()?.receivedAt ?? 0;
+        const r = await this.sdk.sendDelveMerchantItem(wanted.page, wanted.slot);
+        if (!r.success) return { ...r, ...none(wanted) };
+        const window = await this.helpers.waitFor(s => {
+            const w = s.textWindow;
+            return w && w.receivedAt !== before && isDelveOf(w.caption, wanted.name) ? w : null;
+        }, options.timeout ?? 3000);
+        if (!window) return fail(`No delve answer for ${wanted.name}`, 'no_response', none(wanted));
+        const parsed = parseDelve(window.lines);
+        return { success: true, message: `Delved ${wanted.name}: ${parsed.bonuses.length} bonuses`, item: wanted, lines: window.lines, ...parsed };
+    }
+
     async delveItem(target: InventoryItem | NamePattern | number, options: { timeout?: number } = {}): Promise<DelveResult> {
         const none = (item: InventoryItem | null) => ({ item, lines: [], ...parseDelve([]) });
         const item = this.resolveUsableItem(target);

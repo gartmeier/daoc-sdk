@@ -83,6 +83,17 @@ describe('DaocClient regionChangeRequest', () => {
 });
 
 describe('DaocClient delve', () => {
+    test('a merchant item is asked for by page * 30 + slot, and only from an open window', async () => {
+        const { client, s, sent } = playingClient();
+        expect(await client.execute({ type: 'delveMerchantItem', page: 0, slot: 3 })).toMatchObject({ success: false, reason: 'merchant_not_open' });
+        s.model.merchant.isOpen = true;
+        s.model.merchant.items = [{ page: 1, slot: 3, name: 'long sword' } as never];
+        expect(await client.execute({ type: 'delveMerchantItem', page: 0, slot: 3 })).toMatchObject({ success: false, reason: 'bad_args' });
+        expect(sent).toEqual([]);
+        expect((await client.execute({ type: 'delveMerchantItem', page: 1, slot: 3 })).success).toBe(true);
+        expect(sent).toEqual([ClientOp.DetailRequest]);
+    });
+
     const ring = { slot: 40, name: 'Arcane Ring' } as never;
 
     test('asks only about a slot holding something: an empty one gets no reply', async () => {

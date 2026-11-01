@@ -13,6 +13,7 @@ export interface MerchantPage {
         spdAbs: number;
         hand: number;
         objectType: number;
+        damageType: number;
         usable: boolean;
         value2: number;
         price: number;
@@ -34,13 +35,15 @@ export function decodeMerchantWindow(p: Uint8Array): MerchantPage {
         const value1 = r.u8();
         const spdAbs = r.u8();
         const hand = r.u8() >> 6;
-        const objectType = r.u8() & 0x3F;
+        const typeByte = r.u8();
+        const objectType = typeByte & 0x3F;
+        const damageType = typeByte >> 6;
         const usable = r.u8() !== 0;
         const value2 = r.u16le();
         const price = r.u32le();
         const model = r.u16le();
         const name = r.intLePascal();
-        items.push({ index, level, value1, spdAbs, hand, objectType, usable, value2, price, model, name });
+        items.push({ index, level, value1, spdAbs, hand, objectType, damageType, usable, value2, price, model, name });
     }
     return { windowType, page, items };
 }

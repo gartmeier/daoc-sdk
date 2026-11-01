@@ -32,7 +32,7 @@ export const TOOLS = [
                 bot_name: { type: 'string', description: 'Bot name (folder in bots/).' },
                 code: {
                     type: 'string',
-                    description: 'TypeScript function body (types are stripped). Globals: bot, sdk, args, EquipmentSlot. Example: "const npc = sdk.findNearbyNpc(/rat/i, { attackable: true }); return npc;". A world summary comes with every result. Provide exactly one of code or script.',
+                    description: 'TypeScript function body (types are stripped). Globals: bot, sdk, args, EquipmentSlot, ObjectType, ItemHand. Example: "const npc = sdk.findNearbyNpc(/rat/i, { attackable: true }); return npc;". A world summary comes with every result. Provide exactly one of code or script.',
                 },
                 script: {
                     type: 'string',

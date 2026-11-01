@@ -133,6 +133,52 @@ describe('WorldModel', () => {
         expect(s.styles[0]).toMatchObject({ name: 'Slam', skillIndex: 1, prerequisite: 0x100 });
     });
 
+    test('0xD8 tooltips land on the style, spell and ability, and survive a resent skills list', () => {
+        const m = new WorldModel();
+        const skills = W().u8(1).u8(4).u8(3).u8(0)
+            .u8(4).u16(10).u8(0).u16(0).u8(2).u16(5).pascal('Celtic Dual')
+            .u8(1).u16(11).u8(1).u16(0).u8(0).u16(6).pascal('Sprint')
+            .u8(4).u16(40000).u8(2).u16(105).u8(0).u16(7).pascal('Blinding Rain')
+            .u8(9).u16(21).u8(3).u16(0).u8(0).u16(8).pascal('Spark').toBytes();
+        const delve = (s: string) => m.handle(ServerOp.DelveInfo, new TextEncoder().encode(`${s}        expect(s.styles[0]).toMatchObject({ name: 'Slam', skillIndex: 1, prerequisite: 0x100 });`));
+        m.handle(ServerOp.VariousUpdate, skills);
+        delve('(Style (Index "-25536")(FollowupStyle "Blizzard, Gale")(Name "Blinding Rain")(Fatigue "5")(AttackMod "5")(OpeningDamage "175")(OpeningType "1")(OpeningResult "5")(Weapon "Dual Wield"))');
+        delve('(Spell (Function "light")(Index "21")(Name "Spark")(instant "1")(damage_type "10")(power_cost "3")(range "1500")(target "1")(delve_string "Burns "hard" (once)."))');
+        delve('(Ability (Index "11")(Name "Sprint"))');
+        delve('not a tooltip');
+        m.handle(ServerOp.VariousUpdate, skills);
+        const s = m.skills();
+        expect(s.specializations[0]!.bonus).toBe(2);
+        expect(s.styles[0]!.details).toMatchObject({ fatigue: 5, attackMod: 5, openingDamage: 175, opening: 'defensive', result: 'evade', position: null, openingStyle: null, followUps: ['Blizzard', 'Gale'], weapon: 'Dual Wield', procSpellId: null });
+        expect(s.spells[0]!.details).toMatchObject({ castTimeMs: 0, damageType: 'heat', powerCost: 3, costType: 'power', range: 1500, target: 'enemy', description: 'Burns "hard" (once).' });
+        expect(s.abilities[0]!.details).toEqual({ Index: '11', Name: 'Sprint' });
+    });
+
+    test('a style tooltip with no opening type is an offensive one, and a positional 0 is the back', () => {
+        const m = new WorldModel();
+        m.handle(ServerOp.VariousUpdate, W().u8(1).u8(2).u8(3).u8(0)
+            .u8(1).u16(1).u8(2).u16(0x100).u8(0).u16(0).pascal('Misty Gloom')
+            .u8(8).u16(2).u8(2).u16(200).u8(0).u16(0).pascal('Snow Shower').toBytes());
+        const delve = (s: string) => m.handle(ServerOp.DelveInfo, new TextEncoder().encode(`${s}        expect(s.styles[0]).toMatchObject({ name: 'Slam', skillIndex: 1, prerequisite: 0x100 });`));
+        delve('(Style (Index "1")(Name "Misty Gloom")(Fatigue "15"))');
+        delve('(Style (Index "2")(Name "Snow Shower")(OpeningType "2"))');
+        const [gloom, snow] = m.skills().styles;
+        expect(gloom!.details).toMatchObject({ opening: 'offensive', result: null, position: null });
+        expect(snow!.details).toMatchObject({ opening: 'positional', position: 'back' });
+    });
+
+    test('merchant items keep what the window says about them', () => {
+        const m = new WorldModel();
+        const name = (s: string) => [s.length, 0, 0, 0, ...new TextEncoder().encode(s)];
+        const item = (index: number, level: number, dps: number, spd: number, hand: number, type: number, usable: number, price: number, n: string) =>
+            [index, level, dps, spd, hand << 6, type, usable, 30, 0, price & 255, price >> 8, 0, 0, 9, 0, ...name(n)];
+        m.handle(ServerOp.MerchantWindow, Uint8Array.from([2, 0, 0, ...item(3, 4, 24, 35, 0, (2 << 6) | 19, 1, 375, 'long sword'), ...item(0, 1, 15, 28, 2, (1 << 6) | 20, 0, 150, 'club')]));
+        expect(m.merchant.items).toMatchObject([
+            { slot: 0, name: 'club', objectType: 20, hand: 2, damageType: 'crush', value1: 15, spdAbs: 28, usable: false },
+            { slot: 3, name: 'long sword', objectType: 19, hand: 0, damageType: 'slash', value1: 24, spdAbs: 35, usable: true, price: 375 },
+        ]);
+    });
+
     test('inventory update adds and removes slots', () => {
         const m = new WorldModel();
         const item = (slot: number, name: string) => W().u8(slot).u16(0).u8(1).u8(0).u8(0).u8(0).u8(0).u8(0).u16(10).u8(100).u8(100).u8(100).u8(0).u8(0).u16(5).u8(0).u16(0).u8(0).u16(0).pascal(name).toBytes();

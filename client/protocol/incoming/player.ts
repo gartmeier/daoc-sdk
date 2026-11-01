@@ -1,6 +1,74 @@
 // Own-character state packets: status, points, money, stats, skills, inventory.
 
+import { ObjectType, type CombatResult, type SpellDetails, type StyleDetails } from '../../../sdk/types';
 import { PacketReader } from '../buffer';
+
+/**
+ * 0xD8 DelveInfo (PacketLib1110.cs:36-43), one skill's tooltip: `(Kind (Key "value")(Key2 "value2"))`
+ * (ClientDelve.cs). The server pushes one for each usable style, spell and ability right after the
+ * skills list and again at most hourly (PacketLib1110.cs:159-212, GameClient.CanSendTooltip).
+ * Elements whose value is 0 or empty are left out (ClientDelve.cs:15). Null for anything else.
+ */
+export function decodeDelveInfo(p: Uint8Array): { kind: string; fields: Record<string, string> } | null {
+    const text = new TextDecoder('latin1').decode(p).split('\0')[0]!;
+    const kind = /^\((\w+)/.exec(text)?.[1];
+    if (!kind) return null;
+    const fields: Record<string, string> = {};
+    // Lazy up to `")`, since a spell's description can hold quotes and brackets of its own.
+    for (const m of text.matchAll(/\((\w+) "(.*?)"\)/gs)) fields[m[1]!] = m[2]!;
+    return { kind, fields };
+}
+
+const num = (fields: Record<string, string>, key: string): number => Number(fields[key] ?? 0) || 0;
+
+/** eAttackResultRequirement (Style.cs). */
+const STYLE_RESULTS: Record<number, CombatResult> = { 1: 'miss', 2: 'hit', 3: 'parry', 4: 'block', 5: 'evade', 6: 'fumble', 7: 'styledHit' };
+const STYLE_OPENINGS = ['offensive', 'defensive', 'positional'] as const;
+const STYLE_POSITIONS = ['back', 'side', 'front'] as const;
+
+/** SpellDelve.GetStyleString. An absent opening type or position is the 0 the writer leaves out. */
+export function toStyleDetails(fields: Record<string, string>): StyleDetails {
+    const opening = STYLE_OPENINGS[num(fields, 'OpeningType')] ?? 'offensive';
+    return {
+        fatigue: num(fields, 'Fatigue'),
+        attackMod: num(fields, 'AttackMod'),
+        defensiveMod: num(fields, 'DefensiveMod'),
+        openingDamage: num(fields, 'OpeningDamage'),
+        opening,
+        result: STYLE_RESULTS[num(fields, 'OpeningResult')] ?? null,
+        position: opening === 'positional' ? STYLE_POSITIONS[num(fields, 'OpeningNumber')] ?? null : null,
+        openingStyle: fields.OpeningStyle ?? null,
+        followUps: fields.FollowupStyle?.split(', ') ?? [],
+        weapon: fields.Weapon ?? null,
+        stealth: num(fields, 'Hidden') !== 0,
+        procSpellId: fields.SpecialNumber ? num(fields, 'SpecialNumber') & 0xffff : null,
+    };
+}
+
+/** SpellDelve's _damageTypeToIdMap. */
+const DAMAGE_TYPES: Record<number, string> = { 1: 'crush', 2: 'slash', 3: 'thrust', 10: 'heat', 11: 'spirit', 12: 'cold', 13: 'matter', 16: 'body', 20: 'energy' };
+/** SpellDelve.GetSpellTargetType. */
+const SPELL_TARGETS: Record<number, SpellDetails['target']> = { 0: 'self', 1: 'enemy', 3: 'group', 6: 'pet', 7: 'realm', 8: 'corpse', 9: 'area' };
+/** SpellDelve.GetCostTypeId. */
+const COST_TYPES: Record<number, SpellDetails['costType']> = { 0: 'power', 2: 'health', 3: 'endurance' };
+
+/** SpellDelve.GetSpellString. A cast under 2 s has neither `cast_timer` nor `instant`, so its time is unknown. */
+export function toSpellDetails(fields: Record<string, string>): SpellDetails {
+    return {
+        castTimeMs: fields.instant ? 0 : fields.cast_timer ? num(fields, 'cast_timer') + 2000 : null,
+        damageType: DAMAGE_TYPES[num(fields, 'damage_type')] ?? null,
+        powerCost: num(fields, 'power_cost'),
+        costType: COST_TYPES[num(fields, 'cost_type')] ?? 'power',
+        range: num(fields, 'range'),
+        durationSeconds: num(fields, 'duration'),
+        recastSeconds: num(fields, 'timer_value'),
+        target: SPELL_TARGETS[num(fields, 'target')] ?? 'self',
+        radius: num(fields, 'radius'),
+        concentration: num(fields, 'concentration_points'),
+        frequencyMs: num(fields, 'frequency'),
+        description: fields.delve_string ?? '',
+    };
+}
 
 /** 0xAD CharacterStatusUpdate (PacketLib190.cs:53-75), 22 bytes. */
 export interface StatusUpdate {
@@ -196,9 +264,9 @@ export function readItemData(r: PacketReader): ItemData {
     if (m) {
         count = Number(m[1]);
         name = m[2]!;
-    } else if (objectType === 0 /* GenericItem */) {
+    } else if (objectType === ObjectType.GenericItem) {
         count = Math.max(1, value1 | (value2 << 8));
-    } else if (objectType === 43 || objectType === 44 || objectType === 46 /* Arrow, Bolt, Poison */) {
+    } else if (objectType === ObjectType.Arrow || objectType === ObjectType.Bolt || objectType === ObjectType.Poison) {
         count = Math.max(1, value1);
     }
     return {
