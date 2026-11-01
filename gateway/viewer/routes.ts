@@ -1,19 +1,22 @@
 // Browser viewer routes, mounted by gateway.ts.
 //
-//   GET  /viewer                 bot index (HTML)
+//   GET  /viewer                 bot and group index (HTML)
 //   GET  /viewer/<bot>           single-page viewer for one bot (HTML)
-//   GET  /viewer/assets/<file>   app.js (app.ts bundled with Bun.build on request), viewer.css
-//   GET  /bots                   JSON list of the gateway's bot sessions
+//   GET  /viewer/group/<id>      group page: every member on one map, the run's orders (HTML)
+//   GET  /viewer/assets/<file>   app.js and group.js (app.ts, group.ts bundled with Bun.build on request), viewer.css
+//   GET  /bots                   JSON list of the gateway's bot sessions, each with its group
 //   GET  /zones/<regionId>       JSON zone rects, zone points and bind points for a region
 //   POST /bots/<bot>/auth        {"password"} → checks it before the page enables control mode
 //
-// The page itself talks to the gateway WebSocket as an observe-mode SDK and,
-// only when control is ticked, opens a second control-mode socket.
+// The bot page talks to the gateway WebSocket as an observe-mode SDK and, only
+// when control is ticked, opens a second control-mode socket. The group page
+// opens no socket: it polls /groups/<id>/live (gateway/groups.ts).
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { BotWorldState, GatewayAuthHook } from '../types';
-import { findBotPassword, isJsonRequest } from '../security';
+import type { GroupBadge } from '../group-types';
+import { checkControlPassword, isJsonRequest } from '../security';
 
 const DIR = import.meta.dir;
 
@@ -36,6 +39,8 @@ export interface ViewerContext {
     auth?: GatewayAuthHook;
     /** Where bots/<name>/bot.env live; default the repo root. */
     repoRoot?: string;
+    /** The group a username plays in (gateway/groups.ts badge). */
+    groupOf?(username: string): GroupBadge | null;
 }
 
 export interface BotListEntry {
@@ -49,6 +54,7 @@ export interface BotListEntry {
     player: { name: string; level: number; className: string; realm: string; regionId: number; zoneName: string } | null;
     controllers: number;
     observers: number;
+    group: GroupBadge | null;
 }
 
 // Same-origin page: the gateway adds CORS headers for loopback origins itself (security.ts).
@@ -78,6 +84,7 @@ export function listBots(ctx: ViewerContext): BotListEntry[] {
             } : null,
             controllers: sdks.filter(s => s.targetUsername === username && s.mode === 'control').length,
             observers: sdks.filter(s => s.targetUsername === username && s.mode === 'observe').length,
+            group: ctx.groupOf?.(username) ?? null,
         });
     }
     return out.sort((a, b) => a.username.localeCompare(b.username));
@@ -98,10 +105,10 @@ export async function regionData(regionId: number) {
     return { regionId, region: region ? { id: region.id, name: region.name, description: region.description } : null, zones, zonePoints, bindpoints };
 }
 
-/** Built bundles by source folder, keyed by every module's size and mtime. */
+/** Built bundles by source folder and entry, keyed by every module's size and mtime. */
 const bundles = new Map<string, { key: string; text: string }>();
 
-/** The browser-side modules of a folder (app.ts imports con.ts, logic.ts, ...) as "name:size:mtime" lines. */
+/** The browser-side modules of a folder (app.ts imports con-level.ts, logic.ts, ...) as "name:size:mtime" lines. */
 export function sourceKey(dir: string): string {
     let files: string[] = [];
     try { files = readdirSync(dir).filter(f => f.endsWith('.ts') && !f.endsWith('.test.ts') && f !== 'routes.ts').sort(); } catch {}
@@ -116,26 +123,34 @@ export function sourceKey(dir: string): string {
 }
 
 /**
- * app.ts bundled for the browser, rebuilt when any module in `dir` changes.
- * Any change to the key counts, so one future-dated file cannot hide edits to
- * the others. `dir` is for tests, which build a copy.
+ * A page's entry module bundled for the browser, rebuilt when any module in
+ * `dir` changes. Any change to the key counts, so one future-dated file cannot
+ * hide edits to the others. `dir` is for tests, which build a copy.
  */
-export async function buildAppBundle(dir: string = DIR): Promise<string> {
+export async function buildBundle(entry: 'app.ts' | 'group.ts', dir: string = DIR): Promise<string> {
     const key = sourceKey(dir);
-    const cached = bundles.get(dir);
+    const cacheKey = `${dir}|${entry}`;
+    const cached = bundles.get(cacheKey);
     if (cached && cached.key === key) return cached.text;
-    const result = await Bun.build({ entrypoints: [join(dir, 'app.ts')], target: 'browser', format: 'esm', minify: false });
+    const result = await Bun.build({ entrypoints: [join(dir, entry)], target: 'browser', format: 'esm', minify: false });
     if (!result.success || !result.outputs[0]) {
         throw new Error(`viewer bundle failed: ${result.logs.map(l => String(l)).join('\n')}`);
     }
     const text = await result.outputs[0].text();
-    bundles.set(dir, { key, text });
+    bundles.set(cacheKey, { key, text });
     return text;
 }
 
-function htmlPage(file: string, bot?: string): Response {
-    let html = readFileSync(join(DIR, file), 'utf8');
-    if (bot !== undefined) html = html.replaceAll('{{BOT}}', escapeHtml(bot));
+/** The bot page's app.ts bundle. */
+export function buildAppBundle(dir: string = DIR): Promise<string> {
+    return buildBundle('app.ts', dir);
+}
+
+/** An HTML page from this folder with each {{KEY}} replaced by its escaped value. */
+function htmlPage(file: string, vars: Record<string, string> = {}): Response {
+    let html: string;
+    try { html = readFileSync(join(DIR, file), 'utf8'); } catch { return new Response('Not found', { status: 404 }); }
+    for (const [key, value] of Object.entries(vars)) html = html.replaceAll(`{{${key}}}`, escapeHtml(value));
     return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
@@ -143,15 +158,11 @@ function escapeHtml(s: string): string {
     return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 }
 
-async function checkPassword(ctx: ViewerContext, bot: string, password: string): Promise<{ ok: boolean; error?: string; botEnv: boolean }> {
-    if (!password) return { ok: false, error: 'Password required', botEnv: false };
-    const expected = findBotPassword(bot, [process.cwd(), ctx.repoRoot ?? join(DIR, '..', '..')]);
-    if (expected !== null && expected !== password) return { ok: false, error: 'Password does not match bots/' + bot + '/bot.env', botEnv: true };
-    if (ctx.auth) {
-        const result = await ctx.auth({ kind: 'sdk', username: bot, password });
-        if (!result.success) return { ok: false, error: result.error ?? 'Authentication failed', botEnv: expected !== null };
-    }
-    return { ok: true, botEnv: expected !== null };
+function bundleResponse(build: Promise<string>): Promise<Response> {
+    return build.then(
+        text => new Response(text, { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' } }),
+        error => new Response(`console.error(${JSON.stringify(String(error))});`, { status: 500, headers: { 'Content-Type': 'text/javascript' } }),
+    );
 }
 
 const decode = (s: string) => { try { return decodeURIComponent(s); } catch { return s; } };
@@ -167,7 +178,8 @@ export async function handleViewerRequest(req: Request, url: URL, ctx: ViewerCon
         if (!isJsonRequest(req)) return json({ ok: false, error: 'Content-Type must be application/json', botEnv: false }, 415);
         let body: any = null;
         try { body = await req.json(); } catch {}
-        const result = await checkPassword(ctx, decode(authMatch[1]!), typeof body?.password === 'string' ? body.password : '');
+        const roots = [process.cwd(), ctx.repoRoot ?? join(DIR, '..', '..')];
+        const result = await checkControlPassword(decode(authMatch[1]!), typeof body?.password === 'string' ? body.password : '', roots, ctx.auth);
         return json(result, result.ok ? 200 : 401);
     }
 
@@ -183,18 +195,17 @@ export async function handleViewerRequest(req: Request, url: URL, ctx: ViewerCon
     if (req.method !== 'GET' || (path !== '/viewer' && !path.startsWith('/viewer/'))) return null;
     if (path === '/viewer' || path === '/viewer/') return htmlPage('index.html');
 
-    if (path === '/viewer/assets/app.js') {
-        try {
-            return new Response(await buildAppBundle(), { headers: { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' } });
-        } catch (error) {
-            return new Response(`console.error(${JSON.stringify(String(error))});`, { status: 500, headers: { 'Content-Type': 'text/javascript' } });
-        }
-    }
+    if (path === '/viewer/assets/app.js') return bundleResponse(buildBundle('app.ts'));
+    if (path === '/viewer/assets/group.js') return bundleResponse(buildBundle('group.ts'));
     if (path === '/viewer/assets/viewer.css') {
         return new Response(readFileSync(join(DIR, 'viewer.css'), 'utf8'), { headers: { 'Content-Type': 'text/css; charset=utf-8', 'Cache-Control': 'no-store' } });
     }
 
+    // Before the bot page, which would take /viewer/group as a bot named "group"
+    // (it still does: only the two-segment form is the group page).
+    const groupMatch = path.match(/^\/viewer\/group\/([A-Za-z0-9_-]{1,64})\/?$/);
+    if (groupMatch) return htmlPage('group.html', { GROUP: groupMatch[1]! });
     const botMatch = path.match(/^\/viewer\/([^/]+)\/?$/);
-    if (botMatch) return htmlPage('bot.html', decode(botMatch[1]!));
+    if (botMatch) return htmlPage('bot.html', { BOT: decode(botMatch[1]!) });
     return new Response('Not found', { status: 404 });
 }

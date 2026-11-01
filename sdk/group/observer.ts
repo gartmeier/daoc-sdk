@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } fr
 import { join } from 'path';
 import type { Blackboard } from './blackboard';
 import type { GroupEvent, GroupPicture, Phase } from './types';
+import type { LiveReport } from './wire';
 
 export interface Finding {
     severity: 'high' | 'medium' | 'low';
@@ -348,6 +349,20 @@ export class GroupObserver {
         report.findings = findingsFor(report);
         return report;
     }
+
+    /**
+     * The report so far, for a live view: report() closes the open fight (it would
+     * count twice and split), so put it back afterwards. A copy, safe to keep.
+     */
+    snapshot(): LiveReport {
+        const fight = this.fight, closed = this.fights.length;
+        try {
+            return structuredClone({ ...this.report(), openFight: fight !== null });
+        } finally {
+            this.fights.length = closed;
+            this.fight = fight;
+        }
+    }
 }
 
 const top = (r: Record<string, number>, n = 2) => Object.entries(r).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k} (${v})`).join(', ');
@@ -426,6 +441,12 @@ export function formatReport(r: RunReport): string {
     return lines.join('\n');
 }
 
+/** The runs/<stamp> of a run started at `startedAt` (ms epoch or ISO): YYYYMMDD-HHMMSS in UTC. */
+export function stampOf(startedAt: number | string): string {
+    const iso = typeof startedAt === 'number' ? new Date(startedAt).toISOString() : startedAt;
+    return iso.replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+}
+
 /** Write runs/<stamp>.json, .md (and .log with `log`), compare with and append to runs/history.jsonl. Returns the .md path. */
 export function saveReport(groupDir: string, r: RunReport, log?: string[]): string {
     const dir = join(groupDir, 'runs');
@@ -448,7 +469,7 @@ export function saveReport(groupDir: string, r: RunReport, log?: string[]): stri
         }
     }
     appendFileSync(history, JSON.stringify(summary) + '\n');
-    const stamp = r.startedAt.replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+    const stamp = stampOf(r.startedAt);
     writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(r, null, 2));
     const md = join(dir, `${stamp}.md`);
     writeFileSync(md, formatReport(r));

@@ -11,12 +11,13 @@ bun groups/create-group.ts hibernia cuchulainn brigid oisin niamh ciaran   # gro
 bun client/swarm.ts cuchulainn brigid oisin niamh ciaran                   # every member needs a running client (one process for all)
 bun sdk/group/cli.ts hibernia                                              # look: members, load, enemies and who sees them (observe only)
 bun groups/hibernia/hunt.ts 180                                            # hunt 3 min, then read groups/hibernia/runs/<stamp>.md
+# meanwhile: http://localhost:7780/viewer/group/hibernia, or bun sdk/group/cli.ts hibernia --live
 ```
 
 - **Roles** come from each bot.env `CLASS` (Hero → tank, Druid → healer, Bard → support, Mentalist/Enchanter → nuker; `roleForClass`). Override per member in group.json (`{ "bot": "oisin", "role": "healer" }`) or with `--role=oisin:healer` at creation.
 - **Flags** of hunt.ts become settings for that run only: `bun groups/hibernia/hunt.ts 120 --holdMs=3000 --ready.mana=40`.
 - **MCP:** `execute_code({ bot_name: 'cuchulainn', script: 'groups/hibernia/hunt.ts', args: { seconds: 180 }, timeout: 7 })`. The MCP bot is used as one member; the others get their own control connections. Verified live.
-- **One controller per bot still holds:** a group run takes control of every member. A single-bot script or MCP call on a member pre-empts the group run, and the run stops with `BotPreemptedError`. `sdk/group/cli.ts` only observes.
+- **One controller per bot still holds:** a group run takes control of every member. A single-bot script or MCP call on a member pre-empts the group run, and the run stops with `BotPreemptedError`. `sdk/group/cli.ts` only observes. To end a run early, wind it down instead (see [Watching a run](#watching-a-run-gateway-viewer)).
 - **A run ends** `seconds` after the group formed: no new pulls, the current fight and a pull under way are finished (up to 60 s), then everyone stops. Each run writes `runs/<stamp>.md` (report), `.json`, `.log` (full log) and a line in `runs/history.jsonl`.
 
 ## The four parts
@@ -188,6 +189,16 @@ What this loop did live (3–4 minutes per run, same camp, water beetles L6–8)
 | 5 | `holdMs` 2500 | tank hold 99 %, no interrupts; waited 25 % for the Mentalist's power |
 | 6 | `ready.mana` 35 | XP/h 137k → 243k, downtime 22 %, three members level 6 → 7 |
 
+## Watching a run (gateway viewer)
+
+`http://localhost:7780/viewer/group/<group>` (also listed on `/viewer`):
+- **Without a run** the gateway builds the picture from the members' own states: every member on one map with health, power, load, client and controller status, the in-game group check, and the monsters they see merged by object id (`seenBy`, who targets whom). It also notes deaths on its own, with the corpse position, the killer and the last minute of the walk, so a death between hunts or on a solo walk to town is still on the map afterwards. These notes are kept in memory and lost when the gateway restarts.
+- **With a run**, `runGroup` publishes its board to the gateway about once a second (`sdk/group/publish.ts`, `POST /groups/<g>/publish`). This adds the orders (phase, reason, objective, focus, puller, cc assignments, flagged when the caster's client doesn't see the target, waiting), each member's activity, the board's threat and cc marks, the base plan (camp, base, safe targets with distance, unsafe spawns with the reason, route), the observer's score so far, and the run log's events.
+- **Wind down** (the button, or `bun sdk/group/cli.ts <g> --wind-down`) is the timed end, sooner: the current fight is finished, the report saved, and a campaign goes on with its next step. Use it instead of taking control of a member. It needs the leader's bot.env password.
+- The group page opens no game connection and offers no member actions. Member names link to the single-bot pages, whose control checkbox warns when the bot is in a live run.
+- **Recent runs** lists `runs/history.jsonl` and opens each `runs/<stamp>.md` or `.log`, with filters for orders, deaths and failures, and the lines before each death.
+- Publishing never touches a member connection and gives up for the run on any refusal. An older gateway answers with its help page, which costs one log line per hunt. Turn it off with `DAOC_GROUP_PUBLISH=0` or `runGroup({ publish: false })`.
+
 ## Pitfalls seen live
 
 - **Overloaded members can't move:** loot piles up. An Enchanter at 59/40 encumbrance had max speed 0 ("walk: stuck ... max speed 0"); the group's `gather` waited for him forever. `shedLoad` now drops the heaviest backpack item not matching `keepItems` at 95 % load; selling needs a town visit, which the PvE policy doesn't plan yet.
@@ -208,5 +219,5 @@ What this loop did live (3–4 minutes per run, same camp, water beetles L6–8)
 - **RvR:** enemy-realm players already arrive as contacts (`kind: 'player'`) and the observer works unchanged. Missing: an RvR `decide()` (assist trains on enemy healers, cc rotations, focus switching on low health, retreat on numbers), and line of sight is not real (the client always answers "clear").
 - **Pets** (Druid, Enchanter): no SDK pet commands yet.
 - **Town visits** as a phase: not in the PvE policy. `groups/hibernia/town.ts` does it between runs (teleport to the trainer's town, train, wear upgrades, sell, teleport to the hub and `/bind`), and `groups/hibernia/campaign.ts` alternates it with hunts until a target level.
-- **Across processes:** the blackboard is in-process. Its reports, orders and events are plain JSON, so a gateway channel could let separately running per-bot scripts or MCP sessions join one group.
+- **Across processes:** the blackboard is in-process. A run now publishes it to the gateway (one way, plus wind-down), but separately running per-bot scripts or MCP sessions still can't join one group.
 - **Leaving or disbanding** a group (`/disband` in `formGroup` for members already in another group) is unverified.

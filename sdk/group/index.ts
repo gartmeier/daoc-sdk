@@ -8,9 +8,12 @@ export { MemberAgent, MemberContext, type Behavior, type Member } from './member
 export * from './behaviors';
 export { Coordinator, defineStrategy, roleForClass, type CoordinatorContext, type GroupStrategy } from './strategy';
 export { pveLeveling, decidePve, pickPullTarget, pickFocus, assignCc, PVE_SETTINGS, type PveSettings } from './pve';
-export { GroupObserver, findingsFor, formatReport, saveReport, inferPhase, type Finding, type FightSummary, type MemberStats, type RunReport } from './observer';
+export { GroupObserver, findingsFor, formatReport, saveReport, stampOf, inferPhase, type Finding, type FightSummary, type MemberStats, type RunReport } from './observer';
 export { loadGroup, connectBot, connectGroup, formGroup } from './roster';
 export { runGroup, runGroupScript, groupArgs, type GroupRunOptions, type GroupRunResult } from './runner';
+export { GroupPublisher, EventOutbox, windDownClock, memoryView, planView, jsonSafe, type GroupPublishOptions, type PublisherDeps } from './publish';
+export { isLoggedEvent, WIRE_VERSION } from './wire';
+export type { RunPhase, RunMember, RunMeta, CoordinatorView, PlanView, LiveReport, WireEvent, RunResultView, GroupPublish, ControlRequest, PublishAck } from './wire';
 export { Spellbook, spellsOf, slotOf, pickNuke, dotFamily, toPick, type SpellPick, type NukeOptions } from './spells';
 export * from './buffs';
 export * from './songs';

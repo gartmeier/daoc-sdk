@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, readdirSync } from 'fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { formatReport, GroupObserver, saveReport } from './observer';
+import { formatReport, GroupObserver, saveReport, stampOf } from './observer';
 import { contact, picture, report } from './fixtures';
 import type { MemberReport } from './types';
 
@@ -151,22 +151,80 @@ describe('GroupObserver', () => {
         expect(r.members.Menta!.fightsWithoutNuke).toBe(0);
     });
 
+    test('snapshot() mid-fight shows the open fight and leaves the final report unchanged', () => {
+        // The same samples and events into two observers; one is snapshotted mid-fight and after the kill.
+        const feed = (o: GroupObserver, snap: boolean) => {
+            const snaps: ReturnType<GroupObserver['snapshot']>[] = [];
+            for (let i = 1; i <= 5; i++) o.sample(picture(members(), [], { seq: 1, phase: 'recover' }, T0 + i * 1000));
+            for (let i = 6; i <= 15; i++) {
+                const Menta = i >= 9 ? act('nuke', T0 + 8500) : act('idle');
+                o.sample(picture(members({ Menta }), [wolf], { seq: 2, phase: 'engage', focus: 7 }, T0 + i * 1000));
+                if (i === 7) o.handle({ at: T0 + 7200, kind: 'result', member: 'Menta', text: 'nuke: interrupted', data: { action: 'nuke', success: false, reason: 'interrupted' } });
+                if (snap && i % 4 === 0) snaps.push(o.snapshot());
+            }
+            o.handle({ at: T0 + 15_500, kind: 'kill', member: 'Tank', targetId: 7, text: 'wolf died', data: { name: 'wolf' } });
+            if (snap) snaps.push(o.snapshot());
+            calm(o, 16);
+            if (snap) snaps.push(o.snapshot());
+            return snaps;
+        };
+        const a = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 });
+        const b = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 });
+        const snaps = feed(a, true);
+        feed(b, false);
+        const [early, , withKill, after] = snaps;
+        expect(snaps.length).toBe(4);
+        expect(early!.openFight).toBe(true);
+        expect(early!.fights.length).toBe(1);
+        expect(early!.fights[0]!.outcome).toBe('unfinished');
+        expect(early!.totals.fights).toBe(1);
+        expect(withKill!.fights[0]).toMatchObject({ kills: ['wolf'], outcome: 'won' });
+        expect(after!.openFight).toBe(false);
+        // Copies: changing one changes nothing inside the observer.
+        early!.fights.length = 0;
+        withKill!.members.Menta!.failures.x = 9;
+        const final = a.report();
+        expect(final).toEqual(b.report());
+        expect(final.fights.length).toBe(1);
+        expect(final.fights[0]).toMatchObject({ kills: ['wolf'], outcome: 'won', openerMs: { Menta: 2500 } });
+        expect(final.members.Menta!.failures).toEqual({ 'nuke:interrupted': 1 });
+        expect(after).toEqual({ ...final, openFight: false });
+    });
+
+    test('stampOf names a run by its start in UTC, the same from ms and from ISO text', () => {
+        const at = Date.UTC(2026, 9, 31, 13, 37, 19, 450);
+        expect(stampOf(at)).toBe('20261031-133719');
+        expect(stampOf(new Date(at).toISOString())).toBe('20261031-133719');
+        const dir = mkdtempSync(join(tmpdir(), 'group-'));
+        try {
+            const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: at });
+            o.sample(picture(members(), [], { seq: 1, phase: 'recover' }, at + 1000));
+            expect(saveReport(dir, o.report())).toBe(join(dir, 'runs', '20261031-133719.md'));
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     test('saveReport writes json/md/log and compares with the previous run', () => {
         const dir = mkdtempSync(join(tmpdir(), 'group-'));
-        const run = (kills: number) => {
-            const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 + kills * 100_000 });
-            o.sample(picture(members(), [], { seq: 1, phase: 'recover' }, T0 + kills * 100_000 + 60_000));
-            for (let i = 0; i < kills; i++) o.handle({ at: T0, kind: 'kill', text: 'x died', data: { name: 'x' } });
-            return o.report();
-        };
-        saveReport(dir, run(1), ['line one']);
-        const second = run(2);
-        const md = saveReport(dir, second);
-        expect(second.previous?.killsPerHour).toBe('60→120');
-        expect(readFileSync(md, 'utf-8')).toContain('Against the previous run');
-        const files = readdirSync(join(dir, 'runs'));
-        expect(files.filter(f => f.endsWith('.json')).length).toBe(2);
-        expect(files.filter(f => f.endsWith('.log')).length).toBe(1);
-        expect(readFileSync(join(dir, 'runs', 'history.jsonl'), 'utf-8').trim().split('\n').length).toBe(2);
+        try {
+            const run = (kills: number) => {
+                const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 + kills * 100_000 });
+                o.sample(picture(members(), [], { seq: 1, phase: 'recover' }, T0 + kills * 100_000 + 60_000));
+                for (let i = 0; i < kills; i++) o.handle({ at: T0, kind: 'kill', text: 'x died', data: { name: 'x' } });
+                return o.report();
+            };
+            saveReport(dir, run(1), ['line one']);
+            const second = run(2);
+            const md = saveReport(dir, second);
+            expect(second.previous?.killsPerHour).toBe('60→120');
+            expect(readFileSync(md, 'utf-8')).toContain('Against the previous run');
+            const files = readdirSync(join(dir, 'runs'));
+            expect(files.filter(f => f.endsWith('.json')).length).toBe(2);
+            expect(files.filter(f => f.endsWith('.log')).length).toBe(1);
+            expect(readFileSync(join(dir, 'runs', 'history.jsonl'), 'utf-8').trim().split('\n').length).toBe(2);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
     });
 });

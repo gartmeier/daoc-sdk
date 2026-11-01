@@ -5,8 +5,16 @@ import { join } from 'node:path';
 import { createGateway, type Gateway, type GatewayOptions } from '../gateway';
 import { makeState } from '../../sdk/test/fixtures';
 import { conColor, conLevel } from './con-level';
+import {
+    appendBySeq, canWindDown, ccSeen, conReference, contactListed, deathContext, eventVisible, gatewayRestarted, isGroupFrame, isThreat,
+    listedContacts, logLineKind, mapRegion, mergeEvents, npcShown, phaseClass, retryRuns, roleLetter, runFailed, runPill, runRegion, timeLeft,
+    type FeedFilters,
+} from './group-logic';
 import { authHeaders, REGION_RETRY_MS, shouldLoadRegion } from './logic';
-import { buildAppBundle } from './routes';
+import { buildAppBundle, buildBundle } from './routes';
+import { drawPass } from './ui-kit';
+import type { GroupMemberView, MemberPlayer, PassiveEvent, RunView, WorldContact } from '../group-types';
+import type { RunMeta, WireEvent } from '../../sdk/group/wire';
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -59,7 +67,9 @@ describe('viewer routes', () => {
         const index = await http('/viewer');
         expect(index.status).toBe(200);
         expect(index.headers.get('content-type')).toContain('text/html');
-        expect(await index.text()).toContain('/bots');
+        const indexHtml = await index.text();
+        expect(indexHtml).toContain('/bots');
+        expect(indexHtml).toContain('/groups');
 
         const page = await http('/viewer/vbot');
         expect(page.status).toBe(200);
@@ -71,6 +81,41 @@ describe('viewer routes', () => {
         expect(evil).not.toContain('<x>');
         expect(evil).toContain('&lt;x&gt;&quot;');
     });
+
+    test('GET /viewer/group/<id> serves the group page; /viewer/group alone stays a bot page', async () => {
+        start();
+        const page = await http('/viewer/group/alpha_1-B');
+        expect(page.status).toBe(200);
+        expect(page.headers.get('content-type')).toContain('text/html');
+        const html = await page.text();
+        expect(html).toContain('data-group="alpha_1-B"');
+        expect(html).toContain('/viewer/assets/group.js');
+        expect(html).not.toContain('{{GROUP}}');
+        expect((await http('/viewer/group/alpha/')).status).toBe(200);
+        // Group ids are letters, digits, _ and -, so nothing that needs escaping reaches the page.
+        for (const bad of [encodeURIComponent('<x>"'), 'a%22b', 'a'.repeat(65), 'a/b']) {
+            const res = await http(`/viewer/group/${bad}`);
+            expect(res.status).toBe(404);
+            expect(await res.text()).not.toContain('<x>');
+        }
+        const bot = await (await http('/viewer/group')).text();
+        expect(bot).toContain('data-bot="group"');
+        expect(bot).toContain('/viewer/assets/app.js');
+        expect(bot).toContain('id="grouplink"');
+    });
+
+    test('GET /viewer/assets/group.js bundles the group page with no imports and no sockets', async () => {
+        start();
+        const js = await http('/viewer/assets/group.js');
+        expect(js.status).toBe(200);
+        expect(js.headers.get('content-type')).toContain('javascript');
+        const text = await js.text();
+        expect(text).toContain('/groups/');
+        expect(text).not.toContain('import ');
+        // Observe-only by construction: the page opens no socket, so it can never pre-empt a member's controller.
+        expect(text).not.toContain('WebSocket');
+        expect(text).not.toContain('sdk_connect');
+    }, 20_000);
 
     test('GET /viewer/assets serves the bundled app and css', async () => {
         start();
@@ -179,7 +224,7 @@ describe('viewer page logic', () => {
         expect((await res.json() as any).state.player.name).toBe('Testbot');
     });
 
-    test('the app bundle is rebuilt when any imported viewer module changes', async () => {
+    test('the app and group bundles are rebuilt when any viewer module changes, cached per entry', async () => {
         // A private copy: touching the real sources would race other test runs in this checkout.
         const dir = mkdtempSync(join(tmpdir(), 'daoc-viewer-'));
         try {
@@ -201,6 +246,19 @@ describe('viewer page logic', () => {
                 utimesSync(app, new Date(), new Date(Date.now() - 60_000));
                 await buildAppBundle(dir);
                 expect(build).toHaveBeenCalledTimes(2);
+                // The group page is a second entry in the same folder, with its own cache slot.
+                const group = await buildBundle('group.ts', dir);
+                expect(build).toHaveBeenCalledTimes(3);
+                expect(group).toContain('/groups/');
+                expect(group).not.toContain('sdk_connect');
+                await buildBundle('group.ts', dir);
+                expect(await buildAppBundle(dir)).toContain('sdk_connect');
+                expect(build).toHaveBeenCalledTimes(3);
+                // Every module in the folder is in both keys: a change to one rebuilds both pages.
+                utimesSync(join(dir, 'ui-kit.ts'), new Date(), new Date(Date.now() + 120_000));
+                await buildBundle('group.ts', dir);
+                await buildAppBundle(dir);
+                expect(build).toHaveBeenCalledTimes(5);
             } finally {
                 build.mockRestore();
             }
@@ -208,4 +266,340 @@ describe('viewer page logic', () => {
             rmSync(dir, { recursive: true, force: true });
         }
     }, 30_000);
+});
+
+// ── Group page logic (group-logic.ts) ───────────────────────────────────────
+
+function player(overrides: Partial<MemberPlayer> = {}): MemberPlayer {
+    return {
+        name: 'Galahad', objectId: 1, level: 10, levelPermill: 0, className: 'Paladin', realm: 'albion', regionId: 1, zoneId: 1, zoneName: 'Camelot Hills',
+        x: 0, y: 0, z: 0, heading: 0, speed: 0, hp: 100, mana: 100, endurance: 100, concentration: 0, maxConcentration: 0,
+        isDead: false, isSitting: false, inCombat: false, attacking: false, targetObjectId: null, load: null, deathCount: 0, constitutionLost: 0,
+        ...overrides,
+    };
+}
+
+function member(bot: string, p: Partial<MemberPlayer> | null, overrides: Partial<GroupMemberView> = {}): GroupMemberView {
+    return {
+        bot, username: bot, charName: null, role: null, leader: false,
+        client: { status: 'active', stateAge: 100, phase: 'playing', lastError: null, controllers: 1, observers: 0 },
+        player: p ? player({ name: bot[0]!.toUpperCase() + bot.slice(1), ...p }) : null,
+        movement: null, inGameGroup: [], run: null, ...overrides,
+    };
+}
+
+const inRun = (role: 'tank' | 'healer' | 'nuker'): Partial<GroupMemberView> => ({
+    run: { name: '', role, activity: { kind: 'idle', targetId: null, detail: '', since: 0 }, effects: [], can: { heal: false, cc: false, nuke: false }, at: 0 },
+});
+
+function contact(overrides: Partial<WorldContact> = {}): WorldContact {
+    return {
+        key: '1:500', objectId: 500, regionId: 1, kind: 'npc', name: 'wolf', level: 9, realm: 'none', x: 0, y: 0, z: 0, heading: 0, speed: 0,
+        hp: 100, inCombat: false, isDead: false, targetObjectId: null, target: null,
+        npc: { isPeaceful: false, isTargetable: true, isPet: false, role: null }, enemy: false, seenBy: [], nearest: 100, board: null,
+        ...overrides,
+    };
+}
+
+const board = (overrides: Partial<NonNullable<WorldContact['board']>> = {}): WorldContact['board'] => ({
+    threat: false, stale: false, cc: null, engagedAt: 0, hostileSince: 0, seenBy: [], lastSeen: 0, ...overrides,
+});
+
+function runView(overrides: Partial<RunView> = {}): RunView {
+    return {
+        runId: 'run-0001-aaaa', state: 'live', error: null, current: true, firstAt: 1000, lastAt: 10_000, skewMs: 0, strategy: 'pve',
+        orders: { seq: 3, phase: 'engage', objective: '', anchor: null, facing: null, focus: null, puller: null, cc: [], retreatTo: null, waiting: [], reason: 'wolf attacks', issuedAt: 0 },
+        pictureAt: 0, timing: { windingDown: false, deadline: 0, hardStop: 0 }, coordinator: null, planRev: 0, reportRev: 0,
+        events: [], eventSeq: 0, eventsFrom: 1, lostEvents: 0, moreEvents: false, control: [], result: null,
+        ...overrides,
+    };
+}
+
+const wire = (seq: number, at: number, kind: WireEvent['kind'], text: string, memberName?: string): WireEvent =>
+    ({ seq, at, kind, text, ...(memberName ? { member: memberName } : {}) });
+const passive = (seq: number, at: number, kind: PassiveEvent['kind'], runId: string | null, name = 'Niamh'): PassiveEvent => ({
+    seq, at, kind, bot: name.toLowerCase(), name, text: `${name} ${kind}`, by: null, pos: null, track: null, runId,
+});
+
+describe('group page logic', () => {
+    test('isGroupFrame accepts a frame and refuses what the page could not read', () => {
+        const frame = {
+            v: 1, id: 'alpha', name: 'Alpha', leader: { bot: 'galahad', username: 'galahad' }, now: 5, boot: 1, members: [member('galahad', {})], world: [],
+            grouping: { inLeaderGroup: [], missing: [], strangers: [] }, run: null, others: [], passive: { events: [], seq: 0 }, notes: [],
+        };
+        expect(isGroupFrame(frame)).toBe(true);
+        expect(isGroupFrame({ ...frame, run: runView() })).toBe(true);
+        expect(isGroupFrame(null)).toBe(false);
+        expect(isGroupFrame('Gateway help: ...')).toBe(false);
+        expect(isGroupFrame({ ...frame, v: 2 })).toBe(false);
+        expect(isGroupFrame({ ...frame, members: undefined })).toBe(false);
+        expect(isGroupFrame({ ...frame, members: [null] })).toBe(false);
+        expect(isGroupFrame({ ...frame, world: [null] })).toBe(false);
+        expect(isGroupFrame({ ...frame, passive: { events: null, seq: 0 } })).toBe(false);
+        expect(isGroupFrame({ ...frame, run: { state: 'live' } })).toBe(false);
+        expect(isGroupFrame({ ...frame, now: NaN })).toBe(false);
+    });
+
+    test('mapRegion follows the followed member, else the region most members are in', () => {
+        const members = [member('a', { regionId: 1 }), member('b', { regionId: 2 }), member('c', { regionId: 2 }), member('d', null)];
+        expect(mapRegion(members, null)).toBe(2);
+        expect(mapRegion(members, 'a')).toBe(1);
+        // A followed member without a player falls back to the majority.
+        expect(mapRegion(members, 'd')).toBe(2);
+        expect(mapRegion(members, 'nobody')).toBe(2);
+        // Ties go to the earlier member in group.json order.
+        expect(mapRegion([member('a', { regionId: 7 }), member('b', { regionId: 3 })], null)).toBe(7);
+        expect(mapRegion([member('d', null)], null)).toBeNull();
+        expect(mapRegion([], 'a')).toBeNull();
+    });
+
+    test('runRegion is where the living tank is, as the coordinator picks it', () => {
+        const tank = member('tank', { regionId: 5 }, inRun('tank'));
+        const healer = member('healer', { regionId: 6 }, inRun('healer'));
+        expect(runRegion([healer, tank])).toBe(5);
+        expect(runRegion([healer, member('tank', { regionId: 5, isDead: true }, inRun('tank'))])).toBe(6);
+        // Members the run does not report don't count.
+        expect(runRegion([member('x', { regionId: 9 }), tank])).toBe(5);
+        expect(runRegion([member('x', { regionId: 9 })])).toBeNull();
+    });
+
+    test('conReference is the lowest living member level in the region', () => {
+        const members = [
+            member('a', { level: 14 }), member('b', { level: 12 }), member('c', { level: 9, isDead: true }),
+            member('d', { level: 5, regionId: 2 }), member('e', null),
+        ];
+        expect(conReference(members, 1)).toBe(12);
+        expect(conReference(members, 2)).toBe(5);
+        // Everyone there dead: still colour by them rather than by nothing.
+        expect(conReference([member('c', { level: 9, isDead: true }), member('f', { level: 11, isDead: true })], 1)).toBe(9);
+        expect(conReference(members, 3)).toBeNull();
+        expect(conReference(members, null)).toBeNull();
+    });
+
+    test('runPill names the run state, the phase and how late it is', () => {
+        expect(runPill(null, 0)).toEqual({ text: 'no run', cls: '' });
+        expect(runPill(runView(), 10_000)).toEqual({ text: 'live · engage', cls: 'active' });
+        expect(runPill(runView({ timing: { windingDown: true, deadline: 0, hardStop: 0 } }), 10_000).text).toBe('live · engage · winding down');
+        expect(runPill(runView({ state: 'starting' }), 10_000).cls).toBe('stale');
+        expect(runPill(runView({ state: 'stale' }), 22_000)).toEqual({ text: 'stale · 12 s · engage', cls: 'stale' });
+        expect(runPill(runView({ state: 'ending' }), 10_000)).toEqual({ text: 'ending', cls: 'stale' });
+        expect(runPill(runView({ state: 'lost' }), 130_000)).toEqual({ text: 'lost · no publish for 2 m', cls: 'dead' });
+        expect(runPill(runView({ state: 'ended' }), 10_000)).toEqual({ text: 'ended', cls: '' });
+        expect(runPill(runView({ state: 'ended', error: 'boom' }), 10_000)).toEqual({ text: 'ended · error', cls: 'dead' });
+        expect(phaseClass('engage')).toBe('phase-engage');
+        expect(phaseClass('retreat')).toBe('phase-retreat');
+        expect(phaseClass('<b>')).toBe('phase-idle');
+        expect(phaseClass(undefined)).toBe('phase-idle');
+    });
+
+    test('runFailed: the result decides, the error only without one', () => {
+        const result = (stoppedBy: 'time' | 'viewer' | 'error') => ({ totals: {} as never, findings: [], stamp: null, stoppedBy });
+        // A run that ran out its time, or was wound down, ended well even with its reason in error (older runners send it).
+        for (const stoppedBy of ['time', 'viewer'] as const) {
+            const run = runView({ state: 'ended', error: stoppedBy === 'time' ? 'time is up' : 'wound down from the viewer', result: result(stoppedBy) });
+            expect(runFailed(run)).toBe(false);
+            expect(runPill(run, 10_000)).toEqual({ text: 'ended', cls: '' });
+        }
+        expect(runFailed(runView({ state: 'ended', error: 'BotPreemptedError: pre-empted', result: result('error') }))).toBe(true);
+        expect(runFailed(runView({ state: 'ended', error: null, result: result('error') }))).toBe(true);
+        // Failed before it started: an error and no result.
+        const early = runView({ state: 'ended', error: 'galahad: not in game', result: null });
+        expect(runFailed(early)).toBe(true);
+        expect(runPill(early, 10_000)).toEqual({ text: 'ended · error', cls: 'dead' });
+        expect(runFailed(runView({ state: 'ended', error: null, result: null }))).toBe(false);
+        expect(runFailed(null)).toBe(false);
+    });
+
+    test('gatewayRestarted: a new boot drops every cursor, a missing one never does', () => {
+        expect(gatewayRestarted(null, { boot: 1000 })).toBe(false);
+        expect(gatewayRestarted(1000, { boot: 1000 })).toBe(false);
+        expect(gatewayRestarted(1000, { boot: 2000 })).toBe(true);
+        // Even when the new gateway's seqs already passed the page's: the boot says it, not the seq.
+        expect(gatewayRestarted(2000, { boot: 1000 })).toBe(true);
+        expect(gatewayRestarted(1000, {})).toBe(false);
+        expect(gatewayRestarted(1000, { boot: NaN })).toBe(false);
+        expect(gatewayRestarted(1000, { boot: '2000' })).toBe(false);
+    });
+
+    test('canWindDown needs a starting, live or stale run that accepts viewer control', () => {
+        expect(canWindDown(runView(), null)).toBe(true);
+        expect(canWindDown(runView({ state: 'stale' }), { control: true } as RunMeta)).toBe(true);
+        expect(canWindDown(runView(), { control: false } as RunMeta)).toBe(false);
+        for (const state of ['ending', 'ended', 'lost'] as const) expect(canWindDown(runView({ state }), null)).toBe(false);
+        expect(canWindDown(null, null)).toBe(false);
+    });
+
+    test('mergeEvents puts skew-corrected run events and passive events in gateway-clock order', () => {
+        // The runner's clock is 5 s behind the gateway's: the run event at 1000 happened at 6000.
+        const run = [wire(2, 3000, 'kill', 'wolf (L9) died', 'Galahad'), wire(1, 1000, 'orders', 'engage on wolf: wolf attacks')];
+        const pass = [passive(7, 7000, 'death', 'r1'), passive(6, 6000, 'client', 'r1'), passive(5, 2000, 'level', null)];
+        const lines = mergeEvents(run, 5000, pass);
+        // At equal times run events come first.
+        expect(lines.map(l => l.key)).toEqual(['p5', 'r1', 'p6', 'p7', 'r2']);
+        expect(lines.map(l => l.at)).toEqual([2000, 6000, 6000, 7000, 8000]);
+        expect(lines.find(l => l.key === 'r2')).toMatchObject({ source: 'run', kind: 'kill', member: 'Galahad', who: ['Galahad'], runId: null });
+        expect(lines.find(l => l.key === 'r1')!.member).toBeNull();
+        expect(lines.find(l => l.key === 'p7')).toMatchObject({ source: 'passive', member: 'Niamh', who: ['Niamh', 'niamh'], runId: 'r1' });
+        // Junk entries are skipped, not thrown on.
+        expect(mergeEvents([null as unknown as WireEvent], 0, [undefined as unknown as PassiveEvent])).toEqual([]);
+    });
+
+    test('appendBySeq keeps only newer events and the newest cap', () => {
+        const held = [{ seq: 1 }, { seq: 2 }];
+        expect(appendBySeq(held, [{ seq: 2 }, { seq: 4 }, { seq: 3 }], 10).map(e => e.seq)).toEqual([1, 2, 3, 4]);
+        expect(held).toHaveLength(2);
+        expect(appendBySeq(held, [{ seq: 3 }, { seq: 4 }, { seq: 5 }], 3).map(e => e.seq)).toEqual([3, 4, 5]);
+        expect(appendBySeq<{ seq: number }>([], [{ seq: 1 }, { seq: 1 }, null as unknown as { seq: number }], 5).map(e => e.seq)).toEqual([1]);
+    });
+
+    test('eventVisible applies the chips and the member filter', () => {
+        const all: FeedFilters = { orders: true, fights: true, failures: true, notes: true, between: true, member: null };
+        const [orders, kill, fail, note] = mergeEvents([
+            wire(1, 1, 'orders', 'pull on wolf'), wire(2, 2, 'kill', 'wolf died', 'Galahad'),
+            wire(3, 3, 'result', 'nuke: no_power', 'Merlin'), wire(4, 4, 'note', 'opener', 'Galahad'),
+        ], 0, []);
+        const [between, during, client] = mergeEvents([], 0, [passive(1, 10, 'death', null), passive(2, 11, 'death', 'r1'), passive(3, 12, 'client', 'r1')]);
+        for (const l of [orders, kill, fail, note, between, during, client]) expect(eventVisible(l!, all)).toBe(true);
+        expect(eventVisible(orders!, { ...all, orders: false })).toBe(false);
+        expect(eventVisible(kill!, { ...all, fights: false })).toBe(false);
+        expect(eventVisible(fail!, { ...all, failures: false })).toBe(false);
+        expect(eventVisible(note!, { ...all, notes: false })).toBe(false);
+        // Passive events between runs follow only "between runs"; during a run their deaths count as fights.
+        expect(eventVisible(between!, { ...all, between: false })).toBe(false);
+        expect(eventVisible(between!, { ...all, fights: false })).toBe(true);
+        expect(eventVisible(during!, { ...all, fights: false })).toBe(false);
+        expect(eventVisible(during!, { ...all, between: false })).toBe(true);
+        expect(eventVisible(client!, { ...all, fights: false, between: false })).toBe(true);
+        // The member filter matches the character name or, for passive events, the bot folder.
+        const galahad = { ...all, member: ['galahad', 'Galahad'] };
+        expect(eventVisible(kill!, galahad)).toBe(true);
+        expect(eventVisible(fail!, galahad)).toBe(false);
+        expect(eventVisible(orders!, galahad)).toBe(false);
+        expect(eventVisible(between!, { ...all, member: ['niamh'] })).toBe(true);
+    });
+
+    test('ccSeen: does the assigned caster see the mob, by its own state or the board', () => {
+        expect(ccSeen(contact({ seenBy: ['Brigid', 'Oisin'] }), 'Oisin')).toBe(true);
+        expect(ccSeen(contact({ seenBy: ['Brigid'] }), 'oisin')).toBe(false);
+        expect(ccSeen(contact({ seenBy: ['Brigid'], board: board({ seenBy: ['Oisin'] }) }), 'OISIN')).toBe(true);
+        expect(ccSeen(null, 'Oisin')).toBe(false);
+        expect(ccSeen(contact({ seenBy: ['Oisin'] }), '')).toBe(false);
+    });
+
+    test('isThreat keeps board threats, mobs on a member and enemy players', () => {
+        expect(isThreat(contact())).toBe(false);
+        expect(isThreat(contact({ target: 'Galahad' }))).toBe(true);
+        expect(isThreat(contact({ target: 'Galahad', isDead: true }))).toBe(false);
+        expect(isThreat(contact({ board: board({ threat: true }) }))).toBe(true);
+        expect(isThreat(contact({ kind: 'player', enemy: true, npc: null }))).toBe(true);
+    });
+
+    test('npcShown: the NPCs layer hides NPCs, never players', () => {
+        const wolf = contact();
+        const onMember = contact({ target: 'Galahad' });
+        const enemy = contact({ kind: 'player', enemy: true, npc: null });
+        const friend = contact({ kind: 'player', npc: null });
+        expect([wolf, onMember, enemy, friend].map(c => npcShown(c, 'all'))).toEqual([true, true, true, true]);
+        expect([wolf, onMember, enemy, friend].map(c => npcShown(c, 'threats'))).toEqual([false, true, true, true]);
+        expect([wolf, onMember, enemy, friend].map(c => npcShown(c, 'off'))).toEqual([false, false, true, true]);
+    });
+
+    test('the contacts panel lists threats, then what the group could fight, nearest first', () => {
+        const albion = new Set(['albion']);
+        const npc = (o: Partial<NonNullable<WorldContact['npc']>>) => ({ isPeaceful: false, isTargetable: true, isPet: false, role: null, ...o });
+        expect(contactListed(contact(), albion)).toBe(true);
+        // A town: merchants and trainers (peaceful), untargetable NPCs, pets, our realm's guards.
+        expect(contactListed(contact({ name: 'Kalli', level: 43, npc: npc({ isPeaceful: true, role: 'merchant' }) }), albion)).toBe(false);
+        expect(contactListed(contact({ npc: npc({ isTargetable: false }) }), albion)).toBe(false);
+        expect(contactListed(contact({ npc: npc({ isPet: true }) }), albion)).toBe(false);
+        expect(contactListed(contact({ name: 'Merarka', level: 50, realm: 'albion' }), albion)).toBe(false);
+        // Another realm's guards can be fought; so can a mob the gateway knows nothing more of.
+        expect(contactListed(contact({ realm: 'midgard' }), albion)).toBe(true);
+        expect(contactListed(contact({ npc: null }), albion)).toBe(true);
+        // Dead ones never; a threat always, even a pet on a member.
+        expect(contactListed(contact({ isDead: true }), albion)).toBe(false);
+        expect(contactListed(contact({ hp: 0 }), albion)).toBe(false);
+        expect(contactListed(contact({ target: 'Galahad', npc: npc({ isPet: true }) }), albion)).toBe(true);
+        expect(contactListed(contact({ board: board({ threat: true }), npc: npc({ isPeaceful: true }) }), albion)).toBe(true);
+        // Players: enemies only.
+        expect(contactListed(contact({ kind: 'player', npc: null, realm: 'albion' }), albion)).toBe(false);
+        expect(contactListed(contact({ kind: 'player', npc: null, realm: 'midgard', enemy: true }), albion)).toBe(true);
+        expect(contactListed(contact({ kind: 'player', npc: null, realm: 'midgard', enemy: true, isDead: true }), albion)).toBe(false);
+
+        const members = [member('galahad', { realm: 'albion' }), member('nimue', null)];
+        const world = [
+            contact({ key: '1:1', objectId: 1, name: 'merchant', nearest: 10, npc: npc({ isPeaceful: true }) }),
+            contact({ key: '1:2', objectId: 2, name: 'guard', nearest: 20, realm: 'albion' }),
+            contact({ key: '1:3', objectId: 3, name: 'cat', nearest: 300 }),
+            contact({ key: '1:4', objectId: 4, name: 'rat', nearest: 200 }),
+            contact({ key: '1:5', objectId: 5, name: 'wolf', nearest: 900, target: 'Galahad' }),
+            contact({ key: '1:6', objectId: 6, name: 'Enemy', nearest: 500, kind: 'player', npc: null, realm: 'midgard', enemy: true }),
+            contact({ key: '1:7', objectId: 7, name: 'corpse', nearest: 5, isDead: true }),
+        ];
+        expect(listedContacts(world, members).map(c => c.name)).toEqual(['Enemy', 'wolf', 'rat', 'cat']);
+        expect(listedContacts([], members)).toEqual([]);
+    });
+
+    test('retryRuns: a runs list refused before the stored password unlocked /live is asked for again, once', () => {
+        // The bot page's key unlocked /live after the first runs request went out without it.
+        expect(retryRuns(false, false, '', 'leader-pw')).toBe(true);
+        expect(retryRuns(false, true, '', 'leader-pw')).toBe(false);
+        expect(retryRuns(true, false, '', 'leader-pw')).toBe(false);
+        // Already failed with this password, or never failed: the 30 s refresh does it.
+        expect(retryRuns(false, false, 'leader-pw', 'leader-pw')).toBe(false);
+        expect(retryRuns(false, false, null, 'leader-pw')).toBe(false);
+    });
+
+    test('drawPass restores the canvas state after every pass, also after a throw', () => {
+        const calls: string[] = [];
+        const ctx = { globalAlpha: 1, save: () => { calls.push('save'); }, restore: () => { calls.push('restore'); ctx.globalAlpha = 1; } };
+        // drawPlan used to return early with the stale-run alpha still set.
+        drawPass(ctx, 'plan', () => { ctx.globalAlpha = 0.45; });
+        expect(ctx.globalAlpha).toBe(1);
+        const error = spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            // safely() logs once per label per process: a fresh label keeps the test repeatable.
+            drawPass(ctx, `test pass that throws ${crypto.randomUUID()}`, () => { ctx.globalAlpha = 0.45; calls.push('draw'); throw new Error('odd data'); });
+            expect(error).toHaveBeenCalledTimes(1);
+        } finally {
+            error.mockRestore();
+        }
+        expect(ctx.globalAlpha).toBe(1);
+        expect(calls).toEqual(['save', 'restore', 'save', 'draw', 'restore']);
+    });
+
+    test('timeLeft counts down to the deadline, then to the hard stop while winding down', () => {
+        const timing = { windingDown: false, deadline: 100_000, hardStop: 160_000 };
+        // Runner clock + 2 s skew = gateway clock.
+        expect(timeLeft(timing, 2000, 42_000)).toEqual({ text: '1:00 left', ms: 60_000, windingDown: false });
+        expect(timeLeft({ ...timing, windingDown: true }, 2000, 42_000)).toEqual({ text: 'winding down · stops within 2:00', ms: 120_000, windingDown: true });
+        expect(timeLeft(timing, 0, 500_000)!.ms).toBe(0);
+        expect(timeLeft({ ...timing, deadline: 4 * 3600_000 }, 0, 0)!.text).toBe('4:00:00 left');
+        expect(timeLeft(null, 0, 0)).toBeNull();
+        expect(timeLeft({ windingDown: false, deadline: NaN, hardStop: 0 }, 0, 0)).toBeNull();
+    });
+
+    test('run log lines: kinds, and the context around a death', () => {
+        expect(logLineKind('14:41:22 » engage on large bloated spider: fighting large bloated spider (94%)')).toBe('orders');
+        expect(logLineKind('14:41:30 Galahad: Galahad died')).toBe('death');
+        expect(logLineKind('14:41:31 Galahad: kill: died (Died fighting forest cat)')).toBe('death');
+        expect(logLineKind('14:41:27 Galahad: large bloated spider (L14) died')).toBe('kill');
+        expect(logLineKind('14:41:28 Merlin: nuke: no_target (You must select a target for this spell!)')).toBe('failure');
+        expect(logLineKind('14:41:15 Nimue: buff: no_response')).toBe('failure');
+        expect(logLineKind('14:41:22 Galahad: opener Uppercut on large bloated spider')).toBe('other');
+        expect(logLineKind('14:42:28 time is up: finishing the current fight')).toBe('other');
+        expect(logLineKind('camelot: Galahad (Paladin L17, tank); strategy camelot-pve')).toBe('other');
+        const lines = Array.from({ length: 30 }, (_, i) => `line ${i}`);
+        expect(deathContext(lines, 20)).toEqual({ start: 8, lines: lines.slice(8, 24) });
+        expect(deathContext(lines, 3)).toEqual({ start: 0, lines: lines.slice(0, 7) });
+        expect(deathContext(lines, 29)).toEqual({ start: 17, lines: lines.slice(17) });
+        expect(deathContext(lines, 30)).toEqual({ start: 0, lines: [] });
+        expect(deathContext(lines, -1).lines).toEqual([]);
+    });
+
+    test('roleLetter labels members on the map', () => {
+        expect(['tank', 'healer', 'support', 'nuker', 'melee'].map(roleLetter).join('')).toBe('THSNM');
+        expect(roleLetter(null)).toBe('?');
+        expect(roleLetter('toString')).toBe('?');
+    });
 });

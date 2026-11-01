@@ -9,13 +9,50 @@
 <body>
 <main class="index">
     <h1>daoc-sdk viewer</h1>
-    <div class="muted">Bots with a headless client attached to this gateway. Pick one to watch it.</div>
+    <div class="muted">Groups from <span class="mono">groups/&lt;name&gt;/group.json</span> and bots with a headless client attached to this gateway. Pick one to watch it.</div>
+    <h2>Groups</h2>
+    <div id="groups" class="bot-list"><div class="muted">Loading…</div></div>
+    <h2>Bots</h2>
     <div id="bots" class="bot-list"><div class="muted">Loading…</div></div>
     <p class="muted" style="margin-top:16px">Or open <span class="mono">/viewer/&lt;bot&gt;</span> directly; the page waits for the client to attach.</p>
 </main>
 <script>
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
-async function refresh() {
+const RUN_PILL = { live: 'active', starting: 'stale', stale: 'stale', ending: 'stale', lost: 'dead', ended: '' };
+function groupCard(g) {
+    const members = Array.isArray(g.members) ? g.members : [];
+    const run = g.run;
+    const pill = run
+        ? `<span class="pill ${Object.hasOwn(RUN_PILL, run.state) ? RUN_PILL[run.state] : ''}">${esc(run.state)}${run.phase ? ` · ${esc(run.phase)}` : ''}${run.windingDown ? ' · winding down' : ''}</span>`
+        : '<span class="pill">no run</span>';
+    const dots = members.map(m => `<span class="member-dot" title="${esc(m.bot)}: ${esc(m.status)}${m.isDead ? ', dead' : ''}${m.level ? ` · L${esc(m.level)} ${esc(m.className)}` : ''}${m.zoneName ? ` · ${esc(m.zoneName)}` : ''}"><i class="dot ${esc(m.status)}${m.isDead ? ' corpse' : ''}"></i>${esc(m.name || m.bot)}</span>`).join('');
+    return `<a class="bot-card group-card" href="/viewer/group/${encodeURIComponent(g.id)}">
+        <span class="name">${esc(g.name)}</span>
+        <span>${pill}</span>
+        <span class="dots">${dots || '<span class="muted">no members</span>'}</span>
+        <span class="muted">${members.filter(m => m.inGame).length}/${members.length} in game${g.hasCampaign ? ' · campaign' : ''}</span>
+        ${g.error ? `<span class="bad">${esc(g.error)}</span>` : ''}
+    </a>`;
+}
+async function refreshGroups() {
+    // Its own try/catch: an older gateway answers /groups with its plain-text help page, and the bot list must still work.
+    const el = document.getElementById('groups');
+    try {
+        const res = await fetch('/groups', { cache: 'no-store' });
+        let body = null;
+        try { body = await res.json(); } catch {}
+        if (!body || !Array.isArray(body.groups)) {
+            el.innerHTML = '<div class="muted">Group views need a newer gateway.</div>';
+            return;
+        }
+        el.innerHTML = body.groups.length
+            ? body.groups.map(groupCard).join('')
+            : '<div class="muted">No groups: none of <span class="mono">groups/&lt;name&gt;/group.json</span> on the gateway\'s disk.</div>';
+    } catch (e) {
+        el.innerHTML = `<div class="bad">Groups unavailable: ${esc(e.message || e)}</div>`;
+    }
+}
+async function refreshBots() {
     const el = document.getElementById('bots');
     try {
         const res = await fetch('/bots', { cache: 'no-store' });
@@ -28,16 +65,23 @@ async function refresh() {
             const p = b.player;
             const who = p ? `${esc(p.name)} · L${esc(p.level)} ${esc(p.className)} · ${esc(p.realm)} · ${esc(p.zoneName || 'region ' + p.regionId)}` : esc(b.phase || 'no state');
             const age = b.stateAge == null ? '' : `state ${(b.stateAge / 1000).toFixed(1)} s ago`;
+            const g = b.group;
+            const group = g ? `<span class="muted">group: ${esc(g.name)}${g.run ? ` (${esc(g.run.phase || g.run.state)})` : ''}</span><span></span>` : '';
             return `<a class="bot-card" href="/viewer/${encodeURIComponent(b.username)}">
                 <span class="name">${esc(b.username)}</span>
                 <span><span class="pill ${esc(b.status)}">${esc(b.status)}</span> ${b.inGame ? '<span class="pill active">in game</span>' : '<span class="pill">not in game</span>'}</span>
                 <span class="muted">${who}</span>
                 <span class="muted">${age} · ${b.controllers} ctl / ${b.observers} obs</span>
+                ${group}
             </a>`;
         }).join('');
     } catch (e) {
         el.innerHTML = `<div class="bad">Gateway unreachable: ${esc(e.message || e)}</div>`;
     }
+}
+function refresh() {
+    refreshGroups();
+    refreshBots();
 }
 refresh();
 setInterval(refresh, 2000);
