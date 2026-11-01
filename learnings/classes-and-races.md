@@ -31,6 +31,14 @@ import { getStartingClasses, getRacesForClass, validateCharacter } from '../../d
 validateCharacter({ realm: 'hibernia', class: 'Magician', race: 'Elf' });   // { valid, errors, warnings, gender, classInfo, raceInfo }
 ```
 
+## Looks
+
+Every character gets its own face, hair, colours and size, picked from its name (`lookFor`, client/model/look.ts), so the same name always gives the same look. New characters get it at creation. A character whose face bytes are all zero gets one at its next login, through a face-only customize; its stats stay. Verified live on a throwaway Viking: the values land in the database and it enters the world. How they render in the real client is unverified.
+
+- **Ranges** come from the client's tables in gamedata.mpk: morphs 0..8 (we use 1..7), 8 eye colours, 8 skin tones, 16 hair colours, 7 faces (we send 1..5), and hair styles per race and gender (`fig3descriptions.csv`).
+- **The model carries the look too:** the low 11 bits depend on the hair style (`fig3tofigmain.csv`), and bits 11-12 are the size (1 short, 2 average, 3 tall). A customize with size 0 can get the account banned (CharacterCreateRequestHandler.cs:802), so `lookFor` never sends it.
+- **Open:** whether the wire's face and hair numbers count from 0 or 1. The ranges we send are valid either way.
+
 ## Start points and the first monsters
 
 From `getStartupLocation` and `findNpcSpawns` (levels 0–1, realm 0, not peaceful). Rows marked *live* were confirmed in game; the rest are data only.

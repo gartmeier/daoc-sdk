@@ -15,6 +15,7 @@ import type { ServerPacket } from './net/framing';
 import { ClientOp, loginErrorName, ServerOp, serverOpName } from './protocol/opcodes';
 import * as out from './protocol/outgoing';
 import { decodeCharacterOverview, decodeCryptKey, decodeDupNameCheckReply, decodeLoginDenied, decodeLoginGranted, decodeSessionId, type CharacterOverview, type OverviewCharacter } from './protocol/incoming/login';
+import { hasNoLook, lookFor } from './model/look';
 import { decodeCharacterJump, decodeLosRequest, decodeMaxSpeed, decodePositionAndObjectId, decodeQuit, decodeRegionChanged, decodeRiding } from './protocol/incoming/world';
 import { decodeSpellCastAnimation } from './protocol/incoming/combat';
 import { decodeStatusUpdate } from './protocol/incoming/player';
@@ -230,6 +231,8 @@ export class DaocSession {
             if (!ch) throw this.fail('creationFailed', `character ${o.charName} was not created (server rejected it; check name, class/race and the server log)`);
             this.createdCharacter = true;
             this.accountRealm = realmOf(overview);
+        } else if (hasNoLook(ch)) {
+            ch = await this.giveLook(ch, realm, findChar) ?? ch;
         }
         this.character = ch;
         this.charSlot = ch.slot;
@@ -250,6 +253,22 @@ export class DaocSession {
         } catch {
             this.log('no 0x28 SessionID reply; continuing without session id');
         }
+    }
+
+    /**
+     * A character made before looks existed gets one on its next login (0xFF customize, face only).
+     * The server doesn't answer a customize, so the new overview shows whether it took.
+     */
+    private async giveLook(ch: OverviewCharacter, realm: number, findChar: (ov: CharacterOverview) => OverviewCharacter | undefined): Promise<OverviewCharacter | undefined> {
+        const look = lookFor(ch.name, ch.raceId, ch.gender);
+        if (!look) return undefined;
+        const stats = ch.stats as out.CharacterCreateData['stats'];
+        this.send(ClientOp.CharacterCreateRequest, out.encodeCharacterCreateRequest({
+            slot: ch.slot, name: ch.name, realm: ch.realm, classId: ch.classId, raceId: ch.raceId, gender: ch.gender, model: ch.model, stats, operation: 2, look,
+        }));
+        const after = findChar(await this.requestOverview(realm));
+        this.log(after && !hasNoLook(after) ? `gave ${ch.name} a look (model ${look.model & 0x7FF})` : `WARNING: ${ch.name} kept the blank look`);
+        return after;
     }
 
     private async createCharacter(overview: CharacterOverview, realm: number): Promise<void> {
@@ -280,6 +299,7 @@ export class DaocSession {
         this.log(`creating ${o.charName}: class ${plan.classId} race ${plan.raceId} slot ${slot} stats ${plan.stats.join('/')}`);
         this.send(ClientOp.CharacterCreateRequest, out.encodeCharacterCreateRequest({
             slot, name: o.charName, realm, classId: plan.classId, raceId: plan.raceId, gender: plan.gender, model: plan.model, stats: plan.stats,
+            look: lookFor(o.charName, plan.raceId, plan.gender) ?? undefined,
         }));
         await this.waitFor([ServerOp.LoginGranted], 15_000, 'LoginGranted after create');
         this.setPhase('charScreen');
