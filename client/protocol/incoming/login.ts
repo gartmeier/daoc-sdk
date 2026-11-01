@@ -71,6 +71,12 @@ export interface OverviewCharacter {
     location: string;
     className: string;
     raceName: string;
+    eyeSize: number;
+    lipSize: number;
+    eyeColor: number;
+    hairColor: number;
+    faceType: number;
+    hairStyle: number;
     model: number;
     region: number;
     stats: number[];
@@ -102,7 +108,12 @@ export function decodeCharacterOverview(p: Uint8Array): CharacterOverview {
         const name = r.intLePascal();
         r.skip(4); // 0x18
         r.skip(1); // always 1
-        r.skip(6); // face
+        const eyeSize = r.u8();
+        const lipSize = r.u8();
+        const eyeColor = r.u8();
+        const hairColor = r.u8();
+        const faceType = r.u8();
+        const hairStyle = r.u8();
         r.skip(4); // ext boots/gloves, ext torso/hood, customisation step, mood
         r.skip(13);
         const location = r.intLePascal();
@@ -120,7 +131,7 @@ export function decodeCharacterOverview(p: Uint8Array): CharacterOverview {
         const raceId = ((rg >> 2) & 0x10) | (rg & 0x0F);
         const gender = (rg >> 7) & 1;
         r.skip(2 + 1 + 1 + 1); // active weapons, SI flag, con, 0
-        slots.push({ slot, level, name, location, className, raceName, model, region, stats, classId, realm, raceId, gender });
+        slots.push({ slot, level, name, location, className, raceName, eyeSize, lipSize, eyeColor, hairColor, faceType, hairStyle, model, region, stats, classId, realm, raceId, gender });
     }
     return { flags, slots };
 }

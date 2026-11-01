@@ -2,6 +2,7 @@
 // framing is done by net/framing.ts. Layouts are for client 1.127 and cite the
 // handler in server/core/GameServer/packets/Client/168/.
 
+import type { Look } from '../model/look';
 import { PacketWriter } from './buffer';
 
 // ── Login / character screen ────────────────────────────────────────────────
@@ -60,6 +61,8 @@ export interface CharacterCreateData {
     stats: [number, number, number, number, number, number, number, number];
     /** 1 = create, 2 = customize, 3 = delete. */
     operation?: number;
+    /** Sets the face fields and takes over from `model`. Without it the face stays at zeros. */
+    look?: Look;
 }
 
 /**
@@ -72,19 +75,23 @@ export function encodeCharacterCreateRequest(d: CharacterCreateData): Uint8Array
     w.u8((d.realm - 1) * 10 + d.slot); // server subtracts (Realm-1)*10
     w.intLePascal(d.name);
     w.u32le(0x18);
-    w.u8(0); // CustomMode (0 = keep server defaults for face)
-    w.fill(0, 6); // eye size, lip size, eye color, hair color, face type, hair style
+    const customize = d.operation === 2;
+    // CustomMode: 0 keeps the zeros, 1 applies the face at creation, 2 in a customize, which also
+    // ends the configuration (CustomisationStep 2, CharacterCreateRequestHandler.cs:814).
+    w.u8(!d.look ? 0 : customize ? 2 : 1);
+    const k = d.look;
+    for (const v of [k?.eyeSize, k?.lipSize, k?.eyeColor, k?.hairColor, k?.faceType, k?.hairStyle]) w.u8(v ?? 0);
     w.fill(0, 3);
     w.u8(0); // mood
     w.fill(0, 9);
     w.u8(d.operation ?? 1);
-    w.u8(0); // customize type
+    w.u8(customize ? 1 : 0); // customize type: 1 = face only, the stats stay
     w.fill(0, 2);
     for (let i = 0; i < 3; i++) w.u32le(1).u8(0); // location/class/race strings: Skip(5) each
     w.u8(d.classId);
     w.u8(d.realm);
     w.u8((d.raceId & 0x1F) | ((d.gender & 1) << 7));
-    w.u16le(d.model);
+    w.u16le(d.look?.model ?? d.model);
     for (const s of d.stats) w.u8(s);
     w.fill(0, 43);
     w.u8(d.stats[2]); // NewConstitution

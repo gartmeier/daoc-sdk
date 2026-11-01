@@ -33,6 +33,30 @@ describe('login / character screen encoders', () => {
         expect(H(b.subarray(0, 4))).toBe('42 6F 62 00');
     });
 
+    const LOOK = { eyeSize: 0x12, lipSize: 0x34, eyeColor: 0x56, hairColor: 7, faceType: 0x20, hairStyle: 0x30, model: 0x914A };
+    const DALTA = { slot: 0, name: 'Dalta', realm: 3, classId: 43, raceId: 11, gender: 1, model: 342, stats: [60, 60, 60, 60, 60, 60, 60, 60] as [number, number, number, number, number, number, number, number] };
+    const faceBytes = (b: Uint8Array) => {
+        const r = new PacketReader(b);
+        r.u8();
+        r.intLePascal();
+        r.skip(4);
+        const mode = r.u8();
+        const face = H(r.bytes(6));
+        r.skip(3 + 1 + 9);
+        const operation = r.u8();
+        const type = r.u8();
+        r.skip(2 + 15 + 3);
+        return { mode, face, operation, type, model: r.u16le() };
+    };
+
+    test('0xFF create with a look: CustomMode 1, the face bytes, its model', () => {
+        expect(faceBytes(o.encodeCharacterCreateRequest({ ...DALTA, look: LOOK }))).toEqual({ mode: 1, face: '12 34 56 07 20 30', operation: 1, type: 0, model: 0x914A });
+    });
+
+    test('0xFF customize: CustomMode 2, face only', () => {
+        expect(faceBytes(o.encodeCharacterCreateRequest({ ...DALTA, operation: 2, look: LOOK }))).toEqual({ mode: 2, face: '12 34 56 07 20 30', operation: 2, type: 1, model: 0x914A });
+    });
+
     test('0xFF CharacterCreateRequest layout matches CreationCharacterData (1.126+)', () => {
         const b = o.encodeCharacterCreateRequest({
             slot: 2, name: 'Smoke', realm: 2, classId: 35, raceId: 6, gender: 1, model: 145,
