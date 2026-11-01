@@ -127,6 +127,8 @@ export const StateFlags = {
     Sitting: 0x10,
     Jumping: 0x08,
     Swimming: 0x04,
+    /** SITTING|SWIMMING: lying dead. A real client's dead state, stripped from the living (PlayerPositionUpdateHandler.cs:640-643). */
+    Dead: 0x14,
 } as const;
 
 export const ActionFlags = {

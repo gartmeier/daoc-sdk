@@ -42,6 +42,18 @@ describe('DaocClient sit', () => {
         expect(client.collectState().player?.isSitting).toBe(false);
     });
 
+    test('a corpse neither jumps nor turns', async () => {
+        const { client, sent } = playingClient();
+        const s = client.session!;
+        s.model.self.isDead = true;
+        const heading = s.mover.heading;
+        for (const action of [{ type: 'jump' }, { type: 'face', heading: 1000 }, { type: 'faceObject', objectId: 2 }] as const) {
+            expect(await client.execute(action)).toMatchObject({ success: false, reason: 'dead' });
+        }
+        expect(sent).not.toContain(ClientOp.PositionUpdate);
+        expect(s.mover.heading).toBe(heading);
+    });
+
     test('sit(false) clears the flags at once (standing is never wrong)', async () => {
         const { client, s } = playingClient();
         s.mover.sitting = true;

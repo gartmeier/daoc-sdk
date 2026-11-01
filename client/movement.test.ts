@@ -237,6 +237,26 @@ describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
         expect(sent.at(-1)!.flags).toBe(0x04);
     });
 
+    test('dead overrides swimming and sitting with the DEAD state alone, and ends with the death', () => {
+        let dead = false;
+        const flags: number[] = [];
+        const mover = new Mover({
+            timer: false,
+            isDead: () => dead,
+            ground: () => ({ z: 1789, swimming: true }),
+            send: (_code, p) => flags.push(p[26]!),
+        });
+        mover.snap(1, CAMELOT.x, CAMELOT.y, 1830, 0, null);
+        mover.start();
+        expect(flags.at(-1)).toBe(0x04);
+        dead = true;
+        mover.sendUpdate();
+        expect(flags.at(-1)).toBe(0x14);
+        dead = false;
+        mover.sendUpdate();
+        expect(flags.at(-1)).toBe(0x04);
+    });
+
     test('a ladder hop keeps its interpolated z', () => {
         const { mover, advance } = groundHarness(() => ({ z: 2900, swimming: false }));
         mover.snap(1, CAMELOT.x, CAMELOT.y, 2900, 0, null);

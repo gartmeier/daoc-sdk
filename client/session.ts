@@ -117,9 +117,14 @@ export class DaocSession {
         this.log = opts.log ?? (() => {});
         this.model = new WorldModel({
             onUnknownSession: sid => this.requestPlayer(sid),
-            onSelfDeath: () => this.mover.stop('died'),
+            onSelfDeath: () => {
+                this.mover.stop('died');
+                this.mover.sendUpdate();
+            },
         });
-        this.mover = new Mover({ send: (c, p) => this.send(c, p), log: opts.trace ? this.log : undefined, ground: opts.ground });
+        // self.isDead, not a health of 0 %: that is also a living character with a few hit points
+        // (GameLiving.cs:2621), and the server wouldn't strip DEAD from it.
+        this.mover = new Mover({ send: (c, p) => this.send(c, p), log: opts.trace ? this.log : undefined, ground: opts.ground, isDead: () => this.model.self.isDead });
     }
 
     // ── events ────────────────────────────────────────────────────────────

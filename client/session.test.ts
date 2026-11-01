@@ -39,6 +39,59 @@ describe('DaocSession packet housekeeping', () => {
     });
 });
 
+describe('DaocSession dead state in 0xA9', () => {
+    /** A session streaming on a fake socket; `states` holds the state byte (offset 26) of every 0xA9 sent. */
+    function streaming() {
+        const { s, feed } = session();
+        const states: number[] = [];
+        (s as unknown as { connection: unknown }).connection = {
+            isOpen: true,
+            send: (code: number, payload: Uint8Array) => { if (code === ClientOp.PositionUpdate) states.push(payload[26]!); return true; },
+            close: () => {},
+        };
+        s.phase = 'playing';
+        s.model.self.objectId = 1;
+        s.mover.objectId = 1;
+        s.mover.snap(1, 574797, 530161, 2896, 0, null);
+        (s.mover as unknown as { enabled: boolean }).enabled = true;
+        return { s, feed, states };
+    }
+    /** 0xAE PlayerDeath (PacketLib168.cs:1988). */
+    const death = (victim: number) => W().u16(victim).u16(2).fill(0, 4).toBytes();
+
+    test('a death goes out as DEAD at once, even standing still, and every heartbeat keeps it', () => {
+        const { s, feed, states } = streaming();
+        s.mover.sendUpdate();
+        expect(states.at(-1)).toBe(0);
+        feed(ServerOp.PlayerDeath, death(1));
+        expect(states.at(-1)).toBe(0x14);
+        const sent = states.length;
+        s.mover.sendUpdate();
+        expect(states.length).toBe(sent + 1);
+        expect(states.at(-1)).toBe(0x14);
+    });
+
+    test('a release or rez clears DEAD: 0xAD with health, and 0x89', () => {
+        const { s, feed, states } = streaming();
+        feed(ServerOp.PlayerDeath, death(1));
+        feed(ServerOp.CharacterStatusUpdate, status(90, 0x00));
+        s.mover.sendUpdate();
+        expect(states.at(-1)).toBe(0);
+        feed(ServerOp.PlayerDeath, death(1));
+        expect(states.at(-1)).toBe(0x14);
+        feed(ServerOp.PlayerRevive, W().u16(1).u16(0).toBytes());
+        s.mover.sendUpdate();
+        expect(states.at(-1)).toBe(0);
+    });
+
+    test('a living bot at a few hit points, which reads 0 %, stays alive on the wire', () => {
+        const { s, feed, states } = streaming();
+        feed(ServerOp.CharacterStatusUpdate, status(0, 0x00)); // health 38, truncated to 0 %
+        s.mover.sendUpdate();
+        expect(states.at(-1)).toBe(0);
+    });
+});
+
 /** A session that thinks it is connected; records the commands it sends. */
 function connectedSession(phase: DaocSession['phase']) {
     const { s, feed } = session();

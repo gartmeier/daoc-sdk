@@ -298,7 +298,7 @@ export class DaocClient {
     private faceObject(objectId: number): boolean {
         const s = this.session!;
         const p = s.model.positionOf(objectId);
-        if (!p) return false;
+        if (!p || s.model.self.isDead) return false;
         if (s.mover.moving) {
             s.mover.heading = headingTo(s.mover, p);
         } else {
@@ -370,17 +370,20 @@ export class DaocClient {
                 mv.stop('stopped');
                 return ok('stopped');
             case 'face': {
+                if (m.self.isDead) return fail('dead', 'cannot turn while dead');
                 if (!Number.isFinite(a.heading)) return fail('bad_args', 'heading must be a number');
                 mv.face(((Math.round(a.heading) % 4096) + 4096) % 4096);
                 return ok(`facing ${mv.heading}`);
             }
             case 'faceObject': {
+                if (m.self.isDead) return fail('dead', 'cannot turn while dead');
                 const bad = requireObject(a.objectId);
                 if (bad) return bad;
                 this.faceObject(a.objectId);
                 return ok(`facing object ${a.objectId} (heading ${mv.heading})`);
             }
             case 'jump': {
+                if (m.self.isDead) return fail('dead', 'cannot jump while dead');
                 if (mv.zoneId === null) return fail('no_zone', 'current zone unknown');
                 mv.sendUpdate();
                 const p = encodeJump(mv);

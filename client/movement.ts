@@ -63,6 +63,8 @@ export interface MoverDeps {
      * state flag follows it. Null means unknown there: keep the interpolated z.
      */
     ground?: (regionId: number, x: number, y: number, zHint: number) => { z: number; swimming: boolean } | null;
+    /** The character is dead: every 0xA9 carries the DEAD state. */
+    isDead?: () => boolean;
 }
 
 /** A segment that climbs more than this and twice its length is a ladder/off-mesh hop: keep its interpolated z. */
@@ -370,9 +372,11 @@ export class Mover {
             sessionId: this.sessionId,
             objectId: this.objectId,
             zoneId: this.zoneId,
-            // Never both: SWIMMING|SITTING reads as DEAD, and SWIMMING|JUMPING as FLYING (an autoban
-            // under ban_hackers; PlayerPositionUpdateHandler.ProcessStateFlags).
-            stateFlags: this.swimming ? StateFlags.Swimming : this.sitting ? StateFlags.Sitting : 0,
+            // The server relays this byte as is and never sets DEAD itself (PlayerPositionUpdateHandler.cs:415,
+            // no IsAlive check), so without it viewers get a standing player at 0 % once a second, which a
+            // real client shows dying and vanishing over and over. Otherwise never both: SWIMMING|SITTING
+            // reads as DEAD, and SWIMMING|JUMPING as FLYING (an autoban under ban_hackers; ProcessStateFlags).
+            stateFlags: this.deps.isDead?.() ? StateFlags.Dead : this.swimming ? StateFlags.Swimming : this.sitting ? StateFlags.Sitting : 0,
             fallingDamage: 0x8000,
             heading: this.heading,
             actionFlags: this.targetInView ? ActionFlags.TargetInView : 0,

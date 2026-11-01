@@ -358,7 +358,7 @@ describe('WorldModel combat events', () => {
         expect(norseman()).toMatchObject({ healthPercent: 0, isDead: false });
         m.handle(ServerOp.PlayerDeath, W().u16(301).u16(302).fill(0, 4).toBytes());
         expect(norseman()).toMatchObject({ healthPercent: 0, isDead: true });
-        // Our headless clients never send DEAD: its relays carry health 0 and no flag, and it stays dead.
+        // A relay without the flag (a client that doesn't send it) carries health 0: it stays dead.
         now += 1000;
         m.handle(ServerOp.PlayerPosition, a9(0));
         expect(norseman().isDead).toBe(true);
@@ -369,7 +369,10 @@ describe('WorldModel combat events', () => {
         now += 5000;
         m.handle(ServerOp.PlayerPosition, a9(10));
         expect(norseman()).toMatchObject({ healthPercent: 10, isDead: false });
-        // A DEAD state from a real client holds (the server strips it only from the living).
+        // A stale DEAD left over from before that revive: the server relays the state it last stored.
+        m.handle(ServerOp.PlayerPosition, a9(10, 0x14));
+        expect(norseman().isDead).toBe(false);
+        // A DEAD state holds (the server strips it only from the living).
         m.handle(ServerOp.PlayerPosition, a9(0, 0x14));
         expect(norseman().isDead).toBe(true);
     });

@@ -846,11 +846,11 @@ export class WorldModel {
      * health again shows a revive, since 0x89 PlayerRevive goes to the revived player alone
      * (GamePlayer.cs:1688/1809, ResurrectSpellHandler.cs:179). `deadFlag` is the DEAD state the
      * player's own client sends; the server only strips it from the living (:640-643), so it holds,
-     * but our headless clients never send it.
+     * except that a relay can still carry it just after a revive: at 0 % only.
      */
     private relayedHealth(pl: PlayerEntry, healthPercent: number, deadFlag: boolean, now: number): void {
         pl.healthPercent = healthPercent;
-        if (deadFlag) {
+        if (deadFlag && healthPercent === 0) {
             if (!pl.isDead) pl.diedAt = now;
             pl.isDead = true;
         } else if (pl.isDead && healthPercent > 0 && now - pl.diedAt >= REVIVE_SETTLE_MS) {

@@ -28,6 +28,8 @@ You know you died when `bot.isDead()` / `player.isDead` is true. `player.deathCo
   ```
   After a release you are at your **bind point**, alive with low health. Rest before fighting again.
 - **Grinding:** `grind({ respawn: true })` releases, walks back to the anchor and carries on. With `respawn: false` (the default) it stops with `stopReason: 'died'`. Deaths the server auto-released are counted too.
+- **Viewers:** a real client shows a player as dead from the state byte of its 0xA9 (0x14, SITTING|SWIMMING), and the server relays that byte as the player's client sent it. The client sends it while `player.isDead`. Without it a real client showed the corpse dying and vanishing over and over, with one 0xAE and no remove or create from the server; with it the corpse lies still (verified in a real 1.127 client). Moving, turning and jumping are refused while dead.
+- **Nobody releases an idle corpse for you:** without a running script a dead bot lies there for the server's full release timer, 900 s.
 - **Bind points:** `nearestBindpoint(regionId, x, y, realm)` from `data/index`. Binding elsewhere (`/bind` near a bind stone) is unverified.
 - **Unverified:** the XP and constitution loss penalties at low level.
 
