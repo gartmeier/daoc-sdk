@@ -13,7 +13,7 @@ import { ConsoleCapture, formatLogArgument, installExecutionConsoleCapture } fro
 import { executionContext, abortable, throwIfExecutionAborted } from '../sdk/execution-context';
 import { formatWorldState, summarizeWorldState, type WorldDetail, type WorldSummary } from '../sdk/formatter';
 import { redactCredentials } from '../sdk/redact';
-import { EquipmentSlot } from '../sdk/types';
+import { EquipmentSlot, ItemHand, ObjectType } from '../sdk/types';
 
 export type ExecutionErrorKind = 'exception' | 'timeout' | 'superseded' | 'cancelled' | 'not_connected' | 'invalid_input' | 'unserializable_result';
 export const EXECUTION_ERROR_KINDS: ExecutionErrorKind[] = ['exception', 'timeout', 'superseded', 'cancelled', 'not_connected', 'invalid_input', 'unserializable_result'];
@@ -134,11 +134,11 @@ async function loadScript(path: string): Promise<(ctx: { bot: unknown; sdk: unkn
     return module.default;
 }
 
-/** Compile an inline code body into `async (bot, sdk, args, EquipmentSlot) => ...`. */
-export function compileInline(source: string): (bot: unknown, sdk: unknown, args: unknown, equipmentSlot: unknown) => Promise<unknown> {
+/** Compile an inline code body into `async (bot, sdk, args, EquipmentSlot, ObjectType, ItemHand) => ...`. */
+export function compileInline(source: string): (bot: unknown, sdk: unknown, args: unknown, equipmentSlot: unknown, objectType: unknown, itemHand: unknown) => Promise<unknown> {
     // The inner block lets code redeclare `args` (or bot/sdk) without a parameter clash.
     const compiled = new Bun.Transpiler({ loader: 'ts' }).transformSync(
-        `const __daocExec = async (bot, sdk, args, EquipmentSlot) => {{\n${source}\n}};`,
+        `const __daocExec = async (bot, sdk, args, EquipmentSlot, ObjectType, ItemHand) => {{\n${source}\n}};`,
     );
     return new Function(`${compiled}\nreturn __daocExec;`)();
 }
@@ -206,7 +206,7 @@ export async function executeCode(
                 const bot = tracked(connection.bot, 'bot', active, controller.signal);
                 const sdk = tracked(connection.sdk, 'sdk', active, controller.signal);
                 if (typeof source !== 'string') return (await loadScript(source.script))({ bot, sdk, args: options.args });
-                return compileInline(source)(bot, sdk, options.args, EquipmentSlot);
+                return compileInline(source)(bot, sdk, options.args, EquipmentSlot, ObjectType, ItemHand);
             };
 
             // The raw promise outlives the abort: abortable() rejects at once while

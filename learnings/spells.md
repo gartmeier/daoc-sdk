@@ -6,7 +6,10 @@
 const spells = sdk.getSkills().spells;          // name, level, lineName, lineIndex, spellIndex, cooldownRemaining
 const nuke = sdk.findSpell(/bolt|blast|drain/i);
 const info = bot.getSpellInfo(nuke);            // from the DB: type, target, range, power, castTime, damage, ...
+nuke.details;                                   // from the server: castTimeMs, damageType, powerCost, range, durationSeconds, recastSeconds, target, description, ...
 ```
+
+- **`spell.details` is what the server says about this character's spell**, from the 0xD8 tooltip it pushes after the skills list (PacketLib1110.cs:159-212; property `use_new_tooltip_forcedupdate`, on by default). `castTimeMs` is 0 when instant and null for a cast under 2 s, which the tooltip doesn't state. Verified live on a level-1 Mage: Minor Vitality Drain reads 2500 ms, 2 power, range 1500, "Inflicts 5 body damage and heals for 30% of the damage dealt."
 
 - `info.target` is one of `Enemy`, `Self`, `Realm`, `Group` or `Pet`.
 - Common `info.type` values: `DirectDamage`, `Bolt`, `DamageOverTime`, `Lifedrain`, `Heal`, `BaseArmorFactorBuff`, `DamageAdd`, `DamageShield`, `SpeedDecrease`, `Mesmerize`.

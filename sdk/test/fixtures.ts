@@ -79,7 +79,7 @@ export function makeState(overrides: Partial<BotWorldState> = {}): BotWorldState
         ],
         vault: [],
         skills: {
-            specializations: [{ name: 'Slash', level: 2, internalId: 1 }],
+            specializations: [{ name: 'Slash', level: 2, internalId: 1, bonus: 0 }],
             abilities: [{ name: 'Sprint', level: 1, internalId: 2, skillIndex: 4 }],
             styles: [{ name: 'Backslash', internalId: 3, specLevel: 2, specName: 'Slash', skillIndex: 7, prerequisite: 0x100 }],
             spells: [],

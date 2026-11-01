@@ -79,6 +79,10 @@ A mob that failed is avoided for 60 s. A death stops the grind unless `respawn: 
 - `bot.useStyle(name)` queues a style for the next swing and is confirmed by "You prepare to perform a ...".
 - `killNpc(mob, { styles: ['Name1', 'Name2'] })` rotates styles, one per swing, every 2.5 s while endurance is at least 15 %.
 - `useStyle: ({ npc, player, styles }) => name | null` chooses a style per swing instead.
+- **`style.details` says what a style does**, from the 0xD8 tooltip the server pushes after the skills list: `fatigue`, `attackMod`, `defensiveMod`, `openingDamage` (damage growth), `opening` with `result` and `position`, `openingStyle`, `followUps` (learned or not), `weapon`, and `procSpell`. A combat event doesn't name the style; the last one is in "You perform your X perfectly!". Verified live at Celtic Dual 4:
+  - Misty Gloom: `fatigue` 15, `openingDamage` 7, anytime.
+  - Blinding Rain: `fatigue` 5, `attackMod` 10, `openingDamage` 175, `opening` defensive, `result` evade, `followUps` Blizzard, and a bleed of 3 body damage every 4 s for 20 s.
+- **`style.prerequisite`** is the same rule as a code (PacketLib1112.cs:125-146): 0x100 anytime, 100 + result a reaction, 200 + position positional, or result with 100 + the opener's skillIndex in the high byte.
 - **Base classes have no styles; promotion brings them** (verified live):
   - Style rows are keyed by class (`style.ClassId`; SkillBase.cs:600-625, Specialization.cs:374-381). `getStylesFor(14)` (Fighter), `getStylesFor(35)` (Viking) and `getStylesFor(52)` (Guardian) are empty; Armsman (2) has 84.
   - Training a weapon spec on a base class unlocks nothing: a Fighter trained Slash 1 → 2 and still had 0 styles at level 4.

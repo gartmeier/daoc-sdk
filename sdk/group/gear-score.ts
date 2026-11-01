@@ -10,7 +10,7 @@
 
 import { getClass, type ClassInfo, type StatName } from '../../data/index';
 import { ALL_FOCUS, SKILLS, specOf } from '../delve';
-import type { InventoryItem, ItemBonus, SkillGroup } from '../types';
+import { ObjectType, type InventoryItem, type ItemBonus, type SkillGroup } from '../types';
 
 /** Per stat point, by the class's data (classes.json): the higher applies when one stat holds two roles. */
 export const STAT_WEIGHTS = { primary: 1, secondary: 0.6, tertiary: 0.3, mana: 0.8 };
@@ -139,7 +139,7 @@ export function statScore(bonuses: readonly ItemBonus[], classInfo: ClassInfo, l
  * level, applied before quality.
  */
 export function armorValue(i: Pick<InventoryItem, 'objectType' | 'value1' | 'value2' | 'quality'>, level: number): number {
-    return (Math.min(i.value1, i.objectType === 32 ? level : level * 2) * (i.quality / 100) + 10) * (1 + i.value2 / 100);
+    return (Math.min(i.value1, i.objectType === ObjectType.Cloth ? level : level * 2) * (i.quality / 100) + 10) * (1 + i.value2 / 100);
 }
 
 /**

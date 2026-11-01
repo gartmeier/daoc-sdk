@@ -509,6 +509,13 @@ export class DaocClient {
                 this.send(ClientOp.DetailRequest, out.encodeDetailRequest(1, 0, a.slot));
                 return ok(`delving slot ${a.slot}`);
             }
+            case 'delveMerchantItem': {
+                // The server looks the item up on our target, and answers nothing for an unknown one (DetailDisplayHandler.cs:311-318).
+                if (!m.merchant.isOpen) return fail('merchant_not_open', 'no merchant window open: interact with the merchant first');
+                if (!m.merchant.items.some(i => i.page === a.page && i.slot === a.slot)) return fail('bad_args', `no merchant item at page ${a.page} slot ${a.slot}`);
+                this.send(ClientOp.DetailRequest, out.encodeDetailRequest(4, 0, a.page * 30 + a.slot));
+                return ok(`delving merchant item ${a.page}:${a.slot}`);
+            }
             case 'buy': {
                 if (!m.merchant.isOpen) return fail('merchant_not_open', 'no merchant window open: interact with a merchant first');
                 const item = m.merchant.items.find(i => i.page === a.page && i.slot === a.slot);

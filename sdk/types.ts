@@ -221,12 +221,109 @@ export const EquipmentSlot = {
     LastVault: 149,
 } as const;
 
+/** eObjectType.cs: `objectType` on inventory and merchant items. Weapon types belong to a realm: Blades is Hibernian, Sword Midgardian. */
+export const ObjectType = {
+    GenericItem: 0,
+    GenericWeapon: 1,
+    // Albion weapons
+    CrushingWeapon: 2,
+    SlashingWeapon: 3,
+    ThrustWeapon: 4,
+    Fired: 5,
+    TwoHandedWeapon: 6,
+    PolearmWeapon: 7,
+    Staff: 8,
+    Longbow: 9,
+    Crossbow: 10,
+    Flexible: 24,
+    // Midgard weapons
+    Sword: 11,
+    Hammer: 12,
+    Axe: 13,
+    Spear: 14,
+    CompositeBow: 15,
+    Thrown: 16,
+    LeftAxe: 17,
+    HandToHand: 25,
+    // Hibernia weapons
+    RecurvedBow: 18,
+    Blades: 19,
+    Blunt: 20,
+    Piercing: 21,
+    LargeWeapons: 22,
+    CelticSpear: 23,
+    Scythe: 26,
+    // Mauler weapons
+    FistWraps: 27,
+    MaulerStaff: 28,
+    // Armor
+    GenericArmor: 31,
+    Cloth: 32,
+    Leather: 33,
+    Studded: 34,
+    Chain: 35,
+    Plate: 36,
+    Reinforced: 37,
+    Scale: 38,
+    // Misc
+    Magical: 41,
+    Shield: 42,
+    Arrow: 43,
+    Bolt: 44,
+    Instrument: 45,
+    Poison: 46,
+    AlchemyTincture: 47,
+    SpellcraftGem: 48,
+    // Housing
+    GardenObject: 49,
+    HouseWallObject: 50,
+    HouseFloorObject: 51,
+    HouseCarpetFirst: 52,
+    HouseNPC: 53,
+    HouseVault: 54,
+    HouseInteriorObject: 55,
+    HouseTentColor: 56,
+    HouseExteriorBanner: 57,
+    HouseExteriorShield: 58,
+    HouseRoofMaterial: 59,
+    HouseWallMaterial: 60,
+    HouseDoorMaterial: 61,
+    HousePorchMaterial: 62,
+    HouseWoodMaterial: 63,
+    HouseShutterMaterial: 64,
+    HouseInteriorBanner: 66,
+    HouseInteriorShield: 67,
+    HouseBindstone: 68,
+    HouseCarpetSecond: 69,
+    HouseCarpetThird: 70,
+    HouseCarpetFourth: 71,
+    // Siege weapons
+    SiegeBalista: 80,
+    SiegeCatapult: 81,
+    SiegeCauldron: 82,
+    SiegeRam: 83,
+    SiegeTrebuchet: 84,
+} as const;
+
+/** eObjectType's _FirstWeapon.._LastWeapon. */
+export const isWeapon = (objectType: number): boolean => objectType >= ObjectType.CrushingWeapon && objectType <= ObjectType.MaulerStaff;
+/** eObjectType's _FirstArmor.._LastArmor. */
+export const isArmor = (objectType: number): boolean => objectType >= ObjectType.GenericArmor && objectType <= ObjectType.Scale;
+
+/**
+ * item.Hand, `hand` on a merchant item. The left-hand slot itself checks the item's Item_Type, which
+ * the window doesn't send (GamePlayerInventory.cs:822), so FitsLeft is a guide and equipItem has the last word.
+ */
+export const ItemHand = { MainHand: 0, TwoHanded: 1, FitsLeft: 2 } as const;
+
 // ── Skills / spells ─────────────────────────────────────────────────────────
 
 export interface Specialization {
     name: string;
     level: number;
     internalId: number;
+    /** Levels added on top of `level` by items and the like. */
+    bonus: number;
 }
 
 export interface Ability {
@@ -235,6 +332,54 @@ export interface Ability {
     internalId: number;
     /** Index to pass to the useSkill action. */
     skillIndex: number;
+    /** The server's tooltip fields as sent; a plain ability has little beyond Index and Name. */
+    details?: Record<string, string>;
+}
+
+/** A style as the server's tooltip describes it. */
+export interface StyleDetails {
+    /** Endurance cost as the style table lists it. */
+    fatigue: number;
+    /** To-hit and defence modifiers while the style lands. */
+    attackMod: number;
+    defensiveMod: number;
+    /** Damage growth: the style's GrowthRate * 200. */
+    openingDamage: number;
+    /** What it needs: his own last attack (offensive), the enemy's (defensive), or where he stands (positional). */
+    opening: 'offensive' | 'defensive' | 'positional';
+    /** The attack result `opening` asks for; null for any. 'styledHit' with `openingStyle` is a follow-up. */
+    result: CombatResult | null;
+    position: 'back' | 'side' | 'front' | null;
+    /** The style this one follows. */
+    openingStyle: string | null;
+    /** Styles that follow this one, learned or not. */
+    followUps: string[];
+    /** Weapon it needs, in the server's words. */
+    weapon: string | null;
+    /** Needs stealth. */
+    stealth: boolean;
+    /** Internal id of the spell it procs, and that spell's details when the server sent them. */
+    procSpellId: number | null;
+    procSpell?: SpellDetails;
+}
+
+/** A spell as the server's tooltip describes it. */
+export interface SpellDetails {
+    /** 0 when instant; null for a cast under 2 s, which the tooltip doesn't state. */
+    castTimeMs: number | null;
+    damageType: string | null;
+    powerCost: number;
+    costType: 'power' | 'health' | 'endurance';
+    range: number;
+    durationSeconds: number;
+    recastSeconds: number;
+    target: 'self' | 'enemy' | 'group' | 'pet' | 'realm' | 'corpse' | 'area';
+    radius: number;
+    concentration: number;
+    /** Time between pulses or ticks. */
+    frequencyMs: number;
+    /** The server's description; empty when it has none. */
+    description: string;
 }
 
 export interface Style {
@@ -244,8 +389,10 @@ export interface Style {
     specName: string | null;
     /** Index to pass to the useSkill action. */
     skillIndex: number;
-    /** Raw prerequisite code from 0x16/01 (0x100 = none). */
+    /** Raw prerequisite code from 0x16/01 (0x100 = none). `details` says the same in words. */
     prerequisite: number;
+    /** From the 0xD8 tooltip the server pushes after the skills list. */
+    details?: StyleDetails;
 }
 
 export interface Spell {
@@ -263,6 +410,8 @@ export interface Spell {
      * spell line (lineIndex/spellIndex are then -1): cast them with useSkill(skillIndex).
      */
     skillIndex?: number;
+    /** From the 0xD8 tooltip the server pushes after the skills list. */
+    details?: SpellDetails;
 }
 
 /** Server 0x75 concentration list entry. */
@@ -387,7 +536,18 @@ export interface MerchantItem {
     level: number;
     price: number;
     model: number;
+    /** The server's verdict: this character has the ability to use it. */
     usable: boolean;
+    /** See ObjectType (the same number as InventoryItem.objectType). */
+    objectType: number;
+    /** See ItemHand. */
+    hand: number;
+    /** Crush, slash or thrust for a weapon; null otherwise. */
+    damageType: 'crush' | 'slash' | 'thrust' | null;
+    /** DPS * 10 for a weapon, AF for armour, pack size for ammunition (PacketLib1125.cs:640-675). */
+    value1: number;
+    /** Speed in 0.1 s for a weapon, absorption for armour. */
+    spdAbs: number;
 }
 
 export interface MerchantState {
@@ -554,6 +714,7 @@ export type BotAction = ActionBase & (
     | { type: 'dropItem'; slot: number }
     | { type: 'destroyItem'; slot: number }
     | { type: 'delve'; slot: number }
+    | { type: 'delveMerchantItem'; page: number; slot: number }
 
     // Merchants / trainers
     | { type: 'buy'; page: number; slot: number; count: number }

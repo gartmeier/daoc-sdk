@@ -5,7 +5,7 @@
 import type {
     Ability, CombatEvent, DialogBox, Effect, GameMessage, GroupMember, InventoryItem, MerchantItem,
     MerchantState, Money, NearbyNpc, NearbyObject, NearbyPlayer, NpcDialog, Realm, SkillsState,
-    Specialization, Spell, Stats, Style, TextWindow, TrainerState, Vec3,
+    Specialization, Spell, SpellDetails, Stats, Style, StyleDetails, TextWindow, TrainerState, Vec3,
 } from '../../sdk/types';
 import { getZone } from '../../data/zones';
 import { ServerOp } from '../protocol/opcodes';
@@ -20,8 +20,8 @@ import {
     decodePlayerHeading, decodePlayerPosition, decodeRemoveObject, decodeObjectDataUpdate,
 } from '../protocol/incoming/objects';
 import {
-    decodeInventoryUpdate, decodeMoney, decodePointsUpdate, decodeStatsUpdate, decodeStatusUpdate, decodeVariousUpdate,
-    type ItemData, type SpellLinePage, type UsableSkillEntry,
+    decodeDelveInfo, decodeInventoryUpdate, decodeMoney, decodePointsUpdate, decodeStatsUpdate, decodeStatusUpdate, decodeVariousUpdate,
+    toSpellDetails, toStyleDetails, type ItemData, type SpellLinePage, type UsableSkillEntry,
 } from '../protocol/incoming/player';
 import { decodeEncumbrance, decodeMaxSpeed, decodeTime } from '../protocol/incoming/world';
 import { decodeGroupMemberUpdate, decodeMerchantWindow, decodeTrainerWindow } from '../protocol/incoming/windows';
@@ -248,6 +248,9 @@ export function guessNpcRole(name: string, guild: string): string | null {
 const dist3 = (a: PositionRef, b: PositionRef): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const dist2 = (a: PositionRef, b: PositionRef): number => Math.hypot(a.x - b.x, a.y - b.y);
 
+/** item.Type_Damage in the merchant window's type byte (PacketLib1125.cs:689). */
+const MERCHANT_DAMAGE_TYPES: Record<number, MerchantItem['damageType']> = { 1: 'crush', 2: 'slash', 3: 'thrust' };
+
 export class WorldModel {
     self = newSelf();
     npcs = new Map<number, NpcEntry>();
@@ -257,6 +260,8 @@ export class WorldModel {
     /** All inventory slots (equipment, backpack, vault, ...). */
     items = new Map<number, InventoryItem>();
     usableSkills: UsableSkillEntry[] = [];
+    /** 0xD8 tooltips by '<kind>:<internal id>'. Kept when the skills list is resent, since the server pushes each only hourly. */
+    delves = new Map<string, Record<string, string>>();
     spellLines = new Map<number, SpellLinePage>();
     private spellLinesSinceFooter = 0;
     /** key 'S:<skillIndex>' or 'L:<line>:<spell>' → expiresAt ms. */
@@ -531,6 +536,11 @@ export class WorldModel {
                 this.self.encumbrance = decodeEncumbrance(p);
                 return true;
             }
+            case ServerOp.DelveInfo: {
+                const d = decodeDelveInfo(p);
+                if (d && d.fields.Index !== undefined) this.delves.set(`${d.kind}:${Number(d.fields.Index) & 0xffff}`, d.fields);
+                return true;
+            }
             case ServerOp.VariousUpdate:
                 return this.applyVarious(p);
             case ServerOp.InventoryUpdate: {
@@ -565,7 +575,10 @@ export class WorldModel {
                 this.merchant.windowType = d.windowType;
                 this.merchant.items = this.merchant.items.filter(i => i.page !== d.page);
                 for (const it of d.items) {
-                    const item: MerchantItem = { page: d.page, slot: it.index, name: it.name, level: it.level, price: it.price, model: it.model, usable: it.usable };
+                    const item: MerchantItem = {
+                        page: d.page, slot: it.index, name: it.name, level: it.level, price: it.price, model: it.model, usable: it.usable,
+                        objectType: it.objectType, hand: it.hand, damageType: MERCHANT_DAMAGE_TYPES[it.damageType] ?? null, value1: it.value1, spdAbs: it.spdAbs,
+                    };
                     this.merchant.items.push(item);
                 }
                 this.merchant.items.sort((a, b) => a.page * 30 + a.slot - (b.page * 30 + b.slot));
@@ -732,7 +745,6 @@ export class WorldModel {
             case ServerOp.ObjectGuildID:
             case ServerOp.QuestEntry:
             case ServerOp.DebugMode:
-            case ServerOp.DelveInfo:
                 return true;
             default:
                 return IGNORED_OPCODES.has(code);
@@ -1011,23 +1023,26 @@ export class WorldModel {
             const skillIndex = i - specCount;
             switch (e.skillType) {
                 case 0:
-                    specializations.push({ name: e.name, level: e.level, internalId: e.internalId });
+                    // e.bonus is the modified spec level minus the trained one (PacketLib1112.cs:70).
+                    specializations.push({ name: e.name, level: e.level, internalId: e.internalId, bonus: e.bonus });
                     break;
                 case 2:
                     // e.bonus is GlobalConstants.GetSpecToInternalIndex(style.Spec) (PacketLib1112.cs:150), a fixed table.
-                    styles.push({ name: e.name, internalId: e.internalId, specLevel: e.level, specName: SPEC_BY_INTERNAL_INDEX[e.bonus] ?? null, skillIndex, prerequisite: e.special });
+                    styles.push({ name: e.name, internalId: e.internalId, specLevel: e.level, specName: SPEC_BY_INTERNAL_INDEX[e.bonus] ?? null, skillIndex, prerequisite: e.special, ...this.styleDetails(e.internalId) });
                     break;
                 case 3:
                 case 4: {
                     const spec = e.special < specializations.length ? specializations[e.special] : undefined;
                     spells.push({
                         name: e.name, level: e.level, internalId: e.internalId, lineName: spec?.name ?? '',
-                        lineIndex: -1, spellIndex: -1, cooldownRemaining: cd(`S:${skillIndex}`), skillIndex,
+                        lineIndex: -1, spellIndex: -1, cooldownRemaining: cd(`S:${skillIndex}`), skillIndex, ...this.spellDetails(e.internalId),
                     });
                     break;
                 }
-                default:
-                    abilities.push({ name: e.name, level: e.level, internalId: e.internalId, skillIndex });
+                default: {
+                    const details = this.delves.get(`Ability:${e.internalId}`) ?? this.delves.get(`RealmAbility:${e.internalId}`);
+                    abilities.push({ name: e.name, level: e.level, internalId: e.internalId, skillIndex, ...(details && { details }) });
+                }
             }
         });
         for (const line of [...this.spellLines.values()].sort((a, b) => a.lineIndex - b.lineIndex)) {
@@ -1035,11 +1050,24 @@ export class WorldModel {
                 if (s.kind !== 'spell') return;
                 spells.push({
                     name: s.name, level: s.level, internalId: s.internalId, lineName: line.lineName,
-                    lineIndex: line.lineIndex, spellIndex, cooldownRemaining: cd(`L:${line.lineIndex}:${spellIndex}`),
+                    lineIndex: line.lineIndex, spellIndex, cooldownRemaining: cd(`L:${line.lineIndex}:${spellIndex}`), ...this.spellDetails(s.internalId),
                 });
             });
         }
         return { specializations, abilities, styles, spells };
+    }
+
+    private spellDetails(internalId: number): { details?: SpellDetails } {
+        const fields = this.delves.get(`Spell:${internalId}`);
+        return fields ? { details: toSpellDetails(fields) } : {};
+    }
+
+    private styleDetails(internalId: number): { details?: StyleDetails } {
+        const fields = this.delves.get(`Style:${internalId}`);
+        if (!fields) return {};
+        const details = toStyleDetails(fields);
+        const proc = details.procSpellId !== null ? this.spellDetails(details.procSpellId).details : undefined;
+        return { details: proc ? { ...details, procSpell: proc } : details };
     }
 
     effectList(): Effect[] {

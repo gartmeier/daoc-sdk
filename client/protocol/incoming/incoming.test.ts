@@ -324,7 +324,7 @@ describe('window packets', () => {
         const p = W().u8(1).u8(0).u8(1).u8(3).u8(5).u8(12).u8(37).u8(0x40).u8(3).u8(1).u16le(25).u32le(150).u16le(3).intLePascal('short sword').toBytes();
         expect(decodeMerchantWindow(p)).toEqual({
             windowType: 0, page: 1,
-            items: [{ index: 3, level: 5, value1: 12, spdAbs: 37, hand: 1, objectType: 3, usable: true, value2: 25, price: 150, model: 3, name: 'short sword' }],
+            items: [{ index: 3, level: 5, value1: 12, spdAbs: 37, hand: 1, objectType: 3, damageType: 0, usable: true, value2: 25, price: 150, model: 3, name: 'short sword' }],
         });
         expect(decodeMerchantWindow(Uint8Array.of(0, 0, 0, 0)).items).toEqual([]);
     });

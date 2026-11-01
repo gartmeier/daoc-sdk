@@ -29,7 +29,7 @@ describe('formatWorldState', () => {
             player: makePlayer({ isDead: true }),
             dialog: { isOpen: true, code: 5, data: [0, 0, 0, 0], type: 1, text: 'Join group?', receivedAt: 0 },
             npcDialog: { npcObjectId: 203, npcName: 'Lady Grynoch', text: 'Do you want to [buy] or [sell]?', keywords: ['buy', 'sell'], receivedAt: 0 },
-            merchant: { isOpen: true, merchantObjectId: 203, windowType: 0, items: [{ page: 0, slot: 1, name: 'bread', level: 1, price: 150, model: 1, usable: true }] },
+            merchant: { isOpen: true, merchantObjectId: 203, windowType: 0, items: [{ page: 0, slot: 1, name: 'bread', level: 1, price: 150, model: 1, usable: true, objectType: 0, hand: 0, damageType: null, value1: 0, spdAbs: 0 }] },
         });
         const text = formatWorldState(state, 0);
         expect(text).toContain('"Join group?" (code 5, yes/no)');
@@ -92,7 +92,7 @@ describe('summarizeWorldState', () => {
             player: makePlayer({ targetObjectId: 200 }),
             dialog: { isOpen: true, code: 5, data: [0, 0, 0, 0], type: 1, text: 'x', receivedAt: 0 },
             npcDialog: { npcObjectId: 1, npcName: 'n', text: 't', keywords: [], receivedAt: 0 },
-            merchant: { isOpen: true, merchantObjectId: 1, windowType: 0, items: [{ page: 0, slot: 0, name: 'b', level: 1, price: 1, model: 1, usable: true }] },
+            merchant: { isOpen: true, merchantObjectId: 1, windowType: 0, items: [{ page: 0, slot: 0, name: 'b', level: 1, price: 1, model: 1, usable: true, objectType: 0, hand: 0, damageType: null, value1: 0, spdAbs: 0 }] },
             group: [{ name: 'g', className: 'c', level: 1, objectId: 1, healthPercent: 1, manaPercent: 1, endurancePercent: 1, isDead: false, inOtherRegion: false }],
         });
         const summary = summarizeWorldState(state, 0);
