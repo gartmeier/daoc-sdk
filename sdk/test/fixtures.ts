@@ -7,7 +7,7 @@ export function makePlayer(overrides: Partial<PlayerState> = {}): PlayerState {
         name: 'Testbot', lastName: '', guildName: '', accountName: 'testbot', objectId: 100, sessionId: 5,
         level: 5, realm: 'albion', className: 'Fighter', raceName: 'Briton',
         regionId: 1, zoneId: 0, zoneName: 'Camelot Hills', x: 560000, y: 511000, z: 2500, heading: 0,
-        speed: 0, maxSpeed: 191, maxSpeedPercent: 100,
+        speed: 0, maxSpeed: 191, maxSwimSpeed: 85, maxSpeedPercent: 100,
         health: 80, maxHealth: 100, healthPercent: 80, mana: 0, maxMana: 0, manaPercent: 0,
         endurance: 100, maxEndurance: 100, endurancePercent: 100, concentration: 0, maxConcentration: 0,
         experience: 1500, experienceForNextLevel: 4000, levelPermill: 375, realmPoints: 0, bountyPoints: 0,

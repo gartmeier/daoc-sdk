@@ -2193,10 +2193,11 @@ export class BotActions {
             return at({ success: true, message: 'Already at destination' });
         }
 
-        const speed = (p0.maxSpeed || 191) * (options.speedFactor ?? 0.9);
+        // The slowest the route can be: the planner doesn't know which parts of it are water.
+        const speed = (p0.maxSwimSpeed || 85) * (options.speedFactor ?? 0.9);
         const provider = options.pathProvider ?? getDefaultPathProvider();
-        // An explicit timeout covers planning and never moves. The default is 1.5 × the ETA along
-        // the planned route + 15 s, set once a plan exists (navmesh detours can be several times
+        // An explicit timeout covers planning and never moves. The default is 1.5 × the swimming ETA
+        // along the planned route + 15 s (stuckMs ends a stalled walk long before), set once a plan exists (navmesh detours can be several times
         // the straight distance) and extended when a correction re-plans a longer way.
         const started = Date.now();
         let deadline = options.timeout !== undefined ? started + options.timeout : 0;

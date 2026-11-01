@@ -107,6 +107,22 @@ describe('Mover', () => {
         expect(mover.maxSpeed).toBeCloseTo(286.5);
     });
 
+    test('maxSwimSpeed is the real client formula (game.dll 0x4388d9): 85 base, the 0xB6 byte on top, capped at 170, scaled by the percentage', () => {
+        const { mover } = harness();
+        expect(mover.maxSwimSpeed).toBe(85);
+        mover.waterSpeedPercent = 15;
+        expect(mover.maxSwimSpeed).toBe(97);
+        mover.waterSpeedPercent = 100;
+        expect(mover.maxSwimSpeed).toBe(170);
+        mover.waterSpeedPercent = 200;
+        expect(mover.maxSwimSpeed).toBe(170);
+        mover.waterSpeedPercent = 0;
+        mover.maxSpeedPercent = 130;
+        expect(mover.maxSwimSpeed).toBe(110);
+        mover.maxSpeedPercent = 0;
+        expect(mover.maxSwimSpeed).toBe(0);
+    });
+
     test('maxSpeed 0 (rooted) keeps the move pending in place with speed 0, then resumes', () => {
         const { mover, sent, advance } = harness();
         mover.snap(1, CAMELOT.x, CAMELOT.y, CAMELOT.z, 0, null);
@@ -235,6 +251,31 @@ describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
         mover.sitting = true; // a sit request while swimming must not combine into DEAD (0x14)
         mover.sendUpdate();
         expect(sent.at(-1)!.flags).toBe(0x04);
+    });
+
+    test('swimming moves at the swim speed and is back to the run speed on land', () => {
+        const { mover, advance } = groundHarness((_r, x) => (x > CAMELOT.x + 100 && x < CAMELOT.x + 400 ? { z: 1789, swimming: true } : { z: 1830, swimming: false }));
+        mover.snap(1, CAMELOT.x, CAMELOT.y, 1830, 0, null);
+        mover.start();
+        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y, z: 1830 }, { speedFactor: 1 });
+        advance(1000); // on land for the first 191 units, so the water starts on the way
+        expect(mover.swimming).toBe(true);
+        expect(mover.speed).toBe(85);
+        const before = mover.x;
+        advance(1000);
+        expect(mover.x - before).toBeCloseTo(85, 0);
+        advance(3000);
+        expect(mover.swimming).toBe(false);
+        expect(mover.speed).toBe(191);
+    });
+
+    test('speedFactor scales swimming like running', () => {
+        const { mover, advance } = groundHarness(() => ({ z: 1789, swimming: true }));
+        mover.snap(1, CAMELOT.x, CAMELOT.y, 1789, 0, null);
+        mover.start();
+        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y, z: 1789 });
+        advance(1000);
+        expect(mover.x - CAMELOT.x).toBeCloseTo(76.5, 0);
     });
 
     test('dead overrides swimming and sitting with the DEAD state alone, and ends with the death', () => {

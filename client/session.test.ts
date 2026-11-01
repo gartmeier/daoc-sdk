@@ -26,6 +26,13 @@ describe('DaocSession packet housekeeping', () => {
         expect(s.mover.maxSpeedPercent).toBe(125);
     });
 
+    test('0xB6 hands the water speed byte to the mover', () => {
+        const { s, feed } = session();
+        feed(ServerOp.MaxSpeed, W().u16(100).u8(0).u8(15).toBytes());
+        expect(s.mover.waterSpeedPercent).toBe(15);
+        expect(s.mover.maxSwimSpeed).toBe(97);
+    });
+
     test('0xAD sitting flag keeps the mover SITTING state flag in sync', () => {
         const { s, feed } = session();
         s.mover.sitting = true;

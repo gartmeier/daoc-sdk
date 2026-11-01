@@ -221,7 +221,7 @@ export class DaocClient {
             className: self.className, raceName: self.raceName,
             regionId: mv.regionId, zoneId: mv.zoneId ?? -1, zoneName: zone?.name ?? '',
             x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z), heading: mv.heading,
-            speed: mv.moving ? Math.round(mv.speed) : 0, maxSpeed: Math.round(mv.maxSpeed), maxSpeedPercent: mv.maxSpeedPercent,
+            speed: mv.moving ? Math.round(mv.speed) : 0, maxSpeed: Math.round(mv.maxSpeed), maxSwimSpeed: mv.maxSwimSpeed, maxSpeedPercent: mv.maxSpeedPercent,
             health: self.health, maxHealth: self.maxHealth, healthPercent: self.healthPercent,
             mana: self.mana, maxMana: self.maxMana, manaPercent: self.manaPercent,
             endurance: self.endurance, maxEndurance: self.maxEndurance, endurancePercent: self.endurancePercent,
@@ -360,7 +360,7 @@ export class DaocClient {
                 m.self.isSitting = false;
                 mv.moveTo({ x: a.x, y: a.y, z: finalZ }, { waypoints: a.waypoints, tolerance: a.tolerance, speedFactor: a.speedFactor });
                 const d = Math.hypot(a.x - mv.x, a.y - mv.y);
-                const speed = mv.maxSpeed * Math.min(1, Math.max(0.05, a.speedFactor ?? 0.9));
+                const speed = mv.speedLimit * Math.min(1, Math.max(0.05, a.speedFactor ?? 0.9));
                 // maxSpeed 0 = rooted/stunned: the mover waits in place until 0xB6 restores it.
                 const etaMs = speed > 0 ? Math.round((d / speed) * 1000) : null;
                 const note = speed > 0 ? '' : ' (max speed is 0: rooted/stunned, waiting)';

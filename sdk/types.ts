@@ -70,6 +70,8 @@ export interface PlayerState {
     speed: number;
     /** Absolute max run speed, units/s (191 * maxSpeedPercent / 100). */
     maxSpeed: number;
+    /** Absolute max swim speed in deep water, units/s (85 at 100 %, up to 170 with water speed bonuses). */
+    maxSwimSpeed: number;
     maxSpeedPercent: number;
 
     health: number;

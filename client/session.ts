@@ -438,7 +438,11 @@ export class DaocSession {
             case ServerOp.MaxSpeed:
                 // 0 is real (rooted, stunned, mezzed, over-encumbered: PlayerMovementComponent.cs:29,132);
                 // moving anyway would be flagged by PlayerMovementMonitor and teleported back.
-                this.mover.maxSpeedPercent = decodeMaxSpeed(p.payload).percent;
+                {
+                    const d = decodeMaxSpeed(p.payload);
+                    this.mover.maxSpeedPercent = d.percent;
+                    this.mover.waterSpeedPercent = d.waterSpeed;
+                }
                 break;
             case ServerOp.CharacterStatusUpdate: {
                 // The server stands us up on its own (moving, attacked, quit cancelled); keep the 0xA9

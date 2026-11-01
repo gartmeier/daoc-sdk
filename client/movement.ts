@@ -4,6 +4,8 @@
 //   soft-linkdeads after 5 s without one (PlayerMovementComponent.cs:15,52-61).
 // - Steps stay under speedFactor × maxSpeed so the speed monitor
 //   (gameutils/PlayerMovementMonitor.cs:56-130, tolerance ×1.15) never trips.
+// - In deep water the limit is maxSwimSpeed: the server doesn't know about swimming (its monitor
+//   only checks maxSpeed), a real client slows itself down, and so do we.
 // - zoneId comes from the zone table (data/zones.ts); an unknown zone id kicks us
 //   to the character screen (PlayerPositionUpdateHandler.cs:91-103), so we never send one.
 // - Server corrections (0x04 / 0x20) snap the local position.
@@ -13,6 +15,8 @@ import { getZoneAt } from '../data/zones';
 import { encodePositionUpdate, StateFlags, ActionFlags } from './protocol/outgoing';
 
 export const PLAYER_BASE_SPEED = 191;
+/** A real client's swim speed at 100 % with water speed 0 (game.dll 0x4388d9). */
+export const PLAYER_BASE_SWIM_SPEED = 85;
 export const MOVE_INTERVAL_MS = 200;
 export const IDLE_INTERVAL_MS = 1000;
 /** Sent positions kept for isHeightNudge; the nudge answers one of the last few 0xA9 (one round trip). */
@@ -78,6 +82,8 @@ export class Mover {
     heading = 0;
     speed = 0;
     maxSpeedPercent = 100;
+    /** Water speed byte of 0xB6: percent on top of the swim speed (Mastery of Water, water breathing). */
+    waterSpeedPercent = 0;
     zoneId: number | null = null;
 
     objectId = 0;
@@ -114,6 +120,22 @@ export class Mover {
 
     get maxSpeed(): number {
         return (PLAYER_BASE_SPEED * this.maxSpeedPercent) / 100;
+    }
+
+    /**
+     * Swim speed as a real client works it out (game.dll 0x4388d9, integer maths): the bonus stops at
+     * 100 %, which is the "about 90 % of normal speed" cap of OpenDAoC a0c8941e0 (170 of 191).
+     * The client's own Mastery of Water table stays out of it: the server sends that ability so the
+     * client doesn't apply it (AtlasOF_Masteries.cs:132-135) and adds it to the byte instead.
+     */
+    get maxSwimSpeed(): number {
+        const base = Math.floor(((Math.min(100, this.waterSpeedPercent) + 100) * PLAYER_BASE_SWIM_SPEED) / 100);
+        return Math.floor((base * this.maxSpeedPercent) / 100);
+    }
+
+    /** The limit where we are now: maxSwimSpeed in deep water, maxSpeed elsewhere. */
+    get speedLimit(): number {
+        return this.swimming ? this.maxSwimSpeed : this.maxSpeed;
     }
 
     get position(): Vec3 {
@@ -289,7 +311,7 @@ export class Mover {
     private step(now: number): void {
         const dt = Math.min(500, now - this.lastStepAt) / 1000;
         this.lastStepAt = now;
-        const speed = this.maxSpeed * this.speedFactor;
+        const speed = this.speedLimit * this.speedFactor;
         let budget = speed * dt;
         this.speed = speed;
         while (budget > 0 && this.waypoints.length > 0) {

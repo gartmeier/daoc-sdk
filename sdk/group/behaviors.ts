@@ -745,7 +745,7 @@ export const position = (): Behavior<TacticsSettings> => ({
         if (dist(me, spot.to) <= 60) return false;
         await stopSwinging(ctx);
         ctx.doing('move', mob.objectId, `position ${spot.move} ${Math.round(spot.d)}→${Math.round(spot.want)}`);
-        const w = await ctx.bot.walkTo(spot.to.x, spot.to.y, { tolerance: 60, timeout: 1500 + dist(me, spot.to) / 0.191 });
+        const w = await ctx.bot.walkTo(spot.to.x, spot.to.y, { tolerance: 60, timeout: 1500 + dist(me, spot.to) / (ctx.sdk.getState()?.movement.swimming ? 0.085 : 0.191) });
         if (!w.success) { ctx.result('walk', w); ctx.memory.set('positionRetryAt', Date.now() + 3000); }
         return true;
     },
