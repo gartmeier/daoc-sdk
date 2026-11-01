@@ -343,6 +343,16 @@ table.runs tr.topics td { padding-bottom: 4px; }
 .report-log .lk-failure { color: var(--warn); }
 .report-log .ctx { border-left: 2px solid var(--bad); margin: 2px 0 4px; padding-left: 6px; color: var(--muted); }
 
+/* ── Region page ───────────────────────────────────────────────────────── */
+
+.run-card { border-left: 3px solid var(--muted); padding: 4px 2px 4px 8px; margin: 4px 0; cursor: pointer; }
+.run-card.sel { background: rgba(90, 169, 255, 0.08); }
+.run-card .line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+.run-card .spacer { flex: 1; }
+.run-card .activity { font-weight: 600; }
+.realm-head { margin: 8px 0 2px; font-weight: 600; }
+.realm-head:first-of-type { margin-top: 0; }
+
 @media (max-width: 800px) {
     .viewer { grid-template-columns: 1fr; grid-template-rows: auto 55vh auto; height: auto; }
     .side { border-left: none; overflow: visible; }

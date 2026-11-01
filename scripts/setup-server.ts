@@ -159,6 +159,8 @@ export function botProperties(xpRate: number): Desired[] {
         { key: 'player idle kick', value: 'False', why: 'never kick idle bots to the character screen' },
         { key: 'ban_hackers', value: 'False', why: 'protocol mistakes kick instead of ban' },
         { key: 'xp_rate', value: String(xpRate), why: 'faster levelling for test runs' },
+        // GamePlayer.Release: a battleground release goes to the realm's portal keep there only with this on.
+        { key: 'bg_release_to_portal_keep', value: 'True', why: 'a death in a battleground respawns at the realm\'s portal keep there, not at the home bind' },
     ];
 }
 

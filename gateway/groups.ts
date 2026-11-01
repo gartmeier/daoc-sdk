@@ -16,6 +16,8 @@
 // control-grade check (security.ts checkControlPassword). Passwords come from
 // the Authorization header or a POST body, never from the query string. A
 // publish is authenticated right after JSON.parse, before its body is walked.
+// activeRuns() hands every current run to the region page (gateway/regions.ts),
+// which checks the leader's credential the same way before showing one.
 //
 // Besides the run's picture it watches the members' states itself (deaths,
 // levels, region changes, clients and controllers coming and going), so the
@@ -59,6 +61,10 @@ const PHASES: readonly string[] = ['idle', 'gather', 'travel', 'recover', 'pull'
 const RUN_PHASES: readonly string[] = ['starting', 'running', 'ending', 'ended'] satisfies RunPhase[];
 const EVENT_KINDS: readonly string[] = ['orders', 'activity', 'result', 'death', 'kill', 'level', 'note'];
 const REALMS: readonly string[] = ['none', 'albion', 'midgard', 'hibernia'] satisfies Realm[];
+/** A contact's optional player flags (Sighting.casting/helped, Contact.healer/caster). */
+const PLAYER_SIGNS = ['casting', 'helped', 'healer', 'caster'] as const satisfies readonly (keyof Contact)[];
+/** RunReport.totals' optional RvR numbers, also in runs/history.jsonl. */
+const RVR_TOTALS = ['playerKills', 'deathsToPlayers', 'realmPoints', 'rpPerHour', 'enemiesSeen', 'engagements'] as const satisfies readonly (keyof RunResultView['totals'])[];
 /** The run states in which a run speaks for its group: its members' activities and contacts are current. */
 const ACTIVE: ReadonlySet<RunState> = new Set(['starting', 'live', 'stale', 'ending']);
 /** A DAoC group holds 8; a group.json listing more than this is a mistake, not a group. */
@@ -117,11 +123,38 @@ export interface GroupStoreOptions {
     limits?: Partial<GroupLimits>;
 }
 
+/**
+ * A group's current run while it speaks for its group (starting, live, stale,
+ * ending), as its last publish left it: for the region page (gateway/regions.ts).
+ * The picture, coordinator, report and result are the store's own objects: read only.
+ */
+export interface ActiveRun {
+    id: string;
+    name: string;
+    /** The group's principal for auth, like /groups/<id>/live. */
+    leaderUsername: string;
+    /** group.json members' gateway usernames. */
+    usernames: string[];
+    runId: string;
+    state: RunState;
+    strategy: string;
+    /** Gateway clock. */
+    lastAt: number;
+    picture: GroupPicture;
+    timing: GroupPublish['timing'];
+    coordinator: CoordinatorView | null;
+    /** A JSON copy of what the runner sent: check every field before use. */
+    report: LiveReport | null;
+    result: RunResultView | null;
+}
+
 export interface GroupStore {
     /** Answers /groups routes; null for any other path. Never throws (500 JSON on an error). */
     handle(req: Request, url: URL): Promise<Response | null>;
     /** The group a username plays in, for /bots and /status/<bot>. */
     badge(username: string): GroupBadge | null;
+    /** Every group's current run while it speaks for its group (no auth: the caller checks the leader). Never throws. */
+    activeRuns(): ActiveRun[];
     /** The passive tracker, from the gateway's state branch. Never throws. */
     onState(username: string, state: BotWorldState): void;
     /** Client and controller changes, discovery refresh and the sweep; a 1 s timer calls it. */
@@ -154,6 +187,12 @@ function list<T>(x: unknown, max: number, f: (v: any) => T | null): T[] {
     return out;
 }
 const strings = (x: unknown, max: number, len: number) => list(x, max, v => (typeof v === 'string' ? v.slice(0, len) : null));
+/** The optional `keys` of `x` that hold a value of `type` (finite, for numbers); absent ones stay absent. */
+function present(x: Record<string, any>, keys: readonly string[], type: 'boolean' | 'number'): Record<string, any> {
+    const out: Record<string, any> = {};
+    for (const k of keys) if (type === 'boolean' ? typeof x[k] === 'boolean' : Number.isFinite(x[k])) out[k] = x[k];
+    return out;
+}
 const point = (x: unknown): Point | null => (isObj(x) && Number.isFinite(x.x) && Number.isFinite(x.y) ? { x: x.x, y: x.y } : null);
 const point3 = (x: unknown): Point3 | null => (isObj(x) && Number.isFinite(x.x) && Number.isFinite(x.y) ? { x: x.x, y: x.y, z: num(x.z) } : null);
 
@@ -493,7 +532,8 @@ export function composePassive(group: DiskGroup, src: SessionSources, now: numbe
                 name: str(o.name, 64), level: num(o.level), realm: str(o.realm, 16, 'none'),
                 x: o.x, y: o.y, z: num(o.z), heading: num(o.heading), speed: num(npc?.speed),
                 hp: num(o.healthPercent), inCombat: bool(o.inCombat),
-                isDead: pc ? bool(pc.isDead) || num(pc.healthPercent, 100) <= 0 : num(o.healthPercent, 100) <= 0,
+                // A player dies by its dead flag only: the server rounds health down, so a living one can read 0 %.
+                isDead: pc ? bool(pc.isDead) : num(o.healthPercent, 100) <= 0,
                 targetObjectId,
                 target: targetObjectId === null ? null : memberAt.get(`${region}:${targetObjectId}`) ?? null,
                 npc: npc ? { isPeaceful: bool(npc.isPeaceful), isTargetable: npc.isTargetable !== false, isPet: bool(npc.isPet), role: strOrNull(npc.role, 32) } : null,
@@ -605,7 +645,7 @@ function memberReport(x: any): MemberReport | null {
     const act = isObj(x.activity) ? x.activity : {};
     return {
         name: str(x.name, 64), bot: x.bot.slice(0, 64), role: roleOf(x.role) ?? 'melee', className: str(x.className, 32),
-        level: num(x.level), experience: num(x.experience), objectId: num(x.objectId), regionId: num(x.regionId),
+        level: num(x.level), experience: num(x.experience), ...present(x, ['realmPoints'], 'number'), objectId: num(x.objectId), regionId: num(x.regionId),
         x: num(x.x), y: num(x.y), z: num(x.z), hp: num(x.hp), mana: num(x.mana), endurance: num(x.endurance), load: num(x.load),
         isDead: bool(x.isDead), isSitting: bool(x.isSitting), inCombat: bool(x.inCombat), attacking: bool(x.attacking),
         targetId: numOrNull(x.targetId), effects: strings(x.effects, 64, 64),
@@ -622,7 +662,7 @@ function contactOf(x: any): Contact | null {
         objectId: x.objectId, kind: x.kind === 'player' ? 'player' : 'npc', name: str(x.name, 64), level: num(x.level),
         realm: (REALMS.includes(x.realm) ? x.realm : 'none') as Realm,
         x: num(x.x), y: num(x.y), z: num(x.z), hp: num(x.hp), targetId: numOrNull(x.targetId),
-        inCombat: bool(x.inCombat), swinging: bool(x.swinging), regionId: num(x.regionId), target: strOrNull(x.target, 64),
+        inCombat: bool(x.inCombat), swinging: bool(x.swinging), ...present(x, PLAYER_SIGNS, 'boolean'), regionId: num(x.regionId), target: strOrNull(x.target, 64),
         targetSince: num(x.targetSince), engagedAt: num(x.engagedAt), movedAt: num(x.movedAt), seenBy: strings(x.seenBy, 16, 64),
         firstSeen: num(x.firstSeen), lastSeen: num(x.lastSeen), stale: bool(x.stale), threat: bool(x.threat),
         hostileSince: num(x.hostileSince),
@@ -705,7 +745,7 @@ function resultOf(x: unknown): RunResultView | undefined {
         totals: {
             kills: num(t.kills), deaths: num(t.deaths), wipes: num(t.wipes), retreats: num(t.retreats), fights: num(t.fights),
             killsPerHour: num(t.killsPerHour), xpPerHour: num(t.xpPerHour), avgFightMs: num(t.avgFightMs), downtime: num(t.downtime),
-            tankHold: numOrNull(t.tankHold),
+            tankHold: numOrNull(t.tankHold), ...present(t, RVR_TOTALS, 'number'),
         },
         findings: strings(x.findings, 50, 300),
         stamp: typeof x.stamp === 'string' && STAMP.test(x.stamp) ? x.stamp : null,
@@ -1085,14 +1125,14 @@ export function createGroupStore(opts: GroupStoreOptions): GroupStore {
             const metaRoles = new Map(run.meta.members.map(m => [lower(m.bot), m.role]));
             view.members.forEach((v, i) => {
                 const r = reports.get(lower(v.bot));
-                if (r) v.run = { name: r.name, role: r.role, activity: { ...r.activity }, effects: [...r.effects], can: { heal: r.capabilities.heal, cc: r.capabilities.cc, nuke: r.capabilities.nuke }, at: r.at };
+                if (r) v.run = { name: r.name, role: r.role, activity: { ...r.activity }, effects: [...r.effects], can: { heal: r.capabilities.heal, cc: r.capabilities.cc, nuke: r.capabilities.nuke }, ...present(r, ['realmPoints'], 'number'), at: r.at };
                 const runRole = r?.role ?? metaRoles.get(lower(v.bot));
                 if (!group.members[i]?.role && runRole) v.role = runRole;
             });
             const contacts = new Map(run.picture.contacts.map(c => [`${c.regionId}:${c.objectId}`, c]));
             for (const w of view.world) {
                 const c = contacts.get(w.key);
-                if (c) w.board = { threat: c.threat, stale: c.stale, cc: c.cc ? { ...c.cc } : null, engagedAt: c.engagedAt, hostileSince: c.hostileSince, seenBy: [...c.seenBy], lastSeen: c.lastSeen };
+                if (c) w.board = { threat: c.threat, stale: c.stale, cc: c.cc ? { ...c.cc } : null, engagedAt: c.engagedAt, hostileSince: c.hostileSince, seenBy: [...c.seenBy], lastSeen: c.lastSeen, ...present(c, PLAYER_SIGNS, 'boolean') };
             }
         }
         const ring = passive.get(group.id);
@@ -1294,7 +1334,7 @@ export function createGroupStore(opts: GroupStoreOptions): GroupStore {
                 stamp: stampOf(h.startedAt), startedAt: h.startedAt.slice(0, 40), strategy: str(h.strategy, 64), seconds: num(h.seconds),
                 kills: num(h.kills), deaths: num(h.deaths), wipes: num(h.wipes), retreats: num(h.retreats), fights: num(h.fights),
                 killsPerHour: num(h.killsPerHour), xpPerHour: num(h.xpPerHour), avgFightMs: num(h.avgFightMs), downtime: num(h.downtime),
-                tankHold: numOrNull(h.tankHold), findings: strings(h.findings, 50, 64),
+                tankHold: numOrNull(h.tankHold), ...present(h, RVR_TOTALS, 'number'), findings: strings(h.findings, 50, 64),
             });
         }
         return out;
@@ -1415,6 +1455,26 @@ export function createGroupStore(opts: GroupStoreOptions): GroupStore {
             } catch (error) {
                 fail('badge', error);
                 return null;
+            }
+        },
+        activeRuns() {
+            try {
+                const t = now();
+                const out: ActiveRun[] = [];
+                for (const group of groups()) {
+                    const run = current(group.id, t);
+                    const st = run ? runStateOf(run, t, L) : null;
+                    if (!run || !st || !ACTIVE.has(st)) continue;
+                    out.push({
+                        id: group.id, name: group.name, leaderUsername: group.leaderUsername, usernames: group.members.map(m => m.username),
+                        runId: run.runId, state: st, strategy: run.meta.strategy, lastAt: run.lastAt, picture: run.picture, timing: run.timing,
+                        coordinator: run.coordinator, report: run.report, result: run.result,
+                    });
+                }
+                return out;
+            } catch (error) {
+                fail('active runs', error);
+                return [];
             }
         },
         onState(username, state) {

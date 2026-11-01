@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { getSpell, getSpellLines } from '../../data/index';
+import { getSpell, getSpellLines, getSpells } from '../../data/index';
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import type { Spell } from '../types';
@@ -108,5 +108,31 @@ describe('Spellbook.nuke', () => {
         expect(name(book(7).nuke({ dotted: new Set([ILLUSORY]) }))).toBe('Moon Streak');
         expect(name(book(100, { 'Moon Blast': 5 }).nuke({ dotted: new Set([ILLUSORY]) }))).toBe('Moon Streak');
         expect(book(1).nuke()).toBeNull();
+    });
+});
+
+describe('Spellbook.mezz and cc: what can be cast at an add', () => {
+    // Real spell rows at made-up levels, the point-blank and area mezzes highest (as Hrafna's and Merlin's are).
+    function book(spells: [string, number][]): Spellbook {
+        const known = spells.map(([n, level], i) => {
+            const info = getSpells().find(s => s.name === n)!;
+            return { name: n, level, internalId: info.id, lineName: 'test', lineIndex: 0, spellIndex: i, cooldownRemaining: 0 } as Spell;
+        });
+        const sdk = { getSkills: () => ({ spells: known }), getPlayer: () => ({ mana: 100 }) } as unknown as BotSDK;
+        const bot = { getSpellInfo: (s: Spell) => getSpell(s.internalId) ?? null } as unknown as BotActions;
+        return new Spellbook(sdk, bot);
+    }
+    test('a point-blank mezz (range 0) is never picked: the single-target one is', () => {
+        const hrafna = book([['Dark Wave', 20], ['Hold Spirit', 10], ['Lessen Movement', 4]]);
+        expect(name(hrafna.mezz())).toBe('Hold Spirit');
+        expect(hrafna.cc()).toMatchObject({ kind: 'mezz', spell: { name: 'Hold Spirit' } });
+        expect(name(book([['Dark Wave', 20], ['Lessen Movement', 4]]).cc())).toBe('Lessen Movement');
+        expect(book([['Heavenly Visions', 20]]).capabilities().cc).toBe(false);
+    });
+    test('an area mezz only with aoe, and only after the single-target ones', () => {
+        const merlin = book([['Fog of Senility', 20], ['Major Mesmerization', 18]]);
+        expect(name(merlin.mezz())).toBe('Major Mesmerization');
+        expect(name(book([['Fog of Senility', 20]]).mezz())).toBeNull();
+        expect(name(book([['Fog of Senility', 20]]).mezz({ aoe: true }))).toBe('Fog of Senility');
     });
 });

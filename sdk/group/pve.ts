@@ -269,7 +269,7 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
             return { phase: 'retreat', focus: null, cc: [], puller: null, retreatTo: to, reason: `retreat: ${lost}` };
         }
         if (lost && o.phase === 'retreat') return { phase: 'retreat', reason: o.reason };
-        const cc = assignCc(threats.filter(t => t.objectId !== focus.objectId && !t.cc), alive, o.cc);
+        const cc = assignCc(threats.filter(t => t.objectId !== focus.objectId && !t.cc && (t.ccImmuneUntil ?? 0) <= now), alive, o.cc);
         const why = kept ? `fighting ${focus.name} (${focus.hp}%)` : `${focus.name} L${focus.level} attacks ${focus.target ?? 'the group'}`;
         return { phase: 'engage', focus: focus.objectId, puller: null, cc, retreatTo: null, reason: threats.length > 1 ? `${why}, ${threats.length - 1} more attacking` : why };
     }

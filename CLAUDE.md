@@ -2,7 +2,7 @@
 
 You play Dark Age of Camelot on a local OpenDAoC server by writing bot scripts. Start small, make one step toward the goal, then learn and grow the script as you go. Characters are **persistent**: every session continues where the last one ended.
 
-Before writing logic for a topic (walking, combat, spells, merchants, looting, death, classes, zones, grouping/chat, group coordination), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
+Before writing logic for a topic (walking, combat, spells, merchants, looting, death, classes, zones, grouping/chat, group coordination, RvR), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
 
 ## First-time setup
 
@@ -54,6 +54,8 @@ bun sdk/group/cli.ts <group>                          # shared picture, observe 
 bun groups/<group>/hunt.ts 180                        # coordinated hunt; report in groups/<group>/runs/<stamp>.md
 bun sdk/group/cli.ts <group> --live                   # the running hunt as the gateway sees it: phase, orders, members, events
 bun sdk/group/cli.ts <group> --wind-down              # end the hunt after the current fight (report saved)
+bun groups/<group>/battleground.ts [--via=x,y,z]      # into Thidranki (levels 20-24): portal keep, bind, medallion, port
+bun groups/<group>/rvr.ts 300                         # roam the battleground and fight the other realms (learnings/rvr.md)
 ```
 
 The loop is the session loop at group scale: run, read the report (findings name the setting to change), change one thing in `strategy.ts`, run again and compare, note it in the group's `lab_log.md`. A group run controls every member, so don't drive a member separately meanwhile: taking control of one member aborts the whole run. To stop a hunt early, wind it down (`--wind-down`, or the button on the group page). The browser view is `http://localhost:7780/viewer/group/<group>`: every member on one map, orders, base plan, enemies, events, deaths and recent runs.
@@ -99,6 +101,7 @@ A new call for the same bot cancels the one still running. Every result includes
 | `walkTo(x, y, {z, tolerance})` / `followPath(points)` / `travelTo(name \| point)` | Walk in straight lines; re-issues after server corrections |
 | `findKillableNpc({pattern, minCon, maxCon, radius})` | Best monster nearby (default con green..yellow) |
 | `killNpc(npc, {styles})` | Approach, attack, chase, wait for death; reports xp/money/items |
+| `killPlayer(objectId, {useStyle})` | The same against an enemy-realm player (named by race: pass the id); reason `immune` during PvP immunity |
 | `castSpell(spell, target?)` | Approach to range, cast, observe completion/damage |
 | `grind({durationMs, pattern, respawn, onKill})` | Hunt/kill/loot/rest loop around an anchor |
 | `rest({healthPercent, manaPercent})` / `releaseAndRespawn()` | Sit to regenerate / respawn at the bind point |

@@ -243,12 +243,18 @@ export function npcShown(c: WorldContact, npcs: string): boolean {
  * pets and friendly players stay off the list; the map still draws them.
  */
 export function contactListed(c: WorldContact, memberRealms: ReadonlySet<string>): boolean {
-    if (c.isDead || num(c.hp, 100) <= 0) return false;
+    if (c.isDead || (c.kind === 'npc' && num(c.hp, 100) <= 0)) return false;
     if (isThreat(c)) return true;
     if (c.kind !== 'npc') return false;
     const n = c.npc;
     if (n && (n.isPeaceful || n.isTargetable === false || n.isPet)) return false;
     return c.realm === 'none' || !memberRealms.has(c.realm);
+}
+
+/** What the run's board saw an enemy player do (Contact.healer, Contact.caster), for its tags in the panel. */
+export function enemyTags(c: WorldContact): string[] {
+    if (c.kind !== 'player' || !c.board) return [];
+    return [c.board.healer ? 'healer' : '', c.board.caster ? 'caster' : ''].filter(Boolean);
 }
 
 /** The contacts panel's list: listed contacts, threats first, then the nearest. */

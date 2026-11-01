@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>region {{REGION}} · daoc-sdk viewer</title>
+<link rel="stylesheet" href="/viewer/assets/viewer.css">
+</head>
+<body data-region="{{REGION}}">
+<div class="viewer">
+    <header class="topbar">
+        <a href="/viewer">← viewer</a>
+        <span class="title" id="title">region {{REGION}}</span>
+        <span id="counts" class="muted"></span>
+        <span id="age" class="muted mono"></span>
+        <span class="spacer"></span>
+        <label title="What the map keeps centred">follow <select id="follow"><option value="all">all bots</option><option value="off">off</option></select></label>
+        <label title="Draw bot and player names"><input type="checkbox" id="labels" checked> labels</label>
+        <details class="layers">
+            <summary>layers</summary>
+            <div class="layers-box">
+                <label title="Each run's anchor, travel leg and route, retreat point, patrol waypoint and focus"><input type="checkbox" id="l-orders" checked> orders</label>
+                <label title="Who each bot has targeted"><input type="checkbox" id="l-targets" checked> targets</label>
+                <label title="Keeps, and how far RvR groups stay from the ones that aren't theirs"><input type="checkbox" id="l-keeps" checked> keeps</label>
+                <label title="Players of other realms that are none of our bots"><input type="checkbox" id="l-enemies" checked> enemy players</label>
+                <label><input type="checkbox" id="l-zones" checked> zones</label>
+            </div>
+        </details>
+        <input type="password" id="password" placeholder="bot.env password" autocomplete="current-password" size="16" hidden>
+        <button id="unlock" hidden>unlock</button>
+    </header>
+    <div class="map-wrap" id="mapwrap">
+        <canvas id="map"></canvas>
+        <div class="legend" id="legend"></div>
+        <div class="map-tools">
+            <button id="zoomin" title="Zoom in">+</button>
+            <button id="zoomout" title="Zoom out">−</button>
+            <button id="center" title="Follow every bot">◎</button>
+            <button id="fit" title="Fit the bots in view">⤢</button>
+        </div>
+        <div class="map-hud mono" id="hud"></div>
+        <div class="tooltip" id="tooltip"></div>
+        <div class="banner" id="banner"></div>
+    </div>
+    <aside class="side" id="side">
+        <section class="section" id="r-notes"></section>
+        <section class="section" id="r-runs"></section>
+        <section class="section" id="r-bots"></section>
+        <section class="section" id="r-enemies"></section>
+        <section class="section" id="r-keeps"></section>
+    </aside>
+</div>
+<script type="module" src="/viewer/assets/region.js"></script>
+</body>
+</html>

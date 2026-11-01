@@ -18,8 +18,67 @@ import type {
 // ── Refusals (lowercase substrings of server messages) ──────────────────────
 // Sources: GameServer/language/EN/*.txt and spells/SpellHandler.cs.
 
+/**
+ * PvP immunity (AbstractServerRules.IsAllowedToAttack, AbstractServerRules.cs:350-375), for melee
+ * and spells alike: ours ("You can't attack players until your PvP invulnerability timer wears
+ * off!") or the target's ("X is temporarily immune to PvP attacks!", "X is entering the game and
+ * cannot be attacked!"). Under this server's Normal rules (GAME_TYPE in docker-compose.yml) the
+ * timers run 10 s after entering the game (TIMER_GAME_ENTERED), a region change (TIMER_REGION_CHANGED,
+ * the port into a battleground) and a release (TIMER_KILLED_BY_MOB, AbstractServerRules.OnReleased:257;
+ * a same-region release fires Released at once, GamePlayer.cs:1690-1697). A teleport within the region
+ * starts none: TIMER_PVP_TELEPORT is used only by the PvP rules (PvPServerRules.OnPlayerTeleport:90).
+ * So these mean "try again shortly", not "never". Anchored to the refusals: the notice that ours
+ * ended ("Your temporary PvP invulnerability timer has expired.", AbstractServerRules.cs:301) is none.
+ */
+export const PVP_IMMUNE_REFUSALS = [
+    'until your pvp invulnerability timer wears off',
+    'is temporarily immune to pvp attacks',
+    'is entering the game and cannot be attacked',
+] as const;
+
+/** retryAfterMs reported with reason 'immune'. */
+export const PVP_IMMUNE_RETRY_MS = 2000;
+
+export function isPvpImmunity(text: string): boolean {
+    const t = text.toLowerCase();
+    return PVP_IMMUNE_REFUSALS.some(r => t.includes(r));
+}
+
+/**
+ * Refusals because we are crowd-controlled: mesmerized or stunned, for melee (AttackComponent.cs:495-505;
+ * GamePlayer.txt:36-37) and spells (PlayerCastingComponent.cs:44-53; Spells.txt:18-19), and silenced
+ * for spells ("You are fumbling for your words, and cannot cast!", Spells.txt:20). The effect wears
+ * off by itself, so retrying every moment only repeats the refusal: reason 'crowd_controlled' with
+ * retryAfterMs CROWD_CONTROLLED_RETRY_MS.
+ */
+export const CROWD_CONTROL_REFUSALS = [
+    "you can't attack when you are mesmerized",
+    "you can't attack when you are stunned",
+    "you can't cast while mesmerized",
+    "you can't cast while stunned",
+    'you are fumbling for your words',
+] as const;
+
+/** retryAfterMs reported with reason 'crowd_controlled'. */
+export const CROWD_CONTROLLED_RETRY_MS = 2000;
+
+export function isCrowdControlled(text: string): boolean {
+    const t = text.toLowerCase();
+    return CROWD_CONTROL_REFUSALS.some(r => t.includes(r));
+}
+
+/**
+ * An enemy player's swing or hostile spell counts as aimed at its target this long. The server never
+ * sends another player's target, only its swings, and a swing round lasts the weapon's speed
+ * (AttackComponent.AttackSpeed): two-handed weapons and bows of levels 18-26 mostly swing every
+ * 4-5.4 s (SPD_ABS 40-54 in itemtemplate.sql), so a shorter window drops the target between two
+ * swings at the same victim.
+ */
+export const PLAYER_AIM_MS = 6000;
+
 /** Melee refusals: GamePlayer.Attack.*, Skill.Ability.*, AbstractServerRules. */
 export const ATTACK_REFUSALS = [
+    ...PVP_IMMUNE_REFUSALS,
     "can't see your target",
     'is not in view',
     'target is not in view',
@@ -42,6 +101,12 @@ export const RETRYABLE_ATTACK_REFUSALS = [
     'you are too far away to attack',
 ] as const;
 
+/** An ATTACK_REFUSALS text that is not a RETRYABLE_ATTACK_REFUSALS one: the attack is off. */
+export function isFatalAttackRefusal(text: string): boolean {
+    const t = text.toLowerCase();
+    return ATTACK_REFUSALS.some(r => t.includes(r)) && !RETRYABLE_ATTACK_REFUSALS.some(r => t.includes(r));
+}
+
 /** Spell refusals and interruptions (SpellHandler.cs, CastingComponent.cs). */
 export const CAST_REFUSALS = [
     "you can't cast while sitting",
@@ -54,11 +119,13 @@ export const CAST_REFUSALS = [
     "you can't see your target",
     'you must wait',
     'you are dead and can\'t cast',
+    ...CROWD_CONTROL_REFUSALS,
     'you move and interrupt your spellcast',
     'your spell was cancelled',
     'invalid target',
     "you can't attack",
     'you cannot attack',
+    ...PVP_IMMUNE_REFUSALS,
     'is interrupted',
     'this spell requires',
     'you cannot cast this spell directly',
@@ -279,6 +346,8 @@ export function experienceFromMessages(messages: readonly GameMessage[]): number
 
 export type NpcTarget = NearbyNpc | NamePattern | number;
 export type PlayerTarget = NearbyPlayer | NamePattern | number;
+/** Something to fight: an NPC or a player. */
+export type LivingTarget = NearbyNpc | NearbyPlayer | NamePattern | number;
 export type ObjectTarget = NearbyNpc | NearbyPlayer | NearbyObject | NamePattern | number;
 export type Point = { x: number; y: number; z?: number };
 
@@ -458,6 +527,13 @@ export class ActionHelpers {
         return players.find(p => p.objectId === target.objectId) ?? null;
     }
 
+    /** An NPC or player by object id or snapshot object; a name matches NPCs first, then players. */
+    resolveLiving(target: LivingTarget): NearbyNpc | NearbyPlayer | null {
+        if (typeof target === 'string' || target instanceof RegExp) return this.resolveNpc(target) ?? this.resolvePlayer(target);
+        const obj = this.sdk.getObject(typeof target === 'number' ? target : target.objectId);
+        return obj && obj.kind !== 'object' ? obj : null;
+    }
+
     resolveAny(target: ObjectTarget): NearbyNpc | NearbyPlayer | NearbyObject | null {
         if (typeof target === 'number') return this.sdk.getObject(target);
         if (typeof target === 'string' || target instanceof RegExp) {
@@ -480,6 +556,25 @@ export class ActionHelpers {
         const me = state?.player?.objectId;
         if (!me) return [];
         return (state?.nearbyNpcs ?? []).filter(n => n.targetObjectId === me && n.healthPercent > 0);
+    }
+
+    /**
+     * Living players of another realm whose melee swing (hit or miss) or spell effect landed on us
+     * within `windowMs` of the snapshot (default PLAYER_AIM_MS, longer than a slow weapon's swing).
+     * The server never sends another player's target, so these combat events are the only evidence
+     * (0xBC, WeaponAction.cs:331-369; 0x1B, SpellHandler.cs:1284-1291).
+     */
+    playerAttackers(state: BotWorldState | null = this.sdk.getState(), windowMs: number = PLAYER_AIM_MS): NearbyPlayer[] {
+        const p = state?.player;
+        if (!state || !p) return [];
+        const since = state.timestamp - windowMs;
+        const ids = new Set<number>();
+        for (const e of state.combatEvents) {
+            if ((e.kind === 'melee' || e.kind === 'spellEffect') && e.targetObjectId === p.objectId && e.attackerObjectId !== null && e.receivedAt >= since) {
+                ids.add(e.attackerObjectId);
+            }
+        }
+        return state.nearbyPlayers.filter(pl => ids.has(pl.objectId) && pl.realm !== p.realm && !pl.isDead);
     }
 
     matches(pattern: NamePattern | undefined, name: string): boolean {

@@ -35,8 +35,15 @@ export const VISIBILITY_DISTANCE = 6000;
 const NPC_STALE_MS = 16_000;
 const OBJECT_STALE_MS = 95_000;
 const PLAYER_STALE_MS = 60_000;
+/**
+ * A relayed position sent just before a player's death can arrive just after its 0xAE (UDP behind
+ * TCP), with the old health: health only revives a death this old. A release takes at least 10 s
+ * (GamePlayer.RELEASE_MINIMUM_WAIT) and a rez its cast time.
+ */
+const REVIVE_SETTLE_MS = 2000;
 const MAX_MESSAGES = 100;
-const MAX_COMBAT_EVENTS = 50;
+/** Enough for a group-vs-group fight: every swing and spell in view lands here, not only ours. */
+export const MAX_COMBAT_EVENTS = 200;
 /**
  * The trainer window is client-side only: the server never sends a close (it only pushes 0x7B,
  * GameTrainer.cs:132/198, PlayerTrainRequestHandler.cs:240, train.cs:170). Training needs the trainer
@@ -121,7 +128,10 @@ export interface PlayerEntry {
     heading: number;
     speed: number;
     healthPercent: number;
+    /** From 0xAE or the create's dead flag until it shows health again (relayedHealth); never from 0 % alone. */
     isDead: boolean;
+    /** When 0xAE marked it dead; 0 otherwise. */
+    diedAt: number;
     isSitting: boolean;
     inCombat: boolean;
     lastUpdate: number;
@@ -428,7 +438,7 @@ export class WorldModel {
                 this.players.set(d.objectId, {
                     objectId: d.objectId, sessionId: d.sessionId, name: d.name, guildName: d.guildName, lastName: d.lastName,
                     level: d.level, realm: d.realm, x: d.x, y: d.y, z: d.z, heading: d.heading, speed: 0,
-                    healthPercent: d.isDead ? 0 : 100, isDead: d.isDead, isSitting: false, inCombat: false, lastUpdate: now,
+                    healthPercent: d.isDead ? 0 : 100, isDead: d.isDead, diedAt: 0, isSitting: false, inCombat: false, lastUpdate: now,
                 });
                 return true;
             }
@@ -442,9 +452,10 @@ export class WorldModel {
                     return true;
                 }
                 Object.assign(pl, {
-                    x: d.x, y: d.y, z: d.z, heading: d.heading, speed: d.speed, healthPercent: d.healthPercent,
-                    inCombat: d.inCombat, isSitting: d.isSitting, isDead: d.isDead || d.healthPercent === 0, lastUpdate: now,
+                    x: d.x, y: d.y, z: d.z, heading: d.heading, speed: d.speed,
+                    inCombat: d.inCombat, isSitting: d.isSitting, lastUpdate: now,
                 });
+                this.relayedHealth(pl, d.healthPercent, d.isDead, now);
                 return true;
             }
             case ServerOp.PlayerHeading: {
@@ -457,9 +468,9 @@ export class WorldModel {
                     return true;
                 }
                 pl.heading = d.heading;
-                pl.healthPercent = d.healthPercent;
                 pl.inCombat = d.inCombat;
                 pl.lastUpdate = now;
+                this.relayedHealth(pl, d.healthPercent, false, now);
                 return true;
             }
             case ServerOp.ObjectDataUpdate: {
@@ -596,9 +607,14 @@ export class WorldModel {
                     kind: 'melee', attackerObjectId: d.attackerId || null, targetObjectId: d.defenderId || null,
                     result: d.result, targetHealthPercent: d.targetHealthPercent,
                 });
-                const npc = this.npcs.get(d.defenderId);
-                if (npc && d.targetHealthPercent <= 100) npc.healthPercent = d.targetHealthPercent;
+                // The defender's HealthPercent at the swing (WeaponAction.cs:369), sent to everyone in view
+                // of it: for a player fresher than its 0xA9 relay, which waits for its next position update.
+                // Not a player's from our own swing: when a blow on our target is intercepted (a Spiritmaster's
+                // pet, AttackComponent.cs:1492-1498), the attacker's copy names our target but carries the
+                // interceptor's health (WeaponAction.cs:363-369), 0 when the blow killed it.
                 const selfId = this.self.objectId;
+                const defender = this.npcs.get(d.defenderId) ?? (d.attackerId !== selfId ? this.players.get(d.defenderId) : undefined);
+                if (defender && d.targetHealthPercent <= 100) defender.healthPercent = d.targetHealthPercent;
                 if (d.attackerId === selfId || d.defenderId === selfId) this.self.lastCombatAt = now;
                 if (d.defenderId === selfId && d.attackerId) {
                     const att = this.npcs.get(d.attackerId);
@@ -608,12 +624,12 @@ export class WorldModel {
             }
             case ServerOp.SpellCastAnimation: {
                 const d = decodeSpellCastAnimation(p);
-                this.pushCombat({ kind: 'spellCast', attackerObjectId: d.casterId, targetObjectId: null, castTimeMs: d.castTimeMs });
+                this.pushCombat({ kind: 'spellCast', attackerObjectId: d.casterId, targetObjectId: null, castTimeMs: d.castTimeMs, effectId: d.effect });
                 return true;
             }
             case ServerOp.SpellEffectAnimation: {
                 const d = decodeSpellEffect(p);
-                this.pushCombat({ kind: 'spellEffect', attackerObjectId: d.casterId || null, targetObjectId: d.targetId || null });
+                this.pushCombat({ kind: 'spellEffect', attackerObjectId: d.casterId || null, targetObjectId: d.targetId || null, effectId: d.effect });
                 if (d.targetId === this.self.objectId || d.casterId === this.self.objectId) this.self.lastCombatAt = now;
                 return true;
             }
@@ -628,6 +644,7 @@ export class WorldModel {
                 if (d.victimId === this.self.objectId) this.markSelfDead(now);
                 const pl = this.players.get(d.victimId);
                 if (pl) {
+                    if (!pl.isDead) pl.diedAt = now;
                     pl.isDead = true;
                     pl.healthPercent = 0;
                 }
@@ -640,7 +657,10 @@ export class WorldModel {
                     this.signal('revived');
                 }
                 const pl = this.players.get(d.objectId);
-                if (pl) pl.isDead = false;
+                if (pl) {
+                    pl.isDead = false;
+                    pl.diedAt = 0;
+                }
                 return true;
             }
             case ServerOp.AttackMode: {
@@ -819,6 +839,26 @@ export class WorldModel {
         this.signal('died');
     }
 
+    /**
+     * Another player's health from its relayed position or heading (GetHealthByte,
+     * PlayerPositionUpdateHandler.cs:607), and whether it is dead. A death is sticky: health is
+     * truncated (GameLiving.cs:2621), so a living player with a few hit points reads 0 %, and only
+     * health again shows a revive, since 0x89 PlayerRevive goes to the revived player alone
+     * (GamePlayer.cs:1688/1809, ResurrectSpellHandler.cs:179). `deadFlag` is the DEAD state the
+     * player's own client sends; the server only strips it from the living (:640-643), so it holds,
+     * but our headless clients never send it.
+     */
+    private relayedHealth(pl: PlayerEntry, healthPercent: number, deadFlag: boolean, now: number): void {
+        pl.healthPercent = healthPercent;
+        if (deadFlag) {
+            if (!pl.isDead) pl.diedAt = now;
+            pl.isDead = true;
+        } else if (pl.isDead && healthPercent > 0 && now - pl.diedAt >= REVIVE_SETTLE_MS) {
+            pl.isDead = false;
+            pl.diedAt = 0;
+        }
+    }
+
     private setCooldown(key: string, seconds: number, now: number): void {
         if (seconds <= 0) this.cooldowns.delete(key);
         else this.cooldowns.set(key, now + seconds * 1000);
@@ -856,8 +896,11 @@ export class WorldModel {
         for (const [oid, o] of this.objects) {
             if (now - o.lastUpdate > OBJECT_STALE_MS || dist2(pos, o) > VISIBILITY_DISTANCE) this.objects.delete(oid);
         }
+        // A dead player gone quiet released: the release moves it within the region (GamePlayer.MoveTo,
+        // same region) and its corpse would otherwise stay here, dead, as long as we stand near it.
         for (const [oid, pl] of this.players) {
-            if (dist2(pos, pl) > VISIBILITY_DISTANCE || (now - pl.lastUpdate > PLAYER_STALE_MS && pl.speed > 0)) this.removeObject(oid);
+            const quiet = now - pl.lastUpdate > PLAYER_STALE_MS;
+            if (dist2(pos, pl) > VISIBILITY_DISTANCE || (quiet && (pl.speed > 0 || pl.isDead))) this.removeObject(oid);
         }
         this.cullTrainer(pos);
     }

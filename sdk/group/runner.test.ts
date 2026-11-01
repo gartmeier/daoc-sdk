@@ -5,7 +5,7 @@
 // findBotEnv, cwd first, so process.cwd answers that root for each test (no
 // chdir of the shared test process, nothing in the repo's bots/).
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createGateway, type Gateway } from '../../gateway/gateway';
@@ -15,8 +15,10 @@ import { executionContext, type ExecutionContext } from '../execution-context';
 import { BotSDK } from '../index';
 import { FakeClient } from '../test/fake-client';
 import type { PlayerState } from '../types';
+import type { Behavior } from './member';
 import { runGroup, type GroupRunOptions, type GroupRunResult } from './runner';
 import type { GroupStrategy } from './strategy';
+import type { Contact } from './types';
 import type { GroupPublish } from './wire';
 
 const PASSWORD = 'pw-runner-test';
@@ -225,6 +227,40 @@ describe('runGroup and the gateway', () => {
         expect(last.state).toBe('ended');
         expect(last.error).toBe(end.error);
         expect(last.result).toBeUndefined();
+    });
+
+    test('the strategy\'s findings get its settings and land in the result, the saved json and md, and the ended publish', async () => {
+        const seenSettings: unknown[] = [];
+        const strategy: GroupStrategy<{ huntRadius: number }> = {
+            ...stub(),
+            findings: (r, settings) => {
+                seenSettings.push(settings);
+                return [{ severity: 'medium', topic: 'roam', issue: `Roamed with huntRadius ${settings.huntRadius}`, evidence: `${r.fights.length} fights`, suggestion: 'Roam farther.' }];
+            },
+        };
+        const run = start('rg', { have: await connect('rguser'), seconds: 0.3, save: true, strategy, settings: { huntRadius: 999 } });
+        const result = await run.done;
+        expect(result.findings).toContain('medium roam: Roamed with huntRadius 999');
+        expect(seenSettings.at(-1)).toEqual({ huntRadius: 999 });
+        expect(readFileSync(result.report!, 'utf-8')).toContain('[roam] Roamed with huntRadius 999. Evidence: 0 fights. Try: Roam farther.');
+        const json = JSON.parse(readFileSync(result.report!.replace(/\.md$/, '.json'), 'utf-8'));
+        expect(json.findings.map((f: { topic: string }) => f.topic)).toContain('roam');
+        expect(publishes().at(-1)!.result!.findings).toContain('medium roam: Roamed with huntRadius 999');
+    });
+
+    test('the strategy\'s board and agent options reach the Blackboard and every MemberAgent', async () => {
+        let contacts: Contact[] | null = null;
+        const look: Behavior = { name: 'look', run: ctx => { contacts ??= ctx.picture().contacts; return false; } };
+        const base = stub();
+        // staleAfterMs -1: every contact is stale at once. sightRadius 200: of the fake client's rats at 100 and 300, only the first.
+        const strategy: GroupStrategy<{ huntRadius: number }> = { ...base, behaviors: { ...base.behaviors, tank: [look] }, board: { staleAfterMs: -1 }, agent: { sightRadius: 200 } };
+        const have = await connect('rguser');
+        await start('rg', { have, seconds: 0.3, strategy, publish: false }).done;
+        expect(contacts!.map(c => [c.objectId, c.stale])).toEqual([[200, true]]);
+        // The defaults see both, fresh.
+        contacts = null;
+        await start('rg', { have, seconds: 0.3, strategy: { ...strategy, board: undefined, agent: undefined }, publish: false }).done;
+        expect(contacts!.map(c => [c.objectId, c.stale])).toEqual([[200, false], [201, false]]);
     });
 
     test('publish: false sends nothing', async () => {

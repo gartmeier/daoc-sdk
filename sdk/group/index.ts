@@ -3,11 +3,13 @@
 // that scores each run. See learnings/group-coordination.md.
 
 export * from './types';
-export { Blackboard, observeState, emptyOrders, isMaterialChange, type BlackboardOptions, type Observation } from './blackboard';
+export { Blackboard, observeState, emptyOrders, isMaterialChange, isAlive, type BlackboardOptions, type Observation } from './blackboard';
 export { MemberAgent, MemberContext, type Behavior, type Member } from './member';
 export * from './behaviors';
 export { Coordinator, defineStrategy, roleForClass, type CoordinatorContext, type GroupStrategy } from './strategy';
 export { pveLeveling, decidePve, pickPullTarget, pickFocus, assignCc, PVE_SETTINGS, type PveSettings } from './pve';
+export { PORTAL_KEEPS, BATTLEGROUNDS, portalKeepOf, inBattleground, atPortalKeep, entryProblem, townTeleporter, viaWalkers, walkTogether, toPortalKeep, bindAtPortalKeep, wearsMedallion, getMedallion, wearMedallion, waitForPort, enterBattleground, type MedallionResult, type PortalKeep, type Battleground, type EnterResult } from './battleground';
+export { rvrRoaming, decideRvr, rvrBehaviors, rvrFindings, pickRvrFocus, homeOf, keepDangers, defaultPatrol, realmOfGroup, BATTLEGROUND_LAYOUTS, THIDRANKI, RVR_SETTINGS, type RvrSettings, type BattlegroundLayout, type Keep, type PlayerRealm } from './rvr';
 export { GroupObserver, findingsFor, formatReport, saveReport, stampOf, inferPhase, type Finding, type FightSummary, type MemberStats, type RunReport } from './observer';
 export { loadGroup, connectBot, connectGroup, formGroup } from './roster';
 export { runGroup, runGroupScript, groupArgs, type GroupRunOptions, type GroupRunResult } from './runner';

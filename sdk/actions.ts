@@ -13,12 +13,20 @@ import {
     BUY_REFUSALS,
     CAST_REFUSALS,
     conLevel,
+    CROWD_CONTROL_REFUSALS,
+    CROWD_CONTROLLED_RETRY_MS,
     diffInventory,
     experienceFromMessages,
     INTERACT_REFUSALS,
+    isFatalAttackRefusal,
+    isCrowdControlled,
     isKillable,
+    isPvpImmunity,
     maxCombatEventId,
     PICKUP_REFUSALS,
+    PLAYER_AIM_MS,
+    PVP_IMMUNE_REFUSALS,
+    PVP_IMMUNE_RETRY_MS,
     RELEASE_REFUSALS,
     RETRYABLE_ATTACK_REFUSALS,
     SELL_REFUSALS,
@@ -28,6 +36,7 @@ import {
     USE_ITEM_REFUSALS,
     describeTarget,
     totalCopper,
+    type LivingTarget,
     type MessageWatch,
     type NpcTarget,
     type ObjectTarget,
@@ -55,7 +64,7 @@ import type {
 } from './types';
 
 export { conLevel, conColor, isKillable } from './actions-helpers';
-export type { ConColor, NpcTarget, ObjectTarget, PlayerTarget, Point } from './actions-helpers';
+export type { ConColor, LivingTarget, NpcTarget, ObjectTarget, PlayerTarget, Point } from './actions-helpers';
 export { StraightLinePathProvider, NavmeshPathProvider, getDefaultPathProvider, setDefaultPathProvider, navmeshGroundZ } from './pathfinding';
 export type { PathProvider, PathRequest, PathResult } from './pathfinding';
 export { NavmeshStore, NavMesh, getNavmeshStore, PolyFlags } from './navmesh';
@@ -160,11 +169,19 @@ export interface RespondDialogResult extends ActionResult {
 }
 
 export interface AttackResult extends ActionResult {
+    /** The target when it is an NPC (null for a player). */
     npc: NearbyNpc | null;
+    /** The resolved target, NPC or player. */
+    target: NearbyNpc | NearbyPlayer | null;
+    /** For reason 'immune' (PvP immunity, ours or the target's) and 'crowd_controlled' (we are mezzed or stunned): ms until trying again makes sense. */
+    retryAfterMs?: number;
 }
 
-/** Choose a style for the next swing; return its name or null for a plain swing. */
-export type StyleChooser = (ctx: { npc: NearbyNpc; player: PlayerState; state: BotWorldState; styles: Style[] }) => string | null | undefined;
+/** Choose a style for the next swing; return its name or null for a plain swing. `target` repeats `npc`. */
+export type StyleChooser = (ctx: { npc: NearbyNpc; target: NearbyNpc; player: PlayerState; state: BotWorldState; styles: Style[] }) => string | null | undefined;
+
+/** killPlayer's style chooser. One that takes `{ target: NearbyNpc | NearbyPlayer, ... }` fits killNpc as well. */
+export type PlayerStyleChooser = (ctx: { target: NearbyPlayer; player: PlayerState; state: BotWorldState; styles: Style[] }) => string | null | undefined;
 
 export interface KillOptions {
     /** Give up after this long (default 60000 ms). */
@@ -191,6 +208,22 @@ export interface KillResult extends ActionResult {
     durationMs: number;
     levelsGained: number;
     stylesUsed: number;
+    /** For reason 'immune' (PvP immunity, ours or the target's) and 'crowd_controlled' (we are mezzed or stunned): ms until trying again makes sense. */
+    retryAfterMs?: number;
+}
+
+/** killPlayer's options: KillOptions' timeout, styles, chase and maxChaseDistance, with a style chooser for players. */
+export interface KillPlayerOptions extends Omit<KillOptions, 'useStyle' | 'force'> {
+    /** Pick the style per swing instead of rotating `styles`. */
+    useStyle?: PlayerStyleChooser;
+}
+
+/**
+ * KillResult's numbers for an enemy player. A player kill gives realm points: rpGained counts
+ * those that arrived by the time the death did (killPlayer does not wait for the award).
+ */
+export interface KillPlayerResult extends Omit<KillResult, 'npc'> {
+    player: NearbyPlayer | null;
 }
 
 export interface CastOptions {
@@ -218,13 +251,20 @@ export interface CastResult extends ActionResult {
     completed: boolean;
     resisted: boolean;
     /**
+     * The cast went off (success, power spent) but its effect did not land: "Your target is immune to
+     * this effect!" (CCSpellHandler.cs:173/288, SpellHandler.cs:571). A player already mezzed or stunned,
+     * or within the 60 s immunity that follows one (CrowdControlECSEffect.cs), an NPC's mezz immunity, a
+     * snare immunity. `resisted` stays false: the target did not resist, nothing could have landed.
+     */
+    effectImmune?: boolean;
+    /**
      * Damage from "You hit X for N damage!" / "Your <this spell> hits X for N damage!" lines that
      * arrived once the cast time was up. Other spells' DoT ticks and "extra damage" lines are left
      * out; a damage shield's "You hit X for N damage!" in the same moment cannot be told apart.
      */
     damage: number;
     messages: GameMessage[];
-    /** For reason 'must_wait' / 'interrupted': ms until casting is allowed again ("You must wait N seconds"). */
+    /** For reason 'must_wait' / 'interrupted' / 'immune' / 'crowd_controlled': ms until casting is allowed again ("You must wait N seconds"). */
     retryAfterMs?: number;
 }
 
@@ -427,6 +467,26 @@ export interface GrindResult extends ActionResult {
 
 type Obj = NearbyNpc | NearbyPlayer | NearbyObject;
 
+/** KillResult without the ActionResult fields and the target. */
+type KillNumbers = Omit<KillResult, keyof ActionResult | 'npc' | 'retryAfterMs'>;
+
+const noKill = (): KillNumbers => ({ killed: false, xpGained: 0, rpGained: 0, moneyGained: 0, itemsGained: [], durationMs: 0, levelsGained: 0, stylesUsed: 0 });
+
+/** fight()'s end: the kill, or why not. */
+type FightOutcome = 'killed' | { message: string; reason: string; retryAfterMs?: number };
+
+/** What fight() needs from its target: an NPC (killNpc) or an enemy player (killPlayer). */
+interface Foe<T extends NearbyNpc | NearbyPlayer> {
+    first: T;
+    /** Its entry in a snapshot; undefined once it left view. */
+    find(s: BotWorldState): T | undefined;
+    /** Dead by the snapshot (death events are checked separately). */
+    isDown(t: T): boolean;
+    /** It left view without a death event at `lastHp` %: true when that still counts as the kill. */
+    vanishedKilled(lastHp: number, watch: MessageWatch): boolean;
+    chooseStyle?: (t: T, player: PlayerState, state: BotWorldState, styles: Style[]) => string | null | undefined;
+}
+
 /** Message types that are combat/loot spam, never an answer to a skill or item use. */
 const COMBAT_CHAT_TYPES = new Set<GameMessage['type']>(['youHit', 'otherCombat', 'damaged', 'resisted', 'yourDeath', 'otherDeath', 'spellPulse', 'loot', 'say', 'send', 'group', 'guild', 'broadcast', 'chat', 'emote']);
 
@@ -441,6 +501,8 @@ function headingDiff(a: number, b: number): number {
 /** Machine reason for a cast refusal text. */
 export function castFailureReason(text: string, fallback: string = 'refused'): string {
     const t = text.toLowerCase();
+    if (isPvpImmunity(t)) return 'immune';
+    if (isCrowdControlled(t)) return 'crowd_controlled';
     if (t.includes('you are dead')) return 'died'; // "You are dead and can't cast!" (SpellHandler.cs:881-884)
     if (t.includes('interrupt')) return 'interrupted';
     if (t.includes('you must wait')) return 'must_wait';
@@ -453,6 +515,8 @@ export function castFailureReason(text: string, fallback: string = 'refused'): s
 }
 
 function retryAfter(text: string): number | undefined {
+    if (isPvpImmunity(text)) return PVP_IMMUNE_RETRY_MS;
+    if (isCrowdControlled(text)) return CROWD_CONTROLLED_RETRY_MS;
     const m = /must wait (\d+(?:\.\d+)?) seconds?/i.exec(text);
     if (m) return Math.ceil(Number(m[1]) * 1000);
     return /interrupt/i.test(text) ? 2000 : undefined;
@@ -751,28 +815,53 @@ export class BotActions {
 
     // ============ Combat ============
 
-    /** Approach, target, face and switch melee on; observed via attack mode or a swing. */
-    async attack(npc: NpcTarget, options: { timeout?: number } = {}): Promise<AttackResult> {
-        const n = this.helpers.resolveNpc(npc);
-        if (!n) return fail(`NPC not found: ${describeTarget(npc)}`, 'not_found', { npc: null });
-        if (n.healthPercent <= 0) return fail(`${n.name} is already dead`, 'already_dead', { npc: n });
-        const engaged = await this.engage(n);
-        if (!engaged.success) return { ...engaged, npc: n };
+    /**
+     * Approach, target, face and switch melee on against an NPC or a player (enemy players are
+     * named by race: pass the objectId); observed via attack mode or a swing. Reason 'immune'
+     * (with retryAfterMs) when PvP immunity, ours or the target's, refuses the swing, and
+     * 'crowd_controlled' (with retryAfterMs) when we are mezzed or stunned.
+     */
+    async attack(target: LivingTarget, options: { timeout?: number } = {}): Promise<AttackResult> {
+        const t = this.helpers.resolveLiving(target);
+        if (!t) return fail(`Target not found: ${describeTarget(target)}`, 'not_found', { npc: null, target: null });
+        const targets = (o: NearbyNpc | NearbyPlayer) => ({ npc: o.kind === 'npc' ? o : null, target: o });
+        // A player's health is truncated (GameLiving.cs:2621): one with a few hit points left reads 0 %.
+        if (t.kind === 'player' ? t.isDead : t.healthPercent <= 0) return fail(`${t.name} is already dead`, 'already_dead', targets(t));
+        // A name that matched no monster falls back to players: never one of our realm (a duel takes the id).
+        if (t.kind === 'player' && (typeof target === 'string' || target instanceof RegExp) && t.realm === this.helpers.player()?.realm) {
+            return fail(`${t.name} is a player of our realm`, 'not_attackable', targets(t));
+        }
+        const engaged = await this.engage(t);
+        if (!engaged.success) return { ...engaged, ...targets(t) };
         const watch = this.helpers.watch();
         const baseline = maxCombatEventId(this.helpers.state());
         try {
             const r = await this.sdk.sendAttack(true);
-            if (!r.success) return { ...r, npc: n };
+            if (!r.success) return { ...r, ...targets(t) };
             const me = this.helpers.player()?.objectId;
-            const evidence = await this.helpers.waitFor(s => {
+            const swung = (s: BotWorldState) => s.combatEvents.some(e => e.id > baseline && e.kind === 'melee' && e.attackerObjectId === me && e.targetObjectId === t.objectId);
+            let evidence = await this.helpers.waitFor(s => {
                 if (watch.find(ATTACK_REFUSALS)) return 'refused';
-                if (s.combatEvents.some(e => e.id > baseline && e.kind === 'melee' && e.attackerObjectId === me && e.targetObjectId === n.objectId)) return 'swing';
+                if (swung(s)) return 'swing';
                 if (s.player?.attacking) return 'attacking';
                 return null;
             }, options.timeout ?? 5000);
-            if (evidence === 'refused') return fail(watch.findText(ATTACK_REFUSALS)!, 'refused', { npc: n });
-            if (!evidence) return fail(`No attack observed on ${n.name}`, 'timeout', { npc: n });
-            return { success: true, message: `Attacking ${n.name}`, npc: this.helpers.resolveNpc(n.objectId) ?? n };
+            // Attack mode comes on before the server checks the rules: a PvP refusal arrives with the
+            // first swing round right after it (AttackComponent.cs:710, WeaponAction.cs:411). That round
+            // also says "too far away" / "not in view" when the target stepped off (AttackComponent.cs:1725-1737):
+            // retryable, so attack mode stands and fight() re-approaches.
+            const fatal = () => watch.messages().find(m => isFatalAttackRefusal(m.text));
+            if (evidence === 'attacking' && t.kind === 'player') {
+                evidence = await this.helpers.waitFor(s => fatal() ? 'refused' : swung(s) ? 'swing' : null, 1000) ?? 'attacking';
+            }
+            if (evidence === 'refused') {
+                const text = watch.findText(PVP_IMMUNE_REFUSALS) ?? watch.findText(CROWD_CONTROL_REFUSALS) ?? fatal()?.text ?? watch.findText(ATTACK_REFUSALS)!;
+                if (isPvpImmunity(text)) return fail(text, 'immune', { ...targets(t), retryAfterMs: PVP_IMMUNE_RETRY_MS });
+                if (isCrowdControlled(text)) return fail(text, 'crowd_controlled', { ...targets(t), retryAfterMs: CROWD_CONTROLLED_RETRY_MS });
+                return fail(text, 'refused', targets(t));
+            }
+            if (!evidence) return fail(`No attack observed on ${t.name}`, 'timeout', targets(t));
+            return { success: true, message: `Attacking ${t.name}`, ...targets(this.helpers.resolveLiving(t.objectId) ?? t) };
         } finally {
             watch.dispose();
         }
@@ -781,13 +870,13 @@ export class BotActions {
     /**
      * Fight an NPC to the death: walk into melee range (adopting its z), face,
      * target, attack, re-approach when it moves, use styles, and wait for the
-     * death (remove packet / 0 HP). Reports XP, RP, money, items and duration.
+     * death (remove packet / 0 HP). Reports XP, RP, money, items and duration. Reason
+     * 'crowd_controlled' (with retryAfterMs) when a mezz or stun refuses our swing.
      */
     async killNpc(target: NpcTarget, options: KillOptions = {}): Promise<KillResult> {
-        const started = Date.now();
         const s0 = this.helpers.state();
         const p0 = s0?.player;
-        const base = { npc: null as NearbyNpc | null, killed: false, xpGained: 0, rpGained: 0, moneyGained: 0, itemsGained: [] as InventoryItem[], durationMs: 0, levelsGained: 0, stylesUsed: 0 };
+        const base = { npc: null as NearbyNpc | null, ...noKill() };
         if (!s0 || !p0) return fail('Not in game', 'not_in_game', base);
         if (p0.isDead) return fail('We are dead', 'dead', base);
         const n0 = this.helpers.resolveNpc(target);
@@ -795,15 +884,73 @@ export class BotActions {
         if (n0.healthPercent <= 0) return fail(`${n0.name} is already dead`, 'already_dead', { ...base, npc: n0 });
         if (!options.force && !isKillable(n0, p0)) return fail(`${n0.name} is not something we can kill (realm ${n0.realm}, role ${n0.role}, peaceful ${n0.isPeaceful})`, 'not_attackable', { ...base, npc: n0 });
 
+        const useStyle = options.useStyle;
+        const r = await this.fightToDeath<NearbyNpc>({
+            first: n0,
+            find: s => s.nearbyNpcs.find(n => n.objectId === n0.objectId),
+            isDown: n => n.healthPercent <= 0,
+            vanishedKilled: (lastHp, watch) => lastHp <= 20 || experienceFromMessages(watch.messages()) > 0,
+            chooseStyle: useStyle && ((npc, player, state, styles) => useStyle({ npc, target: npc, player, state, styles })),
+        }, s0, p0, options, async watch => {
+            // XP, loot and money messages trail the remove packet.
+            await this.helpers.waitFor(() => experienceFromMessages(watch.messages()) > 0 ? true : null, 2000);
+            await this.helpers.sleep(400);
+        }, k => ` (+${k.xpGained} xp)`);
+        return { ...r, npc: n0 };
+    }
+
+    /**
+     * Fight an enemy player to the death, like killNpc: walk into melee range (adopting its z),
+     * face, target, attack, chase while it moves (players are not extrapolated: we follow the
+     * latest position) and use styles. Enemy players are named by race, so pass the objectId
+     * (or the NearbyPlayer); a name is only a fallback. Success on its death: the death event or
+     * isDead, never 0 % health, which is truncated (GameLiving.cs:2621): a living player with a few
+     * hit points reads 0 %. Reasons: 'not_found', 'already_dead', 'not_attackable' (our realm),
+     * 'immune' (PvP immunity, ours or its; retryAfterMs), 'crowd_controlled' (we are mezzed or
+     * stunned; retryAfterMs), 'target_lost' (left view alive: stealth, range), 'out_of_reach'
+     * (beyond maxChaseDistance), 'refused', 'died', 'timeout'. Does not wait for XP after the
+     * kill: rpGained counts the realm points that arrived by then.
+     */
+    async killPlayer(target: PlayerTarget, options: KillPlayerOptions = {}): Promise<KillPlayerResult> {
+        const s0 = this.helpers.state();
+        const p0 = s0?.player;
+        const base = { player: null as NearbyPlayer | null, ...noKill() };
+        if (!s0 || !p0) return fail('Not in game', 'not_in_game', base);
+        if (p0.isDead) return fail('We are dead', 'dead', base);
+        const t0 = this.helpers.resolvePlayer(target);
+        if (!t0) return fail(`Player not found: ${describeTarget(target)}`, 'not_found', base);
+        if (t0.isDead) return fail(`${t0.name} is already dead`, 'already_dead', { ...base, player: t0 });
+        if (t0.realm === p0.realm) return fail(`${t0.name} is of our realm (${t0.realm})`, 'not_attackable', { ...base, player: t0 });
+
+        const useStyle = options.useStyle;
+        const r = await this.fightToDeath<NearbyPlayer>({
+            first: t0,
+            find: s => s.nearbyPlayers.find(pl => pl.objectId === t0.objectId),
+            isDown: pl => pl.isDead,
+            // A player's death always comes as 0xAE to everyone in view (GamePlayer.cs:5901-5905).
+            vanishedKilled: () => false,
+            chooseStyle: useStyle && ((pl, player, state, styles) => useStyle({ target: pl, player, state, styles })),
+        }, s0, p0, options, async () => {}, k => k.rpGained ? ` (+${k.rpGained} rp)` : '');
+        return { ...r, player: t0 };
+    }
+
+    /** The fight both kill methods share: deadline, cleanup and what the fight gained. */
+    private async fightToDeath<T extends NearbyNpc | NearbyPlayer>(
+        foe: Foe<T>, s0: BotWorldState, p0: PlayerState, options: Omit<KillOptions, 'useStyle' | 'force'>,
+        settle: (watch: MessageWatch) => Promise<void>, gains: (k: KillNumbers) => string,
+    ): Promise<ActionResult & KillNumbers & { retryAfterMs?: number }> {
+        const started = Date.now();
+        const name = foe.first.name;
         const watch = this.helpers.watch();
         const timeout = options.timeout ?? 60_000;
-        const summary = (killed: boolean): Omit<KillResult, 'success' | 'message'> => {
+        let stylesUsed = 0;
+        const numbers = (killed: boolean): KillNumbers => {
             const s = this.helpers.state();
             const p = s?.player;
             const msgXp = experienceFromMessages(watch.messages());
             const deltaXp = p ? (p.experience - p0.experience) : 0;
             return {
-                npc: n0, killed,
+                killed,
                 xpGained: Math.max(msgXp, deltaXp, 0),
                 rpGained: p ? Math.max(0, p.realmPoints - p0.realmPoints) : 0,
                 moneyGained: Math.max(0, totalCopper(s) - p0.money.totalCopper),
@@ -813,20 +960,17 @@ export class BotActions {
                 stylesUsed,
             };
         };
-        let stylesUsed = 0;
         // What fight() dispatched, set before each send: the snapshot trails dispatches (attack
         // mode only shows after the server's AttackMode echo), so cleanup must not rely on it.
         const sent = { attack: false, move: false };
         try {
-            const outcome = await withExecutionDeadline<'killed' | KillResult>(timeout,
-                () => this.fight(n0, p0, watch, options, () => stylesUsed++, summary, sent),
-                () => ({ success: false, message: `Timed out after ${timeout}ms fighting ${n0.name}`, reason: 'timeout', ...summary(false) }));
-            if (outcome !== 'killed') return outcome;
-            // XP, loot and money messages trail the remove packet.
-            await this.helpers.waitFor(() => experienceFromMessages(watch.messages()) > 0 ? true : null, 2000);
-            await this.helpers.sleep(400);
-            const result = summary(true);
-            return { success: true, message: `Killed ${n0.name} in ${(result.durationMs / 1000).toFixed(1)}s (+${result.xpGained} xp)`, ...result };
+            const outcome = await withExecutionDeadline<FightOutcome>(timeout,
+                () => this.fight(foe, p0, watch, options, () => stylesUsed++, sent),
+                () => ({ message: `Timed out after ${timeout}ms fighting ${name}`, reason: 'timeout' }));
+            if (outcome !== 'killed') return { success: false, ...outcome, ...numbers(false) };
+            await settle(watch);
+            const result = numbers(true);
+            return { success: true, message: `Killed ${name} in ${(result.durationMs / 1000).toFixed(1)}s${gains(result)}`, ...result };
         } finally {
             watch.dispose();
             // Also after a timeout or an abort: leave the bot neither swinging nor chasing.
@@ -836,17 +980,17 @@ export class BotActions {
         }
     }
 
-    private async fight(
-        n0: NearbyNpc, p0: PlayerState, watch: MessageWatch, options: KillOptions,
-        onStyle: () => void, summary: (killed: boolean) => Omit<KillResult, 'success' | 'message'>,
-        sent: { attack: boolean; move: boolean },
-    ): Promise<'killed' | KillResult> {
-        const id = n0.objectId;
+    private async fight<T extends NearbyNpc | NearbyPlayer>(
+        foe: Foe<T>, p0: PlayerState, watch: MessageWatch, options: Omit<KillOptions, 'useStyle' | 'force'>,
+        onStyle: () => void, sent: { attack: boolean; move: boolean },
+    ): Promise<FightOutcome> {
+        const name = foe.first.name;
+        const id = foe.first.objectId;
         const chase = options.chase ?? true;
         const maxChase = options.maxChaseDistance ?? 2500;
         const origin = { x: p0.x, y: p0.y };
         const baseline = maxCombatEventId(this.helpers.state());
-        let lastHp = n0.healthPercent;
+        let lastHp = foe.first.healthPercent;
         let lastMoveAt = 0;
         let lastMoveDest: Point | null = null;
         let lastAttackAt = 0;
@@ -856,7 +1000,7 @@ export class BotActions {
         let refusalsSeen = 0;
         let lastTick = -1;
         let targeted = false;
-        const failWith = (message: string, reason: string): KillResult => ({ success: false, message, reason, ...summary(false) });
+        const failWith = (message: string, reason: string): FightOutcome => ({ message, reason });
         const deathCount0 = p0.deathCount;
 
         for (;;) {
@@ -865,44 +1009,48 @@ export class BotActions {
             if (!s?.player) return failWith('Lost game state', 'not_in_game');
             lastTick = s.tick;
             const p = s.player;
-            if (p.isDead || p.deathCount !== deathCount0) return failWith(`Died fighting ${n0.name}`, 'died');
+            if (p.isDead || p.deathCount !== deathCount0) return failWith(`Died fighting ${name}`, 'died');
 
-            const npc = s.nearbyNpcs.find(n => n.objectId === id);
+            const t = foe.find(s);
             const died = s.combatEvents.some(e => e.id > baseline && e.kind === 'death' && e.targetObjectId === id);
-            if (died || (npc && npc.healthPercent <= 0)) return 'killed';
-            if (!npc) {
-                if (lastHp <= 20 || experienceFromMessages(watch.messages()) > 0) return 'killed';
-                return failWith(`${n0.name} disappeared at ${lastHp}% health`, 'target_lost');
+            if (died || (t && foe.isDown(t))) return 'killed';
+            if (!t) {
+                if (foe.vanishedKilled(lastHp, watch)) return 'killed';
+                return failWith(`${name} disappeared at ${lastHp}% health`, 'target_lost');
             }
-            lastHp = npc.healthPercent;
+            lastHp = t.healthPercent;
 
             const msgs = watch.messages();
             if (msgs.length > refusalsSeen) {
                 const fresh = msgs.slice(refusalsSeen);
                 refusalsSeen = msgs.length;
                 for (const m of fresh) {
-                    const t = m.text.toLowerCase();
-                    if (t.includes('is already dead')) return lastHp <= 30 ? 'killed' : failWith(m.text, 'already_dead');
-                    if (RETRYABLE_ATTACK_REFUSALS.some(r => t.includes(r))) {
+                    const text = m.text.toLowerCase();
+                    if (text.includes('is already dead')) return lastHp <= 30 ? 'killed' : failWith(m.text, 'already_dead');
+                    // Before the fatal refusals: ours reads "You can't attack players until ...", and
+                    // a mezz or stun "You can't attack when you are ...": both wear off by themselves.
+                    if (isPvpImmunity(text)) return { message: m.text, reason: 'immune', retryAfterMs: PVP_IMMUNE_RETRY_MS };
+                    if (isCrowdControlled(text)) return { message: m.text, reason: 'crowd_controlled', retryAfterMs: CROWD_CONTROLLED_RETRY_MS };
+                    if (RETRYABLE_ATTACK_REFUSALS.some(r => text.includes(r))) {
                         lastFaceAt = 0; // re-face and re-approach on the next pass
                         lastMoveAt = 0;
-                    } else if (ATTACK_REFUSALS.some(r => t.includes(r))) {
+                    } else if (ATTACK_REFUSALS.some(r => text.includes(r))) {
                         return failWith(m.text, 'refused');
                     }
                 }
             }
 
-            const dist = npc.distance;
+            const dist = t.distance;
             const now = Date.now();
             if (dist > MELEE_REAPPROACH || (dist > MELEE_APPROACH && !p.attacking && !s.movement.moving)) {
                 if (!chase && p.attacking) continue;
-                if (Math.hypot(npc.x - origin.x, npc.y - origin.y) > maxChase) return failWith(`${n0.name} ran beyond ${maxChase} units`, 'out_of_reach');
-                const destMoved = !lastMoveDest || Math.hypot(npc.x - lastMoveDest.x, npc.y - lastMoveDest.y) > 40;
+                if (Math.hypot(t.x - origin.x, t.y - origin.y) > maxChase) return failWith(`${name} ran beyond ${maxChase} units`, 'out_of_reach');
+                const destMoved = !lastMoveDest || Math.hypot(t.x - lastMoveDest.x, t.y - lastMoveDest.y) > 40;
                 if (!s.movement.moving || (destMoved && now - lastMoveAt > 400)) {
-                    lastMoveDest = { x: npc.x, y: npc.y, z: npc.z };
+                    lastMoveDest = { x: t.x, y: t.y, z: t.z };
                     lastMoveAt = now;
                     sent.move = true;
-                    await this.sdk.sendMoveTo(npc.x, npc.y, npc.z, { tolerance: 50 });
+                    await this.sdk.sendMoveTo(t.x, t.y, t.z, { tolerance: 50 });
                 }
                 continue;
             }
@@ -914,7 +1062,7 @@ export class BotActions {
                 targeted = true;
                 await this.sdk.sendSetTarget(id);
             }
-            if (headingDiff(p.heading, headingBetween(p, npc)) > 200 && now - lastFaceAt > 500) {
+            if (headingDiff(p.heading, headingBetween(p, t)) > 200 && now - lastFaceAt > 500) {
                 lastFaceAt = now;
                 await this.sdk.sendFaceObject(id);
             }
@@ -923,15 +1071,15 @@ export class BotActions {
                 sent.attack = true;
                 await this.sdk.sendAttack(true);
             }
-            if ((options.styles?.length || options.useStyle) && now - lastStyleAt > 2500 && p.attacking) {
+            if ((options.styles?.length || foe.chooseStyle) && now - lastStyleAt > 2500 && p.attacking) {
                 const styles = s.skills.styles;
-                let name: string | null | undefined;
-                if (options.useStyle) name = options.useStyle({ npc, player: p, state: s, styles });
+                let styleName: string | null | undefined;
+                if (foe.chooseStyle) styleName = foe.chooseStyle(t, p, s, styles);
                 else {
-                    name = options.styles![styleIndex % options.styles!.length];
+                    styleName = options.styles![styleIndex % options.styles!.length];
                     styleIndex++;
                 }
-                const style = name ? bestNameMatch(styles, name) : null;
+                const style = styleName ? bestNameMatch(styles, styleName) : null;
                 if (style && p.endurancePercent >= 15) {
                     lastStyleAt = now;
                     const r = await this.sdk.sendUseSkill(style.skillIndex);
@@ -949,7 +1097,9 @@ export class BotActions {
      * (CastOptions.retryNoTarget). Observes the cast start ("You begin
      * casting", cast animation) and completion ("You cast a <spell> spell!", or
      * an effect/damage/resist once the cast time is up). Reason 'died' when we
-     * die mid-cast; 'dead' when already dead before casting.
+     * die mid-cast; 'dead' when already dead before casting; 'crowd_controlled'
+     * (with retryAfterMs) when we are mezzed, stunned or silenced. A cast whose
+     * target is immune to its effect succeeds with effectImmune.
      */
     async castSpell(spell: NamePattern | Spell, target?: ObjectTarget | null, options: CastOptions = {}): Promise<CastResult> {
         const base = { spell: null as Spell | null, target: null as Obj | null, castTimeMs: null as number | null, completed: false, resisted: false, damage: 0, messages: [] as GameMessage[] };
@@ -978,7 +1128,7 @@ export class BotActions {
         } else if (!noTarget) {
             obj = this.helpers.resolveAny(target!);
             if (!obj) return fail(`Target not found: ${describeTarget(target)}`, 'not_found', { ...base, spell: sp });
-            if (friendly && obj.kind === 'npc' && obj.realm !== player.realm) {
+            if (friendly && obj.kind !== 'object' && obj.realm !== player.realm) {
                 return fail(`${sp.name} targets ${info!.target}, not the enemy ${obj.name}`, 'invalid_target', { ...base, spell: sp, target: obj });
             }
         } else if (player.targetObjectId !== null) {
@@ -1118,9 +1268,12 @@ export class BotActions {
                 if (crit) damage += Number(crit[1]);
             }
             if (!done) return fail(`${sp.name} started but no completion was observed`, 'timeout', { ...base, castTimeMs, messages });
+            // Sent right after "You cast a ..." when the effect can't take (CCSpellHandler.CheckSpellResist).
+            const effectImmune = ours.some(m => /your target is immune to this effect/i.test(m.text));
+            const outcome = resisted ? ' (resisted)' : effectImmune ? ' (target immune)' : damage ? ` for ${damage} damage` : '';
             return {
-                success: true, message: `Cast ${sp.name}${obj ? ` on ${obj.name}` : ''}${resisted ? ' (resisted)' : damage ? ` for ${damage} damage` : ''}`,
-                spell: sp, target: obj, castTimeMs, completed: true, resisted, damage, messages,
+                success: true, message: `Cast ${sp.name}${obj ? ` on ${obj.name}` : ''}${outcome}`,
+                spell: sp, target: obj, castTimeMs, completed: true, resisted, effectImmune, damage, messages,
             };
         } finally {
             watch.dispose();
@@ -1177,15 +1330,23 @@ export class BotActions {
             .sort((a, b) => (a.distance2d + Math.abs(a.z - p.z)) - (b.distance2d + Math.abs(b.z - p.z)));
     }
 
-    /** In combat: attack mode on, recently hit, or an NPC targets us. */
+    /** In combat: attack mode on, recently hit, an NPC targets us or an enemy player hit us (getPlayerAttackers). */
     isInCombat(): boolean {
         const p = this.helpers.player();
-        return !!p && (p.inCombat || p.attacking || this.helpers.attackers().length > 0);
+        return !!p && (p.inCombat || p.attacking || this.helpers.attackers().length > 0 || this.helpers.playerAttackers().length > 0);
     }
 
     /** NPCs currently targeting us, nearest first. */
     getAttackers(): NearbyNpc[] {
         return this.helpers.attackers().sort((a, b) => a.distance - b.distance);
+    }
+
+    /**
+     * Enemy-realm players whose melee swing or spell effect landed on us within `windowMs`
+     * (default 6 s, longer than a two-handed weapon's or a bow's swing), nearest first. The server never sends a player's target, so these combat events are the evidence.
+     */
+    getPlayerAttackers(windowMs: number = PLAYER_AIM_MS): NearbyPlayer[] {
+        return this.helpers.playerAttackers(this.helpers.state(), windowMs).sort((a, b) => a.distance - b.distance);
     }
 
     // ============ Loot ============
@@ -1940,15 +2101,15 @@ export class BotActions {
     }
 
 
-    /** Walk into melee range of an NPC (adopting its z), target it and face it. */
-    private async engage(npc: NearbyNpc): Promise<ActionResult> {
-        if (npc.distance > MELEE_APPROACH) {
-            const walk = await this.walkToObject(npc, { range: MELEE_APPROACH });
+    /** Walk into melee range of an NPC or player (adopting its z), target it and face it. */
+    private async engage(target: NearbyNpc | NearbyPlayer): Promise<ActionResult> {
+        if (target.distance > MELEE_APPROACH) {
+            const walk = await this.walkToObject(target, { range: MELEE_APPROACH });
             if (!walk.success) return { success: false, message: walk.message, reason: walk.reason ?? 'out_of_reach' };
         }
-        const t = await this.sdk.sendSetTarget(npc.objectId);
+        const t = await this.sdk.sendSetTarget(target.objectId);
         if (!t.success) return t;
-        return this.sdk.sendFaceObject(npc.objectId);
+        return this.sdk.sendFaceObject(target.objectId);
     }
 
     private async useSkillObserved(name: string, skillIndex: number, confirm: RegExp[] | null, refusals: readonly string[]): Promise<SkillUseResult> {

@@ -54,6 +54,9 @@ sdk/group/            group coordination on top of BotSDK/BotActions (one contro
   member.ts           MemberAgent: publishes its snapshots, runs its role's behaviour list; orders changes interrupt
   behaviors.ts        behaviour library (release, retreat, flee, heal, crowdControl, pull, tank, assist, position, holdFormation, rest, buff, shedLoad)
   strategy.ts, pve.ts GroupStrategy (decide + behaviours + settings), Coordinator, the PvE leveling policy
+  rvr.ts              the RvR roaming policy for battlegrounds (patrol, fight enemy players, hunt, fall back, regroup)
+  keeps.ts            a battleground's keeps, arrival points and the circles round the keeps whose guards attack us
+  battleground.ts     getting a group into a battleground: portal keeps, medallion, the battleground teleporter
   observer.ts         metrics, findings and runs/<stamp>.md reports; runner.ts runGroup/runGroupScript; cli.ts; terrain.ts camps/danger/aggro
 mcp/                  server.ts, execute-code.ts, console-capture.ts, api/ (BotManager, which spawns client/runner.ts when no client is attached)
 bots/                 create-bot.ts, _template/, examples/ (+ script-args.ts); each bots/<name>/ is gitignored

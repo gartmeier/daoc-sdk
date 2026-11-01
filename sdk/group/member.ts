@@ -84,10 +84,14 @@ export class MemberContext<S = any> {
     markCc(targetId: number, kind: string, durationMs: number): void {
         this.agent.board.markCc(targetId, this.me().regionId, this.name, kind, durationMs);
     }
+    /** Tell the group crowd control can't land on it for `durationMs` (it answered "immune"). */
+    markCcImmune(targetId: number, durationMs: number): void {
+        this.agent.board.markCcImmune(targetId, this.me().regionId, durationMs);
+    }
 }
 
 export interface MemberAgentOptions {
-    /** Report monsters within this distance (default 3000). */
+    /** Report monsters and enemy players within this distance (default 3000). */
     sightRadius?: number;
     /** Pause when no behaviour acts (default 300 ms). */
     idleMs?: number;
