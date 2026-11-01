@@ -538,6 +538,8 @@ export type BotAction = ActionBase & (
     | { type: 'sit'; sit: boolean }
     // Drop one of our concentration buffs: its index in state.concentrationEffects.
     | { type: 'removeConcentration'; index: number }
+    // Use a zone point by its id (getZonePointsFrom in data/index).
+    | { type: 'regionChangeRequest'; zonePointId: number }
     | { type: 'release' }
     | { type: 'quit' }
 );

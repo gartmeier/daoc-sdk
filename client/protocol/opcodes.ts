@@ -15,6 +15,7 @@ export const ClientOp = {
     DestroyItemRequest: 0x80,
     DialogResponse: 0x82,
     InviteToGroup: 0x87,
+    PlayerRegionChangeRequest: 0x90,
     DisbandFromGroup: 0x9F,
     PingRequest: 0xA3,
     LoginRequest: 0xA7,

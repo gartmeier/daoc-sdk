@@ -15,7 +15,7 @@ Notes from live runs against the local OpenDAoC server. Each topic file says wha
 | [group-coordination.md](group-coordination.md) | groups of bots: shared picture, coordinator, role behaviours, strategies, observer reports |
 | [rvr.md](rvr.md) | battlegrounds: getting in, PvP rules, killPlayer, the rvr-roam strategy, three groups fighting each other |
 | [classes-and-races.md](classes-and-races.md) | what can be created, start points per class |
-| [regions-and-zones.md](regions-and-zones.md) | coordinates, regions, zones, teleporters, static data |
+| [regions-and-zones.md](regions-and-zones.md) | coordinates, regions, zones, teleporters, zone points, static data |
 
 ## Two environments
 

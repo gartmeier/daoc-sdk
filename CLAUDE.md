@@ -99,6 +99,7 @@ A new call for the same bot cancels the one still running. Every result includes
 | Method | What it does |
 |---|---|
 | `walkTo(x, y, {z, tolerance})` / `followPath(points)` / `travelTo(name \| point)` | Walk in straight lines; re-issues after server corrections |
+| `useZonePoint(idOrZonePoint, {tolerance, timeout})` | Walk to a zone point and take it; reason `wrong_region`, `wrong_realm`, `refused`, `timeout`, ... |
 | `findKillableNpc({pattern, minCon, maxCon, radius})` | Best monster nearby (default con green..yellow) |
 | `killNpc(npc, {styles})` | Approach, attack, chase, wait for death; reports xp/money/items |
 | `killPlayer(objectId, {useStyle})` | The same against an enemy-realm player (named by race: pass the id); reason `immune` during PvP immunity |
@@ -128,7 +129,7 @@ From `sdk.*`, the common calls are `getState`, `getPlayer`, `getInventory`, `fin
   - Pass `z` when you know it, for example from an NPC's position.
   - `killNpc`/`walkToObject` adopt the target's z (with navmeshes: the layer nearest it at the target's spot; a target on a ledge with no layer under us stays out of 3D range and returns `out_of_reach`).
 - **Walks cut through walls and cliffs:** without navmeshes, walking is in straight lines and the server doesn't check collisions. A route that looks fine on the map can still fail with `stuck` (no progress for 8 s). Build navmeshes (`bun run navmesh:build`, see above) or add waypoints with `followPath`. In a zone without a `.nav`, `walkTo` still falls back to straight lines.
-- **Walking onto a zone exit does nothing:** the server uses a zone point only when the client sends 0x90 PlayerRegionChangeRequest, which the SDK can't send yet. Change regions with teleporters (`bot.whisper('Master Visur', 'Camelot')`). Zone boundaries inside a region work by walking. See learnings/regions-and-zones.md.
+- **Walking onto a zone exit does nothing:** the server uses a zone point only when the client sends 0x90 PlayerRegionChangeRequest. Use `bot.useZonePoint(idOrZonePoint)` (`getZonePointsFrom(regionId)` lists them), which walks there, asks and observes the jump. Teleporters (`bot.whisper('Master Visur', 'Camelot')`) also change regions. Zone boundaries inside a region work by walking. See learnings/regions-and-zones.md.
 - **Line of sight is not real:** the client answers every server LoS check with "clear", so spells and aggro behave as if nothing blocks the view.
 - **Casters get interrupted:** every melee hit interrupts casting ("your spell is interrupted"). Pull from range and fall back to melee (`bots/examples/caster.ts`). There is no kiting helper yet.
 - **An NPC "did not answer" a whisper:** NPCs silently ignore a whisper within 1.5 s of the last one they accepted from you, and the server refuses whispers < 500 ms apart ("Slow down! ..."). `bot.whisper` spaces its own whispers and retries; after a raw `sdk.sendWhisper`, wait 1.6 s yourself.

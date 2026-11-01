@@ -133,6 +133,7 @@ describe('BotSDK.sendAction dispatch failures', () => {
             command: s => s.sendCommand('&stick'),
             sit: s => s.sendSit(true),
             removeConcentration: s => s.sendRemoveConcentrationEffect(0),
+            regionChangeRequest: s => s.sendRegionChangeRequest(63),
             release: s => s.sendRelease(),
             quit: s => s.sendQuit(),
         };
@@ -145,7 +146,7 @@ describe('BotSDK.sendAction dispatch failures', () => {
             moveItem: { fromSlot: 40, toSlot: 41, count: 2 }, dropItem: { slot: 40 }, destroyItem: { slot: 40 },
             buy: { page: 0, slot: 1, count: 2 }, sell: { slot: 40 }, trainSpec: { specIndex: 0, levels: 2 },
             respondDialog: { accept: true }, say: { text: 'hi' }, send: { to: 'Ann', text: 'hi' }, groupSay: { text: 'hi' },
-            command: { command: '&stick' }, sit: { sit: true },
+            command: { command: '&stick' }, sit: { sit: true }, regionChangeRequest: { zonePointId: 63 },
         };
         for (const [type, call] of Object.entries(calls) as [BotActionType, (sdk: BotSDK) => Promise<ActionResult>][]) {
             const { sdk, sent } = stubSdk(5000);

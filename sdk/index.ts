@@ -1141,6 +1141,15 @@ export class BotSDK {
     }
 
     /**
+     * Ask the server to use a zone point, by its id (0x90). Success means dispatched: the server
+     * silently ignores a wrong id or another realm's zone point. bot.useZonePoint walks to the
+     * zone point and observes the jump.
+     */
+    async sendRegionChangeRequest(zonePointId: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'regionChangeRequest', zonePointId, reason: 'SDK' });
+    }
+
+    /**
      * Drop one of our concentration buffs (frees its concentration), by its `index`
      * in `state.concentrationEffects`. Observe the effect leaving that list.
      */

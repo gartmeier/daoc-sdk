@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
     defaultStats, estimateZ, findItemTemplates, findNpcSpawns, getClass, getClasses, getItemTemplate, getMerchantItems,
     getNpcSpawns, getPlayableRacesForClass, getRace, getRacesForClass, getSpell, getSpellLine, getStartingClasses, getStartupLocation,
-    getStarterArmour, getStarterEquipment, getStylesFor, getZoneAt, getZonePointsFrom, nearestBindpoint, realmId, statPointCost, toStats, validateCharacter,
+    getStarterArmour, getStarterEquipment, getStylesFor, getZoneAt, getZonePoint, getZonePointsFrom, nearestBindpoint, realmId, statPointCost, toStats, validateCharacter,
 } from './index';
 import { splitClassList } from './build';
 
@@ -109,6 +109,14 @@ describe('bind points, zone points, startup', () => {
     test('zone points from Camelot Hills region', () => {
         const zp = getZonePointsFrom(1);
         expect(zp.every(z => z.sourceRegion === 1)).toBe(true);
+    });
+
+    test('a zone point id with a row per realm gives the realm\'s row; a lone row answers for every realm', () => {
+        expect(getZonePoint(84)?.realm).toBe(1);
+        expect(getZonePoint(84, 'midgard')?.realm).toBe(2);
+        expect(getZonePoint(84, 3)?.realm).toBe(3);
+        expect(getZonePoint(63, 'midgard')?.realm).toBe(1);
+        expect(getZonePoint(999_999, 'midgard')).toBeUndefined();
     });
 
     test('startup location for Briton Armsman is Camelot Hills', () => {

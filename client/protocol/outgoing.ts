@@ -271,6 +271,11 @@ export function encodeRemoveConcentrationEffect(index: number): Uint8Array {
     return Uint8Array.of(index & 0xff);
 }
 
+/** 0x90 PlayerRegionChangeRequest: u16 LE zone point id for >=1126 (RegionChangeRequestHandler.cs:23). */
+export function encodeRegionChangeRequest(zonePointId: number): Uint8Array {
+    return new PacketWriter(2).u16le(zonePointId).toBytes();
+}
+
 /** 0xC7 PlayerSitRequest: u8 status (PlayerSitRequest.cs:8). */
 export function encodeSit(sit: boolean): Uint8Array {
     return Uint8Array.of(sit ? 1 : 0);

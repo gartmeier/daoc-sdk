@@ -64,6 +64,23 @@ describe('DaocClient sit', () => {
     });
 });
 
+describe('DaocClient regionChangeRequest', () => {
+    test('sends 0x90 and leaves the observing to the caller', async () => {
+        const { client, sent } = playingClient();
+        const r = await client.execute({ type: 'regionChangeRequest', zonePointId: 63 });
+        expect(r.success).toBe(true);
+        expect(sent).toEqual([ClientOp.PlayerRegionChangeRequest]);
+    });
+
+    test('an id that does not fit a u16 is refused before anything goes out', async () => {
+        const { client, sent } = playingClient();
+        for (const zonePointId of [-1, 65536, 1.5]) {
+            expect(await client.execute({ type: 'regionChangeRequest', zonePointId })).toMatchObject({ success: false, reason: 'bad_args' });
+        }
+        expect(sent).toEqual([]);
+    });
+});
+
 describe('DaocClient position-prefixed packets after a 0xA9 gap', () => {
     test('a fresh 0xA9 goes out before 0x71 UseSlot when the last one is > 4 s old', async () => {
         const { client, s, sent } = playingClient();

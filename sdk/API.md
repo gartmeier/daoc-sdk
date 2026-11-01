@@ -52,6 +52,7 @@
 | `freeBackpackSlots(): number` | Free backpack slots (of 40). |
 | `findNpcSpawn(pattern: NamePattern, options: { regionId?: number; guild?: NamePattern } = {}): NpcSpawnMatch \| null` | Nearest static spawn (DB `mob` table) in our region matching a name, or null. |
 | `async travelTo(destination: NamePattern \| (Point & { regionId?: number }), options: WalkOptions = {}): Promise<TravelResult>` | Walk (same region, through walkTo: navmesh route when built, else a straight line) to a named spawn from static data or to a point. |
+| `async useZonePoint(target: number \| ZonePoint, options: UseZonePointOptions = {}): Promise<ZonePointResult>` | Use a zone point, by its id or as static data (getZonePointsFrom): walk to its source when farther than `tolerance`, send 0x90 and watch for the jump. Reasons: 'not_found' (no such id), 'wrong_region', 'wrong_realm', 'refused' (a server message said so), 'timeout' (no jump and no word: the server ignores a request it won't take, RegionChangeRequestHandler.cs:41-45), 'dead', and the walk's own ('stuck', 'died', ...). The server checks no distance (the handler reads only the id), so the walk is ours: a real client asks when it steps on the zone point, and a walk that stopped within 400 still asks. The realm is the zone point's in the DB, as for a PrivLevel-1 account (:33-37), and an id with a row per realm means our realm's row. The one other rule (:28, Trials of Atlantis regions go by the zone's realm) has no zone point in the dump. |
 | `async say(text: string): Promise<ChatResult>` | Say text (chunked) and observe our echo. Spaces calls SAY_SPACING_MS apart: the server drops a say < 500 ms after the last accepted one with "Slow down! Think before you say each word!" (commands/playercommands/say.cs:49-53); that answer retries once, then fails with 'rate_limited'. |
 | `async send(to: string, text: string): Promise<ChatResult>` | Private message a player ('/send'); fails on "not online"-style answers. |
 | `async grind(options: GrindOptions = {}): Promise<GrindResult>` | Hunt around an anchor: pick a killable target (attackers first), kill, loot, rest when low, walk back when drifted. Stops on death unless `respawn` is set, and with stopReason 'no_targets' after `noTargetTimeoutMs` (default 60 s) without any candidate. |
@@ -241,6 +242,7 @@
 | `async sendGroupSay(text: string): Promise<ActionResult>` | Group chat. |
 | `async sendCommand(command: string): Promise<ActionResult>` | Slash command sent verbatim, e.g. '&stick', '/bind' ('/' becomes '&'). |
 | `async sendSit(sit: boolean = true): Promise<ActionResult>` | Sit (true) or stand (false). |
+| `async sendRegionChangeRequest(zonePointId: number): Promise<ActionResult>` | Ask the server to use a zone point, by its id (0x90). Success means dispatched: the server silently ignores a wrong id or another realm's zone point. bot.useZonePoint walks to the zone point and observes the jump. |
 | `async sendRemoveConcentrationEffect(index: number): Promise<ActionResult>` | Drop one of our concentration buffs (frees its concentration), by its `index` in `state.concentrationEffects`. Observe the effect leaving that list. |
 | `async sendRelease(): Promise<ActionResult>` | Release after death (back to bind point). |
 | `async sendQuit(): Promise<ActionResult>` | Quit to the character screen ('&quit'; the server timer is 20 s+). |
@@ -1226,6 +1228,31 @@ interface TrainResult {
 ```typescript
 interface TravelResult {
   spawn: NpcSpawnMatch | null;
+}
+```
+
+### UseZonePointOptions
+
+```typescript
+interface UseZonePointOptions {
+  /** Walk to the source when farther than this (default 200). */
+  tolerance?: number;
+  /** How long to watch for the jump after the request, ms (default 20000). */
+  timeout?: number;
+}
+```
+
+### ZonePointResult
+
+```typescript
+interface ZonePointResult {
+  /** The zone point used; null when the id names none. */
+  zonePoint: ZonePoint | null;
+  /** Where we stand now. */
+  regionId: number | null;
+  position: Vec3 | null;
+  /** Server messages since the request. */
+  messages: string[];
 }
 ```
 

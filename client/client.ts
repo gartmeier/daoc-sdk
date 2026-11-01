@@ -581,6 +581,14 @@ export class DaocClient {
                 this.send(ClientOp.RemoveConcentrationEffect, out.encodeRemoveConcentrationEffect(i));
                 return ok(`concentration effect ${i} removal requested`);
             }
+            case 'regionChangeRequest': {
+                const id = a.zonePointId;
+                if (!Number.isInteger(id) || id < 0 || id > 0xffff) return fail('bad_args', 'zonePointId must be 0..65535');
+                // A refused request (wrong id or realm: RegionChangeRequestHandler.cs:41-45) is silent for a
+                // PrivLevel-1 account. A jump comes back as a region change like a teleporter's (session.ts).
+                this.send(ClientOp.PlayerRegionChangeRequest, out.encodeRegionChangeRequest(id));
+                return ok(`zone point ${id} requested`);
+            }
             case 'release':
                 if (!m.self.isDead) return fail('not_dead', 'release only works while dead');
                 this.command('&release');
