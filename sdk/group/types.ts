@@ -52,6 +52,16 @@ export interface Capabilities {
 }
 
 /** One member's view of itself, built from its own snapshots. */
+/** What a member's own client saw it do in the run, counted from the server's messages. */
+export interface MemberCombat {
+    /** Damage dealt with weapons and spells. */
+    dealt: number;
+    /** Styles landed, by name. */
+    styles: Record<string, number>;
+    /** "You fail to execute your X perfectly!": the opening was gone by the swing. */
+    missedStyles: number;
+}
+
 export interface MemberReport {
     /** Character name. */
     name: string;
@@ -83,6 +93,7 @@ export interface MemberReport {
     /** Names of active effects (buffs we can see on ourselves). */
     effects: string[];
     capabilities: Capabilities;
+    combat?: MemberCombat;
     activity: Activity;
     /** Snapshot time (ms epoch). */
     at: number;
@@ -177,6 +188,8 @@ export interface Orders {
     retreatTo: Point3 | null;
     /** Who the group is waiting for in gather/recover, and why ('health', 'power', 'dead', 'away'). */
     waiting: { name: string; why: string }[];
+    /** While travelling: how far there is still to go in all, beyond the leg in `anchor`. */
+    journey?: number;
     /** Why the coordinator decided this (for the observer and the log). */
     reason: string;
     issuedAt: number;

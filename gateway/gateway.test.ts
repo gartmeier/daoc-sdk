@@ -112,6 +112,26 @@ describe('gateway routing', () => {
         expect(status.observers).toHaveLength(1);
     });
 
+    test('taking control closes the trade window the old controller can no longer reach', async () => {
+        start();
+        const b = await bot();
+        const closes = () => b.messages.filter(m => m.type === 'action' && m.action.type === 'tradeCancel');
+        b.send({ type: 'state', state: makeState({ tick: 1 }) });
+        const c1 = await sdk();
+        await until(() => c1.messages.some(m => m.type === 'sdk_state'), 'state');
+        const c2 = await sdk();
+        await c1.closed;
+        expect(closes()).toEqual([]); // no window, nothing to close
+
+        b.send({ type: 'state', state: makeState({ tick: 2, trade: { id: 1, revision: 1, partnerName: 'Aine', mySlots: [40], myMoney: 0, partnerItems: [], partnerMoney: 0 } }) });
+        await until(() => c2.messages.some(m => m.type === 'sdk_state' && m.state.tick === 2), 'window');
+        const c3 = await sdk();
+        await c2.closed;
+        await until(() => closes().length === 1, 'the close');
+        expect(closes()[0].actionId).toBeUndefined();
+        expect(c3.ws.readyState).toBe(WebSocket.OPEN);
+    });
+
     test('observers may only send say/send', async () => {
         start();
         const b = await bot();

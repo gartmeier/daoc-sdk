@@ -13,6 +13,7 @@ import { gatewayHttpBase, type BotSDK } from '../index';
 import { BotDisconnectedError, BotPreemptedError, runScript, type ScriptContext } from '../runner';
 import { Blackboard } from './blackboard';
 import { MemberAgent, type Behavior, type Member } from './member';
+import { withCharacter } from './character';
 import { formatReport, GroupObserver, saveReport, stampOf, type Finding, type RunReport } from './observer';
 import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type PublisherDeps } from './publish';
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
@@ -81,13 +82,18 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     const def = loadGroup(opts.dir);
     const strategy = opts.strategy;
     const settings = mergeSettings(strategy.settings, unflatten(opts.settings ?? {}) as any) as S;
-    const { members, opened } = await connectGroup(def, opts.have, strategy.roleOf);
+    const { members, opened } = await connectGroup(def, opts.have, strategy.roleOf, bot => !strategy.memberBehaviors?.[bot]);
     const board = new Blackboard(strategy.board);
     const agents: MemberAgent<S>[] = [];
     const startedAt = Date.now();
     // The strategy's own rules join the observer's, in the live score and the saved report.
     const strategyFindings = strategy.findings && ((r: RunReport) => strategy.findings!(r, settings));
-    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name, startedAt, findings: strategyFindings });
+    const behaviorsOf = (m: Member) => strategy.memberBehaviors?.[m.bot] ?? withCharacter(strategy.behaviors[m.role] ?? strategy.behaviors.melee, m.character);
+    const routines = Object.fromEntries(members.map(m => [m.bot, {
+        from: strategy.memberBehaviors?.[m.bot] ? 'strategy' as const : m.character ? 'character' as const : 'role' as const,
+        behaviors: behaviorsOf(m).map(b => b.name),
+    }]));
+    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name, startedAt, findings: strategyFindings, routines });
     const graceMs = opts.graceMs ?? 60_000;
     // Planned until the main loop starts; a wind-down from the viewer only moves them earlier.
     let deadline = startedAt + opts.seconds * 1000;
@@ -95,7 +101,6 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     // Set from the publisher's answer handler (a cast: TS would narrow a plain `= null` to null for good).
     let windDown = null as ControlRequest | null;
     let stoppedBy: 'time' | 'viewer' = 'time';
-    const behaviorsOf = (m: Member) => strategy.memberBehaviors?.[m.bot] ?? strategy.behaviors[m.role] ?? strategy.behaviors.melee;
     let publisher: GroupPublisher | null = null;
     const parent = executionContext.getStore()?.signal;
     const run = new AbortController();
@@ -126,6 +131,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         const regions = new Set(players.map(p => p.regionId));
         if (regions.size > 1) throw new Error(`members are in different regions: ${players.map(p => `${p.name} ${p.regionId}`).join(', ')}; bring them together first (teleporters)`);
         log(`${def.name}: ${members.map(m => `${m.sdk.getPlayer()!.name} (${m.sdk.getPlayer()!.className} L${m.sdk.getPlayer()!.level}, ${m.role})`).join(', ')}; strategy ${strategy.name}`);
+        log(`routines: ${members.map(m => `${m.bot} from its ${routines[m.bot]!.from}`).join(', ')}`);
         if (opts.form !== false) for (const line of await formGroup(members, def.leader)) log(`group: ${line}`);
 
         board.onEvent(e => {
@@ -190,7 +196,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     try {
         const report = observer.stop();
         out.flush();
-        made = { report, path: opts.save === false ? null : saveReport(opts.dir, report, out.lines) };
+        made = { report, path: opts.save === false ? null : saveReport(opts.dir, report, out.lines, { botHistory: true }) };
     } catch (e) {
         // No report (runs/ not writable, a full disk): the viewer must not show a clean end.
         await publisher?.finish({ error: failure ?? e });

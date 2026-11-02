@@ -22,7 +22,7 @@
 
 import type { BotWorldState, PlayerState, Realm } from '../types';
 import { isKillable, PLAYER_AIM_MS } from '../actions-helpers';
-import type { Activity, Capabilities, Contact, GroupEvent, GroupPicture, MemberReport, Orders, OrdersUpdate, Role, Sighting } from './types';
+import type { Activity, Capabilities, MemberCombat, Contact, GroupEvent, GroupPicture, MemberReport, Orders, OrdersUpdate, Role, Sighting } from './types';
 
 export interface BlackboardOptions {
     /** A contact nobody has seen for this long is marked stale (default 5000). */
@@ -49,6 +49,7 @@ export interface MemberSelf {
     role: Role;
     activity: Activity;
     capabilities: Capabilities;
+    combat?: MemberCombat;
 }
 
 /** Who killed a member, as its client saw them (the board's 'death' event data). Enemy players go by race name. */
@@ -171,7 +172,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         hp: p.healthPercent, mana: p.manaPercent, endurance: p.endurancePercent,
         load: p.encumbrance && p.encumbrance.max > 0 ? Math.round(100 * p.encumbrance.current / p.encumbrance.max) : 0,
         isDead: p.isDead, isSitting: p.isSitting, inCombat: p.inCombat, attacking: p.attacking, targetId: p.targetObjectId,
-        effects: state.effects.map(e => e.name), capabilities: self.capabilities, activity: self.activity,
+        effects: state.effects.map(e => e.name), capabilities: self.capabilities, activity: self.activity, combat: self.combat,
         at: state.timestamp,
     };
     return { report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null };

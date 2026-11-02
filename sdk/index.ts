@@ -37,6 +37,7 @@ import type {
     Spell,
     Style,
     TextWindow,
+    TradeWindow,
     TrainerState,
     Vec3,
 } from './types';
@@ -810,6 +811,11 @@ export class BotSDK {
         return this.state?.trainer?.isOpen ? this.state.trainer : null;
     }
 
+    /** Open player trade window, or null when none is open. Its partnerItems carry the partner's slots, never ours. */
+    getTrade(): TradeWindow | null {
+        return this.state?.trade ?? null;
+    }
+
     /** Open 0x81 dialog box (group invite, quest offer, yes/no), or null. Answer with sendRespondDialog. */
     getDialog(): DialogBox | null {
         return this.state?.dialog?.isOpen ? this.state.dialog : null;
@@ -1119,6 +1125,26 @@ export class BotSDK {
     /** Train a specialization (index from getTrainer().specs). */
     async sendTrainSpec(specIndex: number, levels?: number): Promise<ActionResult> {
         return this.sendAction({ type: 'trainSpec', specIndex, levels, reason: 'SDK' });
+    }
+
+    /** Add a backpack item to the trade window with a player, opening it if needed. Evidence is the slot in getState().trade.mySlots. Never from both sides at once: two adds that open a window in one server tick can hang the server (learnings/trading.md). bot.offerTrade keeps them apart. */
+    async sendTradeOfferItem(partnerObjectId: number, slot: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'tradeOfferItem', partnerObjectId, slot, reason: 'SDK' });
+    }
+
+    /** Add copper to the trade window with a player, on top of what is there. It goes out as one drop per coin, and the server holds only that drop against the purse, never the total (PlayerMoveItemRequestHandler.cs:258): an amount above the purse can be refused in part, or shown in full and fail at the commit. bot.offerTrade checks the purse first. */
+    async sendTradeOfferMoney(partnerObjectId: number, copper: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'tradeOfferMoney', partnerObjectId, copper, reason: 'SDK' });
+    }
+
+    /** Accept the open trade; with a revision, only while the window still shows it, and with a window id, only while it is that window, because revisions start over per window (reason trade_changed otherwise). The second accept commits. */
+    async sendTradeAccept(revision?: number, windowId?: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'tradeAccept', revision, windowId, reason: 'SDK' });
+    }
+
+    /** Close the trade window, also one the server holds but never told us about. A no-op on the server without one. */
+    async sendTradeCancel(): Promise<ActionResult> {
+        return this.sendAction({ type: 'tradeCancel', reason: 'SDK' });
     }
 
     /** Answer the open dialog box (yes/accept or no/decline). */

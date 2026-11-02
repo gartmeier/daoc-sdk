@@ -4,7 +4,8 @@
 
 export * from './types';
 export { Blackboard, observeState, emptyOrders, isMaterialChange, isAlive, type BlackboardOptions, type Observation } from './blackboard';
-export { MemberAgent, MemberContext, type Behavior, type Member } from './member';
+export { MemberAgent, MemberContext, countCombatMessage, type Behavior, type Member } from './member';
+export { loadCharacter, withCharacter, type Character } from './character';
 export * from './behaviors';
 export { Coordinator, defineStrategy, roleForClass, type CoordinatorContext, type GroupStrategy } from './strategy';
 export { pveLeveling, decidePve, pickPullTarget, pickFocus, assignCc, PVE_SETTINGS, type PveSettings } from './pve';

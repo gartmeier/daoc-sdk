@@ -174,6 +174,17 @@ describe('item / merchant / trainer / ui encoders', () => {
         expect(H(o.encodeMoveItem(41, 40, 3))).toBe('00 00 00 29 00 28 00 03');
     });
 
+    test('0xDD to a player: toSlot is 1000 + objectId, money comes from slots 500..504 with its amount', () => {
+        expect(H(o.encodeMoveItem(1000 + 7, 40, 0))).toBe('00 00 03 EF 00 28 00 00');
+        expect(H(o.encodeMoveItem(1000 + 7, 503, 5))).toBe('00 00 03 EF 01 F7 00 05');
+    });
+
+    test('0xEB ModifyTrade: 26 bytes, the code first', () => {
+        const zeros = (n: number): string[] => Array<string>(n).fill('00');
+        expect(H(o.encodeModifyTrade(2))).toBe(['02', ...zeros(25)].join(' '));
+        expect(H(o.encodeModifyTrade(0))).toBe(zeros(26).join(' '));
+    });
+
     test('0x80 DestroyItem: 4 skipped, u16 slot', () => {
         expect(H(o.encodeDestroyItem(45))).toBe('00 00 00 00 00 2D');
         expect(H(o.encodeDetailRequest(1, 0, 40))).toBe('00 01 00 00 00 00 00 28');

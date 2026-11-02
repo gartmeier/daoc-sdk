@@ -5,7 +5,7 @@
 import type {
     Ability, CombatEvent, DialogBox, Effect, GameMessage, GroupMember, InventoryItem, MerchantItem,
     MerchantState, Money, NearbyNpc, NearbyObject, NearbyPlayer, NpcDialog, Realm, SkillsState,
-    Specialization, Spell, SpellDetails, Stats, Style, StyleDetails, TextWindow, TrainerState, Vec3,
+    Specialization, Spell, SpellDetails, Stats, Style, StyleDetails, TextWindow, TradeWindow, TrainerState, Vec3,
 } from '../../sdk/types';
 import { getZone } from '../../data/zones';
 import { ServerOp } from '../protocol/opcodes';
@@ -24,13 +24,15 @@ import {
     toSpellDetails, toStyleDetails, type ItemData, type SpellLinePage, type UsableSkillEntry,
 } from '../protocol/incoming/player';
 import { decodeEncumbrance, decodeMaxSpeed, decodeTime } from '../protocol/incoming/world';
-import { decodeGroupMemberUpdate, decodeMerchantWindow, decodeTrainerWindow } from '../protocol/incoming/windows';
+import { decodeGroupMemberUpdate, decodeMerchantWindow, decodeTradeWindow, decodeTrainerWindow } from '../protocol/incoming/windows';
 import { realmName } from './classes';
 
 /** (ushort)1000000: the server's 'no concentration' MaxConcentration. */
 const NO_CONCENTRATION_U16 = 1_000_000 & 0xffff;
 /** Process-wide, so ids stay monotonic across re-logins (a new WorldModel per session). */
 let nextMessageId = 1;
+/** Process-wide too: a window closed and reopened between two snapshots still reads as a new one. */
+let nextTradeId = 1;
 export const VISIBILITY_DISTANCE = 6000;
 const NPC_STALE_MS = 16_000;
 const OBJECT_STALE_MS = 95_000;
@@ -61,6 +63,22 @@ export function totalCopper(m: { copper: number; silver: number; gold: number; p
     return m.copper + m.silver * COPPER_PER.silver + m.gold * COPPER_PER.gold + m.platinum * COPPER_PER.platinum + m.mithril * COPPER_PER.mithril;
 }
 
+/** Copper as 0xDD money drops, [client slot, amount] per nonzero coin: 500 mithril .. 504 copper (IGameInventory.cs:95-99, PlayerMoveItemRequestHandler.cs:234-242). */
+export function coinDrops(copper: number): Array<[slot: number, amount: number]> {
+    const amounts = [
+        Math.floor(copper / COPPER_PER.mithril),
+        Math.floor((copper % COPPER_PER.mithril) / COPPER_PER.platinum),
+        Math.floor((copper % COPPER_PER.platinum) / COPPER_PER.gold),
+        Math.floor((copper % COPPER_PER.gold) / COPPER_PER.silver),
+        copper % COPPER_PER.silver,
+    ];
+    const drops: Array<[number, number]> = [];
+    amounts.forEach((amount, i) => {
+        if (amount > 0) drops.push([500 + i, amount]);
+    });
+    return drops;
+}
+
 /**
  * Reverse of GlobalConstants.GetSpecToInternalIndex (GlobalConstants.cs:801-891), which the server
  * writes as the bonus byte of a 0x16/01 style entry (PacketLib1112.cs:150). Values are the Specs
@@ -89,7 +107,7 @@ export const SPEC_BY_INTERNAL_INDEX: Readonly<Record<number, string>> = {
 const IGNORED_OPCODES = new Set<number>([
     0x03, 0x05, 0x08, 0x09, 0x0A, 0x0F, 0x12, 0x13, 0x18, 0x1E, 0x1F, 0x45, 0x46, 0x49, 0x4A, 0x4C, 0x4E, 0x59, 0x5C,
     0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x86, 0x88, 0x8D, 0x92, 0x99,
-    0x9E, 0xC3, 0xC5, 0xC6, 0xC8, 0xC9, 0xD1, 0xD3, 0xDB, 0xE2, 0xE3, 0xEA, 0xEF, 0xF0, 0xF3, 0xF5, 0xF7, 0xF9,
+    0x9E, 0xC3, 0xC5, 0xC6, 0xC8, 0xC9, 0xD1, 0xD3, 0xDB, 0xE2, 0xE3, 0xEF, 0xF0, 0xF3, 0xF5, 0xF7, 0xF9,
 ]);
 
 export interface NpcEntry {
@@ -273,6 +291,8 @@ export class WorldModel {
     npcDialog: NpcDialog | null = null;
     dialog: DialogBox | null = null;
     textWindow: TextWindow | null = null;
+    /** Replaced per 0xEA, never mutated: snapshots share it. */
+    trade: TradeWindow | null = null;
     merchant: MerchantState = { isOpen: false, merchantObjectId: null, windowType: 0, items: [] };
     private merchantLastPageAt = 0;
     /** Where we stood when the trainer window arrived (set by the next cull). */
@@ -301,6 +321,7 @@ export class WorldModel {
         this.players.clear();
         this.sessionToOid.clear();
         this.objects.clear();
+        this.trade = null;
         this.merchant = { isOpen: false, merchantObjectId: null, windowType: 0, items: [] };
         this.closeTrainer();
         this.self.targetObjectId = null;
@@ -558,6 +579,21 @@ export class WorldModel {
                 const d = decodeDialog(p);
                 this.dialog = { isOpen: true, code: d.code, data: d.data, type: d.type, text: d.text, receivedAt: now };
                 this.signal('dialog');
+                return true;
+            }
+            case ServerOp.TradeWindow: {
+                const d = decodeTradeWindow(p);
+                const prev = d && this.trade?.partnerName === d.partnerName ? this.trade : null;
+                this.trade = d && {
+                    id: prev?.id ?? nextTradeId++,
+                    revision: (prev?.revision ?? 0) + 1,
+                    partnerName: d.partnerName,
+                    mySlots: d.mySlots,
+                    myMoney: totalCopper(d.myMoney),
+                    partnerItems: d.partnerItems.map(i => toInventoryItem(i.slot, i.item)), // never into this.items: the slots are the partner's
+                    partnerMoney: totalCopper(d.partnerMoney),
+                };
+                this.signal('trade');
                 return true;
             }
             case ServerOp.DetailWindow: {

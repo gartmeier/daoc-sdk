@@ -33,14 +33,19 @@ import {
     SIT_REFUSALS,
     STYLE_REFUSALS,
     TRAIN_REFUSALS,
+    TRADE_COMMIT_FAILURES,
+    TRADE_COMPLETED,
+    TRADE_REFUSALS,
     USE_ITEM_REFUSALS,
     describeTarget,
+    firstTradeLine,
     totalCopper,
     type LivingTarget,
     type MessageWatch,
     type NpcTarget,
     type ObjectTarget,
     type PlayerTarget,
+    type TradeLine,
     type Point,
 } from './actions-helpers';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
@@ -62,6 +67,7 @@ import type {
     PlayerState,
     Spell,
     Style,
+    TradeWindow,
     Vec3,
 } from './types';
 
@@ -126,6 +132,7 @@ export interface WalkResult extends ActionResult {
 export interface WalkToObjectOptions {
     /** Required 3D distance to the target (default 100). */
     range?: number;
+    /** The whole walk, however often the target moves on (default: each leg's own, see WalkOptions). */
     timeout?: number;
 }
 
@@ -180,18 +187,34 @@ export interface AttackResult extends ActionResult {
     retryAfterMs?: number;
 }
 
-/** Choose a style for the next swing; return its name or null for a plain swing. `target` repeats `npc`. */
-export type StyleChooser = (ctx: { npc: NearbyNpc; target: NearbyNpc; player: PlayerState; state: BotWorldState; styles: Style[] }) => string | null | undefined;
+/**
+ * A style for the next swing by name, or two: the server keeps a first style and a backup, and at the
+ * moment of the swing uses the first if its opening is met, else the backup. Null for a plain swing.
+ */
+export type StyleChoice = string | readonly string[] | null | undefined;
+
+/** Send a style choice again after this long without a swing, in case the last one never reached the queue. */
+const STYLE_RESEND_MS = 5000;
+
+/** The styles a choice names, at most the two the server keeps, each once. */
+export function styleQueue(choice: StyleChoice, styles: Style[]): Style[] {
+    const names = typeof choice === 'string' ? [choice] : choice ?? [];
+    const found = names.map(n => bestNameMatch(styles, n)).filter((s): s is Style => !!s);
+    return [...new Set(found)].slice(0, 2);
+}
+
+/** Choose the style or styles for the next swing. `target` repeats `npc`. */
+export type StyleChooser = (ctx: { npc: NearbyNpc; target: NearbyNpc; player: PlayerState; state: BotWorldState; styles: Style[] }) => StyleChoice;
 
 /** killPlayer's style chooser. One that takes `{ target: NearbyNpc | NearbyPlayer, ... }` fits killNpc as well. */
-export type PlayerStyleChooser = (ctx: { target: NearbyPlayer; player: PlayerState; state: BotWorldState; styles: Style[] }) => string | null | undefined;
+export type PlayerStyleChooser = (ctx: { target: NearbyPlayer; player: PlayerState; state: BotWorldState; styles: Style[] }) => StyleChoice;
 
 export interface KillOptions {
     /** Give up after this long (default 60000 ms). */
     timeout?: number;
     /** Style names to rotate through, one per swing (endurance permitting). */
     styles?: string[];
-    /** Pick the style per swing instead of rotating `styles`. */
+    /** Pick the style, or a style and its backup, per swing instead of rotating `styles`. */
     useStyle?: StyleChooser;
     /** Follow a target that moves away (default true). */
     chase?: boolean;
@@ -416,6 +439,55 @@ export interface GroupResult extends ActionResult {
     group: GroupMember[];
 }
 
+export interface TradeOfferOptions {
+    /** Backpack items, at most 10. A stack always goes whole. */
+    give?: Array<InventoryItem | NamePattern | number>;
+    /** TOTAL copper our side should show, not an increment. */
+    money?: number;
+    /** Approach distance (default 100). The server allows 128 in 3D. */
+    range?: number;
+    /** The whole call (default 30000 ms). Seeing a failure's window close can take up to 2 s more. */
+    timeout?: number;
+}
+
+/** TradeOfferOptions (give, money, range, timeout) plus the judge of each offer. */
+export interface TradeOptions extends TradeOfferOptions {
+    /** Judge each new offer before accepting it; false means "not yet". A partner's change can cross our accept in flight, so this is no safeguard against strangers. */
+    accept?: (window: TradeWindow) => boolean;
+}
+
+export interface AcceptTradeOptions {
+    /** Only this partner's window; anyone else's is closed while waiting. Default: whoever opens one. */
+    from?: PlayerTarget;
+    accept?: (window: TradeWindow) => boolean;
+    /** The whole call (default 30000 ms). */
+    timeout?: number;
+}
+
+export interface TradeOfferResult extends ActionResult {
+    partner: NearbyPlayer | null;
+    trade: TradeWindow | null;
+    /** The server's refusal of an add, and the item it was for (null for money). */
+    refused: { item: InventoryItem | null; message: string } | null;
+    messages: GameMessage[];
+}
+
+export interface TradeResult extends ActionResult {
+    partner: string | null;
+    /** As they were in our backpack. */
+    gave: InventoryItem[];
+    /** Real slots of ours, ready for equipItem. */
+    received: InventoryItem[];
+    /** Offered, completed, not found in our backpack (reason 'item_missing'). */
+    missing: InventoryItem[];
+    /** Copper. */
+    moneyGiven: number;
+    /** Copper. */
+    moneyReceived: number;
+    refused: { item: InventoryItem | null; message: string } | null;
+    messages: GameMessage[];
+}
+
 export interface FollowOptions {
     /** Keep within this 2D distance (default 150). */
     distance?: number;
@@ -504,8 +576,43 @@ export interface GrindResult extends ActionResult {
 
 type Obj = NearbyNpc | NearbyPlayer | NearbyObject;
 
+/**
+ * How long to wait before an add that opens a window. Two of those in one server tick (33 ms) cross the windows, and
+ * then two adds can hang the whole server (learnings/trading.md). The bots have no channel and either can start
+ * first, so the clock keeps them apart: the earlier name sends in the first 250 ms of each second, the later name
+ * in the 250 ms from the half second. Adds to an open window are safe, because both sides then share one lock.
+ */
+export function tradeSlotWait(now: number, later: boolean): number {
+    const phase = (now + (later ? TRADE_SLOT_CYCLE_MS / 2 : 0)) % TRADE_SLOT_CYCLE_MS;
+    return phase < TRADE_SLOT_MS ? 0 : TRADE_SLOT_CYCLE_MS - phase;
+}
+
 /** KillResult without the ActionResult fields and the target. */
 type KillNumbers = Omit<KillResult, keyof ActionResult | 'npc' | 'retryAfterMs'>;
+
+/** A trade call's whole budget when the caller sets none. */
+const TRADE_TIMEOUT_MS = 30_000;
+/** How long the server gets to answer one add with a new 0xEA or a refusal line. */
+const TRADE_ANSWER_MS = 3000;
+/** How long a close gets to show in the snapshots. */
+const TRADE_CLOSE_MS = 2000;
+/** PlayerTradeWindow.MAX_ITEMS. */
+const TRADE_MAX_ITEMS = 10;
+/** Where to step when the server calls us too far away after the normal approach. */
+const TRADE_CLOSE_RANGE = 64;
+/** The wall clock's cycle for an add that opens a window, and the part of it a side may send in. See tradeSlotWait. */
+const TRADE_SLOT_CYCLE_MS = 1000;
+const TRADE_SLOT_MS = 250;
+
+/** Our half of a window. */
+type TradeSide = Pick<TradeWindow, 'mySlots' | 'myMoney'>;
+/** What a call that gives nothing may find on our side. */
+const NOTHING_OF_OURS: TradeSide = { mySlots: [], myMoney: 0 };
+const sameTradeSide = (a: TradeSide, b: TradeSide): boolean =>
+    a.myMoney === b.myMoney && a.mySlots.length === b.mySlots.length && a.mySlots.every(slot => b.mySlots.includes(slot));
+
+const noTrade = (message: string, reason: string, partner: string | null, messages: GameMessage[], refused: TradeResult['refused'] = null): TradeResult =>
+    fail(message, reason, { partner, gave: [], received: [], missing: [], moneyGiven: 0, moneyReceived: 0, refused, messages });
 
 const noKill = (): KillNumbers => ({ killed: false, xpGained: 0, rpGained: 0, moneyGained: 0, itemsGained: [], durationMs: 0, levelsGained: 0, stylesUsed: 0 });
 
@@ -521,7 +628,7 @@ interface Foe<T extends NearbyNpc | NearbyPlayer> {
     isDown(t: T): boolean;
     /** It left view without a death event at `lastHp` %: true when that still counts as the kill. */
     vanishedKilled(lastHp: number, watch: MessageWatch): boolean;
-    chooseStyle?: (t: T, player: PlayerState, state: BotWorldState, styles: Style[]) => string | null | undefined;
+    chooseStyle?: (t: T, player: PlayerState, state: BotWorldState, styles: Style[]) => StyleChoice;
 }
 
 /** Message types that are combat/loot spam, never an answer to a skill or item use. */
@@ -580,6 +687,8 @@ export class BotActions {
     private helpers: ActionHelpers;
     private lastWhisperAt = 0;
     private lastSayAt = 0;
+    /** The window of an offerTrade, for the acceptTrade that finishes it. */
+    private lastOffer: TradeWindow | null = null;
 
     constructor(public sdk: BotSDK) {
         this.helpers = new ActionHelpers(sdk);
@@ -603,10 +712,13 @@ export class BotActions {
         if (!obj) return { ...fail(`Target not found: ${describeTarget(target)}`, 'not_found', {}), position: this.position(), distance: Infinity, reissues: 0, target: null };
         let last: WalkResult = { success: true, message: 'Already in range', position: this.position(), distance: obj.distance2d, reissues: 0 };
         const tolerance = Math.max(16, Math.min(range * 0.6, range - 20));
+        const deadline = options.timeout === undefined ? null : Date.now() + options.timeout;
         for (let attempt = 0; attempt < 4; attempt++) {
             if (obj.distance <= range) {
                 return { ...last, success: true, message: `In range of ${obj.name} (${obj.distance})`, target: obj };
             }
+            const left = deadline === null ? undefined : deadline - Date.now();
+            if (left !== undefined && left <= 0) return { ...last, ...fail(`Walk to ${obj.name} timed out after ${options.timeout}ms`, 'timeout', {}), target: obj };
             if (obj.distance2d <= tolerance) {
                 // Close on the ground but out of range in 3D: our z is off (estimateZ can miss by
                 // hundreds) or the target is on another layer (ledge, wall, balcony). route() would
@@ -618,11 +730,11 @@ export class BotActions {
                 const targetZ = obj.z;
                 const r = await this.sdk.sendMoveTo(obj.x, obj.y, targetZ, { tolerance: Math.min(tolerance, 24) });
                 if (!r.success) return { ...last, ...fail(`Cannot reach ${obj.name}: ${r.message}`, r.reason ?? 'dispatch_failed', {}), target: obj };
-                const adopted = await this.helpers.waitFor(s => s.player && Math.abs(s.player.z - targetZ) <= 16 ? true : null, 2000);
+                const adopted = await this.helpers.waitFor(s => s.player && Math.abs(s.player.z - targetZ) <= 16 ? true : null, Math.min(2000, left ?? 2000));
                 last = { success: true, message: 'Adopted target height', position: this.position(), distance: obj.distance2d, reissues: last.reissues };
                 if (!adopted) break; // no layer near the target's height here: retrying won't find one
             } else {
-                last = await this.route({ x: obj.x, y: obj.y, z: obj.z }, [], { tolerance, timeout: options.timeout });
+                last = await this.route({ x: obj.x, y: obj.y, z: obj.z }, [], { tolerance, timeout: left });
             }
             if (!last.success) return { ...last, message: `Cannot reach ${obj.name}: ${last.message}`, target: obj };
             const fresh = this.helpers.resolveAny(obj.objectId);
@@ -1038,6 +1150,7 @@ export class BotActions {
         let lastAttackAt = 0;
         let lastFaceAt = 0;
         let lastStyleAt = 0;
+        let lastSwing: number | null = null;
         let styleIndex = 0;
         let refusalsSeen = 0;
         let lastTick = -1;
@@ -1113,19 +1226,24 @@ export class BotActions {
                 sent.attack = true;
                 await this.sdk.sendAttack(true);
             }
-            if ((options.styles?.length || foe.chooseStyle) && now - lastStyleAt > 2500 && p.attacking) {
+            // A swing empties the server's queue, so one seen means the next choice can go in now. Until then a
+            // queue already holds: sending again only gets "You have already selected your styles for this round!".
+            const swing = s.combatEvents.findLast(e => e.kind === 'melee' && e.attackerObjectId === p.objectId)?.id ?? null;
+            if (swing !== lastSwing) { lastSwing = swing; lastStyleAt = 0; }
+            if ((options.styles?.length || foe.chooseStyle) && now - lastStyleAt > STYLE_RESEND_MS && p.attacking) {
                 const styles = s.skills.styles;
-                let styleName: string | null | undefined;
-                if (foe.chooseStyle) styleName = foe.chooseStyle(t, p, s, styles);
+                let choice: StyleChoice;
+                if (foe.chooseStyle) choice = foe.chooseStyle(t, p, s, styles);
                 else {
-                    styleName = options.styles![styleIndex % options.styles!.length];
+                    choice = options.styles![styleIndex % options.styles!.length];
                     styleIndex++;
                 }
-                const style = styleName ? bestNameMatch(styles, styleName) : null;
-                if (style && p.endurancePercent >= 15) {
+                const queue = styleQueue(choice, styles);
+                if (queue.length && p.endurancePercent >= 15) {
                     lastStyleAt = now;
-                    const r = await this.sdk.sendUseSkill(style.skillIndex);
-                    if (r.success) onStyle();
+                    let sent = false;
+                    for (const style of queue) sent = (await this.sdk.sendUseSkill(style.skillIndex)).success || sent;
+                    if (sent) onStyle();
                 }
             }
         }
@@ -2043,6 +2161,103 @@ export class BotActions {
     }
 
     /**
+     * Trade with a player. With `give` or `money` this walks up and offers them first (the partner must be
+     * in view; a string must be its exact name, and a pattern is refused); without, it only waits for that
+     * player's window, and closes one that holds anything of ours. Then it accepts every new offer until the
+     * server commits, and reads the outcome from the backpack. Both sides call this, in any order, and must
+     * stay within 128 units. An add that opens a window waits for this side's slot on the clock, up to 750 ms. Between hunts only: a second controller aborts a group run. Afterwards, or after
+     * an abort, no window of ours stays open, and when a failure returns the close has been seen.
+     * Reasons: those of offerTrade and acceptTrade.
+     */
+    async trade(partner: PlayerTarget, options: TradeOptions = {}): Promise<TradeResult> {
+        const deadline = Date.now() + (options.timeout ?? TRADE_TIMEOUT_MS);
+        const watch = this.helpers.watch();
+        const before = this.sdk.getInventory();
+        this.lastOffer = null;
+        try {
+            if (!options.give?.length && (options.money ?? 0) === 0) {
+                const matches = this.tradePartnerMatcher(partner);
+                if (!matches) {
+                    if (this.sdk.getTrade()) await this.closeTrade();
+                    return noTrade(`Player not found: ${describeTarget(partner)}`, 'not_found', null, watch.messages());
+                }
+                return await this.settleTrade(matches, options.accept, watch, before, deadline, null, NOTHING_OF_OURS);
+            }
+            const offer = await this.offerOnWatch(partner, options, watch, deadline);
+            if (!offer.success) return noTrade(offer.message, offer.reason ?? 'refused', offer.partner?.name ?? null, offer.messages, offer.refused);
+            const name = offer.partner!.name;
+            return await this.settleTrade(n => n === name, options.accept, watch, before, deadline, offer.trade, offer.trade);
+        } finally {
+            watch.dispose();
+        }
+    }
+
+    /**
+     * Put `give` and `money` on our side of a window with a player and leave it open for acceptTrade. The
+     * offer describes our whole side: a window that holds anything else of ours is closed first. Evidence is
+     * the server's 0xEA, because items stay in the backpack until the commit. On any failure the window is
+     * closed. Reasons: not_in_game, dead, bad_args (also a pattern as the partner), not_found, too_many_items,
+     * insufficient_funds, timeout, out_of_reach (or the walk's reason), out_of_range, busy, wrong_realm, refused,
+     * empty_slot, no_response, cancelled, wrong_partner, trade_accepted.
+     */
+    async offerTrade(partner: PlayerTarget, options: TradeOfferOptions): Promise<TradeOfferResult> {
+        const watch = this.helpers.watch();
+        this.lastOffer = null;
+        try {
+            const offer = await this.offerOnWatch(partner, options, watch, Date.now() + (options.timeout ?? TRADE_TIMEOUT_MS));
+            if (offer.success) this.lastOffer = offer.trade;
+            return offer;
+        } finally {
+            watch.dispose();
+        }
+    }
+
+    /**
+     * Finish the window of this bot's offerTrade, or else whatever window opens: accept each new offer until
+     * the server commits. After an offerTrade it is that window or nothing: one closed since is cancelled at
+     * once, and our side must still be what we offered. Without one, in a new script say, it takes a window as
+     * it stands, our side included. Afterwards, or after an abort, no window of ours stays open, and when a
+     * failure returns the close has been seen. Reasons: timeout (no window), offer_rejected (`accept` never said
+     * yes), offer_changed (it said no after a yes, or our side changed), partner_no_accept, cancelled (a partner's
+     * cancel and a range close alike: the server gives no cause), inventory_full, partner_inventory_full,
+     * insufficient_funds, partner_insufficient_funds, item_missing, not_found (`from` names nobody in view),
+     * not_in_game, unknown_action (the client runs older code).
+     */
+    async acceptTrade(options: AcceptTradeOptions = {}): Promise<TradeResult> {
+        const deadline = Date.now() + (options.timeout ?? TRADE_TIMEOUT_MS);
+        const watch = this.helpers.watch();
+        const before = this.sdk.getInventory();
+        const offered = this.lastOffer;
+        this.lastOffer = null;
+        try {
+            const matches = options.from === undefined ? () => true : this.tradePartnerMatcher(options.from);
+            if (!matches) {
+                if (this.sdk.getTrade()) await this.closeTrade();
+                return noTrade(`Player not found: ${describeTarget(options.from)}`, 'not_found', null, watch.messages());
+            }
+            return await this.settleTrade(matches, options.accept, watch, before, deadline, offered, offered);
+        } finally {
+            watch.dispose();
+        }
+    }
+
+    /** Close the trade window and observe it gone. Also cures a window the server holds but never told us about, so no window at all is a success. Reasons: timeout, already_completed. */
+    async cancelTrade(): Promise<ActionResult> {
+        const watch = this.helpers.watch();
+        this.lastOffer = null;
+        try {
+            const r = await this.sdk.sendTradeCancel();
+            if (!r.success) return r;
+            const closed = await this.helpers.waitFor(s => !s.trade, TRADE_CLOSE_MS);
+            const completed = watch.findText([TRADE_COMPLETED]);
+            if (completed) return fail(completed, 'already_completed', {});
+            return closed ? { success: true, message: 'Trade closed' } : fail('The trade window is still open', 'timeout', {});
+        } finally {
+            watch.dispose();
+        }
+    }
+
+    /**
      * Follow a player client-side (OpenDAoC has no /follow or /stick; the
      * retail client does it locally): keep within `distance` until `until`,
      * the duration ends, or the player is lost for 5 s.
@@ -2227,6 +2442,288 @@ export class BotActions {
     }
 
     // ============ Internals ============
+
+    /** Who a window we wait for may be from. The window carries a name and nothing else. Null when `target` names nobody. */
+    private tradePartnerMatcher(target: PlayerTarget): ((name: string) => boolean) | null {
+        if (typeof target === 'string') {
+            const wanted = target.toLowerCase();
+            return name => name.toLowerCase() === wanted;
+        }
+        if (target instanceof RegExp) return nameMatcher(target);
+        const wanted = typeof target === 'number' ? this.helpers.resolvePlayer(target)?.name : target.name;
+        return wanted === undefined ? null : name => name === wanted;
+    }
+
+    /** offerTrade's body, on the caller's watch and deadline. */
+    private async offerOnWatch(partner: PlayerTarget, options: TradeOfferOptions, watch: MessageWatch, deadline: number): Promise<TradeOfferResult> {
+        const refuse = (message: string, reason: string, extra: Partial<TradeOfferResult> = {}): TradeOfferResult =>
+            fail(message, reason, { partner: null, trade: null, refused: null, messages: watch.messages(), ...extra });
+
+        let sent = false;
+        let succeeded = false;
+        let windowId: number | null = null;
+        try {
+            const player = this.helpers.player();
+            if (!player) return refuse('Not in game', 'not_in_game');
+            if (player.isDead) return refuse('Dead', 'dead');
+            const items: InventoryItem[] = [];
+            for (const ref of options.give ?? []) {
+                const item = this.tradeItem(ref);
+                if (!item) return refuse(`Item not found: ${describeTarget(ref)}`, 'not_found');
+                items.push(item);
+            }
+            const slots = items.map(i => i.slot);
+            if (new Set(slots).size !== slots.length) return refuse('Two of the items are the same backpack slot', 'bad_args');
+            if (items.length > TRADE_MAX_ITEMS) return refuse(`A trade holds ${TRADE_MAX_ITEMS} items per side, not ${items.length}`, 'too_many_items');
+            const money = options.money ?? 0;
+            if (!Number.isSafeInteger(money) || money < 0) return refuse(`Bad money amount: ${money}`, 'bad_args');
+            if (items.length === 0 && money === 0) return refuse('Nothing to offer', 'bad_args');
+            if (money > player.money.totalCopper) return refuse(`Offering ${money}c with ${player.money.totalCopper}c in the purse`, 'insufficient_funds');
+            if (partner instanceof RegExp) return refuse(`An offer needs a player's exact name, not the pattern ${partner}: it could match anyone in view`, 'bad_args');
+            const p = this.tradeReceiver(partner);
+            if (!p) return refuse(`Player not found: ${describeTarget(partner)}`, 'not_found');
+
+            /** One add: dispatch it, then the 0xEA that shows it or a refusal line, curing what can be cured once. */
+            const add = async (send: () => Promise<ActionResult>, done: (t: TradeWindow) => boolean, item: InventoryItem | null): Promise<TradeOfferResult | null> => {
+                let stepped = false;
+                let cured = false;
+                for (;;) {
+                    if (Date.now() >= deadline) return refuse(`Out of time for the offer to ${p.name}`, 'timeout', { partner: p });
+                    while (!this.sdk.getTrade()) {
+                        const wait = tradeSlotWait(Date.now(), player.name.toLowerCase() > p.name.toLowerCase());
+                        if (wait === 0) break;
+                        if (Date.now() + wait >= deadline) return refuse(`Out of time for the offer to ${p.name}`, 'timeout', { partner: p });
+                        await this.helpers.sleep(wait);
+                    }
+                    const mark = watch.messages().length;
+                    sent = true;
+                    const r = await send();
+                    if (!r.success) return refuse(r.message, r.reason ?? 'dispatch_failed', { partner: p });
+                    const got = await this.helpers.waitFor<TradeWindow | TradeLine>(
+                        s => s.trade && done(s.trade) ? s.trade : firstTradeLine(watch.messages().slice(mark), TRADE_REFUSALS),
+                        Math.min(TRADE_ANSWER_MS, Math.max(0, deadline - Date.now())),
+                    );
+                    if (!got) return refuse(`No answer to the offer to ${p.name}`, 'no_response', { partner: p });
+                    if ('id' in got) {
+                        windowId ??= got.id;
+                        return null;
+                    }
+                    if (got.reason === 'out_of_range' && !stepped) {
+                        stepped = true;
+                        const walk = await this.walkToObject(p, { range: TRADE_CLOSE_RANGE, timeout: Math.max(1, deadline - Date.now()) });
+                        if (!walk.success) return refuse(walk.message, walk.reason ?? 'out_of_reach', { partner: p });
+                        continue;
+                    }
+                    if (got.reason === 'self_busy' && !cured && !this.sdk.getTrade()) {
+                        // The server opens a window before it checks the item, and a refused first item leaves it open unseen.
+                        cured = true;
+                        await this.sdk.sendTradeCancel();
+                        await this.helpers.nextState(500);
+                        continue;
+                    }
+                    return refuse(got.text, got.reason === 'self_busy' ? 'busy' : got.reason, { partner: p, refused: { item, message: got.text } });
+                }
+            };
+
+            const open = this.sdk.getTrade();
+            if (open && (open.partnerName !== p.name || open.mySlots.some(s => !slots.includes(s)) || open.myMoney > money)) {
+                sent = true;
+                const cancel = await this.cancelTrade();
+                if (!cancel.success) return refuse(cancel.message, cancel.reason ?? 'timeout', { partner: p });
+            }
+            if (this.helpers.state()?.movement.moving) await this.stop();
+            const walk = await this.walkToObject(p, { range: options.range ?? 100, timeout: Math.max(1, deadline - Date.now()) });
+            if (!walk.success) return refuse(walk.message, walk.reason ?? 'out_of_reach', { partner: p });
+
+            // A partner's cancel or a range close: the next add would open a new window, without the items before it.
+            const closed = (): boolean => windowId !== null && this.sdk.getTrade()?.id !== windowId;
+            for (const item of items) {
+                if (this.sdk.getTrade()?.mySlots.includes(item.slot)) continue;
+                if (closed()) return refuse('The trade window closed during the offer', 'cancelled', { partner: p });
+                const refused = await add(() => this.sdk.sendTradeOfferItem(p.objectId, item.slot), t => t.mySlots.includes(item.slot), item);
+                if (refused) return refused;
+            }
+            if ((this.sdk.getTrade()?.myMoney ?? 0) !== money) {
+                if (closed()) return refuse('The trade window closed during the offer', 'cancelled', { partner: p });
+                const refused = await add(() => this.sdk.sendTradeOfferMoney(p.objectId, money - (this.sdk.getTrade()?.myMoney ?? 0)), t => t.myMoney === money, null);
+                if (refused) return refused;
+            }
+
+            // Closed in the same snapshot as our last add: that add silently opened a new window without the earlier items.
+            const t = this.sdk.getTrade();
+            if (!t || (windowId !== null && t.id !== windowId) || slots.some(s => !t.mySlots.includes(s)) || t.myMoney !== money) {
+                return refuse('The trade window closed during the offer', 'cancelled', { partner: p, trade: t });
+            }
+            if (t.partnerName !== p.name) return refuse(`The window is with ${t.partnerName}, not ${p.name}`, 'wrong_partner', { partner: p, trade: t });
+            succeeded = true;
+            return { success: true, message: `Offered ${slots.length} items and ${money}c to ${p.name}`, partner: p, trade: t, refused: null, messages: watch.messages() };
+        } finally {
+            if (!succeeded && (sent || this.sdk.getTrade())) await this.closeTrade();
+        }
+    }
+
+    /**
+     * An item to give, as the caller means it. An item object names that item in that slot: resolveInventoryItem
+     * falls back to a substring of its name, and that would give away another one once the first has gone.
+     */
+    private tradeItem(ref: InventoryItem | NamePattern | number): InventoryItem | null {
+        if (typeof ref === 'number' || typeof ref === 'string' || ref instanceof RegExp) return this.helpers.resolveInventoryItem(ref);
+        return this.sdk.getInventory().find(i => i.slot === ref.slot && i.name === ref.name) ?? null;
+    }
+
+    /**
+     * Who gets an offer. A name must be exact: resolvePlayer falls back to a substring, and that would hand items
+     * to another player. A snapshot object goes by its name too: its id can be a newcomer's by now, because the
+     * server hands a freed id to the next object in the region (Region.cs:779, :955).
+     */
+    private tradeReceiver(partner: NearbyPlayer | string | number): NearbyPlayer | null {
+        if (typeof partner === 'number') return this.helpers.resolvePlayer(partner);
+        const wanted = (typeof partner === 'string' ? partner : partner.name).toLowerCase();
+        return this.sdk.getNearbyPlayers().find(pl => pl.name.toLowerCase() === wanted) ?? null;
+    }
+
+    /** Close the window and see it gone, so a retry can't take the one that is closing. The dispatch survives an abort; the wait ends there. */
+    private async closeTrade(): Promise<void> {
+        const open = this.sdk.getTrade();
+        await this.helpers.cleanup(() => this.sdk.sendTradeCancel());
+        if (!open) return;
+        try {
+            await this.helpers.waitFor(s => !s.trade || s.trade.id !== open.id, TRADE_CLOSE_MS);
+        } catch {
+            // aborted: the abort is the answer
+        }
+    }
+
+    /**
+     * Accept every new revision of the window until it closes. The window is the only channel between the two
+     * sides: order is free, the second accept commits, and every 0xEA means both accepts were reset. A commit
+     * failure is terminal, before any re-accept: a failed money check zeroes that side's money and leaves the items
+     * in the window, so a blind re-accept could give an item away for nothing (PlayerTradeWindow.cs:430, :443, :455).
+     * `offered` is the window this call must finish, if any. `ourSide` is what we may give: an inventory move drops
+     * an item from the offer as one more revision (GamePlayerInventory.cs:335, :542-543), and accepting that would
+     * give the partner's side for nothing, or ours in a window a call that gives nothing never meant to finish.
+     */
+    private async settleTrade(
+        matches: (name: string) => boolean,
+        accept: ((window: TradeWindow) => boolean) | undefined,
+        watch: MessageWatch,
+        before: readonly InventoryItem[],
+        deadline: number,
+        offered: TradeWindow | null,
+        ourSide: TradeSide | null,
+    ): Promise<TradeResult> {
+        let seen = offered;
+        let sentFor = -1;
+        let sentAny = false;
+        let closed = false;
+        let closing = -1;
+        const failure = (message: string, reason: string) => noTrade(message, reason, seen?.partnerName ?? null, watch.messages());
+        /**
+         * Leave the window ourselves and see how it ended: our accept may stand, a partner's can commit on it before
+         * the close lands (PlayerTradeWindow.cs:408-414), and the close is then a no-op. That is a completed trade.
+         */
+        const giveUp = async (message: string, reason: string): Promise<TradeResult> => {
+            closed = true;
+            await this.closeTrade();
+            return seen && watch.find([TRADE_COMPLETED]) ? await this.completedTrade(seen, before, watch) : failure(message, reason);
+        };
+        try {
+            for (;;) {
+                const s = this.helpers.state();
+                if (!s?.player) return failure('Not in game', 'not_in_game');
+                // The field is null while no window is open, so only a client without the trade code leaves it out.
+                if (s.trade === undefined) return failure('The client runs older code, without trades: restart it with a quit action', 'unknown_action');
+                const t = s.trade;
+                const bad = firstTradeLine(watch.messages(), TRADE_COMMIT_FAILURES);
+                if (bad) return await giveUp(bad.text, bad.reason);
+                if (seen && (!t || t.id !== seen.id)) {
+                    closed = true;
+                    // A window that came up in its place isn't ours to hold, whatever became of the first.
+                    if (t) await this.closeTrade();
+                    if (watch.find([TRADE_COMPLETED])) return await this.completedTrade(seen, before, watch);
+                    return failure(`The trade with ${seen.partnerName} closed without a trade`, 'cancelled');
+                }
+                if (t) {
+                    const notOurSide = ourSide !== null && !sameTradeSide(t, ourSide);
+                    if (t.partnerName === null || !matches(t.partnerName) || (notOurSide && !seen)) {
+                        // A stranger, a self-craft window or a leftover of ours: never hold it, or the real partner gets "still trading". Once per window, so a late cancel can't hit the next one.
+                        if (t.id !== closing) {
+                            closing = t.id;
+                            await this.sdk.sendTradeCancel();
+                        }
+                        await this.helpers.nextState(250);
+                    } else {
+                        seen = t;
+                        if (notOurSide) return await giveUp(`Our side of the trade with ${t.partnerName} is no longer what we offered`, 'offer_changed');
+                        if (t.revision !== sentFor) {
+                            if (accept?.(t) ?? true) {
+                                const r = await this.sdk.sendTradeAccept(t.revision, t.id);
+                                if (r.success) {
+                                    sentFor = t.revision;
+                                    sentAny = true;
+                                } else if (r.reason !== 'trade_changed' && r.reason !== 'no_trade') {
+                                    return await giveUp(r.message, r.reason ?? 'dispatch_failed');
+                                }
+                            } else if (sentAny) {
+                                return await giveUp(`Not accepting the changed offer from ${t.partnerName}`, 'offer_changed');
+                            }
+                        }
+                    }
+                }
+                if (Date.now() >= deadline) {
+                    if (!seen) return await giveUp('No trade window opened', 'timeout');
+                    return sentAny ? await giveUp(`${seen.partnerName} did not accept`, 'partner_no_accept') : await giveUp(`The offer from ${seen.partnerName} was not accepted`, 'offer_rejected');
+                }
+                await this.helpers.nextState(Math.min(250, deadline - Date.now()));
+            }
+        } finally {
+            if (!closed) await this.helpers.cleanup(() => this.sdk.sendTradeCancel());
+        }
+    }
+
+    /**
+     * The commit happened; the backpack says what came of it. The server only logs a failed add and still prints
+     * "Trade Completed" (PlayerTradeWindow.cs:614-617, :657-660). No diff by slot or name: an identical swap lands
+     * in the slot it left (:552-583, :607-611), so each partner item claims an entry that matches it. What we had
+     * and kept is out of the running, or it would hide a lost item and take the place of the one that came.
+     */
+    private async completedTrade(seen: TradeWindow, before: readonly InventoryItem[], watch: MessageWatch): Promise<TradeResult> {
+        const key = (i: InventoryItem) => `${i.name}|${i.model}|${i.count}`;
+        const kept = (i: InventoryItem) => !seen.mySlots.includes(i.slot) && before.some(b => b.slot === i.slot && key(b) === key(i));
+        const claim = (inventory: readonly InventoryItem[]) => {
+            const free = inventory.filter(i => !kept(i));
+            const received: InventoryItem[] = [];
+            const missing: InventoryItem[] = [];
+            for (const wanted of seen.partnerItems) {
+                const found = free.find(i => key(i) === key(wanted));
+                if (found) {
+                    free.splice(free.indexOf(found), 1);
+                    received.push(found);
+                } else {
+                    missing.push(wanted);
+                }
+            }
+            return { received, missing };
+        };
+        let outcome = claim(this.sdk.getInventory());
+        await this.helpers.waitFor(s => {
+            outcome = claim(s.inventory);
+            return outcome.missing.length === 0;
+        }, 1000);
+        const result = {
+            partner: seen.partnerName,
+            gave: before.filter(i => seen.mySlots.includes(i.slot)),
+            received: outcome.received,
+            missing: outcome.missing,
+            moneyGiven: seen.myMoney,
+            moneyReceived: seen.partnerMoney,
+            refused: null,
+            messages: watch.messages(),
+        };
+        return outcome.missing.length
+            ? fail(`Trade completed, but ${outcome.missing.map(i => i.name).join(', ')} never reached our backpack`, 'item_missing', result)
+            : { success: true, message: watch.findText([TRADE_COMPLETED])!, ...result };
+    }
 
     private position(): Vec3 | null {
         const p = this.helpers.player();

@@ -3,7 +3,7 @@ import { encodeCp1252, PacketWriter } from '../protocol/buffer';
 import { ServerOp } from '../protocol/opcodes';
 import { getRacesForClass, getStartingClasses } from '../../data/index';
 import { creationPoints, planCharacter, RACE_MODELS } from './classes';
-import { MAX_COMBAT_EVENTS, WorldModel } from './world-model';
+import { coinDrops, MAX_COMBAT_EVENTS, WorldModel } from './world-model';
 
 const W = () => new PacketWriter();
 const ME = { x: 574797, y: 530161, z: 2896 };
@@ -12,6 +12,23 @@ function npcCreate(oid: number, name: string, x: number, y: number, opts: { guil
     return W().u16(oid).u16(0).u16(0).u16(ME.z).u32(x).u32(y).u16(0).u16(400).u8(50).u8(opts.level ?? 1)
         .u8(opts.peace ? 0x10 : 0).u8(0x20).u8(0).u8(0).u16(0).pascal(name).pascal(opts.guild ?? '').u8(0).toBytes();
 }
+
+/** 0xEA open (PacketLib1109.cs:34-78). Money is [mithril, platinum, gold, silver, copper]; items are [slot, name]. */
+function tradeOpen(title: string, o: { slots?: number[]; mine?: number[]; theirs?: number[]; items?: Array<[number, string]> } = {}): Uint8Array {
+    const slots = o.slots ?? [];
+    const items = o.items ?? [];
+    const w = W().bytes(slots).fill(0, 10 - slots.length).u16(0);
+    for (const coin of o.mine ?? [0, 0, 0, 0, 0]) w.u16(coin);
+    w.u16(0);
+    for (const coin of o.theirs ?? [0, 0, 0, 0, 0]) w.u16(coin);
+    w.u16(0).u8(items.length).u8(1).u8(0).u8(0);
+    for (const [slot, name] of items) {
+        const count = Number(/^\d+/.exec(name)?.[0] ?? 1); // also in the value bytes (PacketLib1124.cs:850-853)
+        w.u8(slot).u16(0).u8(5).u8(count).u8(0).u8(0).u8(0).u8(0).u16(5).u8(100).u8(100).u8(100).u8(0).u8(0).u16(99).u8(0).u16(0).u8(0x02).u16(0).pascal(name);
+    }
+    return w.pascal(title).toBytes();
+}
+const TRADE_CLOSE = new Uint8Array(40);
 
 describe('classes / character creation', () => {
     test('every creatable class/race plan costs exactly 30 points and stays in realm', () => {
@@ -447,6 +464,99 @@ describe('WorldModel combat events', () => {
             { kind: 'spellCast', attackerObjectId: 301, targetObjectId: null, castTimeMs: 3000, effectId: 5208 },
             { kind: 'spellEffect', attackerObjectId: 301, targetObjectId: 123, effectId: 5208 },
         ]);
+    });
+
+    test('0xEA opens a trade: copper totals, the partner by name, and a signal', () => {
+        const signals: string[] = [];
+        const m = new WorldModel({ onSignificant: r => signals.push(r) });
+        expect(m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine', { slots: [40, 41], mine: [0, 0, 1, 2, 3], theirs: [0, 0, 0, 0, 50], items: [[45, '3 minor healing potion']] }))).toBe(true);
+        expect(m.trade).toMatchObject({ revision: 1, partnerName: 'Aine', mySlots: [40, 41], myMoney: 10203, partnerMoney: 50 });
+        expect(m.trade!.partnerItems).toMatchObject([{ slot: 45, name: 'minor healing potion', count: 3 }]);
+        expect(signals).toEqual(['trade']);
+        expect(m.unknownOpcodes.size).toBe(0);
+        expect(m.decodeErrors).toBe(0);
+    });
+
+    test('a second 0xEA in the same millisecond is a new revision of the same window', () => {
+        const m = new WorldModel({}, () => 1000);
+        m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine'));
+        const first = m.trade!;
+        m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine', { slots: [40] }));
+        expect(m.trade).toMatchObject({ id: first.id, revision: 2, mySlots: [40] });
+        expect(first).toMatchObject({ revision: 1, mySlots: [] }); // replaced, never mutated: a snapshot may hold it
+    });
+
+    test('the close clears the window, and is a no-op with nothing open', () => {
+        const m = new WorldModel();
+        expect(m.handle(ServerOp.TradeWindow, TRADE_CLOSE)).toBe(true);
+        expect(m.trade).toBeNull();
+        m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine'));
+        m.handle(ServerOp.TradeWindow, TRADE_CLOSE);
+        expect(m.trade).toBeNull();
+        expect(m.decodeErrors).toBe(0);
+        expect(m.unknownOpcodes.size).toBe(0);
+    });
+
+    test('a new window gets a new id: after a close, for another partner, and across models', () => {
+        const m = new WorldModel({}, () => 1000);
+        m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine'));
+        const first = m.trade!.id;
+        m.handle(ServerOp.TradeWindow, TRADE_CLOSE);
+        m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine'));
+        const second = m.trade!;
+        expect(second.id).not.toBe(first);
+        expect(second.revision).toBe(1);
+        m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Bran'));
+        expect(m.trade!.id).not.toBe(second.id);
+        expect(m.trade!.revision).toBe(1);
+        const other = new WorldModel();
+        other.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine'));
+        expect(other.trade!.id).toBeGreaterThan(m.trade!.id);
+    });
+
+    test('Selfcrafting has no partner', () => {
+        const m = new WorldModel();
+        m.handle(ServerOp.TradeWindow, tradeOpen('Selfcrafting'));
+        expect(m.trade).toMatchObject({ partnerName: null, revision: 1 });
+        m.handle(ServerOp.TradeWindow, tradeOpen('Selfcrafting'));
+        expect(m.trade).toMatchObject({ partnerName: null, revision: 2 });
+    });
+
+    test('a partner item in slot 45 leaves our slot 45 alone', () => {
+        const m = new WorldModel();
+        m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine', { items: [[45, 'their sword']] }));
+        expect(m.items.has(45)).toBe(false);
+        m.items.set(45, { slot: 45, name: 'my sword' } as never);
+        m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine', { items: [[45, 'their sword'], [46, 'their shield']] }));
+        expect(m.items.get(45)!.name).toBe('my sword');
+        expect(m.items.has(46)).toBe(false);
+    });
+
+    test('clearWorld clears the window, and a late close stays a no-op', () => {
+        const m = new WorldModel();
+        m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine'));
+        m.clearWorld();
+        expect(m.trade).toBeNull();
+        m.handle(ServerOp.TradeWindow, TRADE_CLOSE);
+        expect(m.trade).toBeNull();
+    });
+
+    test('the slot refresh after a money drop (500-504 wrapped to a byte, 244-248) changes nothing', () => {
+        const m = new WorldModel();
+        m.items.set(40, { slot: 40, name: 'my sword' } as never);
+        m.handle(ServerOp.TradeWindow, tradeOpen('Trading with Aine'));
+        const trade = m.trade;
+        m.handle(ServerOp.InventoryUpdate, W().u8(1).u8(0).u8(0).u8(0).u8(0).u8(0).u8(244).fill(0, 24).toBytes());
+        expect([...m.items.keys()]).toEqual([40]);
+        expect(m.trade).toBe(trade);
+        expect(m.decodeErrors).toBe(0);
+    });
+
+    test('coinDrops: one drop per nonzero coin, largest first, adding up to the amount', () => {
+        expect(coinDrops(10_000_030_405)).toEqual([[500, 1], [502, 3], [503, 4], [504, 5]]);
+        expect(coinDrops(500)).toEqual([[503, 5]]);
+        expect(coinDrops(10_000_000)).toEqual([[501, 1]]);
+        expect(coinDrops(19_999_999)).toEqual([[501, 1], [502, 999], [503, 99], [504, 99]]);
     });
 
     test(`the buffer keeps the newest ${MAX_COMBAT_EVENTS} events (a group fight is many swings a second)`, () => {

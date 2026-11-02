@@ -10,9 +10,10 @@
 // realm points and engagements, and leaves out the findings that only fit PvE.
 
 import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { findBotEnv } from '../index';
 import { isAlive, type Blackboard } from './blackboard';
-import type { GroupEvent, GroupPicture, Phase } from './types';
+import type { GroupEvent, GroupPicture, MemberCombat, Phase } from './types';
 import type { LiveReport } from './wire';
 
 export interface Finding {
@@ -89,6 +90,15 @@ export interface MemberStats {
     realmPoints?: number;
     /** Deaths by killer: 'player:<realm>', 'pet:<realm>' (an NPC of another player realm: a pet or a keep guard), 'npc:<name>' or 'unknown'. */
     killedBy?: Record<string, number>;
+    /** Bot folder under bots/. */
+    bot?: string;
+    /** The behaviours it ran, in order, and whose list that was. */
+    routine?: string[];
+    routineFrom?: 'character' | 'role' | 'strategy';
+    /** Damage dealt, and styles landed and missed, from its own client's messages. */
+    dealt?: number;
+    styles?: Record<string, number>;
+    missedStyles?: number;
 }
 
 export interface RunReport {
@@ -133,6 +143,8 @@ interface Track {
     /** Realm points at the first report that carried them (null until one did), and the highest since. */
     rp0: number | null; rp1: number;
     killedBy: Record<string, number>;
+    bot?: string;
+    combat?: MemberCombat;
 }
 
 interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outcome' | 'adds' | 'openerMs' | 'enemyPlayers' | 'enemyRealms'> {
@@ -194,7 +206,7 @@ export class GroupObserver {
     private unsubscribe: (() => void) | null = null;
 
     /** `findings`: the strategy's own rules (GroupStrategy.findings), added to every report's. */
-    constructor(private readonly board: Blackboard | null, private readonly meta: { group: string; strategy: string; sampleMs?: number; startedAt?: number; findings?: (r: RunReport) => Finding[] }) {
+    constructor(private readonly board: Blackboard | null, private readonly meta: { group: string; strategy: string; sampleMs?: number; startedAt?: number; routines?: Record<string, { from: 'character' | 'role' | 'strategy'; behaviors: string[] }>; findings?: (r: RunReport) => Finding[] }) {
         this.started = meta.startedAt ?? Date.now();
         this.last = this.started;
     }
@@ -236,6 +248,8 @@ export class GroupObserver {
             }
             t.className = m.className;
             t.level1 = m.level;
+            t.bot = m.bot;
+            if (m.combat) t.combat = m.combat;
             if (m.experience >= t.xp1) t.xp1 = m.experience;
             if (typeof m.realmPoints === 'number') {
                 t.rp0 ??= m.realmPoints;
@@ -398,6 +412,8 @@ export class GroupObserver {
             const openers = this.fights.map(f => f.openerMs[name]).filter(v => v !== undefined);
             const stats: MemberStats = {
                 role: t.role, className: t.className, level: t.level0 === t.level1 ? `${t.level1}` : `${t.level0}→${t.level1}`,
+                bot: t.bot, routine: t.bot ? this.meta.routines?.[t.bot]?.behaviors : undefined, routineFrom: t.bot ? this.meta.routines?.[t.bot]?.from : undefined,
+                dealt: t.combat?.dealt, styles: t.combat && { ...t.combat.styles }, missedStyles: t.combat?.missedStyles,
                 xp, xpPerHour: Math.round(xp / hours), deaths: t.deaths, actions: t.actions, failures: t.failures,
                 idleInFights: pct(t.idle, t.engageSamples), idleReasons: t.idleReasons,
                 targeted: pct(t.targeted, t.fightSamples), inMelee: pct(t.inMelee, t.fightSamples),
@@ -488,9 +504,10 @@ export function findingsFor(r: RunReport): Finding[] {
         if (interrupts >= 2) out.push({ severity: 'medium', topic: 'interrupts', member: name, issue: `${name} was interrupted ${interrupts}×`, evidence: `targeted ${m.targeted}% of fight time, in melee range ${m.inMelee}%`, suggestion: 'Wait longer for the tank (holdMs), stand farther (combatRange), or let flee() run before casting.' });
         // Healers and supports idle when nobody needs them; that is fine.
         if ((m.role === 'nuker' || m.role === 'melee') && m.idleInFights > 40) out.push({ severity: 'medium', topic: 'idle', member: name, issue: `${name} was idle ${m.idleInFights}% of fight time`, evidence: `idle because: ${top(m.idleReasons, 3) || 'unknown'}`, suggestion: 'Check its behaviour list and spells for the role; "no power" points at mana (ready.mana, rest), "waiting for the tank" at holdMs.' });
-        if (m.role !== 'tank' && m.inMelee > 15) out.push({ severity: 'medium', topic: 'positioning', member: name, issue: `${name} stood in melee range of an attacker ${m.inMelee}% of fight time`, evidence: `targeted ${m.targeted}%, min health ${m.minHp}%`, suggestion: 'Widen combatRange for its role, or put position() before its damage behaviour.' });
+        // A melee member belongs in melee range; these two are about casters.
+        if (m.role !== 'tank' && m.role !== 'melee' && m.inMelee > 15) out.push({ severity: 'medium', topic: 'positioning', member: name, issue: `${name} stood in melee range of an attacker ${m.inMelee}% of fight time`, evidence: `targeted ${m.targeted}%, min health ${m.minHp}%`, suggestion: 'Widen combatRange for its role, or put position() before its damage behaviour.' });
         // Every step in a fight delays a cast; older reports lack the field.
-        if ((m.movingInFights ?? 0) > 20) out.push({ severity: m.movingInFights! >= 35 ? 'medium' : 'low', topic: 'positioning', member: name, issue: `${name} was moving ${m.movingInFights}% of engaged time`, evidence: `in melee range ${m.inMelee}%, targeted ${m.targeted}%${m.openerMs != null ? `, first nuke ${secs(m.openerMs)} after the engage (median)` : ''}`, suggestion: 'Widen the combatRange limits for its role (it moves only when closer than the min or farther than the max), or raise slotSlack so it stays where it stands near its slot.' });
+        if (m.role !== 'melee' && (m.movingInFights ?? 0) > 20) out.push({ severity: m.movingInFights! >= 35 ? 'medium' : 'low', topic: 'positioning', member: name, issue: `${name} was moving ${m.movingInFights}% of engaged time`, evidence: `in melee range ${m.inMelee}%, targeted ${m.targeted}%${m.openerMs != null ? `, first nuke ${secs(m.openerMs)} after the engage (median)` : ''}`, suggestion: 'Widen the combatRange limits for its role (it moves only when closer than the min or farther than the max), or raise slotSlack so it stays where it stands near its slot.' });
         for (const [why, share] of Object.entries(m.waitedFor)) {
             if (share < 15) continue;
             const fix: Record<string, string> = {
@@ -542,6 +559,11 @@ export function formatReport(r: RunReport): string {
         lines.push('', 'Realm points, and deaths by killer:', '');
         for (const [n, m] of Object.entries(r.members)) lines.push(`- ${n}: ${m.realmPoints ?? 0} RP${m.killedBy ? `, killed by ${top(m.killedBy, 4)}` : ''}`);
     }
+    const fought = Object.entries(r.members).filter(([, m]) => m.dealt !== undefined);
+    if (fought.length) {
+        lines.push('', '## What each member did', '', '| Member | Damage dealt | Styles landed | Styles missed | Routine from | Routine |', '|---|---|---|---|---|---|');
+        for (const [n, m] of fought) lines.push(`| ${n} | ${m.dealt} | ${top(m.styles ?? {}, 6)} | ${m.missedStyles ?? 0} | ${m.routineFrom ?? ''} | ${(m.routine ?? []).join(', ')} |`);
+    }
     lines.push('', '## Fights', '');
     for (const f of r.fights) {
         const openers = Object.entries(f.openerMs ?? {}).map(([n, ms]) => `${n} ${ms === null ? 'none' : secs(ms)}`).join(', ');
@@ -557,8 +579,23 @@ export function stampOf(startedAt: number | string): string {
     return iso.replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 }
 
+/** One line per member in bots/<bot>/runs/history.jsonl: what it ran and how that went, whichever group it was in. */
+function saveBotHistory(r: RunReport): void {
+    for (const [name, m] of Object.entries(r.members)) {
+        const env = m.bot ? findBotEnv(m.bot) : null;
+        if (!env) continue;
+        const dir = join(dirname(env), 'runs');
+        mkdirSync(dir, { recursive: true });
+        appendFileSync(join(dir, 'history.jsonl'), JSON.stringify({
+            startedAt: r.startedAt, stamp: stampOf(r.startedAt), group: r.group, strategy: r.strategy, seconds: Math.round(r.durationMs / 1000),
+            name, role: m.role, level: m.level, routineFrom: m.routineFrom, xpPerHour: m.xpPerHour, deaths: m.deaths, dealt: m.dealt, styles: m.styles, missedStyles: m.missedStyles,
+            actions: m.actions, failures: m.failures, idleInFights: m.idleInFights, targeted: m.targeted, minHp: m.minHp, routine: m.routine,
+        }) + '\n');
+    }
+}
+
 /** Write runs/<stamp>.json, .md (and .log with `log`), compare with and append to runs/history.jsonl. Returns the .md path. */
-export function saveReport(groupDir: string, r: RunReport, log?: string[]): string {
+export function saveReport(groupDir: string, r: RunReport, log?: string[], opts: { botHistory?: boolean } = {}): string {
     const dir = join(groupDir, 'runs');
     mkdirSync(dir, { recursive: true });
     const history = join(dir, 'history.jsonl');
@@ -585,5 +622,9 @@ export function saveReport(groupDir: string, r: RunReport, log?: string[]): stri
     const md = join(dir, `${stamp}.md`);
     writeFileSync(md, formatReport(r));
     if (log) writeFileSync(join(dir, `${stamp}.log`), log.map(l => `${l}\n`).join(''));
+    // Last and on its own, so it can't cost the run its report.
+    if (opts.botHistory) {
+        try { saveBotHistory(r); } catch (e) { console.warn(`bot history not saved: ${(e as Error).message}`); }
+    }
     return md;
 }

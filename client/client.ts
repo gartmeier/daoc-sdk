@@ -11,6 +11,7 @@ import { ClientOp } from './protocol/opcodes';
 import * as out from './protocol/outgoing';
 import { headingTo, type MoverDeps } from './movement';
 import { realmName } from './model/classes';
+import { coinDrops, COPPER_PER } from './model/world-model';
 
 export interface DaocClientOptions {
     host?: string;
@@ -47,6 +48,9 @@ const PICKUP_RANGE = 256;
  */
 const STALE_POSITION_MS = 4000;
 
+/** A 0xDD to a player has toSlot = 1000 + objectId, which must fit its u16 and exceed 1000 (PlayerMoveItemRequestHandler.cs:16-21). */
+const tradeOid = (oid: number): boolean => Number.isInteger(oid) && oid > 0 && oid <= 0xFFFF - 1000;
+
 const ok = (message: string, data?: unknown): ActionResult => ({ success: true, message, phase: 'dispatch', ...(data !== undefined ? { data } : {}) });
 const fail = (reason: string, message: string, phase: ActionResult['phase'] = 'validation'): ActionResult => ({ success: false, message, reason, phase });
 
@@ -68,6 +72,8 @@ export class DaocClient {
     private endListeners: Array<(reason: SessionEndReason, message: string) => void> = [];
     private publishTimer: ReturnType<typeof setInterval> | null = null;
     private lastPublishAt = 0;
+    /** The window and revision our last accept went out on. It stands on the server until a new revision or a close. */
+    private acceptSent: { id: number; revision: number } | null = null;
     private lastPublishedRevision = -1;
     private pendingSignificant: ReturnType<typeof setTimeout> | null = null;
     private readonly log: (msg: string) => void;
@@ -259,6 +265,7 @@ export class DaocClient {
             combatEvents: m.combatEvents.slice(),
             concentrationEffects: m.concentrationEffects.map(c => ({ ...c })),
             groundTarget: m.groundTarget,
+            trade: m.trade,
         };
     }
 
@@ -327,6 +334,19 @@ export class DaocClient {
         }
     }
 
+    /**
+     * With our accept standing, the partner's accept commits while it holds the window's lock and then wants ours
+     * and our inventory's, and an add or a removal holds those and wants the window: that can hang the server
+     * (PlayerTradeWindow.cs:406, :513, :718-722; GamePlayer.cs:6261; GamePlayerInventory.cs:335). A plain move is safe (:489).
+     */
+    private changesWhatWeAccepted(a: BotAction): boolean {
+        switch (a.type) {
+            case 'tradeOfferItem': case 'tradeOfferMoney': case 'dropItem': case 'destroyItem': case 'sell': case 'useItem': return true;
+            case 'moveItem': return a.toSlot === 1 || a.toSlot > 1000;
+            default: return false;
+        }
+    }
+
     private async executeInner(a: BotAction): Promise<ActionResult> {
         if (a.type === 'none') return ok('noop');
         if (a.type === 'wait') {
@@ -341,6 +361,9 @@ export class DaocClient {
         const requireObject = (oid: number): ActionResult | null =>
             Number.isInteger(oid) && oid > 0 && m.hasObject(oid) ? null : fail('unknown_object', `unknown objectId ${oid}`);
 
+        if (this.acceptSent && this.changesWhatWeAccepted(a) && this.acceptSent.id === m.trade?.id && this.acceptSent.revision === m.trade.revision) {
+            return fail('trade_accepted', 'our accept stands on the open trade window: cancel it first');
+        }
         switch (a.type) {
             case 'moveTo': {
                 if (![a.x, a.y].every(Number.isFinite)) return fail('bad_args', 'x/y must be finite numbers');
@@ -602,6 +625,36 @@ export class DaocClient {
                 this.send(ClientOp.PlayerRegionChangeRequest, out.encodeRegionChangeRequest(id));
                 return ok(`zone point ${id} requested`);
             }
+            case 'tradeOfferItem': {
+                if (!tradeOid(a.partnerObjectId)) return fail('bad_args', `bad partner objectId ${a.partnerObjectId}`);
+                if (!Number.isInteger(a.slot) || a.slot < 40 || a.slot > 79) return fail('bad_args', `slot ${a.slot} is not in the backpack`);
+                if (!m.items.has(a.slot)) return fail('empty_slot', `no item in slot ${a.slot}`);
+                this.send(ClientOp.PlayerMoveItem, out.encodeMoveItem(1000 + a.partnerObjectId, a.slot, 0));
+                return ok(`offering slot ${a.slot} to object ${a.partnerObjectId}`);
+            }
+            case 'tradeOfferMoney': {
+                // Each coin's amount goes out as a u16 (PlayerMoveItemRequestHandler.cs:18). The drops add up (PlayerTradeWindow.cs:350).
+                if (!tradeOid(a.partnerObjectId)) return fail('bad_args', `bad partner objectId ${a.partnerObjectId}`);
+                if (!Number.isSafeInteger(a.copper) || a.copper <= 0 || a.copper >= 0x10000 * COPPER_PER.mithril) return fail('bad_args', `bad copper amount ${a.copper}`);
+                for (const [slot, amount] of coinDrops(a.copper)) this.send(ClientOp.PlayerMoveItem, out.encodeMoveItem(1000 + a.partnerObjectId, slot, amount));
+                return ok(`offering ${a.copper} copper to object ${a.partnerObjectId}`);
+            }
+            case 'tradeAccept': {
+                const t = m.trade;
+                if (!t || t.partnerName === null) return fail('no_trade', 'no trade window open');
+                if (a.revision !== undefined && a.revision !== t.revision) return fail('trade_changed', `the offer changed: revision ${t.revision}, not ${a.revision}`);
+                // Revisions start over per window, so a reopened window can show the same one. The packet names neither (PlayerModifyTradeHandler.cs:54-56): this hop is the last check.
+                if (a.windowId !== undefined && a.windowId !== t.id) return fail('trade_changed', `another window: ${t.id}, not ${a.windowId}`);
+                this.send(ClientOp.ModifyTrade, out.encodeModifyTrade(2));
+                this.acceptSent = { id: t.id, revision: t.revision };
+                return ok('trade accept sent');
+            }
+            case 'tradeCancel':
+                // No guard: this also cures a window the server holds but we were never told about, and it is a no-op
+                // there otherwise (PlayerModifyTradeHandler.cs:16-18). m.trade waits for the server's own 0xEA.
+                this.send(ClientOp.ModifyTrade, out.encodeModifyTrade(0));
+                this.acceptSent = null;
+                return ok('trade close sent');
             case 'release':
                 if (!m.self.isDead) return fail('not_dead', 'release only works while dead');
                 this.command('&release');

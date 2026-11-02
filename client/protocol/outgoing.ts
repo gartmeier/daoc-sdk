@@ -304,6 +304,15 @@ export function encodeMoveItem(toSlot: number, fromSlot: number, count = 0, obje
 }
 
 /**
+ * 0xEB ModifyTrade: 0 closes the window, 2 accepts it (PlayerModifyTradeHandler.cs:11-14). The handler reads
+ * only 4 bytes for these; 26 is the full layout it defines for code 1. Code 1 is left out on purpose: it
+ * replaces our whole side (:28-41, :50) and a duplicate slot aborts the commit (PlayerTradeWindow.cs:541-565).
+ */
+export function encodeModifyTrade(code: 0 | 2): Uint8Array {
+    return new PacketWriter(26).u8(code).fill(0, 25).toBytes();
+}
+
+/**
  * 0xD8 DetailRequest, delve (DetailDisplayHandler.cs:28-30): u16 objectType, u32 extraId, u16 objectId,
  * big-endian (PacketIn.cs:34,58). Type 1 is an inventory item with objectId = its slot (:63-69).
  */
