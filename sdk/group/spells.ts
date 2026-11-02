@@ -1,5 +1,5 @@
 // What a member can cast, from its spell list and the static spell data:
-// heals, crowd control, damage and buffs. Highest-level rank wins.
+// heals, crowd control, damage and buffs. Highest-level rank wins, except for heals (pickHeal).
 
 import type { SpellInfo } from '../../data/index';
 import type { BotActions } from '../actions';
@@ -18,6 +18,8 @@ export interface SpellPick {
     castTime: number;
     /** Seconds (0 = instant/permanent). */
     duration: number;
+    /** Seconds until it can be cast again (0 = no timer). */
+    recast: number;
     concentration: number;
     /** A song or chant: keeps pulsing until cancelled; casting it again stops it. */
     pulse: boolean;
@@ -68,7 +70,7 @@ export function slotOf(type: string): BuffSlot | null {
 /** A known spell with its static data. */
 export function toPick(spell: Spell, info: SpellInfo): SpellPick {
     return {
-        spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, concentration: info.concentration,
+        spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, recast: info.recastDelay ?? 0, concentration: info.concentration,
         pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0, value: info.value ?? 0, damage: info.damage ?? 0, spellGroup: info.spellGroup ?? 0,
         effectGroup: info.effectGroup ?? 0, frequency: info.frequency ?? 0,
     };
@@ -124,6 +126,22 @@ export function pickNuke(picks: SpellPick[], opts: NukeOptions = {}): SpellPick 
     return best(ok.filter(s => !isDot(s) && ready(s)));
 }
 
+/** Hit points a heal restores: a negative value is a percent of the caster's own full health, whoever it lands on (HealSpellHandler.cs:33). */
+export const healAmount = (s: Pick<SpellPick, 'value'>, casterMaxHp: number): number => (s.value < 0 ? casterMaxHp * -s.value / 100 : s.value);
+
+/**
+ * The heal for a target missing `missing` hit points: the cheapest that covers it, else the one restoring
+ * most. Level says nothing here: a Healer has Minor Recovery (48) and Major Reparation (172) both at 18.
+ * Without a need, the one restoring most. Cost per hit point is about even across ranks, so the bigger
+ * heal also restores faster for the same power. One on a timer (Favor from Eir, 33 % for no power) waits
+ * until nothing else covers the need.
+ */
+export function pickHeal(picks: SpellPick[], need: { missing?: number; casterMaxHp: number }): SpellPick | null {
+    const amount = (s: SpellPick) => healAmount(s, need.casterMaxHp);
+    const covering = (list: SpellPick[]) => (need.missing === undefined ? [] : list.filter(s => amount(s) >= need.missing!).sort((a, b) => a.power - b.power || a.castTime - b.castTime))[0];
+    return covering(picks.filter(s => !s.recast)) ?? covering(picks) ?? [...picks].sort((a, b) => amount(b) - amount(a))[0] ?? null;
+}
+
 /** Spell picks for one member; `mana` is its current power (absolute). */
 export class Spellbook {
     constructor(private readonly sdk: BotSDK, private readonly bot: BotActions) {}
@@ -134,9 +152,10 @@ export class Spellbook {
         return (this.sdk.getPlayer()?.mana ?? 0) >= s.power && s.spell.cooldownRemaining <= 0;
     }
 
-    /** Single-target heal on a friend (Realm/Group target, no radius). */
-    heal(): SpellPick | null {
-        return best(this.all().filter(s => HEAL_TYPES.test(s.type) && (s.target === 'Realm' || s.target === 'Group') && s.radius === 0 && this.ready(s)));
+    /** Heal on a friend (Realm/Group target, no radius) we can pay for now, by what the target misses (pickHeal). */
+    heal(missing?: number): SpellPick | null {
+        const ok = this.all().filter(s => HEAL_TYPES.test(s.type) && !s.pulse && (s.target === 'Realm' || s.target === 'Group') && s.radius === 0 && this.ready(s));
+        return pickHeal(ok, { missing, casterMaxHp: this.sdk.getPlayer()?.maxHealth ?? 0 });
     }
 
     /**

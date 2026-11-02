@@ -3,7 +3,7 @@ import { getSpell, getSpellLines, getSpells } from '../../data/index';
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import type { Spell } from '../types';
-import { dotFamily, pickNuke, Spellbook, toPick, type SpellPick } from './spells';
+import { dotFamily, healAmount, pickHeal, pickNuke, Spellbook, toPick, type SpellPick } from './spells';
 
 // The spells of each line up to a level, with their real DB rows (as spellsOf builds them).
 function known(lines: Record<string, number>): SpellPick[] {
@@ -134,5 +134,46 @@ describe('Spellbook.mezz and cc: what can be cast at an add', () => {
         expect(name(merlin.mezz())).toBe('Major Mesmerization');
         expect(name(book([['Fog of Senility', 20]]).mezz())).toBeNull();
         expect(name(book([['Fog of Senility', 20]]).mezz({ aoe: true }))).toBe('Fog of Senility');
+    });
+});
+
+describe('pickHeal', () => {
+    // A Healer at level 20, from the real lines: Minor Recovery (48) and Major Reparation (172) are both level 18.
+    const heals = known({ Mending: 20, 'Healer Mending Spec': 20 }).filter(s => s.type === 'Heal' && s.target === 'Realm' && s.radius === 0);
+    const named = (n: string) => heals.find(s => s.spell.name === n)!;
+
+    test('the cheapest that covers what the target misses', () => {
+        expect(pickHeal(heals, { missing: 40, casterMaxHp: 500 })!.value).toBeGreaterThanOrEqual(40);
+        expect(pickHeal(heals, { missing: 40, casterMaxHp: 500 })!.power).toBeLessThanOrEqual(8);
+        expect(name(pickHeal(heals, { missing: 170, casterMaxHp: 500 }))).toBe('Major Reparation');
+    });
+
+    test('nothing covers it: the one restoring most, whatever its level', () => {
+        expect(named('Greater Recovery').spell.level).toBeLessThan(named('Minor Recovery').spell.level);
+        expect(name(pickHeal(heals.filter(s => !s.recast), { missing: 400, casterMaxHp: 500 }))).toBe('Greater Recovery');
+    });
+
+    test('without a need: the one restoring most', () => {
+        expect(name(pickHeal(heals.filter(s => !s.recast), { casterMaxHp: 500 }))).toBe('Greater Recovery');
+    });
+
+    test('a negative value is a percent of the caster, not of the one it lands on', () => {
+        const pct = { ...named('Minor Recovery'), value: -50, power: 1 };
+        expect(healAmount(pct, 400)).toBe(200);
+        expect(pickHeal([named('Minor Recovery'), named('Major Reparation'), pct], { missing: 180, casterMaxHp: 400 })).toBe(pct);
+        expect(pickHeal([named('Minor Recovery'), pct], { missing: 180, casterMaxHp: 200 })).toBe(pct);   // restoring most, at 100
+        expect(pickHeal([named('Major Reparation'), pct], { missing: 180, casterMaxHp: 200 })).toBe(named('Major Reparation'));
+    });
+
+    test('one on a timer waits until nothing else covers the need', () => {
+        const eir = heals.find(s => s.value < 0)!;
+        expect(eir.recast).toBeGreaterThan(0);
+        const few = [named('Minor Recovery'), named('Major Reparation'), eir];
+        expect(pickHeal(few, { missing: 100, casterMaxHp: 1000 })).toBe(named('Major Reparation'));
+        expect(pickHeal(few, { missing: 300, casterMaxHp: 1000 })).toBe(eir);
+    });
+
+    test('nothing to pick from', () => {
+        expect(pickHeal([], { casterMaxHp: 100 })).toBeNull();
     });
 });

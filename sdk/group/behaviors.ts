@@ -9,6 +9,7 @@
 
 import { findNpcSpawns } from '../../data/index';
 import { styleQueue, type StyleChoice, type StyleChooser } from '../actions';
+import { ANYTIME_STYLE, fighterStyle, tankStyles } from './styles';
 import { abortable, executionContext } from '../execution-context';
 import { isAlive } from './blackboard';
 import { clearOf, keepDangers, type KeepSettings } from './keeps';
@@ -152,8 +153,6 @@ async function stopSwinging(ctx: MemberContext): Promise<void> {
 
 /** A character's choice for its next swing: a style by name, or a style and its backup; null for a plain one. For monsters and players alike. */
 export type StylePick = (ctx: { target: NearbyNpc | NearbyPlayer; player: PlayerState; state: BotWorldState; styles: Style[] }) => StyleChoice;
-/** `Style.prerequisite` of a style with no opening. */
-const ANYTIME_STYLE = 0x100;
 /** killNpc's limit: below this much endurance a style isn't worth sending. */
 const STYLE_MIN_ENDURANCE = 15;
 /** killNpc's spacing between styles. */
@@ -335,7 +334,7 @@ export const heal = (opts: { emergencyOnly?: boolean; limits?: Partial<TacticsSe
             .filter(m => m.hp < s.emergency || !claimedBy(ctx, 'heal', m.objectId, 3500).length)
             .sort((a, b) => a.hp - b.hp)[0];
         if (!hurt) return false;
-        const sp = ctx.spells.heal();
+        const sp = ctx.spells.heal(hurt.maxHp ? hurt.maxHp * (100 - hurt.hp) / 100 : undefined);
         if (!sp) return ctx.skip('heal: not enough power');
         await stopSwinging(ctx);
         ctx.doing('heal', hurt.objectId, sp.spell.name);
@@ -434,23 +433,6 @@ export const pull = (): Behavior<TacticsSettings> => ({
 /** The highest anytime (no prerequisite) style; killNpc uses it every swing. */
 export function anytimeStyles(ctx: MemberContext): string[] {
     return (ctx.sdk.getSkills().styles ?? []).filter(s => s.prerequisite === 256).sort((a, b) => b.specLevel - a.specLevel).slice(0, 1).map(s => s.name);
-}
-
-// Styles with a StyleTaunt proc (stylexspell -> spell 20000 "Taunt", Value 17, or 20001 "Detaunt",
-// Value -19). StyleTaunt.cs adds damage * Value * 0.1 threat on top of the hit's own: a taunt nets
-// +2.7x the hit, a detaunt -0.9x (floored at 0, AggroTable.cs). Names don't tell: the Warrior's
-// Plague, Draw Out and Provoke taunt, Hoarfrost, Temper and Placate detaunt, the Hunter's "Taunting
-// Call" detaunts. Both sets come from style.sql x stylexspell.sql. Midgard run 20261031-072248: the
-// tank swung Hoarfrost on every hit (the old /taunt/i match took it for a damage style), hold 31 %.
-const TAUNT_STYLES = new Set(['Bludgeon', "Bumblebee's Sting", 'Celtic Fury', 'Diamondback', 'Distract', 'Draw Out', 'Engage', 'Enrage', 'Forest Spear', "Friar's Boon", 'Inflame', 'Plague', 'Provoke', 'Rile', 'Slam', 'Snowblind', 'Squall', 'Sting', 'Taunting Blade', 'Taunting Scythe', 'Wild Call']);
-const DETAUNT_STYLES = new Set(['Arboreal Shield', 'Blunt Trauma', 'Boomslang', 'Decaying Rage', 'Deflect', 'Dismissal', 'Enervating Blade', "Friar's Redress", 'Hibernian Wrath', 'Hoarfrost', "Hunter's Barb", 'Obscure', 'Pacify', 'Placate', 'Protector', 'Reflect', 'Scorpion', 'Taunting Call', 'Temper', 'Thunderstorm', 'Tranquillize']);
-/** Only the Blunt "Slam" taunts; the Shields and Hammer Slams have no proc. */
-const isTaunt = (s: { name: string; specName: string | null }) => TAUNT_STYLES.has(s.name) && (s.name !== 'Slam' || s.specName === 'Blunt');
-
-/** The best anytime taunt style, and the best anytime style that is neither a taunt nor a detaunt (a detaunt sheds the tank's threat). */
-function tankStyles(ctx: MemberContext): { taunt: string | null; damage: string | null } {
-    const anytime = (ctx.sdk.getSkills().styles ?? []).filter(s => s.prerequisite === ANYTIME_STYLE).sort((a, b) => b.specLevel - a.specLevel);
-    return { taunt: anytime.find(isTaunt)?.name ?? null, damage: anytime.find(s => !isTaunt(s) && !DETAUNT_STYLES.has(s.name))?.name ?? null };
 }
 
 /**
@@ -553,7 +535,7 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
             await ctx.bot.walkTo(mob.x, mob.y, { z: mob.z, tolerance: 200, timeout: 10_000 });
             return true;
         }
-        const { taunt, damage } = tankStyles(ctx);
+        const { taunt, damage } = tankStyles(ctx.sdk.getSkills().styles ?? [], ctx.sdk.getState()?.equipment ?? []);
         // Fighting a stand-in for a focus beyond the leash: back to the focus once it is inside again.
         const focusBack = () => { const f = ctx.focus(); return !!stand && !!f && !beyondLeash(ctx, f); };
         // Players: taunts move no threat (players have no aggro table), so the damage style every swing.
@@ -666,7 +648,7 @@ export function holdState(mob: Pick<Contact, 'target' | 'targetSince' | 'movedAt
  * doesn't wait at all), nuke it (the best DoT family once, then direct damage), or melee with `melee`.
  * Never touches crowd-controlled mobs.
  * Melee leaves a focus beyond the chase leash for the nearest enemy inside it (leashFallback).
- * `style`, from the character, picks the styles of its melee; without one it swings plain.
+ * `style` picks the styles of its melee (fighterStyle, or a character's own); without one it swings plain.
  */
 export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePick } = {}): Behavior<TacticsSettings> => ({
     name: opts.melee ? 'assistMelee' : 'assist',
@@ -859,8 +841,8 @@ export const rest = (): Behavior<TacticsSettings> => ({
 });
 
 /**
- * Play the song the moment calls for (songs.ts): speed while travelling, endurance
- * while pulling and fighting, power or health between fights when casters are low
+ * Play the song the moment calls for (songs.ts): speed while travelling, endurance or else
+ * added damage while pulling and fighting, power or health between fights when casters are low
  * or someone is hurt. Never re-casts the song that is playing: that stops it.
  */
 export const song = (): Behavior<TacticsSettings> => ({
@@ -873,17 +855,34 @@ export const song = (): Behavior<TacticsSettings> => ({
         const want = songs.find(s => s.kind === kind);
         if (!want) return false;
         const playing = (ctx.sdk.getState()?.effects ?? []).map(e => e.name);
-        if (playing.includes(want.spell.name)) return false;
+        const now = Date.now();
+        // A pulse's effect can drop out between two pulses, so it counts as playing until a pulse is overdue;
+        // and a run can begin in such a gap, so nothing is cast before one such wait has gone by.
+        const seen: Map<string, number> = ctx.memory.get('songSeen') ?? new Map();
+        ctx.memory.set('songSeen', seen);
+        for (const s of songs) if (playing.includes(s.spell.name)) seen.set(s.spell.name, now);
+        const overdueMs = want.frequency * 100 + 1000;
+        const since: number = ctx.memory.get('songSince') ?? now;
+        ctx.memory.set('songSince', since);
+        if (now - since < overdueMs || now - (seen.get(want.spell.name) ?? 0) < overdueMs) return false;
         // Just cast: give the effect time to show before trying again (a second cast would stop it).
         const last: { name: string; at: number } | undefined = ctx.memory.get('songCast');
-        if (last?.name === want.spell.name && Date.now() - last.at < 10_000) return false;
+        if (last?.name === want.spell.name && now - last.at < 10_000) return false;
         // Keep a song we started for songs.holdMs (short hops between idle and travel made it flap),
         // except into a fight.
         const holdMs = (ctx.settings.songs ?? SONG_SETTINGS).holdMs;
         if (last && playing.includes(last.name) && Date.now() - last.at < holdMs && ctx.orders().phase !== 'engage') return false;
         if (want.spell.cooldownRemaining > 0) return false;
+        // A cast would stop the swing; one with a cast time waits for the fight to end.
+        if (ctx.me().attacking && want.castTime > 0) return false;
         ctx.doing('song', null, want.spell.name);
         ctx.memory.set('songCast', { name: want.spell.name, at: Date.now() });
+        // Swinging: an instant one goes out raw, because castSpell selects us and the swing would lose the mob.
+        if (ctx.me().attacking && want.castTime === 0) {
+            if (want.spell.skillIndex !== undefined) await ctx.sdk.sendUseSkill(want.spell.skillIndex);
+            else await ctx.sdk.sendCastSpell(want.spell.lineIndex, want.spell.spellIndex);
+            return false;
+        }
         ctx.result('song', await ctx.bot.castSpell(want.spell));
         return true;
     },
@@ -971,6 +970,13 @@ export const shedLoad = (): Behavior<TacticsSettings> => ({
     },
 });
 
+/**
+ * A melee on the role lists: it joins at once, since holdMs is the wait for casters, whose nukes draw the mob
+ * further than a swing does. The Warden's idle time in fights went from 19-25 % to 1 % with hold 0 (groups
+ * of two, not alternated).
+ */
+export const meleeFight = () => assist({ melee: true, holdMs: 0, style: fighterStyle() });
+
 /** The behaviour lists the default strategies use, by role. */
 export function defaultBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
@@ -978,7 +984,7 @@ export function defaultBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
         healer: [release(), healer(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
         support: [release(), healer(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
         nuker: [release(), healer(), sprint(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
-        melee: [release(), healer(), sprint(), retreat(), assist({ melee: true }), shedLoad(), holdFormation(), buff(), rest()],
+        melee: [release(), healer(), sprint(), retreat(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
     };
 }
 

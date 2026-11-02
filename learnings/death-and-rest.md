@@ -8,7 +8,7 @@ const r = await bot.rest({ healthPercent: 90 });                 // casters: add
 ```
 
 - **Sitting:** `rest` sits, and waits for the server's "You sit down." (a refused sit fails). It stands up again when the thresholds are reached, on failure, and on cancel.
-- **Live:** health went from 89 % to 100 % in 18 s at level 1. (DAoC regenerates faster sitting; standing rates were not measured.)
+- **Live:** health went from 89 % to 100 % in 18 s at level 1. (DAoC regenerates faster sitting; standing rates were not measured.) A level-5 Blademaster from 16-34 % took about 96-160 s including its walks, and about 80 s at level 6. `rest` stops at 120 s by default, so size a script's timeout for that.
 - **Attacked while sitting:** a mob attacking you while you sit ends the rest with `attacked`. Fight it (`bot.getAttackers()[0]`), then rest again. `rest` refuses to start while something targets you (`in_combat`).
 - **No sitting:** `bot.waitForHealth(percent)` waits without sitting.
 - **Healers** (Brother Maynard <Healer>, near the Albion start) answer interact. In DAoC they remove constitution loss after deaths; untested here.
@@ -30,7 +30,7 @@ You know you died when `bot.isDead()` / `player.isDead` is true. `player.deathCo
 - **Grinding:** `grind({ respawn: true })` releases, walks back to the anchor and carries on. With `respawn: false` (the default) it stops with `stopReason: 'died'`. Deaths the server auto-released are counted too.
 - **Viewers:** a real client shows a player as dead from the state byte of its 0xA9 (0x14, SITTING|SWIMMING), and the server relays that byte as the player's client sent it. The client sends it while `player.isDead`. Without it a real client showed the corpse dying and vanishing over and over, with one 0xAE and no remove or create from the server; with it the corpse lies still (verified in a real 1.127 client). Moving, turning and jumping are refused while dead.
 - **Nobody releases an idle corpse for you:** without a running script a dead bot lies there for the server's full release timer, 900 s.
-- **Bind points:** `nearestBindpoint(regionId, x, y, realm)` from `data/index`. Binding elsewhere (`/bind` near a bind stone) is unverified.
+- **Bind points:** `nearestBindpoint(regionId, x, y, realm)` from `data/index`. Binding elsewhere: `/bind` near a bind stone answers "You are now bound to this location." (verified live at Ardagh).
 - **Unverified:** the XP and constitution loss penalties at low level.
 
 ## Quitting and the 60 s lockout

@@ -31,7 +31,7 @@
 
 import { estimateZ, getClass, realmName } from '../../data/index';
 import type { Realm } from '../types';
-import { assist, buff, crowdControl, flee, guard, heal, holdFormation, position, release, rest, retreat, shedLoad, song, sprint, tank, type TacticsSettings } from './behaviors';
+import { assist, buff, crowdControl, flee, guard, heal, holdFormation, meleeFight, position, release, rest, retreat, shedLoad, song, sprint, tank, type TacticsSettings } from './behaviors';
 import type { Behavior } from './member';
 import type { Finding, RunReport } from './observer';
 import { isAlive } from './blackboard';
@@ -499,7 +499,7 @@ export function rvrBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
         healer: [release(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
         support: [release(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
         nuker: [release(), sprint(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
-        melee: [release(), sprint(), retreat(), assist({ melee: true }), song(), shedLoad(), holdFormation(), buff(), rest()],
+        melee: [release(), sprint(), retreat(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
     };
 }
 

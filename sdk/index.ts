@@ -796,7 +796,7 @@ export class BotSDK {
         return this.state?.effects ?? [];
     }
 
-    /** Active effect by name, or null. */
+    /** Active effect by name, or null. A string matches inside a name: Lesser Bark Skin passes for Bark Skin. */
     findEffect(pattern: NamePattern): Effect | null {
         return bestNameMatch(this.getEffects(), pattern);
     }

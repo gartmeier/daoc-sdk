@@ -46,7 +46,7 @@ if (import.meta.main) await runScript(main, { args: { pattern: scriptArgs()[0] }
 `runScript` owns connecting, the timeout, Ctrl+C and the final state summary. It does **not** start the game client: keep `bun client/runner.ts <name>` running.
 
 - **Which bot:** a script next to a `bot.env` drives that bot. Anywhere else, the first argument names it: `bun bots/examples/grinder.ts <name> 60`.
-- **Arguments:** `scriptArgs()` returns the positional arguments without that bot name, so a copy of an example in `bots/<name>/` is run as `bun bots/<name>/grinder.ts 60`. Never read `process.argv[2]` by a fixed index.
+- **Arguments:** `scriptArgs()` returns the positional arguments without that bot name, so a copy of an example in `bots/<name>/` is run as `bun bots/<name>/grinder.ts 60`. It drops everything starting with `-`, so `--flags` and negative numbers vanish silently: read those from `process.argv`. Never read `process.argv[2]` by a fixed index.
 
 ## Rules
 
