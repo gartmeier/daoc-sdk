@@ -129,12 +129,13 @@ Keep gameplay bots at PrivLevel 1. Monsters never attack GM accounts.
 
 ## License
 
-The intended license is **GPL-3.0-or-later**, because daoc-sdk is built to run with OpenDAoC and ports parts of its source: protocol layouts, `ConLevelGrid`, the class and race tables, and message texts.
+Copyright (C) 2026 Joshua Gartmeier
 
-- OpenDAoC ships the GPL-3.0 text, and its file headers say "GPL v2 or later".
-- OpenDAoC's GPL-3.0 text is in [LICENSES/OpenDAoC-GPL-3.0.txt](LICENSES/OpenDAoC-GPL-3.0.txt); `sdk/actions-helpers.ts` carries a notice for the ported `ConLevelGrid`.
+daoc-sdk is licensed under the **GNU General Public License, version 3 or (at your option) any later version** (`GPL-3.0-or-later`), with no warranty. The full text is in [LICENSE](LICENSE). The GPL applies because daoc-sdk is built to run with OpenDAoC and ports parts of its source: protocol layouts, `ConLevelGrid`, the class and race tables, and message texts.
+
+Third-party code keeps its own license and notices, and the git submodules (`server/core`, `server/db`, `server/buildnav`, `reference/rs-sdk`) stay under their own licenses:
+
+- OpenDAoC ships the GPL-3.0 text, and its file headers say "GPL v2 or later". Its text is in [LICENSES/OpenDAoC-GPL-3.0.txt](LICENSES/OpenDAoC-GPL-3.0.txt); `sdk/actions-helpers.ts` carries a notice for the ported `ConLevelGrid`.
 - rs-sdk code adapted here is MIT (Copyright (c) 2025 Lost City), which is compatible with the GPL. The full MIT text is in [LICENSES/rs-sdk-MIT.txt](LICENSES/rs-sdk-MIT.txt), and each derived file names it in a header comment:
   - copied verbatim (or re-indented): `sdk/execution-context.ts`, `sdk/redact.ts`, `mcp/console-capture.ts`;
   - adapted: `sdk/index.ts`, `sdk/runner.ts`, `sdk/cli.ts`, `sdk/chat.ts`, `sdk/chat-history.ts`, `sdk/formatter.ts`, `sdk/generate-api-docs.ts`, `sdk/test/api-docs.test.ts`, `sdk/test/sdk-unit.test.ts`, `mcp/server.ts`, `mcp/execute-code.ts`, `mcp/api/index.ts`, `gateway/gateway.ts`, `gateway/gateway.test.ts`, `client/action-queue.ts`, `client/action-queue.test.ts`.
-
-No root `LICENSE` file and no `license` field in package.json have been added yet. Until the maintainer adds them, this section is a statement of intent for the project's own code.
