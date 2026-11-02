@@ -81,6 +81,8 @@ export interface MemberReport {
     z: number;
     /** Percentages. */
     hp: number;
+    /** Full health in hit points, to size a heal; absent in reports from before it. */
+    maxHp?: number;
     mana: number;
     endurance: number;
     /** Carried weight as % of capacity; above 100 the character cannot move. */

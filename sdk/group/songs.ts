@@ -6,13 +6,14 @@
 //
 // The choice (from a Hibernia player, session 2 of groups/hibernia):
 //  - travelling: speed;
-//  - pulling and fighting: endurance, for the tank's styles;
+//  - pulling and fighting: endurance, for the tank's styles, or else added damage
+//    (a Skald's Battlesongs have no endurance song);
 //  - between fights: power when a caster runs low, health when someone is hurt,
 //    else endurance.
 
 import type { MemberReport } from './types';
 
-export type SongKind = 'speed' | 'endurance' | 'power' | 'health';
+export type SongKind = 'speed' | 'endurance' | 'power' | 'health' | 'damage';
 
 /** The kind of a friendly song (a pulsing Group/Self spell), or null for anything else. */
 export function songKind(s: { type: string; target: string; pulse: boolean }): SongKind | null {
@@ -22,6 +23,7 @@ export function songKind(s: { type: string; target: string; pulse: boolean }): S
         case 'EnduranceRegenBuff': return 'endurance';
         case 'PowerRegenBuff': return 'power';
         case 'HealthRegenBuff': return 'health';
+        case 'DamageAdd': return 'damage';
     }
     return null;
 }
@@ -42,7 +44,7 @@ const usesPower = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuk
 /** Song kinds for this phase and the group's state, best first. */
 export function wantedSongs(phase: string, members: MemberReport[], s: SongSettings = SONG_SETTINGS): SongKind[] {
     if (phase === 'travel' || phase === 'retreat') return ['speed', 'endurance'];
-    if (phase === 'engage' || phase === 'pull') return ['endurance'];
+    if (phase === 'engage' || phase === 'pull') return ['endurance', 'damage'];
     const alive = members.filter(m => !m.isDead);
     const out: SongKind[] = [];
     if (alive.some(m => usesPower(m) && m.mana < s.powerBelow)) out.push('power');

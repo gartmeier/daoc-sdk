@@ -7,6 +7,7 @@ export { Blackboard, observeState, emptyOrders, isMaterialChange, isAlive, type 
 export { MemberAgent, MemberContext, countCombatMessage, type Behavior, type Member } from './member';
 export { loadCharacter, withCharacter, type Character } from './character';
 export * from './behaviors';
+export * from './styles';
 export { Coordinator, defineStrategy, roleForClass, type CoordinatorContext, type GroupStrategy } from './strategy';
 export { pveLeveling, decidePve, pickPullTarget, pickFocus, assignCc, PVE_SETTINGS, type PveSettings } from './pve';
 export { PORTAL_KEEPS, BATTLEGROUNDS, CAPITALS, portalKeepOf, capitalOf, inBattleground, inCapital, atPortalKeep, entryProblem, townTeleporter, viaWalkers, walkTogether, toPortalKeep, bindAtPortalKeep, wearsMedallion, getMedallion, wearMedallion, waitForPort, portTogether, enterBattleground, battlegroundExit, leaveBattleground, type MedallionResult, type PortalKeep, type Battleground, type Passage, type EnterResult } from './battleground';
@@ -20,7 +21,7 @@ export { runGroup, runGroupScript, groupArgs, type GroupRunOptions, type GroupRu
 export { GroupPublisher, EventOutbox, windDownClock, memoryView, planView, jsonSafe, type GroupPublishOptions, type PublisherDeps } from './publish';
 export { isLoggedEvent, WIRE_VERSION } from './wire';
 export type { RunPhase, RunMember, RunMeta, CoordinatorView, PlanView, LiveReport, WireEvent, RunResultView, GroupPublish, ControlRequest, PublishAck } from './wire';
-export { Spellbook, spellsOf, slotOf, pickNuke, dotFamily, toPick, type SpellPick, type NukeOptions } from './spells';
+export { Spellbook, spellsOf, slotOf, pickNuke, pickHeal, healAmount, dotFamily, toPick, type SpellPick, type NukeOptions } from './spells';
 export * from './buffs';
 export * from './songs';
 export * from './terrain';

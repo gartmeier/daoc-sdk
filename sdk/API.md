@@ -193,7 +193,7 @@
 | `findStyle(pattern: NamePattern): Style \| null` | Combat style by name; pass its skillIndex to sendUseSkill. |
 | `findAbility(pattern: NamePattern): Ability \| null` | Ability by name; pass its skillIndex to sendUseSkill. |
 | `getEffects(): Effect[]` | Active buffs/debuffs. |
-| `findEffect(pattern: NamePattern): Effect \| null` | Active effect by name, or null. |
+| `findEffect(pattern: NamePattern): Effect \| null` | Active effect by name, or null. A string matches inside a name: Lesser Bark Skin passes for Bark Skin. |
 | `getMerchant(): MerchantState \| null` | Open merchant window, or null when none is open. |
 | `getTrainer(): TrainerState \| null` | Open trainer window, or null when none is open. |
 | `getTrade(): TradeWindow \| null` | Open player trade window, or null when none is open. Its partnerItems carry the partner's slots, never ours. |
@@ -541,6 +541,7 @@ interface SpellDetails {
   /** 0 when instant; null for a cast under 2 s, which the tooltip doesn't state. */
   castTimeMs: number | null;
   damageType: string | null;
+  /** Negative: a percent of the full pool. */
   powerCost: number;
   costType: 'power' | 'health' | 'endurance';
   range: number;

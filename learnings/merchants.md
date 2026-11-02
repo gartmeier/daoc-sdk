@@ -25,7 +25,8 @@ await bot.closeMerchant();
   - `objectType` is the template's Object_Type: compare with `ObjectType.Blades`, or `isWeapon` / `isArmor`.
   - `hand` is an `ItemHand`: `MainHand`, `TwoHanded` or `FitsLeft`. The left-hand slot itself checks Item_Type, which the window doesn't send (GamePlayerInventory.cs:822), so equipItem has the last word.
   - `value1` is DPS * 10 for a weapon (a long sword's 24 is 2.4), `spdAbs` is speed in 0.1 s (35 is 3.5 s). For armour they are AF and absorption; for ammunition `value1` is the pack size.
-  - `usable` is the server's verdict for this character.
+  - `usable` is the server's verdict for this character, today. Armour classes come with level: a Warden gets better armour at 10 and 20, a Hero at 15, a Druid at 10 and 20, a Paladin at 10 and 20, a Bard at 15, a Skald at 20 (`specxability.sql`, also in `specializations.json`).
+  - **A shop item has no worn slot.** For armour, join the static list: `getMerchantItems(...)` and `getItemTemplate(e.itemTemplateId).itemType`, as `groups/camelot/town.ts` does.
 - **Delve shows what the window can't:** bonuses, and the effective damage. A plain long sword reads "2.4 Base DPS", "2.4 Clamped DPS", "85% Quality", "Effective Damage: 2.0 DPS". 0xD8 type 4, object id `page * 30 + slot`, with the merchant targeted (DetailDisplayHandler.cs:311-318).
 - **Range:** the methods walk within 150 of the merchant (the server allows 256), and target and open the window first.
 - **Prices:** `price` is in copper for the whole purchase unit. 20 bolts cost 19c.

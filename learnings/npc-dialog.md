@@ -42,6 +42,8 @@ const n = await bot.navigateDialog('Master Visur', ['towns', /prydwen/i]);   // 
   ```
   It opens the trainer window, falling back to `/train <spec> <level>`, and observes the spec level rise. Verified live: Crush 1 → 2.
 - **Spec points** come with levels (`player.specPoints`). The cost of each next level is in `sdk.getTrainer()?.specs` once the window is open.
+  - **What comes:** levels 2-5 give their own number, and from 6 on each level gives the class's multiplier * level / 10, rounded down (`GamePlayer.cs:4705`). From level 40 half-levels add multiplier * level / 20. A multiplier of 15 gave 9 at level 6.
+  - **What it costs:** each spec level costs its own number, so from 1 to N costs the sum of 2..N. Checked on a Blademaster's real points: 14 + 2 * (6..24) = 584 by level 24, against 573 for Blades 24, Celtic Dual 21 and Parry 9.
 - **The base trainer stops at level 5:** from level 5 on, Master Graent only says "You must now seek your training elsewhere" and lists [Armsman], [Paladin], [Mercenary] (FighterTrainer.cs:63-65). Training continues at the advanced-class trainer after promotion.
 
 ## Promotion
@@ -59,7 +61,7 @@ await bot.navigateDialog('Master Visur', ['towns', /prydwen/i]);  // back to Pry
 ```
 
 - After promotion, `sdk.getSkills().styles` lists the new class's styles (Armsman: Ruby Slash at Slash 2). See [combat.md](combat.md).
-- The other realms' promotion trainers and keywords are unverified; read the trainer's `[keywords]` with `bot.talkTo` first.
+- **Read the keyword with `bot.talkTo` first:** it differs by class and trainer. Live: `join the Church of Albion` for a Paladin or Cleric, `join the House of Tyr` for a Warrior, the class name for a Warden or Blademaster, `song` for a Bard. From the trainer scripts: `Temple of Arawn` for a Reaver, `Path of Affinity` for an Animist or Valewalker. Some bracketed words only give information, such as [Necromancers].
 
 ## Teleporters
 
@@ -68,6 +70,7 @@ Master Visur <Teleporter> stands about 1360 units from the Prydwen Keep start an
 ```typescript
 await bot.whisper('Master Visur', 'Camelot');          // "I'm now teleporting you to Camelot." → region 10
 await bot.whisper('Master Visur', 'Prydwen Keep');     // back to region 1 (the [towns] sub-list)
+await bot.navigateDialog('Channeler Glasny', ['towns', /ardagh/i]);  // Hibernia, from Mag Mell: verified live; Uilliam, the Warden trainer, is 1,959 units from that landing
 ```
 
 - **Destinations:** top-level keywords are Castle Sauvage, Snowdonia Fortress, Avalon Marsh, Gothwaite Harbor, Shrouded Isles, Camelot, Entrance, Housing, towns and Epic Dungeon. `towns` lists Cotswold Village, Prydwen Keep, Caer Ulfwych, Campacorentin Station, Adribard's Retreat and Yarley's Farm.

@@ -368,6 +368,7 @@ export interface SpellDetails {
     /** 0 when instant; null for a cast under 2 s, which the tooltip doesn't state. */
     castTimeMs: number | null;
     damageType: string | null;
+    /** Negative: a percent of the full pool. */
     powerCost: number;
     costType: 'power' | 'health' | 'endurance';
     range: number;
