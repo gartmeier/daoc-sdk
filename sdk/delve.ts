@@ -11,7 +11,7 @@
 // Names are the English ones of SkillBase.RegisterPropertyNames (language/EN/SkillHandler.txt). A
 // name or unit not listed here goes to `unknown`, never into a nearby category.
 
-import type { ItemBonus, ParsedDelve, SkillGroup } from './types';
+import type { ItemBonus, ParsedDelve, SkillGroup, WeaponDelve } from './types';
 
 const STATS: Record<string, NonNullable<ItemBonus['stat']>> = {
     Strength: 'STR', Dexterity: 'DEX', Constitution: 'CON', Quickness: 'QUI', Intelligence: 'INT',
@@ -147,6 +147,22 @@ export function parseDelve(lines: readonly string[]): ParsedDelve {
         out.unknown.push(line);
     }
     return out;
+}
+
+/**
+ * A weapon's damage lines (GameInventoryItem.cs:1156-1197, also through a shop's delve). The clamped
+ * figure is the item's DPS at this character's level; a shield's lines have a "Shield Speed" and no
+ * quality, so they are null here, as is anything with parts missing.
+ */
+export function parseWeaponDelve(lines: readonly string[]): WeaponDelve | null {
+    const figure = (what: string) => {
+        const hit = lines.map(l => new RegExp(`^- ([\\d.,]+)%? ${what}$`).exec(l.trim())).find(Boolean);
+        return hit ? Number(hit[1]!.replace(',', '.')) : null;
+    };
+    const baseDps = figure('Base DPS'), clampedDps = figure('Clamped DPS'), speed = figure('Weapon Speed');
+    const quality = figure('Quality'), condition = figure('Condition');
+    if (baseDps === null || clampedDps === null || speed === null || quality === null || condition === null) return null;
+    return { baseDps, clampedDps, speed, quality, condition };
 }
 
 /**

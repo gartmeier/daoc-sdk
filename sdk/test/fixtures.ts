@@ -70,12 +70,12 @@ export function makeState(overrides: Partial<BotWorldState> = {}): BotWorldState
         nearbyPlayers: [makePlayerObj()],
         nearbyObjects: [makeObject(), makeObject({ objectId: 401, name: 'well', isLoot: false, ownedByUs: false, distance: 900, distance2d: 900 })],
         inventory: [
-            { slot: 40, name: 'minor healing potion', level: 1, count: 3, model: 99, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 5, value1: 0, value2: 0 },
-            { slot: 41, name: 'rat tail', level: 1, count: 2, model: 1, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 1, value1: 0, value2: 0 },
-            { slot: 42, name: 'rat tail', level: 1, count: 1, model: 1, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 1, value1: 0, value2: 0 },
+            { slot: 40, name: 'minor healing potion', level: 1, count: 3, model: 99, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 5, value1: 0, value2: 0, hand: 0 },
+            { slot: 41, name: 'rat tail', level: 1, count: 2, model: 1, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 1, value1: 0, value2: 0, hand: 0 },
+            { slot: 42, name: 'rat tail', level: 1, count: 1, model: 1, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 1, value1: 0, value2: 0, hand: 0 },
         ],
         equipment: [
-            { slot: 10, name: 'training sword', level: 1, count: 1, model: 3, objectType: 3, condition: 100, durability: 100, quality: 85, weight: 30, value1: 12, value2: 37 },
+            { slot: 10, name: 'training sword', level: 1, count: 1, model: 3, objectType: 3, condition: 100, durability: 100, quality: 85, weight: 30, value1: 12, value2: 37, hand: 0 },
         ],
         vault: [],
         skills: {
