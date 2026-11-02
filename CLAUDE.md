@@ -2,7 +2,7 @@
 
 You play Dark Age of Camelot on a local OpenDAoC server by writing bot scripts. Start small, make one step toward the goal, then learn and grow the script as you go. Characters are **persistent**: every session continues where the last one ended.
 
-Before writing logic for a topic (walking, combat, spells, merchants, looting, death, classes, zones, grouping/chat, group coordination, RvR), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
+Before writing logic for a topic (walking, combat, spells, merchants, looting, trading, death, classes, zones, grouping/chat, group coordination, RvR), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
 
 ## First-time setup
 
@@ -45,7 +45,7 @@ MCP `execute_code` does steps 3–4 itself. Scripts and the CLIs never start a c
 
 ## Groups
 
-Several bots play as one group through `sdk/group` (read [learnings/group-coordination.md](learnings/group-coordination.md) first): members share what they see on a blackboard, a coordinator runs the strategy's `decide()` (pull, focus, crowd control, retreat), each member runs its role's behaviour list, and an observer scores every run.
+Several bots play as one group through `sdk/group` (read [learnings/group-coordination.md](learnings/group-coordination.md) first): members share what they see on a blackboard, a coordinator runs the strategy's `decide()` (pull, focus, crowd control, retreat), each member runs its role's behaviour list with its own routine from `bots/<bot>/character.ts` in it, and an observer scores every run.
 
 ```bash
 bun groups/create-group.ts <group> <bot> <bot> ...    # groups/<group>/: group.json, strategy.ts, hunt.ts, lab_log.md
@@ -114,6 +114,7 @@ A new call for the same bot cancels the one still running. Every result includes
 | `trainSpec(trainer, spec, levels)` | Spend specialization points |
 | `equipItem` / `unequipItem` / `useItem` / `dropItem` / `destroyItem` | Items |
 | `delveItem(item \| name \| slot)` | An item's real bonuses: `lines`, `bonuses`, `unknown`; reason `empty_slot`, `not_found`, `no_response` (learnings/looting.md) |
+| `trade(player, {give, money, accept})` / `offerTrade` / `acceptTrade` / `cancelTrade` | Trade with a player: both sides call, in any order, within 128 units, between hunts; reports `gave`, `received`, `moneyGiven`, `moneyReceived`; reason `cancelled`, `busy`, `inventory_full`, `partner_no_accept`, ...; an add that opens a window waits for its slot on the clock, up to 750 ms (learnings/trading.md) |
 | `invite` / `acceptGroupInvite` / `groupSay` / `follow` / `say` / `send` | Social |
 
 From `sdk.*`, the common calls are `getState`, `getPlayer`, `getInventory`, `findNearbyNpc(s)`, `getNearbyLoot`, `getSkills`, `findSpell`, `getMerchant`, `getGroup`, `getChat`, `waitForChat`, `waitForCondition`. The full list is in sdk/API.md.
@@ -141,6 +142,8 @@ From `sdk.*`, the common calls are `getState`, `getPlayer`, `getInventory`, `fin
 - **Character creation fails for some classes:** Valkyrie, Bainshee, Heretic, Warlock, Vampiir and the Maulers can't be created. With `start_as_base_class` on, advanced classes start as their base class; promote at the advanced-class trainer at level 5 (learnings/npc-dialog.md). Base classes have no styles.
 - **A Guardian (or Blademaster, Hero, Champion) dies to level-1 mobs:** it starts without armour, because its starter armour templates are missing from the DB. Hibernia's default is Naturalist for that reason (learnings/classes-and-races.md).
 - **Gateway answers 403, 401 or 415:** 403 is a browser `Origin` that is neither loopback nor the gateway's own, or a non-loopback `Host` on the default 127.0.0.1 bind. 401 means `GATEWAY_AUTH=botenv` is on and the password doesn't match `bots/<name>/bot.env`. 415 means a POST to `/say`, `/dm`, `/bots/<bot>/auth` or `/groups/<group>/...` lacked `Content-Type: application/json`.
+- **The whole server stops answering after a trade (chat and moves do nothing, a quit gets no answer, the gameserver sits near 0 % CPU):** two adds that open a trade window in one server tick can deadlock it. `docker compose -f server/docker/docker-compose.yml restart gameserver`, then start the clients again. Restart it after a single 9 s stall too, because its watchdog only cures one. `bot.trade` and `bot.offerTrade` keep those adds apart; don't call raw `sdk.sendTradeOffer*` from both sides at once, and don't retry a failed trade in a tight loop (learnings/trading.md).
+- **A trade ends in `cancelled`, `busy` or `unknown_action`:** `cancelled` means the window closed without "Trade Completed": the partner cancelled or the two were more than 128 units apart in 3D, and the server doesn't say which. `busy` means one side is still in a window with someone else; `bot.cancelTrade()` on that side clears it. `unknown_action` means the client runs older code: restart it with a quit action. A partner on older code shows up as `partner_no_accept` on the newer side. A trade from a second script aborts a group run, so trade between hunts (learnings/trading.md).
 - **Everything succeeds and nothing happens:** you used a raw `send*` that the server silently ignored (out of range, wrong target, dead). Use the `bot.*` method, or check `sdk.getGameMessages()` for the server's answer.
 
 The game server is the source of truth and is well tested. When something fails, question your assumptions (range, target, z, state) before blaming the game. If the SDK really is wrong, find a workaround, then note it under "Possible SDK Bugs" in the bot's `lab_log.md`.
@@ -148,7 +151,7 @@ The game server is the source of truth and is well tested. When something fails,
 ## Project layout
 
 ```
-bots/<name>/      bot.env (credentials + character), script.ts, lab_log.md
+bots/<name>/      bot.env (credentials + character), script.ts, lab_log.md, character.ts (its routine in a group), runs/history.jsonl
 bots/examples/    grinder.ts, merchant-run.ts, caster.ts, explorer.ts, duo.ts (bun bots/examples/<x>.ts <bot>); script-args.ts
 groups/<group>/   group.json (members, roles), strategy.ts, hunt.ts, lab_log.md, runs/ (observer reports); create-group.ts, _template/
 learnings/        topic notes from live runs

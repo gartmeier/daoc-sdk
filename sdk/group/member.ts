@@ -11,8 +11,9 @@ import type { BotSDK } from '../index';
 import type { PlayerState } from '../types';
 import { abortable, executionContext } from '../execution-context';
 import { type Blackboard, observeState } from './blackboard';
+import type { Character } from './character';
 import { Spellbook } from './spells';
-import type { Activity, Capabilities, Contact, GroupPicture, MemberReport, Orders, Role } from './types';
+import type { Activity, Capabilities, Contact, GroupPicture, MemberCombat, MemberReport, Orders, Role } from './types';
 
 export interface Behavior<S = any> {
     name: string;
@@ -29,6 +30,20 @@ export interface Member {
     role: Role;
     sdk: BotSDK;
     actions: BotActions;
+    /** bots/<bot>/character.ts, if it has one. */
+    character?: Character | null;
+}
+
+/** Count one server message into a member's combat record. */
+export function countCombatMessage(text: string, combat: MemberCombat): void {
+    // A critical hit is its own message, on top of the hit. "Your X hits" is a DoT's tick (DoTSpellHandler.cs:87) or a pet's blow.
+    const hit = /^You (?:(?:attack|shoot) .+ (?:and|but) hit|hit .+) for (\d+)/.exec(text)
+        ?? /^You critical(?:ly)? hit .*for an additional (\d+)/.exec(text)
+        ?? /^Your .+ hits .+ for (\d+)/.exec(text);
+    if (hit) { combat.dealt += Number(hit[1]); return; }
+    const landed = /^You perform your (.+?) perfectly/.exec(text);
+    if (landed) { combat.styles[landed[1]!] = (combat.styles[landed[1]!] ?? 0) + 1; return; }
+    if (/^You fail to execute your /.test(text)) combat.missedStyles++;
 }
 
 class Interrupted extends Error {
@@ -106,6 +121,8 @@ export class MemberAgent<S = any> {
     private activity: Activity = { kind: 'idle', targetId: null, detail: '', since: Date.now() };
     private capabilities: Capabilities;
     private capsAt = 0;
+    private readonly combat: MemberCombat = { dealt: 0, styles: {}, missedStyles: 0 };
+    private lastMessageId: number;
     private current: { controller: AbortController; interruptible: boolean } | null = null;
     private readonly unsubscribe: (() => void)[] = [];
 
@@ -113,6 +130,7 @@ export class MemberAgent<S = any> {
         this.spells = new Spellbook(member.sdk, member.actions);
         this.capabilities = this.spells.capabilities();
         this.ctx = new MemberContext(this, settings);
+        this.lastMessageId = member.sdk.getGameMessages().at(-1)?.id ?? -1;
         this.unsubscribe.push(member.sdk.onStateUpdate(() => this.publish()));
         this.unsubscribe.push(board.onOrders((next, prev) => { if (this.affected(next, prev)) this.interrupt(`orders: ${next.phase}`); }));
         this.publish();
@@ -123,7 +141,9 @@ export class MemberAgent<S = any> {
         const state = this.member.sdk.getState();
         if (!state) return;
         if (Date.now() - this.capsAt > 30_000) { this.capabilities = this.spells.capabilities(); this.capsAt = Date.now(); }
-        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities }, this.options.sightRadius);
+        for (const m of state.gameMessages) if (m.id > this.lastMessageId) countCombatMessage(m.text, this.combat);
+        this.lastMessageId = state.gameMessages.at(-1)?.id ?? this.lastMessageId;
+        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat }, this.options.sightRadius);
         if (obs) this.board.publish(obs);
     }
 

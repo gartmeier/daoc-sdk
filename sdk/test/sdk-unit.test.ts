@@ -125,6 +125,10 @@ describe('BotSDK.sendAction dispatch failures', () => {
             delveMerchantItem: s => s.sendDelveMerchantItem(0, 3),
             buy: s => s.sendBuy(0, 1, 2),
             sell: s => s.sendSell(40),
+            tradeOfferItem: s => s.sendTradeOfferItem(7, 40),
+            tradeOfferMoney: s => s.sendTradeOfferMoney(7, 5),
+            tradeAccept: s => s.sendTradeAccept(3),
+            tradeCancel: s => s.sendTradeCancel(),
             openTrainer: s => s.sendOpenTrainer(),
             trainSpec: s => s.sendTrainSpec(0, 2),
             respondDialog: s => s.sendRespondDialog(true),
@@ -146,6 +150,7 @@ describe('BotSDK.sendAction dispatch failures', () => {
             whisper: { objectId: 7, text: 'kw' }, pickup: { objectId: 7 }, attack: { on: false }, useSkill: { skillIndex: 3 },
             castSpell: { lineIndex: 1, spellIndex: 2 }, setGroundTarget: { x: 1, y: 2, z: 3 }, useItem: { slot: 40, useType: 1 },
             moveItem: { fromSlot: 40, toSlot: 41, count: 2 }, dropItem: { slot: 40 }, destroyItem: { slot: 40 }, delve: { slot: 40 }, delveMerchantItem: { page: 0, slot: 3 },
+            tradeOfferItem: { partnerObjectId: 7, slot: 40 }, tradeOfferMoney: { partnerObjectId: 7, copper: 5 }, tradeAccept: { revision: 3 },
             buy: { page: 0, slot: 1, count: 2 }, sell: { slot: 40 }, trainSpec: { specIndex: 0, levels: 2 },
             respondDialog: { accept: true }, say: { text: 'hi' }, send: { to: 'Ann', text: 'hi' }, groupSay: { text: 'hi' },
             command: { command: '&stick' }, sit: { sit: true }, regionChangeRequest: { zonePointId: 63 },
@@ -191,6 +196,16 @@ describe('BotSDK state reads', () => {
         expect(sdk.getPosition()).toEqual({ regionId: 1, x: 560000, y: 511000, z: 2500 });
         expect(sdk.getMerchant()).toBeNull();
         expect(sdk.getDialog()).toBeNull();
+        expect(sdk.getTrade()).toBeNull();
+    });
+
+    test('getTrade returns the open window; a client without the field reads as closed', () => {
+        const { sdk } = stubSdk(5000);
+        const trade = { id: 1, revision: 2, partnerName: 'Aine', mySlots: [40], myMoney: 5, partnerItems: [], partnerMoney: 0 };
+        feed(sdk, makeState({ trade }));
+        expect(sdk.getTrade()).toEqual(trade);
+        feed(sdk, makeState({ trade: null }));
+        expect(sdk.getTrade()).toBeNull();
     });
 
     test('getTarget resolves the target object', () => {

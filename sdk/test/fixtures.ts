@@ -95,6 +95,7 @@ export function makeState(overrides: Partial<BotWorldState> = {}): BotWorldState
         dialog: null,
         textWindow: null,
         merchant: { isOpen: false, merchantObjectId: null, windowType: 0, items: [] },
+        trade: null,
         trainer: { isOpen: false, specPoints: 0, specs: [] },
         combatEvents: [],
         ...overrides,

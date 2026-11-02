@@ -36,4 +36,10 @@ describe('generated API reference', () => {
         expect(model.resultTypes.some(t => t.name === 'BotWorldState')).toBeTrue();
         expect(model.resultTypes.some(t => t.name === 'FindNpcOptions')).toBeTrue();
     });
+
+    test('an interface shows what it extends: the inherited fields are listed under that name only', async () => {
+        const generated = await generateApiMarkdown(sdkDir);
+        expect(generated).toContain('interface TradeOptions extends TradeOfferOptions {');
+        expect(generated).toContain("interface KillPlayerOptions extends Omit<KillOptions, 'useStyle' | 'force'> {");
+    });
 });

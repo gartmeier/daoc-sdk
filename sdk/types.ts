@@ -43,7 +43,7 @@ export interface Money {
     gold: number;
     mithril: number;
     platinum: number;
-    /** Everything expressed in copper (1s = 100c, 1g = 100s, 1m = 1000g, 1p = 1000m). */
+    /** Everything expressed in copper (1s = 100c, 1g = 100s, 1p = 1000g, 1m = 1000p). */
     totalCopper: number;
 }
 
@@ -641,6 +641,24 @@ export interface ConnectionInfo {
 
 // ── Snapshot ────────────────────────────────────────────────────────────────
 
+/** Open player trade (server 0xEA). Accept state is not on the wire: every 0xEA means both accepts were reset. */
+export interface TradeWindow {
+    /** Process-wide, new per window. */
+    id: number;
+    /** 1 on open, +1 per 0xEA. */
+    revision: number;
+    /** From "Trading with <name>". Null is a self-craft window: never accept it. */
+    partnerName: string | null;
+    /** Our offered slots. The items stay there until the commit. */
+    mySlots: number[];
+    /** Copper. */
+    myMoney: number;
+    /** slot is the PARTNER's slot, never ours. */
+    partnerItems: InventoryItem[];
+    /** Copper. */
+    partnerMoney: number;
+}
+
 export interface BotWorldState {
     /** Monotonic publish counter (one per published snapshot). */
     tick: number;
@@ -676,6 +694,8 @@ export interface BotWorldState {
     concentrationEffects?: ConcentrationEffect[];
     /** Current ground target, when set via setGroundTarget or the server (0xEC). */
     groundTarget?: Vec3 | null;
+    /** Open player trade window; absent or null when closed. */
+    trade?: TradeWindow | null;
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────
@@ -715,6 +735,12 @@ export type BotAction = ActionBase & (
     | { type: 'destroyItem'; slot: number }
     | { type: 'delve'; slot: number }
     | { type: 'delveMerchantItem'; page: number; slot: number }
+
+    // Player trade. Success means dispatched: only the next 0xEA in state.trade shows the server took it.
+    | { type: 'tradeOfferItem'; partnerObjectId: number; slot: number }
+    | { type: 'tradeOfferMoney'; partnerObjectId: number; copper: number }
+    | { type: 'tradeAccept'; revision?: number; windowId?: number }
+    | { type: 'tradeCancel' }
 
     // Merchants / trainers
     | { type: 'buy'; page: number; slot: number; count: number }

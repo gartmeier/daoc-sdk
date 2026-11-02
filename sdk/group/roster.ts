@@ -6,6 +6,7 @@ import { basename, join } from 'path';
 import { BotActions } from '../actions';
 import { BotSDK, deriveGatewayUrl, findBotEnv, parseEnvFile } from '../index';
 import type { ConnectionMode } from '../types';
+import { loadCharacter } from './character';
 import type { Member } from './member';
 import { roleForClass } from './strategy';
 import type { GroupDefinition, Role } from './types';
@@ -61,9 +62,11 @@ export interface ConnectedGroup {
 
 /**
  * Connect every member. `have` is a connection the caller already holds (runScript
- * or MCP gave it): it is used for its bot instead of opening a second one.
+ * or MCP gave it): it is used for its bot instead of opening a second one. `character` says whose
+ * bots/<bot>/character.ts to load, for a run that will use them: its role then goes ahead of the
+ * class's. Travel and shopping scripts don't ask, so a broken routine can't stop them.
  */
-export async function connectGroup(def: GroupDefinition, have?: { bot: BotActions; sdk: BotSDK }, roleOf: (className: string) => Role = roleForClass): Promise<ConnectedGroup> {
+export async function connectGroup(def: GroupDefinition, have?: { bot: BotActions; sdk: BotSDK }, roleOf: (className: string) => Role = roleForClass, character?: (bot: string) => boolean): Promise<ConnectedGroup> {
     const members: Member[] = [];
     const opened: BotSDK[] = [];
     try {
@@ -72,7 +75,8 @@ export async function connectGroup(def: GroupDefinition, have?: { bot: BotAction
             const c = own ?? await connectBot(m.bot);
             if (!own) opened.push(c.sdk);
             const className = c.sdk.getPlayer()?.className ?? '';
-            members.push({ bot: m.bot, role: m.role ?? roleOf(className), sdk: c.sdk, actions: c.bot });
+            const loaded = character?.(m.bot) ? await loadCharacter(m.bot) : null;
+            members.push({ bot: m.bot, role: m.role ?? loaded?.role ?? roleOf(className), sdk: c.sdk, actions: c.bot, character: loaded });
         }
     } catch (e) {
         await Promise.all(opened.map(s => s.disconnect().catch(() => {})));

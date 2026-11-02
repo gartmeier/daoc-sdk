@@ -24,6 +24,8 @@ interface PropertyDoc {
 }
 
 interface TypeDoc {
+    /** The `extends` clause, or empty. */
+    heritage: string;
     name: string;
     description: string;
     properties: PropertyDoc[];
@@ -114,6 +116,7 @@ function extractResultTypes(path: string, source: string, filter: (name: string)
         .map(statement => ({
             name: statement.name.text,
             description: descriptionFor(statement),
+            heritage: (statement.heritageClauses ?? []).map(clause => normalizeCode(clause.getText(file))).join(' '),
             properties: statement.members
                 .filter((member): member is ts.PropertySignature =>
                     ts.isPropertySignature(member) && Boolean(member.name)
@@ -142,6 +145,7 @@ function methodCategory(name: string, surface: 'actions' | 'sdk'): string {
     const lower = name.toLowerCase();
 
     if (surface === 'actions') {
+        if (lower.includes('trade')) return 'Trading';
         if (lower.includes('dialog') || lower.includes('blocking') || lower.includes('whisper') || lower.includes('talk')) return 'NPC Dialog & UI';
         if (lower.includes('walk') || lower.includes('move') || lower.includes('follow') || lower.includes('face') || lower.includes('stop')) return 'Movement';
         if (lower.includes('attack') || lower.includes('kill') || lower.includes('cast') || lower.includes('style') || lower.includes('target') || lower.includes('pull')) return 'Combat';
@@ -217,7 +221,8 @@ function renderApiMarkdown(model: ApiModel): string {
     for (const type of model.resultTypes) {
         lines.push(`### ${type.name}`, '');
         if (type.description) lines.push(type.description, '');
-        lines.push('```typescript', `interface ${type.name} {`);
+        // The heritage names where the rest of the fields are: only an interface's own are listed.
+        lines.push('```typescript', `interface ${type.name}${type.heritage ? ` ${type.heritage}` : ''} {`);
         for (const property of type.properties) {
             if (property.description) {
                 lines.push(`  /** ${property.description.replace(/\*\//g, '*\\/')} */`);

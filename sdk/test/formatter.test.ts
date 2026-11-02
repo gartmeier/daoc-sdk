@@ -38,6 +38,15 @@ describe('formatWorldState', () => {
         expect(text).toContain('DEAD');
     });
 
+    test('shows an open trade as a blocker in both views', () => {
+        const partnerItems = [{ slot: 45, name: 'helm', level: 1, count: 1, model: 1, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 5, value1: 0, value2: 0 }];
+        const state = makeState({ trade: { id: 1, revision: 3, partnerName: 'Aine', mySlots: [40, 41], myMoney: 0, partnerItems, partnerMoney: 0 } });
+        expect(formatWorldState(state, 0)).toContain('trading with Aine (2 ours, 1 theirs)');
+        expect(formatWorldStateSummary(state, 0)).toContain('trading with Aine (2 ours, 1 theirs)');
+        expect(formatWorldState(makeState({ trade: null }), 0)).not.toContain('trading with');
+        expect(formatWorldState(makeState(), 0)).not.toContain('trading with');
+    });
+
     test('not in game', () => {
         const text = formatWorldState(makeState({ inGame: false, player: null, connection: { phase: 'charScreen', serverName: '', clientVersion: '1.127', lastError: 'AccountIsInLogoutProcedure' } }), 9000);
         expect(text).toContain('Phase: charScreen');

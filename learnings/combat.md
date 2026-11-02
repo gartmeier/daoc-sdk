@@ -77,8 +77,15 @@ A mob that failed is avoided for 60 s. A death stops the grind unless `respawn: 
 ## Styles
 
 - `bot.useStyle(name)` queues a style for the next swing and is confirmed by "You prepare to perform a ...".
-- `killNpc(mob, { styles: ['Name1', 'Name2'] })` rotates styles, one per swing, every 2.5 s while endurance is at least 15 %.
-- `useStyle: ({ npc, player, styles }) => name | null` chooses a style per swing instead.
+- `killNpc(mob, { styles: ['Name1', 'Name2'] })` rotates styles, one per swing while endurance is at least 15 %.
+- `useStyle: ({ npc, player, styles }) => name | [name, backup] | null` chooses per swing instead. Choosing goes right after each swing the bot sees (or after 5 s without one).
+- **The server keeps two styles: a first and a backup.** The first style sent becomes the first, a different one the backup ("You are now preparing to perform a Taunting Blade style as a backup for Return Blade!"), and anything more gets "You have already selected your styles for this round!". A swing empties both (`PlayerAttackAction.FinalizeMeleeAttack`).
+  - **It decides when the swing happens, not when you send** (`PlayerStyleComponent.GetStyleToUse`): the first if its opening is met right then, else the backup. So don't guess whether a reaction will be open: queue `[reaction, anytime]` every swing. Verified live: `[Return Blade, Taunting Blade]` landed Taunting Blade 14 times and Return Blade once in 6 fights, with no failures.
+  - **A first style with no backup and its opening unmet still costs its endurance** and does no style damage ("You fail to execute your X perfectly!"; `StyleProcessor.ExecuteStyle`). A conditional style alone is worth sending only when it's certain.
+  - Positional styles are checked the same way, so `[positional, anytime]` is safe from anywhere.
+  - `/cancelstyle` toggles what sending the first style again does: off (the default), "You are already preparing"; on, it cancels both. Leave it off: the SDK resends. `/backupstyle` sets a permanent backup, but `allow_auto_backup_styles` is off on this server. `auto_select_opening_style` is off too, so a follow-up never runs its opener for you.
+- Any weapon style still rolls for the offhand (`WeaponAction.CalculateExtraSwings` doesn't look at the style), so a Blademaster's Blades styles don't give up Celtic Dual's swings.
+- A proc says what it does to threat in the server's words: "increasing your threat", "decreasing your threat" in `style.details.procSpell.description`. Names don't tell.
 - **`style.details` says what a style does**, from the 0xD8 tooltip the server pushes after the skills list: `fatigue`, `attackMod`, `defensiveMod`, `openingDamage` (damage growth), `opening` with `result` and `position`, `openingStyle`, `followUps` (learned or not), `weapon`, and `procSpell`. A combat event doesn't name the style; the last one is in "You perform your X perfectly!". Verified live at Celtic Dual 4:
   - Misty Gloom: `fatigue` 15, `openingDamage` 7, anytime.
   - Blinding Rain: `fatigue` 5, `attackMod` 10, `openingDamage` 175, `opening` defensive, `result` evade, `followUps` Blizzard, and a bleed of 3 body damage every 4 s for 20 s.

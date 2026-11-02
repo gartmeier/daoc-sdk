@@ -117,6 +117,15 @@
 | `async invite(player: string): Promise<ActionResult>` | Invite a player to our group ('/invite name'). |
 | `async acceptGroupInvite(options: { timeout?: number } = {}): Promise<GroupResult>` | Wait for a group invite dialog, accept it and observe group membership. |
 
+### Trading
+
+| Signature | Description |
+|---|---|
+| `async trade(partner: PlayerTarget, options: TradeOptions = {}): Promise<TradeResult>` | Trade with a player. With `give` or `money` this walks up and offers them first (the partner must be in view; a string must be its exact name, and a pattern is refused); without, it only waits for that player's window, and closes one that holds anything of ours. Then it accepts every new offer until the server commits, and reads the outcome from the backpack. Both sides call this, in any order, and must stay within 128 units. An add that opens a window waits for this side's slot on the clock, up to 750 ms. Between hunts only: a second controller aborts a group run. Afterwards, or after an abort, no window of ours stays open, and when a failure returns the close has been seen. Reasons: those of offerTrade and acceptTrade. |
+| `async offerTrade(partner: PlayerTarget, options: TradeOfferOptions): Promise<TradeOfferResult>` | Put `give` and `money` on our side of a window with a player and leave it open for acceptTrade. The offer describes our whole side: a window that holds anything else of ours is closed first. Evidence is the server's 0xEA, because items stay in the backpack until the commit. On any failure the window is closed. Reasons: not_in_game, dead, bad_args (also a pattern as the partner), not_found, too_many_items, insufficient_funds, timeout, out_of_reach (or the walk's reason), out_of_range, busy, wrong_realm, refused, empty_slot, no_response, cancelled, wrong_partner, trade_accepted. |
+| `async acceptTrade(options: AcceptTradeOptions = {}): Promise<TradeResult>` | Finish the window of this bot's offerTrade, or else whatever window opens: accept each new offer until the server commits. After an offerTrade it is that window or nothing: one closed since is cancelled at once, and our side must still be what we offered. Without one, in a new script say, it takes a window as it stands, our side included. Afterwards, or after an abort, no window of ours stays open, and when a failure returns the close has been seen. Reasons: timeout (no window), offer_rejected (`accept` never said yes), offer_changed (it said no after a yes, or our side changed), partner_no_accept, cancelled (a partner's cancel and a range close alike: the server gives no cause), inventory_full, partner_inventory_full, insufficient_funds, partner_insufficient_funds, item_missing, not_found (`from` names nobody in view), not_in_game, unknown_action (the client runs older code). |
+| `async cancelTrade(): Promise<ActionResult>` | Close the trade window and observe it gone. Also cures a window the server holds but never told us about, so no window at all is a success. Reasons: timeout, already_completed. |
+
 ---
 
 ## BotSDK (low-level)
@@ -187,6 +196,7 @@
 | `findEffect(pattern: NamePattern): Effect \| null` | Active effect by name, or null. |
 | `getMerchant(): MerchantState \| null` | Open merchant window, or null when none is open. |
 | `getTrainer(): TrainerState \| null` | Open trainer window, or null when none is open. |
+| `getTrade(): TradeWindow \| null` | Open player trade window, or null when none is open. Its partnerItems carry the partner's slots, never ours. |
 | `getDialog(): DialogBox \| null` | Open 0x81 dialog box (group invite, quest offer, yes/no), or null. Answer with sendRespondDialog. |
 | `getNpcDialog(): NpcDialog \| null` | Last NPC dialogue with its [keywords]; answer with sendWhisper(npcObjectId, keyword). |
 | `getTextWindow(): TextWindow \| null` | Last custom text window (0xC4), or null. |
@@ -239,6 +249,10 @@
 | `async sendSell(slot: number): Promise<ActionResult>` | Sell a backpack item to the open merchant. |
 | `async sendOpenTrainer(): Promise<ActionResult>` | Open the trainer window (stand near a trainer first). |
 | `async sendTrainSpec(specIndex: number, levels?: number): Promise<ActionResult>` | Train a specialization (index from getTrainer().specs). |
+| `async sendTradeOfferItem(partnerObjectId: number, slot: number): Promise<ActionResult>` | Add a backpack item to the trade window with a player, opening it if needed. Evidence is the slot in getState().trade.mySlots. Never from both sides at once: two adds that open a window in one server tick can hang the server (learnings/trading.md). bot.offerTrade keeps them apart. |
+| `async sendTradeOfferMoney(partnerObjectId: number, copper: number): Promise<ActionResult>` | Add copper to the trade window with a player, on top of what is there. It goes out as one drop per coin, and the server holds only that drop against the purse, never the total (PlayerMoveItemRequestHandler.cs:258): an amount above the purse can be refused in part, or shown in full and fail at the commit. bot.offerTrade checks the purse first. |
+| `async sendTradeAccept(revision?: number, windowId?: number): Promise<ActionResult>` | Accept the open trade; with a revision, only while the window still shows it, and with a window id, only while it is that window, because revisions start over per window (reason trade_changed otherwise). The second accept commits. |
+| `async sendTradeCancel(): Promise<ActionResult>` | Close the trade window, also one the server holds but never told us about. A no-op on the server without one. |
 | `async sendRespondDialog(accept: boolean): Promise<ActionResult>` | Answer the open dialog box (yes/accept or no/decline). |
 | `async sendCloseMerchant(): Promise<ActionResult>` | Close the merchant window. |
 | `async sendSay(text: string): Promise<ActionResult>` | Say one message (no chunking; see say()). |
@@ -311,7 +325,7 @@ interface Money {
   gold: number;
   mithril: number;
   platinum: number;
-  /** Everything expressed in copper (1s = 100c, 1g = 100s, 1m = 1000g, 1p = 1000m). */
+  /** Everything expressed in copper (1s = 100c, 1g = 100s, 1p = 1000g, 1m = 1000p). */
   totalCopper: number;
 }
 ```
@@ -383,7 +397,7 @@ interface PlayerState {
 ### NearbyNpc
 
 ```typescript
-interface NearbyNpc {
+interface NearbyNpc extends WorldObjectBase {
   kind: 'npc';
   guildName: string;
   level: number;
@@ -407,7 +421,7 @@ interface NearbyNpc {
 ### NearbyPlayer
 
 ```typescript
-interface NearbyPlayer {
+interface NearbyPlayer extends WorldObjectBase {
   kind: 'player';
   sessionId: number;
   guildName: string;
@@ -426,7 +440,7 @@ interface NearbyPlayer {
 ### NearbyObject
 
 ```typescript
-interface NearbyObject {
+interface NearbyObject extends WorldObjectBase {
   kind: 'object';
   model: number;
   realm: Realm;
@@ -840,6 +854,29 @@ interface ConnectionInfo {
 }
 ```
 
+### TradeWindow
+
+Open player trade (server 0xEA). Accept state is not on the wire: every 0xEA means both accepts were reset.
+
+```typescript
+interface TradeWindow {
+  /** Process-wide, new per window. */
+  id: number;
+  /** 1 on open, +1 per 0xEA. */
+  revision: number;
+  /** From "Trading with <name>". Null is a self-craft window: never accept it. */
+  partnerName: string | null;
+  /** Our offered slots. The items stay there until the commit. */
+  mySlots: number[];
+  /** Copper. */
+  myMoney: number;
+  /** slot is the PARTNER's slot, never ours. */
+  partnerItems: InventoryItem[];
+  /** Copper. */
+  partnerMoney: number;
+}
+```
+
 ### BotWorldState
 
 ```typescript
@@ -878,6 +915,8 @@ interface BotWorldState {
   concentrationEffects?: ConcentrationEffect[];
   /** Current ground target, when set via setGroundTarget or the server (0xEC). */
   groundTarget?: Vec3 | null;
+  /** Open player trade window; absent or null when closed. */
+  trade?: TradeWindow | null;
 }
 ```
 
@@ -996,7 +1035,7 @@ interface WalkOptions {
 ### WalkResult
 
 ```typescript
-interface WalkResult {
+interface WalkResult extends ActionResult {
   position: Vec3 | null;
   /** Remaining 2D distance to the destination. */
   distance: number;
@@ -1011,6 +1050,7 @@ interface WalkResult {
 interface WalkToObjectOptions {
   /** Required 3D distance to the target (default 100). */
   range?: number;
+  /** The whole walk, however often the target moves on (default: each leg's own, see WalkOptions). */
   timeout?: number;
 }
 ```
@@ -1018,7 +1058,7 @@ interface WalkToObjectOptions {
 ### WalkToObjectResult
 
 ```typescript
-interface WalkToObjectResult {
+interface WalkToObjectResult extends WalkResult {
   target: NearbyNpc | NearbyPlayer | NearbyObject | null;
 }
 ```
@@ -1026,7 +1066,7 @@ interface WalkToObjectResult {
 ### FaceResult
 
 ```typescript
-interface FaceResult {
+interface FaceResult extends ActionResult {
   heading: number;
 }
 ```
@@ -1034,7 +1074,7 @@ interface FaceResult {
 ### TargetResult
 
 ```typescript
-interface TargetResult {
+interface TargetResult extends ActionResult {
   target: NearbyNpc | NearbyPlayer | NearbyObject | null;
 }
 ```
@@ -1053,7 +1093,7 @@ interface InteractOptions {
 ### InteractResult
 
 ```typescript
-interface InteractResult {
+interface InteractResult extends ActionResult {
   target: NearbyNpc | NearbyPlayer | NearbyObject | null;
   response: InteractResponse | null;
   dialog: NpcDialog | null;
@@ -1065,7 +1105,7 @@ interface InteractResult {
 ### DialogResult
 
 ```typescript
-interface DialogResult {
+interface DialogResult extends ActionResult {
   npc: NearbyNpc | null;
   dialog: NpcDialog | null;
   /** [keywords] in the newest dialog text. */
@@ -1078,7 +1118,7 @@ interface DialogResult {
 ### RespondDialogResult
 
 ```typescript
-interface RespondDialogResult {
+interface RespondDialogResult extends ActionResult {
   dialog: DialogBox | null;
 }
 ```
@@ -1086,7 +1126,7 @@ interface RespondDialogResult {
 ### AttackResult
 
 ```typescript
-interface AttackResult {
+interface AttackResult extends ActionResult {
   /** The target when it is an NPC (null for a player). */
   npc: NearbyNpc | null;
   /** The resolved target, NPC or player. */
@@ -1104,7 +1144,7 @@ interface KillOptions {
   timeout?: number;
   /** Style names to rotate through, one per swing (endurance permitting). */
   styles?: string[];
-  /** Pick the style per swing instead of rotating `styles`. */
+  /** Pick the style, or a style and its backup, per swing instead of rotating `styles`. */
   useStyle?: StyleChooser;
   /** Follow a target that moves away (default true). */
   chase?: boolean;
@@ -1118,7 +1158,7 @@ interface KillOptions {
 ### KillResult
 
 ```typescript
-interface KillResult {
+interface KillResult extends ActionResult {
   npc: NearbyNpc | null;
   killed: boolean;
   xpGained: number;
@@ -1138,7 +1178,7 @@ interface KillResult {
 killPlayer's options: KillOptions' timeout, styles, chase and maxChaseDistance, with a style chooser for players.
 
 ```typescript
-interface KillPlayerOptions {
+interface KillPlayerOptions extends Omit<KillOptions, 'useStyle' | 'force'> {
   /** Pick the style per swing instead of rotating `styles`. */
   useStyle?: PlayerStyleChooser;
 }
@@ -1149,7 +1189,7 @@ interface KillPlayerOptions {
 KillResult's numbers for an enemy player. A player kill gives realm points: rpGained counts those that arrived by the time the death did (killPlayer does not wait for the award).
 
 ```typescript
-interface KillPlayerResult {
+interface KillPlayerResult extends Omit<KillResult, 'npc'> {
   player: NearbyPlayer | null;
 }
 ```
@@ -1172,7 +1212,7 @@ interface CastOptions {
 ### CastResult
 
 ```typescript
-interface CastResult {
+interface CastResult extends ActionResult {
   spell: Spell | null;
   target: NearbyNpc | NearbyPlayer | NearbyObject | null;
   castTimeMs: number | null;
@@ -1192,7 +1232,7 @@ interface CastResult {
 ### SkillUseResult
 
 ```typescript
-interface SkillUseResult {
+interface SkillUseResult extends ActionResult {
   name: string;
   messages: GameMessage[];
 }
@@ -1238,7 +1278,7 @@ interface LootOptions {
 ### LootResult
 
 ```typescript
-interface LootResult {
+interface LootResult extends ActionResult {
   picked: string[];
   skipped: { name: string; reason: string }[];
   itemsGained: InventoryItem[];
@@ -1262,7 +1302,7 @@ interface RestOptions {
 ### RestResult
 
 ```typescript
-interface RestResult {
+interface RestResult extends ActionResult {
   healthPercent: number;
   manaPercent: number;
   endurancePercent: number;
@@ -1273,7 +1313,7 @@ interface RestResult {
 ### RespawnResult
 
 ```typescript
-interface RespawnResult {
+interface RespawnResult extends ActionResult {
   position: Vec3 | null;
   regionId: number | null;
 }
@@ -1282,7 +1322,7 @@ interface RespawnResult {
 ### ItemResult
 
 ```typescript
-interface ItemResult {
+interface ItemResult extends ActionResult {
   item: InventoryItem | null;
   messages: GameMessage[];
 }
@@ -1291,7 +1331,7 @@ interface ItemResult {
 ### MerchantDelveResult
 
 ```typescript
-interface MerchantDelveResult {
+interface MerchantDelveResult extends Omit<DelveResult, 'item'> {
   item: MerchantItem | null;
 }
 ```
@@ -1299,7 +1339,7 @@ interface MerchantDelveResult {
 ### DelveResult
 
 ```typescript
-interface DelveResult {
+interface DelveResult extends ActionResult {
   item: InventoryItem | null;
   /** The delve window as the server sent it, blank lines included. Empty unless it answered. */
   lines: string[];
@@ -1316,7 +1356,7 @@ interface DelveResult {
 ### MerchantResult
 
 ```typescript
-interface MerchantResult {
+interface MerchantResult extends ActionResult {
   merchant: NearbyNpc | null;
   items: MerchantItem[];
 }
@@ -1325,7 +1365,7 @@ interface MerchantResult {
 ### BuyResult
 
 ```typescript
-interface BuyResult {
+interface BuyResult extends ActionResult {
   item: MerchantItem | null;
   /** Units that arrived in the backpack. */
   count: number;
@@ -1337,7 +1377,7 @@ interface BuyResult {
 ### SellResult
 
 ```typescript
-interface SellResult {
+interface SellResult extends ActionResult {
   item: InventoryItem | null;
   earned: number;
 }
@@ -1346,7 +1386,7 @@ interface SellResult {
 ### SellItemsResult
 
 ```typescript
-interface SellItemsResult {
+interface SellItemsResult extends ActionResult {
   sold: InventoryItem[];
   failed: { item: InventoryItem; reason: string }[];
   earned: number;
@@ -1356,7 +1396,7 @@ interface SellItemsResult {
 ### TrainResult
 
 ```typescript
-interface TrainResult {
+interface TrainResult extends ActionResult {
   spec: string | null;
   fromLevel: number;
   toLevel: number;
@@ -1367,7 +1407,7 @@ interface TrainResult {
 ### TravelResult
 
 ```typescript
-interface TravelResult {
+interface TravelResult extends WalkResult {
   spawn: NpcSpawnMatch | null;
 }
 ```
@@ -1386,7 +1426,7 @@ interface UseZonePointOptions {
 ### ZonePointResult
 
 ```typescript
-interface ZonePointResult {
+interface ZonePointResult extends ActionResult {
   /** The zone point used; null when the id names none. */
   zonePoint: ZonePoint | null;
   /** Where we stand now. */
@@ -1400,7 +1440,7 @@ interface ZonePointResult {
 ### ChatResult
 
 ```typescript
-interface ChatResult {
+interface ChatResult extends ActionResult {
   /** Our own echo was seen ("You say, ..."). */
   echoed: boolean;
 }
@@ -1409,8 +1449,78 @@ interface ChatResult {
 ### GroupResult
 
 ```typescript
-interface GroupResult {
+interface GroupResult extends ActionResult {
   group: GroupMember[];
+}
+```
+
+### TradeOfferOptions
+
+```typescript
+interface TradeOfferOptions {
+  /** Backpack items, at most 10. A stack always goes whole. */
+  give?: Array<InventoryItem | NamePattern | number>;
+  /** TOTAL copper our side should show, not an increment. */
+  money?: number;
+  /** Approach distance (default 100). The server allows 128 in 3D. */
+  range?: number;
+  /** The whole call (default 30000 ms). Seeing a failure's window close can take up to 2 s more. */
+  timeout?: number;
+}
+```
+
+### TradeOptions
+
+TradeOfferOptions (give, money, range, timeout) plus the judge of each offer.
+
+```typescript
+interface TradeOptions extends TradeOfferOptions {
+  /** Judge each new offer before accepting it; false means "not yet". A partner's change can cross our accept in flight, so this is no safeguard against strangers. */
+  accept?: (window: TradeWindow) => boolean;
+}
+```
+
+### AcceptTradeOptions
+
+```typescript
+interface AcceptTradeOptions {
+  /** Only this partner's window; anyone else's is closed while waiting. Default: whoever opens one. */
+  from?: PlayerTarget;
+  accept?: (window: TradeWindow) => boolean;
+  /** The whole call (default 30000 ms). */
+  timeout?: number;
+}
+```
+
+### TradeOfferResult
+
+```typescript
+interface TradeOfferResult extends ActionResult {
+  partner: NearbyPlayer | null;
+  trade: TradeWindow | null;
+  /** The server's refusal of an add, and the item it was for (null for money). */
+  refused: { item: InventoryItem | null; message: string } | null;
+  messages: GameMessage[];
+}
+```
+
+### TradeResult
+
+```typescript
+interface TradeResult extends ActionResult {
+  partner: string | null;
+  /** As they were in our backpack. */
+  gave: InventoryItem[];
+  /** Real slots of ours, ready for equipItem. */
+  received: InventoryItem[];
+  /** Offered, completed, not found in our backpack (reason 'item_missing'). */
+  missing: InventoryItem[];
+  /** Copper. */
+  moneyGiven: number;
+  /** Copper. */
+  moneyReceived: number;
+  refused: { item: InventoryItem | null; message: string } | null;
+  messages: GameMessage[];
 }
 ```
 
@@ -1430,7 +1540,7 @@ interface FollowOptions {
 ### FollowResult
 
 ```typescript
-interface FollowResult {
+interface FollowResult extends ActionResult {
   durationMs: number;
   target: NearbyPlayer | null;
 }
@@ -1477,7 +1587,7 @@ interface GrindOptions {
 ### GrindResult
 
 ```typescript
-interface GrindResult {
+interface GrindResult extends ActionResult {
   kills: number;
   failures: number;
   deaths: number;

@@ -62,6 +62,12 @@ export interface PveSettings extends TacticsSettings {
     aggroPad: number;
     /** ... and allowing this many of them (an add the mezzers can take). */
     maxAggroNeighbors: number;
+    /**
+     * No base: a few melee members hunt as one. The base is wherever the leader stands, a passive mob
+     * is an engage for everyone at once (nobody waits, nobody is carried home), and they rest where
+     * they finish. An aggressive mob is still pulled by the tank to where the others stand, away from its friends.
+     */
+    roam?: boolean;
     /** Pull aggressive monsters too (false: passive ones only; aggressive ones still get fought when they come). */
     pullAggressive: boolean;
     /**
@@ -163,16 +169,20 @@ export function rejectPull(c: Contact, live: Contact[], opts: { base: Point; reg
     if (aggroAt(opts.regionId, c.name, c) && (!s.pullAggressive || con > Math.max(-3, s.aggroTolerance))) return 'aggressive';
     if (!s.avoidAggressive) return null;
     if (dangerNear(opts.regionId, opts.level, c, 300)) return 'in a danger zone';
+    // Roaming to a passive mob, nobody pulls: the whole group walks past whatever is on the way, so an
+    // aggressive mob counts there even if it's one we'd pull. A wipe at level 13: a bear 1,862 away, past
+    // trappers we could have pulled one by one, drew 4 adds. Those trappers are targets themselves, so they go first.
+    const tolerated = s.roam && !aggroAt(opts.regionId, c.name, c) ? -3 : Math.max(-3, s.aggroTolerance);
     // The tank's walk out to it and back passes a live aggressive mob (those next to it count below).
     // Mobs that con grey to us never aggro (StandardMobBrain.CanAggroTarget), as in aggroZones and planBase.
     const onTheWay = live.find(o => {
-        if (o.objectId === c.objectId || conLevel(opts.level, o.level) <= Math.max(-3, s.aggroTolerance)) return false;
+        if (o.objectId === c.objectId || conLevel(opts.level, o.level) <= tolerated) return false;
         const a = aggroAt(opts.regionId, o.name, o);
         return !!a && dist(o, c) >= a.range + s.aggroPad && segDist(o, opts.base, c) < a.range + s.aggroPad;
     });
     if (onTheWay) return `aggressive on the way: ${onTheWay.name}`;
     const near = live.filter(o => {
-        if (o.objectId === c.objectId || conLevel(opts.level, o.level) <= Math.max(-3, s.aggroTolerance)) return false;
+        if (o.objectId === c.objectId || conLevel(opts.level, o.level) <= tolerated) return false;
         const a = aggroAt(opts.regionId, o.name, o);
         return !!a && dist(o, c) < a.range + s.aggroPad;
     });
@@ -274,11 +284,18 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
         return { phase: 'engage', focus: focus.objectId, puller: null, cc, retreatTo: null, reason: threats.length > 1 ? `${why}, ${threats.length - 1} more attacking` : why };
     }
 
+    // ── Roaming: everyone is on their way to a passive mob. It counts as the fight until it's dead or out of reach. ──
+    if (s.roam && o.phase === 'engage' && o.focus !== null) {
+        const c = p.contacts.find(x => x.objectId === o.focus);
+        if (c && !c.stale && c.hp > 0 && now - (mem.pullStart ?? now) < s.pullTimeoutMs) return { phase: 'engage', reason: o.reason };
+        if (c) mem.exclude.add(o.focus);
+    }
+
     // ── Where to hunt ──
     // A level-up with no camp for the new level nearby keeps the current camp (the next town
     // visit moves the hub) instead of idling for the rest of the run.
     let found: Camp | null = null;
-    if (!mem.camp || (!s.camp && mem.campLevel !== level)) {
+    if (!mem.camp || (!s.camp && mem.campLevel !== level) || (s.camp && (s.camp.x !== mem.camp.x || s.camp.y !== mem.camp.y))) {
         found = s.camp
             ? { ...s.camp, zone: '', count: 0, names: 'given camp' }
             : findCamp(regionId, leader, Math.max(0, level + s.campLevelBand[0]), level + s.campLevelBand[1], { avoid: mem.avoidCamps, aggressiveWeight: s.campAggressiveWeight, aggressiveMaxLevel: tolerated(level, s), clear: { radius: s.campClearance, level: level - 2 } });
@@ -287,6 +304,7 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     }
     if (found) {
         mem.camp = found;
+        mem.heading = true;
         mem.plan = null;
         if (s.basePlan) {
             // A camp without a safe base (every spot in aggressive reach): try the next camps, else keep this one with chooseBase.
@@ -305,6 +323,11 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
         mem.leg = null;
     }
     const camp: Camp = mem.camp;
+    // Roaming: once they have reached a new camp, the base is where the leader stands, as long as they are together.
+    if (s.roam) {
+        if (here.every(m => dist(m, mem.base) < s.gatherRadius)) mem.heading = false;
+        if (!mem.heading && here.every(m => dist(m, leader) < s.gatherRadius)) mem.base = { x: Math.round(leader.x), y: Math.round(leader.y), z: Math.round(leader.z) };
+    }
     const base: Point3 = mem.base;
     const plan: BasePlan | null = mem.plan ?? null;
     const facing: Point = mem.facing ?? camp;
@@ -338,7 +361,8 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
             mem.leg = { x: Math.round(from.x + (next.x - from.x) * f), y: Math.round(from.y + (next.y - from.y) * f), z: base.z };
             mem.legFacing = next;
         }
-        return { ...calm, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, reason: `to the base, ${Math.round(dist(centroid(away), base))} away` };
+        const journey = Math.round(dist(centroid(away), base));
+        return { ...calm, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, journey, reason: `to the base, ${journey} away` };
     }
     mem.route = null;
     mem.leg = null;
@@ -359,6 +383,9 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     if (target) {
         mem.pullStart = now;
         mem.idleSince = undefined;
+        if (s.roam && !aggroAt(regionId, target.name, target)) {
+            return { ...calm, phase: 'engage', anchor: { x: Math.round(target.x), y: Math.round(target.y), z: Math.round(target.z) }, facing: target, focus: target.objectId, reason: `together on ${target.name} L${target.level} (con ${conLevel(level, target.level)}) ${Math.round(dist(target, base))} away` };
+        }
         return { ...calm, phase: 'pull', anchor: base, facing, focus: target.objectId, puller: tank.name, reason: `pull ${target.name} L${target.level} (con ${conLevel(level, target.level)}) ${Math.round(dist(target, base))} away` };
     }
 
@@ -374,7 +401,10 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     if (!plan && now - (mem.roamAt ?? mem.idleSince) > s.roamMs) {
         mem.roamAt = now;
         const a = Math.random() * Math.PI * 2;
-        mem.base = { x: Math.round(camp.x + Math.cos(a) * 900), y: Math.round(camp.y + Math.sin(a) * 900), z: camp.z };
+        // Farther than gatherRadius when roaming, or the base would come straight back to the leader.
+        const out = s.roam ? s.gatherRadius + 800 : 900;
+        mem.base = { x: Math.round(camp.x + Math.cos(a) * out), y: Math.round(camp.y + Math.sin(a) * out), z: camp.z };
+        mem.heading = true;
     }
     const seen = Object.entries(rejected).map(([k, v]) => `${v} ${k}`).join(', ');
     return { ...calm, phase: 'idle', anchor: mem.base, facing, reason: `no target in reach${seen ? ` (${seen})` : ''}` };

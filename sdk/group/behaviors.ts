@@ -8,7 +8,7 @@
 // a mob could reach them mid-cast, in when their spells don't reach.
 
 import { findNpcSpawns } from '../../data/index';
-import type { StyleChooser } from '../actions';
+import { styleQueue, type StyleChoice, type StyleChooser } from '../actions';
 import { abortable, executionContext } from '../execution-context';
 import { isAlive } from './blackboard';
 import { clearOf, keepDangers, type KeepSettings } from './keeps';
@@ -18,11 +18,13 @@ import { dotFamily } from './spells';
 import { chooseSong, SONG_SETTINGS, type SongSettings } from './songs';
 import type { Behavior, MemberContext } from './member';
 import { safePath } from './terrain';
-import type { NearbyNpc, NearbyPlayer } from '../types';
+import type { BotWorldState, NearbyNpc, NearbyPlayer, PlayerState, Style } from '../types';
 import type { BuffSlot, Contact, Point, Role } from './types';
 
 /** Settings the behaviours read; strategies extend this. */
 export interface TacticsSettings {
+    /** How far a member walks to a healer for lost constitution or sickness (default 4000). */
+    healerRadius?: number;
     /** The tank must hold the focus this long before damage dealers open (ms). */
     holdMs: number;
     /** ... unless the focus has been fighting this long without the tank holding it: then open anyway (ms). */
@@ -148,6 +150,21 @@ async function stopSwinging(ctx: MemberContext): Promise<void> {
     if (ctx.me().attacking) await ctx.sdk.sendAttack(false);
 }
 
+/** A character's choice for its next swing: a style by name, or a style and its backup; null for a plain one. For monsters and players alike. */
+export type StylePick = (ctx: { target: NearbyNpc | NearbyPlayer; player: PlayerState; state: BotWorldState; styles: Style[] }) => StyleChoice;
+/** `Style.prerequisite` of a style with no opening. */
+const ANYTIME_STYLE = 0x100;
+/** killNpc's limit: below this much endurance a style isn't worth sending. */
+const STYLE_MIN_ENDURANCE = 15;
+/** killNpc's spacing between styles. */
+const STYLE_SPACING_MS = 2500;
+
+/** What `pick` chooses, as far as they are styles we have and can pay for. */
+export function pickStyleFromSeen(pick: StylePick, seen: Parameters<StylePick>[0]): Style[] {
+    if (seen.player.endurancePercent < STYLE_MIN_ENDURANCE) return [];
+    return styleQueue(pick(seen), seen.styles);
+}
+
 /** Members (by name) busy with `kind` on `targetId`, started within `withinMs`. */
 function claimedBy(ctx: MemberContext, kind: string, targetId: number, withinMs: number): string[] {
     const now = Date.now();
@@ -201,7 +218,7 @@ export const healer = (opts: { radius?: number } = {}): Behavior<TacticsSettings
         const lost = me.constitutionLost ?? 0;
         if (!sick && lost <= 0) return false;
         if (Date.now() < (ctx.memory.get('healerRetry') ?? 0)) return false;
-        const spot = findNpcSpawns({ regionId: me.regionId, near: me, radius: opts.radius ?? 4000, classType: /GameHealer/, limit: 1 })[0];
+        const spot = findNpcSpawns({ regionId: me.regionId, near: me, radius: opts.radius ?? ctx.settings.healerRadius ?? 4000, classType: /GameHealer/, limit: 1 })[0];
         if (!spot) { ctx.memory.set('healerRetry', Date.now() + 60_000); return ctx.skip('healer: none near'); }
         ctx.doing('move', null, `to ${spot.name} (healer)`);
         if (Math.hypot(spot.x - me.x, spot.y - me.y) > 600) await ctx.bot.walkTo(spot.x, spot.y, { z: spot.z, tolerance: 200 });
@@ -302,11 +319,11 @@ export const flee = (): Behavior => ({
  * Heal the most hurt member below its threshold. Skips a target another healer
  * is already casting on, unless it is below the emergency threshold.
  */
-export const heal = (opts: { emergencyOnly?: boolean } = {}): Behavior<TacticsSettings> => ({
+export const heal = (opts: { emergencyOnly?: boolean; limits?: Partial<TacticsSettings['heal']> } = {}): Behavior<TacticsSettings> => ({
     name: opts.emergencyOnly ? 'emergencyHeal' : 'heal',
     interruptible: false,
     async run(ctx) {
-        const s = ctx.settings.heal;
+        const s = { ...ctx.settings.heal, ...opts.limits };
         const me = ctx.me();
         const o = ctx.orders();
         const fighting = ctx.threats().length > 0 || o.phase === 'engage' || o.phase === 'pull' || o.phase === 'retreat';
@@ -432,7 +449,7 @@ const isTaunt = (s: { name: string; specName: string | null }) => TAUNT_STYLES.h
 
 /** The best anytime taunt style, and the best anytime style that is neither a taunt nor a detaunt (a detaunt sheds the tank's threat). */
 function tankStyles(ctx: MemberContext): { taunt: string | null; damage: string | null } {
-    const anytime = (ctx.sdk.getSkills().styles ?? []).filter(s => s.prerequisite === 256).sort((a, b) => b.specLevel - a.specLevel);
+    const anytime = (ctx.sdk.getSkills().styles ?? []).filter(s => s.prerequisite === ANYTIME_STYLE).sort((a, b) => b.specLevel - a.specLevel);
     return { taunt: anytime.find(isTaunt)?.name ?? null, damage: anytime.find(s => !isTaunt(s) && !DETAUNT_STYLES.has(s.name))?.name ?? null };
 }
 
@@ -519,7 +536,7 @@ export function leashFallback(ctx: MemberContext<TacticsSettings>): Contact | nu
  * or is mezzed; then back to the focus. A focus beyond the chase leash gives way to the
  * nearest enemy inside it (leashFallback) until it comes back inside.
  */
-export const tank = (): Behavior<TacticsSettings> => ({
+export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings> => ({
     name: 'tank',
     async run(ctx) {
         const o = ctx.orders();
@@ -551,7 +568,7 @@ export const tank = (): Behavior<TacticsSettings> => ({
             // inside the leash of a moved anchor but 2000+ from us failed out_of_reach before the first step.
             const gone = () => { const c = ctx.contact(mob.objectId); return !!c && beyondLeash(ctx, c); };
             const k = await until(add ? () => held() || gone() : () => peelTarget(ctx) !== null || gone() || focusBack(),
-                () => ctx.bot.killPlayer(mob.objectId, { useStyle: () => damage, timeout: add || stand ? 20_000 : 90_000, maxChaseDistance: 3000 + (ctx.settings.chaseLeash ?? 0) }));
+                () => ctx.bot.killPlayer(mob.objectId, { useStyle: seen => opts.style ? opts.style(seen) : damage, timeout: add || stand ? 20_000 : 90_000, maxChaseDistance: 3000 + (ctx.settings.chaseLeash ?? 0) }));
             if (k) ctx.result('kill', k, mob.objectId);
             if (k?.reason === 'immune') await Bun.sleep(1500);
             await waitOutSelfCc(k);
@@ -561,10 +578,17 @@ export const tank = (): Behavior<TacticsSettings> => ({
         // One note per mob (for the observer): the style the tank opened with.
         const noted: Set<string> = ctx.memory.get('openerNoted') ?? new Set();
         ctx.memory.set('openerNoted', new Set([...noted].filter(k => (ctx.memory.get('firstHit') as Map<string, number>).has(k))));
-        const useStyle: StyleChooser = ({ npc, player }) => {
-            const style = taunt && (add || npc.targetObjectId !== player.objectId || Date.now() - opening < ctx.settings.tauntOpenMs) ? taunt : damage;
+        const useStyle: StyleChooser = ({ npc, player, state, styles }) => {
+            const own = opts.style ? opts.style({ target: npc, player, state, styles }) : damage;
+            // The taunt goes in as the backup: a style with an opening to meet runs only if it's met, and
+            // a reaction needs the mob swinging at us, so the threat is there whenever it's still needed.
+            const first = styleQueue(own, styles)[0];
+            const style = taunt && (add || npc.targetObjectId !== player.objectId || Date.now() - opening < ctx.settings.tauntOpenMs)
+                ? (first && first.prerequisite !== ANYTIME_STYLE ? [first.name, taunt] : taunt)
+                : own;
             const seen: Set<string> = ctx.memory.get('openerNoted');
-            if (style && !seen.has(ckey(mob))) { seen.add(ckey(mob)); ctx.note(`opener ${style} on ${mob.name}`); }
+            const opener = typeof style === 'string' ? style : style?.[0];
+            if (opener && !seen.has(ckey(mob))) { seen.add(ckey(mob)); ctx.note(`opener ${opener} on ${mob.name}`); }
             return style;
         };
         if (add) {
@@ -638,11 +662,13 @@ export function holdState(mob: Pick<Contact, 'target' | 'targetSince' | 'movedAt
 }
 
 /**
- * Damage dealer: once the tank has held the focus (holdState, holdMs or opts.holdMs), nuke it (the
- * best DoT family once, then direct damage), or melee with `melee`. Never touches crowd-controlled mobs.
+ * Damage dealer: once the tank has held the focus (holdState, holdMs or opts.holdMs; a holdMs of 0
+ * doesn't wait at all), nuke it (the best DoT family once, then direct damage), or melee with `melee`.
+ * Never touches crowd-controlled mobs.
  * Melee leaves a focus beyond the chase leash for the nearest enemy inside it (leashFallback).
+ * `style`, from the character, picks the styles of its melee; without one it swings plain.
  */
-export const assist = (opts: { melee?: boolean; holdMs?: number } = {}): Behavior<TacticsSettings> => ({
+export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePick } = {}): Behavior<TacticsSettings> => ({
     name: opts.melee ? 'assistMelee' : 'assist',
     interruptible: false,
     async run(ctx) {
@@ -670,7 +696,7 @@ export const assist = (opts: { melee?: boolean; holdMs?: number } = {}): Behavio
         const tankM = ctx.tank();
         const now = Date.now();
         // An enemy player is never "held" by a tank (players have no aggro table): hit it at once.
-        const { held } = mob.kind === 'player' ? { held: true } : holdState(mob, tankM?.name ?? null, opts.holdMs ?? ctx.settings.holdMs, ctx.settings.assistAfterMs, now);
+        const { held } = mob.kind === 'player' || opts.holdMs === 0 ? { held: true } : holdState(mob, tankM?.name ?? null, opts.holdMs ?? ctx.settings.holdMs, ctx.settings.assistAfterMs, now);
         if (!held) return ctx.skip('assist: waiting for the tank to hold it');
         const me = ctx.me();
         if (!opts.melee) {
@@ -700,6 +726,12 @@ export const assist = (opts: { melee?: boolean; holdMs?: number } = {}): Behavio
             if (!a.success) ctx.result('melee', a, mob.objectId);
             await waitOutSelfCc(a);
             if (a.reason === 'immune') await Bun.sleep(1500);
+        } else if (opts.style && Date.now() - (ctx.memory.get('styleAt') ?? 0) > STYLE_SPACING_MS) {
+            const queue = pickStyleFromSeen(opts.style, { target: live, player: me, state: ctx.sdk.getState()!, styles: ctx.sdk.getSkills().styles });
+            if (queue.length) {
+                ctx.memory.set('styleAt', Date.now());
+                for (const style of queue) await ctx.sdk.sendUseSkill(style.skillIndex);
+            }
         }
         await Bun.sleep(400);
         return true;

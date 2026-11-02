@@ -9,7 +9,8 @@ import { decodeNpcCreate, decodeObjectCreate, decodeObjectDataUpdate, decodeObje
 import { decodeInventoryUpdate, decodeMoney, decodePointsUpdate, decodeStatsUpdate, decodeStatusUpdate, decodeVariousUpdate } from './player';
 import { decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseSpeech, chatTypeName } from './chat';
 import { decodeAttackMode, decodeChangeGroundTarget, decodeChangeTarget, decodeCombatAnimation, decodeConcentrationList, decodeDisableSkills, decodeInterrupt, decodePlayerDeath, decodeSpellCastAnimation, decodeSpellEffect, decodeUpdateIcons } from './combat';
-import { decodeGroupMemberUpdate, decodeMerchantWindow, decodeTrainerWindow } from './windows';
+import { decodeGroupMemberUpdate, decodeMerchantWindow, decodeTradeWindow, decodeTrainerWindow } from './windows';
+import { ObjectType } from '../../../sdk/types';
 
 const W = () => new PacketWriter();
 
@@ -333,6 +334,91 @@ describe('window packets', () => {
         const p = W().u8(2).u8(7).u8(0).u8(0).u8(0).u8(1).u8(2).pascal('Slash').u8(1).u8(3).u8(4).pascal('Shields').toBytes();
         expect(decodeTrainerWindow(p)).toEqual({ code: 0, specPoints: 7, specs: [{ index: 0, level: 1, nextLevel: 2, name: 'Slash' }, { index: 1, level: 3, nextLevel: 4, name: 'Shields' }] });
         expect(decodeTrainerWindow(Uint8Array.of(0, 7, 1, 0))).toEqual({ code: 1, specPoints: 7 });
+    });
+
+    /** 0xEA open up to its items (PacketLib1109.cs:34-71). Money is [mithril, platinum, gold, silver, copper]. */
+    const tradeHead = (slots: number[], mine: number[], theirs: number[], itemCount: number): PacketWriter => {
+        const w = W().bytes(slots).fill(0, 10 - slots.length).u16(0);
+        for (const coin of mine) w.u16(coin);
+        w.u16(0);
+        for (const coin of theirs) w.u16(coin);
+        return w.u16(0).u8(itemCount).u8(1).u8(0).u8(0);
+    };
+    /** WriteItemData up to its flag byte (PacketLib1124.cs:836), as in the 0x02 fixtures above: a generic item, with its count in the value bytes. */
+    const itemHead = (w: PacketWriter, flag: number, count = 1): PacketWriter =>
+        w.u16(0).u8(5).u8(count).u8(0).u8(0).u8(0).u8(0).u16(5).u8(100).u8(100).u8(100).u8(0).u8(0).u16(99).u8(0).u16(0).u8(flag);
+
+    test('0xEA TradeWindow open (PacketLib1109.cs:34-78)', () => {
+        const w = tradeHead([40, 41], [0, 0, 1, 2, 3], [0, 0, 0, 0, 50], 1).u8(45);
+        itemHead(w, 0x02, 3).u16(0).pascal('3 minor healing potion').pascal('Trading with Aine');
+        const p = w.toBytes();
+        expect(p[36]).toBe(1); // item count
+        expect(p[40]).toBe(45); // first item's slot
+        const d = decodeTradeWindow(p)!;
+        expect(d).toMatchObject({
+            mySlots: [40, 41],
+            myMoney: { mithril: 0, platinum: 0, gold: 1, silver: 2, copper: 3 },
+            partnerMoney: { mithril: 0, platinum: 0, gold: 0, silver: 0, copper: 50 },
+            partnerName: 'Aine',
+        });
+        expect(d.partnerItems).toHaveLength(1);
+        expect(d.partnerItems[0]).toMatchObject({ slot: 45, item: { name: 'minor healing potion', count: 3, model: 99 } });
+    });
+
+    test('0xEA: one item whose name starts with a number keeps its name and its count', () => {
+        const w = tradeHead([], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], 2).u8(45);
+        itemHead(w, 0x02).u16(0).pascal('100 gold rent token').u8(46);
+        itemHead(w, 0x02, 3).u16(0).pascal('3 100 gold rent token').pascal('Trading with Aine');
+        const d = decodeTradeWindow(w.toBytes())!;
+        expect(d.partnerItems.map(i => [i.item.name, i.item.count])).toEqual([['100 gold rent token', 1], ['100 gold rent token', 3]]);
+    });
+
+    test('a number in front of a name is a count only where the value bytes agree (PacketLib1124.cs:850-863, :978-979)', () => {
+        const item = (objectType: number, value1: number, value2: number, name: string) => {
+            const w = W().u8(1).u8(0).u8(0).u8(0).u8(0).u8(2).u8(45);
+            w.u16(0).u8(5).u8(value1).u8(value2).u8(0).u8(objectType).u8(0).u16(5).u8(100).u8(100).u8(100).u8(0).u8(0).u16(99).u8(0).u16(0).u8(0x02).u16(0).pascal(name);
+            const it = decodeInventoryUpdate(w.toBytes()).items[0]!.item;
+            return [it.name, it.count];
+        };
+        expect(item(ObjectType.GenericItem, 1, 0, '100 yr old cheese')).toEqual(['100 yr old cheese', 1]);
+        expect(item(ObjectType.GenericItem, 44, 1, '300 nails')).toEqual(['nails', 300]);
+        expect(item(ObjectType.Arrow, 1, 0, '20 Elven Arrows')).toEqual(['20 Elven Arrows', 1]);
+        expect(item(ObjectType.Arrow, 20, 0, '20 20 Elven Arrows')).toEqual(['20 Elven Arrows', 20]);
+        expect(item(ObjectType.Arrow, 44, 0, '300 arrows')).toEqual(['arrows', 300]); // a byte holds only the low bits
+        expect(item(ObjectType.Thrown, 12, 1, '20 Tomte Throwing Hammers')).toEqual(['20 Tomte Throwing Hammers', 1]);
+        expect(item(ObjectType.Thrown, 12, 2, '2 20 Tomte Throwing Hammers')).toEqual(['20 Tomte Throwing Hammers', 2]);
+        expect(item(ObjectType.Blades, 12, 37, '3 short swords')).toEqual(['short swords', 3]); // no count in these bytes: the prefix is all there is
+    });
+
+    test('0xEA with a spell block in a partner item stays aligned up to the title', () => {
+        const w = tradeHead([], [0, 0, 0, 0, 0], [0, 0, 0, 0, 0], 2).u8(45);
+        itemHead(w, 0x02 | 0x08 | 0x10, 2).u16(1).pascal('Heal').u16(2).pascal('Buff').u16(0).pascal('2 potion of life').u8(46);
+        itemHead(w, 0x02).u16(0).pascal('short sword').pascal('Trading with Aine');
+        const d = decodeTradeWindow(w.toBytes())!;
+        expect(d.partnerItems.map(i => [i.slot, i.item.name, i.item.count, i.item.spell1])).toEqual([[45, 'potion of life', 2, 'Heal'], [46, 'short sword', 1, null]]);
+        expect(d.partnerName).toBe('Aine');
+    });
+
+    test('0xEA money order, from the bytes as written out; Selfcrafting has no partner', () => {
+        const title = encodeCp1252('Selfcrafting');
+        const p = Uint8Array.of(
+            40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 0,
+            0, 6, 0, 7, 0, 8, 0, 9, 0, 10, 0, 0,
+            0, 1, 0, 0,
+            title.length, ...title,
+        );
+        expect(decodeTradeWindow(p)).toEqual({
+            mySlots: [40],
+            myMoney: { mithril: 1, platinum: 2, gold: 3, silver: 4, copper: 5 },
+            partnerMoney: { mithril: 6, platinum: 7, gold: 8, silver: 9, copper: 10 },
+            partnerItems: [],
+            partnerName: null,
+        });
+    });
+
+    test('0xEA close is 40 zero bytes (PacketLib168.cs:1983)', () => {
+        expect(decodeTradeWindow(new Uint8Array(40))).toBeNull();
     });
 
     test('0x70 GroupMemberUpdate records', () => {

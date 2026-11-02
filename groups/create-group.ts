@@ -11,6 +11,7 @@ import { cp, readFile, readdir, writeFile } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { findBotEnv, parseEnvFile } from '../sdk/index';
+import { loadCharacter } from '../sdk/group/character';
 import { roleForClass } from '../sdk/group/strategy';
 import type { GroupDefinition, Role } from '../sdk/group/types';
 
@@ -39,7 +40,7 @@ for (const bot of bots) {
     const path = findBotEnv(bot);
     if (!path) die(`no bots/${bot}/bot.env (create it with bun bots/create-bot.ts ${bot} ...)`);
     const env = parseEnvFile(readFileSync(path, 'utf-8'));
-    const role = (roles.get(bot) ?? roleForClass(env.CLASS ?? '')) as Role;
+    const role = (roles.get(bot) ?? (await loadCharacter(bot))?.role ?? roleForClass(env.CLASS ?? '')) as Role;
     if (!ROLES.includes(role)) die(`${bot}: unknown role "${role}" (use ${ROLES.join(', ')})`);
     realms.add(env.REALM ?? '?');
     members.push(roles.has(bot) ? { bot, role } : { bot });

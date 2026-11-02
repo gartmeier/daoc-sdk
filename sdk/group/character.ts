@@ -1,0 +1,69 @@
+// A character's own way of playing, brought along to any group. It lives in the bot's folder,
+// bots/<bot>/character.ts, as a default export, so it isn't tied to one group or strategy.
+//
+// The role is the character's job in a group: where it stands, what it may be ordered to do. The
+// character says how it does that job. Its behaviours go into the role's list at the fight:
+//
+//   react   above the fight (a heal)
+//   fight   replaces the role's fight (tank, assist)
+//   chores  right below the fight
+//
+// Lookup per member: the strategy's memberBehaviors, which a group may use to override a character
+// outright, then the role's list with the character's behaviours in it.
+
+import { existsSync, statSync } from 'fs';
+import { dirname, join } from 'path';
+import { findBotEnv } from '../index';
+import type { Behavior } from './member';
+import type { Role } from './types';
+
+const ROLES: readonly Role[] = ['tank', 'healer', 'support', 'nuker', 'melee'];
+
+export interface Character<S = any> {
+    /** Its job when group.json doesn't pin one, ahead of the role its class would get. */
+    role?: Role;
+    react?: Behavior<S>[];
+    fight?: Behavior<S>[];
+    chores?: Behavior<S>[];
+}
+
+/** The behaviours a role's list fights with. */
+const ROLE_FIGHT = new Set(['tank', 'assist', 'assistMelee']);
+
+/**
+ * A role's list with a character's behaviours in it. A list without a fight (a healer's) takes them
+ * where position() would keep it at range, or else above its idle chores. A group pinning a role in
+ * group.json changes the job (where it stands, what it's ordered to do), not this.
+ */
+export function withCharacter<S>(list: Behavior<S>[], character: Character<S> | null | undefined): Behavior<S>[] {
+    if (!character) return list;
+    const isFight = (b: Behavior<S>) => ROLE_FIGHT.has(b.name);
+    const first = list.findIndex(isFight);
+    const stands = list.findIndex(b => b.name === 'position');
+    const chores = list.findIndex(b => b.name === 'shedLoad');
+    const at = first >= 0 ? first : stands >= 0 ? stands : chores >= 0 ? chores : list.length;
+    return [
+        ...list.slice(0, at),
+        ...character.react ?? [],
+        ...character.fight ?? list.filter(isFight),
+        ...character.chores ?? [],
+        ...list.slice(at).filter(b => !isFight(b)),
+    ];
+}
+
+/** bots/<bot>/character.ts, or null when the bot has none. A file that fails to load or has the wrong shape is an error, not a silent role list. */
+export async function loadCharacter(bot: string): Promise<Character | null> {
+    const env = findBotEnv(bot);
+    if (!env) return null;
+    const path = join(dirname(env), 'character.ts');
+    if (!existsSync(path)) return null;
+    // By modification time, like MCP's scripts: its process outlives an edit. Files this one imports stay cached there.
+    const mod = await import(`${path}?v=${statSync(path).mtimeMs}`);
+    const c = mod.default as Character | undefined;
+    if (!c) throw new Error(`${path}: needs a default export`);
+    if (c.role !== undefined && !ROLES.includes(c.role)) throw new Error(`${path}: role "${c.role}"; use one of ${ROLES.join(', ')}`);
+    for (const k of ['react', 'fight', 'chores'] as const) {
+        if (c[k] !== undefined && !Array.isArray(c[k])) throw new Error(`${path}: ${k} must be a list of behaviours`);
+    }
+    return c;
+}

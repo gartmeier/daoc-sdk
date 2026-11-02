@@ -1,6 +1,7 @@
-// Merchant, trainer and group windows.
+// Merchant, trainer, trade and group windows.
 
 import { PacketReader } from '../buffer';
+import { readItemData, type ItemData } from './player';
 
 /** 0x17 MerchantWindow, 1125d+ (PacketLib1125.cs:607-725). One packet per non-empty page. */
 export interface MerchantPage {
@@ -69,6 +70,43 @@ export function decodeTrainerWindow(p: Uint8Array): TrainerPacket {
         specs.push({ index, level, nextLevel, name });
     }
     return { code: 0, specPoints, specs };
+}
+
+type Coins = { mithril: number; platinum: number; gold: number; silver: number; copper: number };
+
+export interface TradePacket {
+    mySlots: number[];
+    myMoney: Coins;
+    partnerMoney: Coins;
+    /** slot is the partner's slot. */
+    partnerItems: Array<{ slot: number; item: ItemData }>;
+    /** Null for a self-craft window. */
+    partnerName: string | null;
+}
+
+/**
+ * 0xEA TradeWindow (PacketLib1109.cs:23-82). Null for the 40-zero-byte close (PacketLib168.cs:1979-1986):
+ * an open is at least 41, the title's length byte being the 41st.
+ */
+export function decodeTradeWindow(p: Uint8Array): TradePacket | null {
+    if (p.length <= 40) return null;
+    const r = new PacketReader(p);
+    const mySlots = [...r.bytes(10)].filter(s => s !== 0);
+    const coins = (): Coins => {
+        r.skip(2);
+        return { mithril: r.u16(), platinum: r.u16(), gold: r.u16(), silver: r.u16(), copper: r.u16() };
+    };
+    const myMoney = coins();
+    const partnerMoney = coins();
+    r.skip(2);
+    const count = r.u8();
+    r.skip(3); // 0x01, repair, combine
+    const partnerItems: TradePacket['partnerItems'] = [];
+    for (let i = 0; i < count; i++) {
+        const slot = r.u8();
+        partnerItems.push({ slot, item: readItemData(r) });
+    }
+    return { mySlots, myMoney, partnerMoney, partnerItems, partnerName: /^Trading with (.+)$/.exec(r.pascal())?.[1] ?? null };
 }
 
 /** 0x70 GroupMemberUpdate (PacketLib168.cs:1644-1690, writers PacketLib1125.cs:418-480): records ending in 0x00. */

@@ -24,10 +24,10 @@ export interface GroupStrategy<S = any> {
     name: string;
     description?: string;
     settings: S;
-    /** Role for a member whose group.json entry has none (default: roleForClass). */
+    /** Role for a member with none in group.json or its character.ts (default: roleForClass). */
     roleOf?(className: string): Role;
     behaviors: Record<Role, Behavior<S>[]>;
-    /** Behaviour lists for single members by bot name, ahead of their role's (two nukers of different classes). */
+    /** Behaviour lists for single members by bot name, ahead of their character's and their role's: the group overriding someone (see character.ts). */
     memberBehaviors?: Record<string, Behavior<S>[]>;
     /** The coordinator's policy, called every tick with the shared picture. */
     decide(ctx: CoordinatorContext<S>): OrdersUpdate;

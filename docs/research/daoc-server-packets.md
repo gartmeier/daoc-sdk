@@ -199,6 +199,7 @@ Client opcodes live in the same file, at lines 135-219 in `eClientPackets`. Exam
 | SendAttackMode | 168:371 | 0x74 |
 | SendLosCheckRequest | 168:1533 → `gameutils/LosCheckHandler.cs:102` | 0xD0 |
 | SendMerchantWindow | **1125**:607 | 0x17 |
+| SendTradeWindow / SendCloseTradeWindow | **1109**:23 / 168:1979 | 0xEA |
 | SendTrainerWindow | **1110**:146 → base **1105**:29 | 0x7B (multiple) |
 | SendConcentrationList | **191**:83 | 0x75 |
 | SendUpdateIcons (both overloads) | **1110**:46/51 | 0x7F |
@@ -731,6 +732,25 @@ The sequence is in `packets/Client/168/WorldInitRequestHandler.cs:114-149` and `
 - `u8 itemCount`, `u8 eMerchantWindowType` (0 normal, 1 BP, 2 count, 3-0x0D housing), `u8 page`
 - Per item: `u8 index`, `u8 level`, `u8 value1`, `u8 SPD_ABS`, `u8 hand<<6` (or DPS_AF for garden), `u8 (typeDamage<<6)|objType`, `u8 usable` (1 if the player can use it), `u16LE value2` (weight, or packSize×weight), `u32LE price` (copper), `u16LE model`, `pascalIntLE name`
 - An empty merchant sends `00 type 00 00`.
+
+**0xEA TradeWindow** (1109:23). Sent to both traders by every `TradeUpdate` (`gameutils/PlayerTradeWindow.cs:378-394`), its only caller for a player trade. Accept state is not on the wire: every 0xEA means both accepts were reset, and a plain accept sends none (`:408-414`).
+
+| Offset | Field |
+|---|---|
+| 0-9 | our offered backpack slots, u8, zero-padded |
+| 10-11 | u16 0 |
+| 12-21 | our money, u16 each: mithril, platinum, gold, silver, copper |
+| 22-23 | u16 0 |
+| 24-33 | partner money, same order |
+| 34-35 | u16 0 |
+| 36-37 | `u8 partnerItemCount`, `u8 1`; u16 0 when the window has no partner list (self-craft) |
+| 38, 39 | `u8 repair`, `u8 combine` |
+| 40+ | count × (`u8 slot` + ItemData). The slot is the **partner's** backpack slot |
+| end | pascal `Trading with <name>` or `Selfcrafting` |
+
+**0xEA close** (168:1979): exactly 40 zero bytes, with no cause. An open window is at least 41 bytes, so a payload of 40 or less means closed. Sent to both traders by `CloseTrade`.
+
+Read from source; not yet seen on the wire. The commands are 0xDD (`toSlot = 1000 + objectId`) and 0xEB in [daoc-client-handlers.md](daoc-client-handlers.md).
 
 ## 4. Coordinate system
 

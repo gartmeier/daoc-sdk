@@ -23,6 +23,7 @@ import { formatReport, GroupObserver, saveReport } from './observer';
 import { connectBot, loadGroup } from './roster';
 import { Spellbook } from './spells';
 import { roleForClass } from './strategy';
+import { loadCharacter } from './character';
 import { groupArgs } from './runner';
 import type { Activity } from './types';
 
@@ -44,7 +45,7 @@ for (const m of def.members) {
         const c = await connectBot(m.bot, 'observe');
         conns.push(c);
         const caps = new Spellbook(c.sdk, new BotActions(c.sdk)).capabilities();
-        const role = m.role ?? roleForClass(c.sdk.getPlayer()?.className ?? '');
+        const role = m.role ?? (await loadCharacter(m.bot).catch(() => null))?.role ?? roleForClass(c.sdk.getPlayer()?.className ?? '');
         const publish = () => {
             const s = c.sdk.getState();
             if (!s?.player) return;

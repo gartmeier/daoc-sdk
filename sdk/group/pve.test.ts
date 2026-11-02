@@ -50,6 +50,64 @@ describe('decidePve', () => {
         expect(d.puller).toBe('Tank');
     });
 
+    describe('roaming', () => {
+        const mob = contact(51, { regionId: R, level: 7, x: BASE.x + 800, y: BASE.y });
+        const settings = { roam: true };
+
+        test('a passive mob is a fight for everyone at once: no puller, no carrying it home', () => {
+            const d = decidePve(ctx(picture(team(), [mob]), { settings }));
+            expect(d.phase).toBe('engage');
+            expect(d.focus).toBe(51);
+            expect(d.puller).toBeNull();
+            expect(d.anchor).toMatchObject({ x: mob.x, y: mob.y });
+        });
+
+        test('the walk there stays the fight until the mob is dead or the time is up', () => {
+            const now = Date.now();
+            const walking = { orders: { phase: 'engage', focus: 51, reason: 'together' } as Partial<Orders>, settings, now };
+            const memory = () => ({ camp: { ...BASE, zone: '', count: 0, names: 'test camp' }, campLevel: 6, base: BASE, pullStart: now - 1000 });
+            expect(decidePve(ctx(picture(team(), [mob]), { ...walking, memory: memory() }))).toEqual({ phase: 'engage', reason: 'together' });
+            const late = { ...memory(), pullStart: now - 60_000 };
+            expect(decidePve(ctx(picture(team(), [mob]), { ...walking, memory: late })).focus).not.toBe(51);
+            expect((late as { exclude?: Set<number> }).exclude?.has(51)).toBeTrue();
+        });
+
+        test('they rest where they stand: the base comes to the leader', () => {
+            const at = { x: BASE.x + 700, y: BASE.y + 300 };
+            const d = decidePve(ctx(picture(team({ Tank: at, Druid: { ...at, mana: 30 }, Bard: at, Menta: at })), { settings }));
+            expect(d.phase).toBe('recover');
+            expect(d.anchor).toMatchObject(at);
+        });
+
+        test('on the way to a new camp the base stays there; after a chase it comes along', () => {
+            const far = { x: BASE.x + 9000, y: BASE.y };
+            const together = team({ Tank: far, Druid: far, Bard: far, Menta: far });
+            const memory = (heading: boolean) => ({ camp: { ...BASE, zone: '', count: 0, names: 'test camp' }, campLevel: 6, base: BASE, heading });
+            expect(decidePve(ctx(picture(together), { settings, memory: memory(true) })).phase).toBe('travel');
+            const chased = memory(false);
+            expect(decidePve(ctx(picture(together), { settings, memory: chased })).phase).not.toBe('travel');
+            expect(chased.base).toMatchObject(far);
+        });
+
+        test('a walk to a passive mob stays clear of aggressive mobs, even ones it would pull', () => {
+            // Real spawns in region 200: aggroAt reads the static data. A trapper stands halfway to the eirebug.
+            const trapper = contact(61, { regionId: 200, level: 12, x: 323284, y: 538834, name: 'curmudgeon trapper' });
+            const eirebug = contact(60, { regionId: 200, level: 11, x: 326250, y: 535210, name: 'large eirebug' });
+            const base = { x: 320318, y: 542458 };
+            const opts = (roam: boolean) => ({ base, regionId: 200, level: 12, exclude: new Set<number>(), settings: mergeSettings(PVE_SETTINGS, { roam, aggroTolerance: 1, minCon: -3, maxCon: 3, huntRadius: 20_000 } as any) });
+            expect(rejectPull(eirebug, [eirebug, trapper], opts(true))).toContain('aggressive on the way');
+            expect(rejectPull(eirebug, [eirebug, trapper], opts(false))).toBeNull();
+            // The trapper itself is still a target, so it goes first.
+            expect(rejectPull(trapper, [eirebug, trapper], opts(true))).toBeNull();
+        });
+
+        test('split up, they gather first and the base stays', () => {
+            const d = decidePve(ctx(picture(team({ Druid: { x: BASE.x + 4000 } })), { settings }));
+            expect(d.phase).toBe('gather');
+            expect(d.anchor).toMatchObject({ x: BASE.x, y: BASE.y });
+        });
+    });
+
     test('says why nothing was pulled', () => {
         const d = decidePve(ctx(picture(team(), [contact(52, { regionId: R, level: 9, x: BASE.x + 600, y: BASE.y })])));
         expect(d.phase).toBe('idle');

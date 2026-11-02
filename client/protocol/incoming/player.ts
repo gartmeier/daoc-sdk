@@ -259,15 +259,22 @@ export function readItemData(r: PacketReader): ItemData {
     const effect = r.u16();
     let name = r.pascal();
     const objectType = typeByte & 0x3F;
-    let count = 1;
+    // These types also carry the count in the value bytes, its low bits only (PacketLib1124.cs:850-863).
+    const generic = objectType === ObjectType.GenericItem;
+    const held = generic ? value1 | (value2 << 8)
+        : objectType === ObjectType.Arrow || objectType === ObjectType.Bolt || objectType === ObjectType.Poison ? value1
+        : objectType === ObjectType.Thrown ? value2
+        : null;
+    let count = held === null ? 1 : Math.max(1, held);
+    // The server writes "<count> <name>" only when Count > 1 (:978-979), and real templates start with a number
+    // too ('100 gold rent token', '20 Elven Arrows'), so a prefix is a count only where those bytes agree.
     const m = /^(\d+) (.+)$/.exec(name);
     if (m) {
-        count = Number(m[1]);
-        name = m[2]!;
-    } else if (objectType === ObjectType.GenericItem) {
-        count = Math.max(1, value1 | (value2 << 8));
-    } else if (objectType === ObjectType.Arrow || objectType === ObjectType.Bolt || objectType === ObjectType.Poison) {
-        count = Math.max(1, value1);
+        const prefix = Number(m[1]);
+        if (prefix > 1 && (held === null || (prefix & (generic ? 0xFFFF : 0xFF)) === held)) {
+            count = prefix;
+            name = m[2]!;
+        }
     }
     return {
         level, value1, value2,

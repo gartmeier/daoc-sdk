@@ -66,6 +66,7 @@ function blockers(state: BotWorldState): string[] {
     if (state.dialog?.isOpen) out.push(`dialog open (code ${state.dialog.code}${state.dialog.type === 1 ? ', yes/no' : ''}): "${state.dialog.text.slice(0, 60)}"`);
     if (state.merchant?.isOpen) out.push(`merchant open (${state.merchant.items.length} items)`);
     if (state.trainer?.isOpen) out.push('trainer open');
+    if (state.trade) out.push(`trading with ${state.trade.partnerName ?? '(self-craft)'} (${state.trade.mySlots.length} ours, ${state.trade.partnerItems.length} theirs)`);
     if (state.player?.isDead) out.push('DEAD - sendRelease() to return to bind');
     return out;
 }

@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { BotSDK } from '../index';
-import { BotActions, castFailureReason } from '../actions';
+import { BotActions, castFailureReason, tradeSlotWait } from '../actions';
 import { ChatHistory } from '../chat-history';
 import { setDefaultPathProvider, StraightLinePathProvider, type PathProvider } from '../pathfinding';
 import { executionContext, throwIfExecutionAborted } from '../execution-context';
-import type { ActionResult, BotAction, BotWorldState, GameMessage, NearbyNpc, NearbyPlayer } from '../types';
+import type { ActionResult, BotAction, BotWorldState, GameMessage, InventoryItem, NearbyNpc, NearbyPlayer } from '../types';
 import { makeMessage, makeNpc, makeObject, makePlayer, makePlayerObj, makeState } from './fixtures';
 
 // Fixed straight-line paths: a locally built server/navmesh/zone000.nav would otherwise route every walk here.
@@ -1852,5 +1852,992 @@ describe('static data', () => {
         expect(r.success).toBeTrue();
         expect(r.spawn?.name).toBe('spirit hound');
         expect((await bot.travelTo({ x: 1, y: 2, regionId: 51 })).reason).toBe('other_region');
+    });
+});
+
+// ── Player trade: two bots and the server between them ──────────────────────
+
+const tradeItem = (slot: number, name: string, count = 1): InventoryItem =>
+    ({ slot, name, level: 1, count, model: 99, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 5, value1: 0, value2: 0 });
+
+/**
+ * Plays the server over two FakeWorlds: the first add opens both windows, every change is a 0xEA on both
+ * sides and clears both accepts, and two accepts commit in the real order (inventory, text, close).
+ * The accept handler also holds the client's guards, against the newest window the client has heard of.
+ */
+function tradeLink(a: FakeWorld, b: FakeWorld) {
+    type Side = { w: FakeWorld; other: Side; slots: number[]; money: number; accepted: boolean };
+    const A = { w: a, slots: [], money: 0, accepted: false } as unknown as Side;
+    const B = { w: b, other: A, slots: [], money: 0, accepted: false } as Side;
+    A.other = B;
+    let id = 0;
+    let nextId = 1000;
+    let revision = 0;
+    const link = {
+        open: false,
+        /** Said at the second accept instead of committing; the window then resets. */
+        failCommit: null as ((a: FakeWorld, b: FakeWorld) => void) | null,
+        /** This side's incoming items get lost: the server only logs that. */
+        losesItems: null as FakeWorld | null,
+        /** This side's item leaves the offer, as any inventory move does (GamePlayerInventory.cs:542-543). */
+        drop(w: FakeWorld, slot: number): void {
+            const s = w === a ? A : B;
+            s.slots = s.slots.filter(x => x !== slot);
+            link.update();
+        },
+        /** A 0xEA on both sides, not yet published. */
+        update(): void {
+            revision++;
+            for (const s of [A, B]) {
+                s.accepted = false;
+                s.w.state.trade = {
+                    id, revision, partnerName: s.other.w.player.name, mySlots: [...s.slots], myMoney: s.money,
+                    partnerItems: s.other.slots.map(slot => s.other.w.state.inventory.find(i => i.slot === slot)!), partnerMoney: s.other.money,
+                };
+            }
+        },
+        /** The silent close: a partner's cancel and a range close look alike. */
+        close(): void {
+            link.open = false;
+            for (const s of [A, B]) {
+                s.slots = [];
+                s.money = 0;
+                s.accepted = false;
+                s.w.state.trade = null;
+            }
+        },
+    };
+    const ensureOpen = () => {
+        if (link.open) return;
+        link.open = true;
+        id = nextId++;
+        revision = 0;
+    };
+    const commit = () => {
+        if (link.failCommit) {
+            link.failCommit(a, b);
+            link.update();
+            return;
+        }
+        const leaving = [A, B].map(s => ({ s, items: s.slots.map(slot => s.w.state.inventory.find(i => i.slot === slot)!), money: s.money }));
+        for (const { s } of leaving) s.w.state.inventory = s.w.state.inventory.filter(i => !s.slots.includes(i.slot));
+        for (const { s, items, money } of leaving) {
+            const to = s.other.w;
+            s.w.player.money.totalCopper -= money;
+            to.player.money.totalCopper += money;
+            if (to === link.losesItems) continue;
+            for (const item of items) {
+                let slot = 40;
+                while (to.state.inventory.some(i => i.slot === slot)) slot++;
+                to.state.inventory = [...to.state.inventory, { ...item, slot }];
+            }
+        }
+        a.publish();
+        b.publish();
+        for (const { s, items } of leaving) s.w.message(`Trade Completed. ${items.length} items for ${s.other.slots.length} items.`);
+        a.publish();
+        b.publish();
+        link.close();
+    };
+    for (const me of [A, B]) {
+        me.w.handlers.tradeOfferItem = (action, w) => {
+            if (action.type !== 'tradeOfferItem') return;
+            if (!w.state.inventory.some(i => i.slot === action.slot)) return { success: false, message: 'no item', reason: 'empty_slot', phase: 'validation' };
+            ensureOpen();
+            me.slots.push(action.slot);
+            link.update();
+        };
+        me.w.handlers.tradeOfferMoney = action => {
+            if (action.type !== 'tradeOfferMoney') return;
+            ensureOpen();
+            me.money += action.copper;
+            link.update();
+        };
+        me.w.handlers.tradeAccept = (action, w) => {
+            if (action.type !== 'tradeAccept') return;
+            const t = w.state.trade;
+            if (!t) return { success: false, message: 'no trade window open', reason: 'no_trade', phase: 'validation' };
+            if (action.revision !== undefined && action.revision !== t.revision) return { success: false, message: 'the offer changed', reason: 'trade_changed', phase: 'validation' };
+            if (action.windowId !== undefined && action.windowId !== t.id) return { success: false, message: 'another window', reason: 'trade_changed', phase: 'validation' };
+            me.accepted = true;
+            me.other.w.message(`${w.player.name} has accepted the trade.`);
+            if (me.other.accepted) commit();
+        };
+        me.w.handlers.tradeCancel = (_action, w) => {
+            if (link.open) link.close();
+            else w.state.trade = null; // a window from someone else
+        };
+    }
+    return link;
+}
+
+/** Two bots of one realm, 50 units apart, each seeing the other. */
+function tradePair(aItems: InventoryItem[] = [tradeItem(40, 'sleeves'), tradeItem(41, 'helm'), tradeItem(42, 'boots')], bItems: InventoryItem[] = []) {
+    const a = world({
+        player: makePlayer({ name: 'Alda', objectId: 100 }), inventory: aItems,
+        nearbyPlayers: [makePlayerObj({ objectId: 300, name: 'Brin', x: 560050 })],
+    });
+    const b = world({
+        player: makePlayer({ name: 'Brin', objectId: 300, x: 560050 }), inventory: bItems,
+        nearbyPlayers: [makePlayerObj({ objectId: 100, name: 'Alda', x: 560000 })],
+    });
+    return { a, b, link: tradeLink(a.w, b.w) };
+}
+
+async function until(check: () => unknown, timeout = 2000): Promise<void> {
+    const end = Date.now() + timeout;
+    while (!check()) {
+        if (Date.now() > end) throw new Error(`until: still false after ${timeout} ms: ${check}`);
+        await Bun.sleep(5);
+    }
+}
+
+/** Run `work` so that it aborts after `ms`, as an MCP cancel or a runScript timeout does. */
+function abortAfter<T>(ms: number, work: () => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error('cancelled')), ms);
+    return executionContext.run({ signal: controller.signal }, work);
+}
+
+const tradeActions = (w: FakeWorld) => w.sent.filter(s => s.type.startsWith('trade'));
+
+describe('trade', () => {
+    test('the giver calling first: the item moves, and both report it', async () => {
+        const { a, b } = tradePair();
+        const [give, take] = await Promise.all([a.bot.trade('Brin', { give: ['sleeves'] }), b.bot.trade('Alda')]);
+        expect(give).toMatchObject({ success: true, partner: 'Brin', received: [], missing: [], moneyGiven: 0, moneyReceived: 0, refused: null, message: 'Trade Completed. 1 items for 0 items.' });
+        expect(give.gave.map(i => [i.slot, i.name])).toEqual([[40, 'sleeves']]);
+        expect(take).toMatchObject({ success: true, partner: 'Alda', gave: [], missing: [], message: 'Trade Completed. 0 items for 1 items.' });
+        expect(take.received.map(i => [i.slot, i.name])).toEqual([[40, 'sleeves']]);
+        expect(a.w.state.inventory.map(i => i.name)).toEqual(['helm', 'boots']);
+        expect(b.w.state.inventory.map(i => i.name)).toEqual(['sleeves']);
+        expect(a.sdk.getTrade()).toBeNull();
+        expect(b.sdk.getTrade()).toBeNull();
+        expect(a.w.sentOf('tradeCancel')).toEqual([]);
+        expect(b.w.sentOf('tradeCancel')).toEqual([]);
+    });
+
+    test('the receiver calling first, a long way ahead', async () => {
+        const { a, b } = tradePair();
+        const taking = b.bot.trade('alda'); // any case
+        await Bun.sleep(50);
+        const give = await a.bot.trade('brin', { give: [a.sdk.getInventoryItem(41)!] });
+        const take = await taking;
+        expect(give.success).toBe(true);
+        expect(take.received.map(i => i.name)).toEqual(['helm']);
+    });
+
+    test('a two-way swap: each gets the other\'s item, in the slot that came free', async () => {
+        const { a, b } = tradePair([tradeItem(40, 'sleeves')], [tradeItem(40, 'gloves')]);
+        const [ra, rb] = await Promise.all([a.bot.trade('Brin', { give: ['sleeves'] }), b.bot.trade('Alda', { give: ['gloves'] })]);
+        expect(ra).toMatchObject({ success: true, message: 'Trade Completed. 1 items for 1 items.' });
+        expect(rb.success).toBe(true);
+        expect(ra.gave.map(i => i.name)).toEqual(['sleeves']);
+        expect(ra.received.map(i => [i.slot, i.name])).toEqual([[40, 'gloves']]);
+        expect(rb.received.map(i => [i.slot, i.name])).toEqual([[40, 'sleeves']]);
+    });
+
+    describe('only one side opens the window', () => {
+        for (const start of [0, 300, 600, 900]) {
+            test(`with both giving and the earlier name starting ${start} ms later`, async () => {
+                const { a, b, link } = tradePair([tradeItem(40, 'sleeves'), tradeItem(41, 'boots')], [tradeItem(40, 'gloves'), tradeItem(41, 'cap')]);
+                const openers: string[] = [];
+                for (const [w, name] of [[a.w, 'Alda'], [b.w, 'Brin']] as const) {
+                    for (const kind of ['tradeOfferItem', 'tradeOfferMoney'] as const) {
+                        const real = w.handlers[kind]!;
+                        w.handlers[kind] = (action: BotAction, world: FakeWorld) => { if (!link.open) openers.push(name); return real(action, world); };
+                    }
+                }
+                const later = b.bot.trade('Alda', { give: ['gloves', 'cap'], money: 5 });
+                await Bun.sleep(start);
+                const earlier = a.bot.trade('Brin', { give: ['sleeves', 'boots'], money: 7 });
+                const [ra, rb] = await Promise.all([earlier, later]);
+                expect(ra.success).toBe(true);
+                expect(rb.success).toBe(true);
+                expect(openers).toHaveLength(1);
+            });
+        }
+    });
+
+    test('the two sides\' slots on the clock never come within 250 ms of each other', () => {
+        const send = (later: boolean, now: number) => now + tradeSlotWait(now, later);
+        for (let now = 0; now < 2000; now += 7) {
+            for (const later of [false, true]) {
+                const phase = send(later, now) % 1000;
+                const inSlot = later ? phase >= 500 && phase < 750 : phase < 250;
+                expect(inSlot).toBe(true);
+            }
+        }
+    });
+
+    test('an opening add out of budget for its slot is a timeout, and nothing is sent', async () => {
+        const { a, link } = tradePair();
+        const now = Date.now();
+        const budget = tradeSlotWait(now, false);
+        if (budget > 20) {
+            const r = await a.bot.offerTrade('Brin', { give: ['sleeves'], timeout: 1 });
+            expect(r).toMatchObject({ success: false, reason: 'timeout' });
+            expect(link.open).toBe(false);
+        }
+    });
+
+    test('a window closed between two adds is not reopened', async () => {
+        const { a } = tradePair();
+        const add = a.w.handlers.tradeOfferItem!;
+        let sent = 0;
+        a.w.handlers.tradeOfferItem = (action: BotAction, world: FakeWorld) => { sent++; return add(action, world); };
+        // The snapshot after the first add's answer shows the window gone: a partner's cancel or a range close.
+        const getTrade = a.sdk.getTrade.bind(a.sdk);
+        a.sdk.getTrade = () => sent > 0 ? null : getTrade();
+        const r = await a.bot.offerTrade('Brin', { give: ['sleeves', 'helm'] });
+        expect(r).toMatchObject({ success: false, reason: 'cancelled' });
+        expect(sent).toBe(1);
+    });
+
+    test('money only: the purses move, and the window shows copper on both sides', async () => {
+        const { a, b } = tradePair();
+        const [ra, rb] = await Promise.all([a.bot.trade('Brin', { money: 10203 }), b.bot.trade('Alda')]);
+        expect(ra).toMatchObject({ success: true, moneyGiven: 10203, moneyReceived: 0, message: 'Trade Completed. 0 items for 0 items.' });
+        expect(rb).toMatchObject({ success: true, moneyGiven: 0, moneyReceived: 10203 });
+        expect(a.w.player.money.totalCopper).toBe(10250 - 10203);
+        expect(b.w.player.money.totalCopper).toBe(10250 + 10203);
+        expect(a.w.sentOf('tradeOfferMoney')).toMatchObject([{ partnerObjectId: 300, copper: 10203 }]);
+    });
+
+    test('three adds while the receiver accepts early: the commit holds all three', async () => {
+        const { a, b } = tradePair();
+        const taking = b.bot.trade('Alda');
+        await a.bot.offerTrade('Brin', { give: [40] });
+        await until(() => b.w.sentOf('tradeAccept').length === 1);
+        await a.bot.offerTrade('Brin', { give: [40, 41] });
+        await until(() => b.w.sentOf('tradeAccept').length === 2);
+        expect(a.w.sentOf('tradeOfferItem').map(s => s.slot)).toEqual([40, 41]); // what is in the window goes once
+        const give = await a.bot.trade('Brin', { give: [40, 41, 42] });
+        const take = await taking;
+        expect(give.gave).toHaveLength(3);
+        expect(take.received.map(i => i.name)).toEqual(['sleeves', 'helm', 'boots']);
+        expect(b.w.sentOf('tradeAccept').map(s => s.revision)).toEqual([1, 2, 3]);
+        expect(a.w.sentOf('tradeAccept').map(s => s.revision)).toEqual([3]);
+    });
+
+    test('two 0xEA between snapshots still re-accepts', async () => {
+        const { a, b, link } = tradePair();
+        const taking = b.bot.acceptTrade();
+        await a.bot.offerTrade('Brin', { give: [40] });
+        await until(() => b.w.sentOf('tradeAccept').length === 1);
+        link.update();
+        link.update(); // one read, one snapshot
+        await until(() => b.w.sentOf('tradeAccept').length === 2);
+        expect(b.w.sentOf('tradeAccept').map(s => s.revision)).toEqual([1, 3]);
+        expect((await a.bot.acceptTrade()).success).toBe(true);
+        expect((await taking).received.map(i => i.name)).toEqual(['sleeves']);
+    });
+
+    test('accept says no on revision 1 and yes on revision 2', async () => {
+        const { a, b } = tradePair();
+        const seen: number[] = [];
+        const taking = b.bot.trade('Alda', { accept: w => { seen.push(w.revision); return w.partnerItems.length === 2; } });
+        await a.bot.offerTrade('Brin', { give: [40] });
+        await until(() => seen.includes(1));
+        const give = await a.bot.trade('Brin', { give: [40, 41] });
+        expect(give.success).toBe(true);
+        expect((await taking).received).toHaveLength(2);
+        expect(b.w.sentOf('tradeAccept').map(s => s.revision)).toEqual([2]);
+    });
+
+    test('accept saying no throughout is offer_rejected, and the window goes', async () => {
+        const { a, b } = tradePair();
+        const taking = b.bot.trade('Alda', { accept: () => false, timeout: 100 });
+        await a.bot.offerTrade('Brin', { give: [40] });
+        expect(await taking).toMatchObject({ success: false, reason: 'offer_rejected', partner: 'Alda', received: [] });
+        expect(b.w.sentOf('tradeAccept')).toEqual([]);
+        expect(b.w.sentOf('tradeCancel')).toHaveLength(1);
+        expect(a.w.state.inventory).toHaveLength(3);
+    });
+
+    test('accept saying yes and then no is offer_changed: our accept may still stand, so it closes', async () => {
+        const { a, b } = tradePair();
+        const taking = b.bot.trade('Alda', { accept: w => w.partnerItems.length < 2 });
+        await a.bot.offerTrade('Brin', { give: [40] });
+        await until(() => b.w.sentOf('tradeAccept').length === 1);
+        await a.bot.offerTrade('Brin', { give: [40, 41] });
+        expect(await taking).toMatchObject({ success: false, reason: 'offer_changed' });
+        expect(b.w.sentOf('tradeAccept')).toHaveLength(1);
+        expect(b.w.sentOf('tradeCancel')).toHaveLength(1);
+    });
+
+    test('a first item refused: no window to see, the cancel still goes, and refused says what', async () => {
+        const { a } = tradePair();
+        a.w.handlers.tradeOfferItem = (_action, w) => { w.message("You can't trade this item!"); };
+        const r = await a.bot.trade('Brin', { give: ['sleeves'] });
+        expect(r).toMatchObject({ success: false, reason: 'refused', partner: 'Brin', message: "You can't trade this item!", gave: [] });
+        expect(r.refused).toMatchObject({ item: { slot: 40 }, message: "You can't trade this item!" });
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+        expect(a.w.sentOf('tradeAccept')).toEqual([]);
+    });
+
+    test('the refusal tables give their reasons, and speech matches none of them', async () => {
+        for (const [line, reason] of [
+            ['Invalid trade target.', 'not_found'],
+            ["You can't trade with enemy realm!", 'wrong_realm'],
+            ['Brin is still trading with Cade.', 'busy'],
+            ['Brin is still selfcrafting.', 'busy'],
+        ] as const) {
+            const { a } = tradePair();
+            a.w.handlers.tradeOfferItem = (_action, w) => { w.message(line); };
+            expect(await a.bot.offerTrade('Brin', { give: [40] })).toMatchObject({ success: false, reason, refused: { message: line } });
+        }
+        const { a } = tradePair();
+        a.w.handlers.tradeOfferItem = (_action, w) => { w.message(`Cade says, "You can't trade this item!"`, { type: 'say', sender: 'Cade' }); };
+        expect(await a.bot.offerTrade('Brin', { give: [40], timeout: 60 })).toMatchObject({ success: false, reason: 'no_response', refused: null });
+    });
+
+    test('"too far away" steps closer and retries once', async () => {
+        const { a } = tradePair();
+        a.w.state.nearbyPlayers = [makePlayerObj({ objectId: 300, name: 'Brin', x: 560090 })];
+        a.w.publish();
+        const real = a.w.handlers.tradeOfferItem!;
+        let calls = 0;
+        a.w.handlers.tradeOfferItem = (action, w) => {
+            if (++calls === 1) w.message('You are too far away to give anything to Brin.');
+            else return real(action, w);
+        };
+        const r = await a.bot.offerTrade('Brin', { give: [40] });
+        expect(r).toMatchObject({ success: true, trade: { mySlots: [40] } });
+        expect(calls).toBe(2);
+        expect(Math.abs(560090 - a.w.player.x)).toBeLessThanOrEqual(64);
+    });
+
+    test('"too far away" twice is out_of_range', async () => {
+        const { a } = tradePair();
+        a.w.handlers.tradeOfferItem = (_action, w) => { w.message('You are too far away to give anything to Brin.'); };
+        const r = await a.bot.offerTrade('Brin', { give: [40] });
+        expect(r).toMatchObject({ success: false, reason: 'out_of_range' });
+        expect(a.w.sentOf('tradeOfferItem')).toHaveLength(2);
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+    });
+
+    test('a phantom window: "still trading" with none in view closes it and retries once', async () => {
+        const { a } = tradePair();
+        const real = a.w.handlers.tradeOfferItem!;
+        let calls = 0;
+        a.w.handlers.tradeOfferItem = (action, w) => {
+            if (++calls === 1) w.message('You are still trading with Cade.');
+            else return real(action, w);
+        };
+        const r = await a.bot.offerTrade('Brin', { give: [40] });
+        expect(r).toMatchObject({ success: true, trade: { mySlots: [40] } });
+        expect(tradeActions(a.w).map(s => s.type)).toEqual(['tradeOfferItem', 'tradeCancel', 'tradeOfferItem']);
+    });
+
+    test('still trading after the cure is busy', async () => {
+        const { a } = tradePair();
+        a.w.handlers.tradeOfferItem = (_action, w) => { w.message('You are still trading with Cade.'); };
+        const r = await a.bot.trade('Brin', { give: [40] });
+        expect(r).toMatchObject({ success: false, reason: 'busy', refused: { message: 'You are still trading with Cade.' } });
+        expect(a.w.sentOf('tradeOfferItem')).toHaveLength(2);
+    });
+
+    test('a close without the text is cancelled, with no extra cancel', async () => {
+        const { a, b, link } = tradePair();
+        const giving = a.bot.trade('Brin', { give: [40], accept: () => false });
+        const taking = b.bot.trade('Alda', { accept: () => false });
+        await until(() => a.sdk.getTrade() && b.sdk.getTrade());
+        await Bun.sleep(30);
+        link.close();
+        expect(await giving).toMatchObject({ success: false, reason: 'cancelled', partner: 'Brin' });
+        expect(await taking).toMatchObject({ success: false, reason: 'cancelled', partner: 'Alda' });
+        expect(a.w.sentOf('tradeCancel')).toEqual([]);
+        expect(b.w.sentOf('tradeCancel')).toEqual([]);
+    });
+
+    test('no room in our backpack: one accept, inventory_full, and the cancel; the partner reads its variant', async () => {
+        const { a, b, link } = tradePair();
+        link.failCommit = (x, y) => {
+            y.message("You don't have enough space in your inventory.");
+            x.message("Brin doesn't have enough space in his inventory.");
+        };
+        const [give, take] = await Promise.all([a.bot.trade('Brin', { give: [40] }), b.bot.trade('Alda')]);
+        expect(take).toMatchObject({ success: false, reason: 'inventory_full', received: [] });
+        expect(give).toMatchObject({ success: false, reason: 'partner_inventory_full', gave: [] });
+        expect(a.w.sentOf('tradeAccept')).toHaveLength(1);
+        expect(b.w.sentOf('tradeAccept')).toHaveLength(1);
+        expect(a.w.sentOf('tradeCancel').length + b.w.sentOf('tradeCancel').length).toBeGreaterThanOrEqual(1);
+        expect(a.w.state.inventory).toHaveLength(3);
+        await until(() => !a.sdk.getTrade() && !b.sdk.getTrade());
+    });
+
+    test('a failed money check never re-accepts, though the reset 0xEA is a new revision', async () => {
+        const { a, b, link } = tradePair();
+        link.failCommit = (x, y) => {
+            x.message("You don't have enough money.");
+            y.message("Alda doesn't have enough money.");
+        };
+        const [give, take] = await Promise.all([a.bot.trade('Brin', { give: [40], money: 500 }), b.bot.trade('Alda')]);
+        expect(give).toMatchObject({ success: false, reason: 'insufficient_funds' });
+        expect(take).toMatchObject({ success: false, reason: 'partner_insufficient_funds' });
+        expect(a.w.sentOf('tradeAccept')).toHaveLength(1);
+        expect(b.w.sentOf('tradeAccept')).toHaveLength(1);
+        expect(a.w.state.inventory).toHaveLength(3);
+    });
+
+    test('a stranger\'s window is cancelled while waiting, once, and the real one then completes', async () => {
+        const { a, b } = tradePair();
+        const stranger = { id: 5, revision: 1, partnerName: 'Cade', mySlots: [], myMoney: 0, partnerItems: [tradeItem(50, 'rags')], partnerMoney: 0 };
+        const taking = b.bot.trade('Alda');
+        b.w.state.trade = stranger;
+        const close = b.w.handlers.tradeCancel!;
+        b.w.handlers.tradeCancel = (action, w) => { setTimeout(() => close(action, w), 40); }; // the close takes a while
+        await until(() => b.w.sentOf('tradeCancel').length === 1 && !b.sdk.getTrade());
+        b.w.handlers.tradeCancel = close;
+        const give = await a.bot.trade('Brin', { give: [40] });
+        const take = await taking;
+        expect(give.success).toBe(true);
+        expect(take.received.map(i => i.name)).toEqual(['sleeves']);
+        expect(b.w.sentOf('tradeCancel')).toHaveLength(1);
+        expect(b.w.sentOf('tradeAccept')).toHaveLength(1);
+    });
+
+    test('a self-craft window is never accepted', async () => {
+        const { b } = tradePair();
+        b.w.state.trade = { id: 6, revision: 1, partnerName: null, mySlots: [], myMoney: 0, partnerItems: [], partnerMoney: 0 };
+        b.w.publish();
+        const r = await b.bot.acceptTrade({ timeout: 60 });
+        expect(r).toMatchObject({ success: false, reason: 'timeout' });
+        expect(b.w.sentOf('tradeAccept')).toEqual([]);
+    });
+
+    test('acceptTrade takes whoever opens one; `from` only that player', async () => {
+        const open = tradePair();
+        const any = open.b.bot.acceptTrade();
+        await open.a.bot.offerTrade('Brin', { give: [40] });
+        expect((await open.a.bot.acceptTrade()).success).toBe(true);
+        expect((await any).received.map(i => i.name)).toEqual(['sleeves']);
+
+        const narrow = tradePair();
+        const r = narrow.b.bot.acceptTrade({ from: /^Cade$/, timeout: 100 });
+        await narrow.a.bot.offerTrade('Brin', { give: [40] });
+        expect(await r).toMatchObject({ success: false, reason: 'timeout', partner: null });
+        expect(narrow.b.w.sentOf('tradeAccept')).toEqual([]);
+        expect(narrow.b.w.sentOf('tradeCancel').length).toBeGreaterThanOrEqual(1);
+        expect(await narrow.b.bot.acceptTrade({ from: 999 })).toMatchObject({ success: false, reason: 'not_found' });
+    });
+
+    test('a stale own item in a window is cancelled before offering', async () => {
+        const { a, b } = tradePair();
+        await a.bot.offerTrade('Brin', { give: [40] });
+        const giving = a.bot.trade('Brin', { give: [41] });
+        await until(() => a.sdk.getTrade()?.mySlots.includes(41));
+        const take = await b.bot.trade('Alda');
+        const give = await giving;
+        expect(tradeActions(a.w).map(s => s.type).slice(0, 3)).toEqual(['tradeOfferItem', 'tradeCancel', 'tradeOfferItem']);
+        expect(give.gave.map(i => i.name)).toEqual(['helm']);
+        expect(take.received.map(i => i.name)).toEqual(['helm']);
+        expect(a.w.state.inventory.map(i => i.name)).toEqual(['sleeves', 'boots']);
+    });
+
+    test('money is a target: more goes as the difference, less starts over', async () => {
+        const { a } = tradePair();
+        await a.bot.offerTrade('Brin', { money: 200 });
+        const more = await a.bot.offerTrade('Brin', { money: 500 });
+        expect(more).toMatchObject({ success: true, trade: { myMoney: 500 } });
+        expect(a.w.sentOf('tradeOfferMoney').map(s => s.copper)).toEqual([200, 300]);
+        expect(a.w.sentOf('tradeCancel')).toEqual([]);
+        const less = await a.bot.offerTrade('Brin', { money: 100 });
+        expect(less).toMatchObject({ success: true, trade: { myMoney: 100 } });
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+    });
+
+    test('a window the partner opened with its own items is kept', async () => {
+        const { a, b } = tradePair([tradeItem(40, 'sleeves')], [tradeItem(40, 'gloves')]);
+        await b.bot.offerTrade('Alda', { give: ['gloves'] });
+        await until(() => a.sdk.getTrade());
+        const r = await a.bot.offerTrade('Brin', { give: ['sleeves'] });
+        expect(r).toMatchObject({ success: true, trade: { mySlots: [40], partnerItems: [{ name: 'gloves' }] } });
+        expect(a.w.sentOf('tradeCancel')).toEqual([]);
+    });
+
+    test('offerTrade leaves the window open for acceptTrade', async () => {
+        const { a, b } = tradePair();
+        const r = await a.bot.offerTrade('Brin', { give: [40], money: 7 });
+        expect(r).toMatchObject({ success: true, partner: { name: 'Brin' }, trade: { mySlots: [40], myMoney: 7, partnerName: 'Brin' } });
+        expect(a.w.sentOf('tradeCancel')).toEqual([]);
+        const take = b.bot.acceptTrade();
+        expect(await a.bot.acceptTrade()).toMatchObject({ success: true, moneyGiven: 7, gave: [{ name: 'sleeves' }] });
+        expect(await take).toMatchObject({ success: true, moneyReceived: 7, received: [{ name: 'sleeves' }] });
+    });
+
+    test('a close and a reopen in one snapshot is cancelled, by window id, at the same revision', async () => {
+        const { a, b, link } = tradePair();
+        const taking = b.bot.trade('Alda');
+        await a.bot.offerTrade('Brin', { give: [40] });
+        await until(() => b.w.sentOf('tradeAccept').length === 1);
+        link.close();
+        a.w.handlers.tradeOfferItem!({ type: 'tradeOfferItem', partnerObjectId: 300, slot: 41 }, a.w);
+        expect(b.w.state.trade?.revision).toBe(1);
+        expect(await taking).toMatchObject({ success: false, reason: 'cancelled' });
+        expect(b.w.sentOf('tradeAccept')).toHaveLength(1);
+        expect(b.w.sentOf('tradeCancel')).toHaveLength(1); // the new window isn't ours to hold
+    });
+
+    test('a window closed mid-offer and reopened by the next add is cancelled, not half an offer', async () => {
+        const { a, link } = tradePair();
+        const real = a.w.handlers.tradeOfferItem!;
+        a.w.handlers.tradeOfferItem = (action, w) => {
+            if (action.type === 'tradeOfferItem' && action.slot === 41) link.close();
+            return real(action, w);
+        };
+        const r = await a.bot.offerTrade('Brin', { give: [40, 41] });
+        expect(r).toMatchObject({ success: false, reason: 'cancelled' });
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+    });
+
+    test('a window with someone else than asked is wrong_partner', async () => {
+        const { a } = tradePair();
+        const real = a.w.handlers.tradeOfferItem!;
+        a.w.handlers.tradeOfferItem = (action, w) => {
+            const r = real(action, w);
+            w.state.trade = { ...w.state.trade!, partnerName: 'Brinn' };
+            return r;
+        };
+        expect(await a.bot.offerTrade('Brin', { give: [40] })).toMatchObject({ success: false, reason: 'wrong_partner' });
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+    });
+
+    test('an identical swap in a reused slot is no false item_missing', async () => {
+        const { a, b } = tradePair([tradeItem(40, 'potion', 3)], [tradeItem(40, 'potion', 3)]);
+        const [ra, rb] = await Promise.all([a.bot.trade('Brin', { give: ['potion'] }), b.bot.trade('Alda', { give: ['potion'] })]);
+        expect(ra).toMatchObject({ success: true, missing: [] });
+        expect(rb).toMatchObject({ success: true, missing: [] });
+        expect(ra.received.map(i => i.slot)).toEqual([40]);
+    });
+
+    test('a new identical item is told from the one we had', async () => {
+        const { a, b } = tradePair([tradeItem(40, 'potion')], [tradeItem(40, 'potion')]);
+        const [, take] = await Promise.all([a.bot.trade('Brin', { give: ['potion'] }), b.bot.trade('Alda')]);
+        expect(take.received.map(i => i.slot)).toEqual([41]);
+    });
+
+    test('completed, but the item never came: item_missing', async () => {
+        const { a, b, link } = tradePair();
+        link.losesItems = b.w;
+        const [give, take] = await Promise.all([a.bot.trade('Brin', { give: [40] }), b.bot.trade('Alda')]);
+        expect(give.success).toBe(true);
+        expect(take).toMatchObject({ success: false, reason: 'item_missing', received: [], missing: [{ name: 'sleeves' }] });
+        expect(b.w.sentOf('tradeCancel')).toEqual([]);
+    });
+
+    test('bad offers send nothing', async () => {
+        const many = Array.from({ length: 11 }, (_, i) => tradeItem(40 + i, `item ${String.fromCharCode(97 + i)}`));
+        const { a } = tradePair(many);
+        const offers: [Parameters<BotActions['offerTrade']>[1], string][] = [
+            [{ give: many }, 'too_many_items'],
+            [{ money: 10251 }, 'insufficient_funds'],
+            [{ give: [40, 'item a'] }, 'bad_args'],
+            [{ money: -5 }, 'bad_args'],
+            [{ money: 1.5 }, 'bad_args'],
+            [{}, 'bad_args'],
+            [{ give: ['no such thing'] }, 'not_found'],
+        ];
+        for (const [options, reason] of offers) expect(await a.bot.offerTrade('Brin', options)).toMatchObject({ success: false, reason, partner: null });
+        expect(await a.bot.trade('Brin', { money: -5 })).toMatchObject({ success: false, reason: 'bad_args' });
+        expect(a.w.sent).toEqual([]);
+    });
+
+    test('a substring names nobody: a wrong match would hand items to another player', async () => {
+        const { a } = tradePair();
+        expect(await a.bot.offerTrade('Bri', { give: [40] })).toMatchObject({ success: false, reason: 'not_found' });
+        expect(await a.bot.trade('Bri', { give: [40] })).toMatchObject({ success: false, reason: 'not_found' });
+        expect(a.w.sent).toEqual([]);
+        // ...and the window of a waiter is held to the same exact name.
+        const r = a.bot.trade('Bri', { timeout: 60 });
+        a.w.state.trade = { id: 7, revision: 1, partnerName: 'Brin', mySlots: [], myMoney: 0, partnerItems: [], partnerMoney: 0 };
+        expect(await r).toMatchObject({ success: false, reason: 'timeout' });
+        expect(a.w.sentOf('tradeAccept')).toEqual([]);
+    });
+
+    test('a waiter needs no partner in view by name, but an unknown object id names nobody', async () => {
+        const { a, b } = tradePair();
+        b.w.state.nearbyPlayers = [];
+        const taking = b.bot.trade('Alda');
+        await a.bot.offerTrade('Brin', { give: [40] });
+        await a.bot.acceptTrade();
+        expect((await taking).received).toHaveLength(1);
+        expect(await b.bot.trade(100)).toMatchObject({ success: false, reason: 'not_found', partner: null });
+    });
+
+    test('not in game, and dead', async () => {
+        const gone = world({ player: null });
+        expect(await gone.bot.offerTrade('Brin', { give: [40] })).toMatchObject({ success: false, reason: 'not_in_game' });
+        expect(await gone.bot.trade('Brin')).toMatchObject({ success: false, reason: 'not_in_game' });
+        const dead = world({ player: makePlayer({ isDead: true }) });
+        expect(await dead.bot.offerTrade('Otherguy', { money: 1 })).toMatchObject({ success: false, reason: 'dead' });
+    });
+
+    test('the deadlines: no window, and a partner that never accepts', async () => {
+        const { a, b } = tradePair();
+        expect(await b.bot.trade('Alda', { timeout: 50 })).toMatchObject({ success: false, reason: 'timeout', partner: null });
+        expect(await a.bot.trade('Brin', { give: [40], timeout: 100 })).toMatchObject({ success: false, reason: 'partner_no_accept', partner: 'Brin' });
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+        await until(() => !a.sdk.getTrade());
+    });
+
+    test('no answer to an add is no_response, and the phantom it may leave gets a cancel', async () => {
+        const { a } = tradePair();
+        a.w.handlers.tradeOfferItem = () => {};
+        expect(await a.bot.offerTrade('Brin', { give: [40], timeout: 900 })).toMatchObject({ success: false, reason: 'no_response' });
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+    });
+
+    test('an add the client refuses says why: the item left the backpack since the snapshot', async () => {
+        const { a } = tradePair();
+        a.w.handlers.tradeOfferItem = () => ({ success: false, message: 'no item in slot 40', reason: 'empty_slot', phase: 'validation' });
+        expect(await a.bot.offerTrade('Brin', { give: [40] })).toMatchObject({ success: false, reason: 'empty_slot' });
+    });
+
+    test('an accept that crossed a new offer is sent again; any other dispatch failure ends it', async () => {
+        const { a, b } = tradePair();
+        const real = b.w.handlers.tradeAccept!;
+        let calls = 0;
+        b.w.handlers.tradeAccept = (action, w) => ++calls === 1 ? { success: false, message: 'changed', reason: 'trade_changed', phase: 'validation' } : real(action, w);
+        const taking = b.bot.acceptTrade();
+        await a.bot.offerTrade('Brin', { give: [40] });
+        expect((await a.bot.acceptTrade()).success).toBe(true);
+        expect((await taking).success).toBe(true);
+        expect(calls).toBe(2);
+
+        const down = tradePair();
+        down.b.w.handlers.tradeAccept = () => ({ success: false, message: 'not in game', reason: 'not_in_game', phase: 'validation' });
+        const lost = down.b.bot.acceptTrade();
+        await down.a.bot.offerTrade('Brin', { give: [40] });
+        expect(await lost).toMatchObject({ success: false, reason: 'not_in_game' });
+    });
+
+    test('a walk that fails ends the offer with its reason, and closes a window already there', async () => {
+        const { a, b } = tradePair();
+        await b.bot.offerTrade('Alda', { money: 5 });
+        await until(() => a.sdk.getTrade());
+        a.w.state.nearbyPlayers = [makePlayerObj({ objectId: 300, name: 'Brin', x: 561000 })];
+        a.w.publish();
+        a.w.handlers.moveTo = () => ({ success: false, message: 'no', reason: 'stuck', phase: 'validation' });
+        const r = await a.bot.offerTrade('Brin', { give: [40] });
+        expect(r).toMatchObject({ success: false, reason: 'stuck', partner: { name: 'Brin' } });
+        expect(a.w.sentOf('tradeOfferItem')).toEqual([]);
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+    });
+
+    test('walks up to a partner across the field, within the range asked for', async () => {
+        const { a } = tradePair();
+        a.w.state.nearbyPlayers = [makePlayerObj({ objectId: 300, name: 'Brin', x: 561000 })];
+        a.w.publish();
+        const r = await a.bot.offerTrade('Brin', { give: [40], range: 80 });
+        expect(r.success).toBe(true);
+        expect(Math.abs(561000 - a.w.player.x)).toBeLessThanOrEqual(80);
+    });
+
+    test('an abort in the wait still closes the window', async () => {
+        const { a } = tradePair();
+        await expect(abortAfter(60, () => a.bot.trade('Brin', { give: [40] }))).rejects.toThrow('cancelled');
+        expect(a.w.sentOf('tradeOfferItem')).toHaveLength(1);
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+        await until(() => !a.sdk.getTrade());
+    });
+
+    test('an abort mid-offer still closes the window', async () => {
+        const { a } = tradePair();
+        a.w.handlers.tradeOfferItem = () => {};
+        await expect(abortAfter(30, () => a.bot.offerTrade('Brin', { give: [40] }))).rejects.toThrow('cancelled');
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+    });
+
+    test('a commit our last accept makes at the deadline is a completed trade, not partner_no_accept', async () => {
+        const { a, b } = tradePair();
+        await a.bot.offerTrade('Brin', { give: [40] });
+        const taking = b.bot.acceptTrade();
+        await until(() => b.w.sentOf('tradeAccept').length === 1);
+        expect(await a.bot.acceptTrade({ timeout: 0 })).toMatchObject({ success: true, gave: [{ name: 'sleeves' }], message: 'Trade Completed. 1 items for 0 items.' });
+        expect(await taking).toMatchObject({ success: true, received: [{ name: 'sleeves' }] });
+    });
+
+    test('a partner\'s accept that gets in before our close at the deadline is a completed trade too', async () => {
+        const { a, b, link } = tradePair();
+        const cancel = a.w.handlers.tradeCancel!;
+        a.w.handlers.tradeCancel = (action, w) => {
+            b.w.handlers.tradeAccept!({ type: 'tradeAccept' }, b.w); // it reached the server first
+            if (link.open) return cancel(action, w);
+        };
+        expect(await a.bot.trade('Brin', { give: [40], timeout: 60 })).toMatchObject({ success: true, gave: [{ name: 'sleeves' }] });
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+        expect(b.w.state.inventory.map(i => i.name)).toEqual(['sleeves']);
+    });
+
+    test('acceptTrade finishes the window of the offer: one that replaced it is closed, not accepted', async () => {
+        const { a, b } = tradePair([tradeItem(40, 'sleeves')], [tradeItem(40, 'gloves')]);
+        await a.bot.offerTrade('Brin', { give: [40] });
+        await until(() => b.sdk.getTrade());
+        expect(await b.bot.cancelTrade()).toMatchObject({ success: true });
+        await b.bot.offerTrade('Alda', { give: ['gloves'] });
+        await until(() => a.sdk.getTrade()?.partnerItems.length);
+        expect(await a.bot.acceptTrade({ from: 'Brin' })).toMatchObject({ success: false, reason: 'cancelled', gave: [], received: [] });
+        expect(a.w.sentOf('tradeAccept')).toEqual([]);
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+        expect(a.sdk.getTrade()).toBeNull();
+        expect(a.w.state.inventory.map(i => i.name)).toEqual(['sleeves']);
+    });
+
+    test('acceptTrade after an offer whose window has closed is cancelled at once', async () => {
+        const { a, b } = tradePair();
+        await a.bot.offerTrade('Brin', { give: [40] });
+        await until(() => b.sdk.getTrade());
+        await b.bot.cancelTrade();
+        await until(() => !a.sdk.getTrade());
+        const started = Date.now();
+        expect(await a.bot.acceptTrade()).toMatchObject({ success: false, reason: 'cancelled', partner: 'Brin' });
+        expect(Date.now() - started).toBeLessThan(1000);
+    });
+
+    test('an acceptTrade with no offer of its own, in a new script, takes the window as it stands', async () => {
+        const { a, b } = tradePair();
+        await a.bot.offerTrade('Brin', { give: [40] });
+        const take = b.bot.acceptTrade();
+        expect(await new BotActions(a.sdk).acceptTrade()).toMatchObject({ success: true, gave: [{ name: 'sleeves' }] });
+        expect((await take).success).toBe(true);
+    });
+
+    test('a failure returns with the window gone, so a retry starts a new one', async () => {
+        const { a } = tradePair();
+        const close = a.w.handlers.tradeCancel!;
+        a.w.handlers.tradeCancel = (action, w) => { setTimeout(() => close(action, w), 40); }; // the 0xEA takes a while
+        expect(await a.bot.trade('Brin', { give: [40], timeout: 50 })).toMatchObject({ success: false, reason: 'partner_no_accept' });
+        expect(a.sdk.getTrade()).toBeNull();
+        expect(await a.bot.offerTrade('Brin', { give: [40] })).toMatchObject({ success: true, trade: { mySlots: [40] } });
+        expect(a.w.sentOf('tradeOfferItem')).toHaveLength(2);
+    });
+
+    test('a failed offer returns with the window gone too', async () => {
+        const { a } = tradePair();
+        const close = a.w.handlers.tradeCancel!;
+        a.w.handlers.tradeCancel = (action, w) => { setTimeout(() => close(action, w), 40); };
+        const real = a.w.handlers.tradeOfferItem!;
+        a.w.handlers.tradeOfferItem = (action, w) => {
+            if (action.type === 'tradeOfferItem' && action.slot === 41) w.message("You can't trade this item!");
+            else return real(action, w);
+        };
+        expect(await a.bot.offerTrade('Brin', { give: [40, 41] })).toMatchObject({ success: false, reason: 'refused' });
+        expect(a.sdk.getTrade()).toBeNull();
+    });
+
+    test('the walk in an offer keeps to the budget of the whole call while the partner runs on', async () => {
+        const { a } = tradePair();
+        a.w.state.nearbyPlayers = [makePlayerObj({ objectId: 300, name: 'Brin', x: 561000 })];
+        a.w.stepSize = 40;
+        a.w.onTick = w => {
+            const brin = w.state.nearbyPlayers[0]!;
+            if (Math.abs(brin.x - w.player.x) < 100) brin.x += 1000;
+        };
+        a.w.publish();
+        const started = Date.now();
+        expect(await a.bot.trade('Brin', { give: [40], timeout: 350 })).toMatchObject({ success: false, reason: 'timeout' });
+        expect(Date.now() - started).toBeLessThan(800); // four legs of about 250 ms before
+        expect(a.w.sentOf('tradeOfferItem')).toEqual([]);
+    });
+
+    test('no budget left at an add is a timeout, and the add stays home', async () => {
+        const { a } = tradePair();
+        expect(await a.bot.offerTrade('Brin', { give: [40], timeout: 0 })).toMatchObject({ success: false, reason: 'timeout' });
+        expect(a.w.sentOf('tradeOfferItem')).toEqual([]);
+    });
+
+    test('an accept judged on one window never lands on the next, at the same revision', async () => {
+        const { a, b, link } = tradePair();
+        const real = b.w.handlers.tradeAccept!;
+        const answers: unknown[] = [];
+        b.w.handlers.tradeAccept = (action, w) => {
+            link.close();
+            a.w.handlers.tradeOfferItem!({ type: 'tradeOfferItem', partnerObjectId: 300, slot: 41 }, a.w); // reopened before the accept got through
+            const answer = real(action, w);
+            answers.push(answer);
+            return answer;
+        };
+        const taking = b.bot.trade('Alda');
+        void a.bot.offerTrade('Brin', { give: [40] });
+        expect(await taking).toMatchObject({ success: false, reason: 'cancelled' });
+        expect(answers).toMatchObject([{ reason: 'trade_changed' }]);
+        expect(a.w.state.inventory).toHaveLength(3);
+        await until(() => !b.sdk.getTrade());
+    });
+
+    test('a commit and a new window in one snapshot: the trade is done, and the new window is closed', async () => {
+        const { a, b } = tradePair();
+        const taking = b.bot.trade('Alda');
+        await a.bot.offerTrade('Brin', { give: [40] });
+        await until(() => b.w.sentOf('tradeAccept').length === 1);
+        const real = a.w.handlers.tradeAccept!;
+        a.w.handlers.tradeAccept = (action, w) => {
+            const r = real(action, w);
+            a.w.handlers.tradeOfferItem!({ type: 'tradeOfferItem', partnerObjectId: 300, slot: 41 }, a.w);
+            b.w.publish();
+            return r;
+        };
+        void a.bot.acceptTrade();
+        expect(await taking).toMatchObject({ success: true, received: [{ name: 'sleeves' }] });
+        expect(b.w.sentOf('tradeCancel')).toHaveLength(1);
+        expect(b.sdk.getTrade()).toBeNull();
+        expect(a.w.state.inventory.map(i => i.name)).toEqual(['helm', 'boots']);
+    });
+
+    test('an identical item we already held hides no lost item', async () => {
+        const { a, b, link } = tradePair([tradeItem(40, 'sleeves')], [tradeItem(45, 'sleeves')]);
+        link.losesItems = b.w;
+        const [, take] = await Promise.all([a.bot.trade('Brin', { give: [40] }), b.bot.trade('Alda')]);
+        expect(take).toMatchObject({ success: false, reason: 'item_missing', received: [], missing: [{ name: 'sleeves' }] });
+    });
+
+    test('received names the item that came, not an old twin of it', async () => {
+        const mine = [40, 41, 42, 43, 44, 45].map(slot => tradeItem(slot, slot === 42 || slot === 45 ? 'sword' : `filler ${slot}`));
+        const { a, b } = tradePair(mine, [tradeItem(40, 'sword')]);
+        const [ra] = await Promise.all([a.bot.trade('Brin', { give: [45] }), b.bot.trade('Alda', { give: [40] })]);
+        expect(ra.received.map(i => i.slot)).toEqual([45]); // the first slot free, not 42
+    });
+
+    test('an item object that has gone names nothing: no longer name wins, and nothing is offered', async () => {
+        const { a } = tradePair([tradeItem(45, 'Sleeves'), tradeItem(50, 'Quilted Sleeves of Might')]);
+        const sleeves = a.sdk.getInventoryItem(45)!;
+        a.w.state.inventory = a.w.state.inventory.filter(i => i.slot !== 45);
+        a.w.publish();
+        expect(await a.bot.trade('Brin', { give: [sleeves] })).toMatchObject({ success: false, reason: 'not_found' });
+        expect(a.w.sent).toEqual([]);
+    });
+
+    test('a receive-only trade closes a leftover window of ours instead of accepting it', async () => {
+        const { a, b } = tradePair();
+        await a.bot.offerTrade('Brin', { give: [40] });
+        const take = b.bot.acceptTrade({ timeout: 300 }); // its accept stands: ours would commit
+        await until(() => b.w.sentOf('tradeAccept').length === 1);
+        expect(await new BotActions(a.sdk).trade('Brin', { timeout: 100 })).toMatchObject({ success: false, reason: 'timeout', gave: [] });
+        expect(a.w.sentOf('tradeAccept')).toEqual([]);
+        expect(a.w.sentOf('tradeCancel').length).toBeGreaterThanOrEqual(1);
+        expect(a.w.state.inventory.map(i => i.name)).toEqual(['sleeves', 'helm', 'boots']);
+        expect(await take).toMatchObject({ success: false, reason: 'cancelled' });
+    });
+
+    test('a receive-only trade still takes a clean window after closing the leftover', async () => {
+        const { a, b } = tradePair();
+        await a.bot.offerTrade('Brin', { give: [40] });
+        const receiving = a.bot.trade('Brin');
+        await until(() => a.w.sentOf('tradeCancel').length === 1 && !a.sdk.getTrade());
+        const give = await b.bot.trade('Alda', { money: 5 });
+        expect(give.success).toBe(true);
+        expect(await receiving).toMatchObject({ success: true, gave: [], moneyReceived: 5 });
+        expect(a.w.state.inventory).toHaveLength(3);
+    });
+
+    test('every early refusal closes a window already open', async () => {
+        const refusals: Array<[string, (bot: BotActions) => Promise<ActionResult>, string]> = [
+            ['no such item', bot => bot.trade('Brin', { give: ['no such item'] }), 'not_found'],
+            ['over the purse', bot => bot.offerTrade('Brin', { money: 10251 }), 'insufficient_funds'],
+            ['bad money', bot => bot.offerTrade('Brin', { money: -5 }), 'bad_args'],
+            ['a partner nobody has', bot => bot.trade('Nobody', { give: [40] }), 'not_found'],
+            ['a waiter for an unknown id', bot => bot.trade(999), 'not_found'],
+            ['an accept from an unknown id', bot => bot.acceptTrade({ from: 999 }), 'not_found'],
+        ];
+        for (const [, call, reason] of refusals) {
+            const { a, b } = tradePair();
+            const waiting = b.bot.trade('Alda', { give: [], accept: () => false });
+            await a.bot.offerTrade('Brin', { money: 5 });
+            await until(() => b.sdk.getTrade());
+            expect(await call(a.bot)).toMatchObject({ success: false, reason });
+            expect(a.sdk.getTrade()).toBeNull();
+            expect(await waiting).toMatchObject({ success: false, reason: 'cancelled' });
+        }
+    });
+
+    test('a snapshot of a player goes by the name: a newcomer on the freed id gets nothing', async () => {
+        const { a } = tradePair();
+        const brin = a.sdk.getNearbyPlayers()[0]!;
+        a.w.state.nearbyPlayers = [makePlayerObj({ objectId: 300, name: 'Bob', x: 560050 })];
+        a.w.publish();
+        expect(await a.bot.trade(brin, { give: [40] })).toMatchObject({ success: false, reason: 'not_found' });
+        expect(a.w.sent).toEqual([]);
+        a.w.state.nearbyPlayers = [makePlayerObj({ objectId: 301, name: 'Brin', x: 560050 })]; // back, under a new id
+        a.w.publish();
+        expect(await a.bot.offerTrade(brin, { give: [40] })).toMatchObject({ success: true, partner: { objectId: 301 } });
+        expect(a.w.sentOf('tradeOfferItem')[0]).toMatchObject({ partnerObjectId: 301 });
+    });
+
+    test('a pattern gives nothing: it could match anyone in view', async () => {
+        const { a } = tradePair();
+        a.w.state.nearbyPlayers = [makePlayerObj({ objectId: 300, name: 'Germaine', x: 560050 })];
+        a.w.publish();
+        expect(await a.bot.trade(/aine/i, { give: [40] })).toMatchObject({ success: false, reason: 'bad_args' });
+        expect(await a.bot.offerTrade(/aine/i, { money: 5 })).toMatchObject({ success: false, reason: 'bad_args' });
+        expect(a.w.sent).toEqual([]);
+    });
+
+    test('our own item leaving the offer is never accepted: the swap ends, and nothing moves', async () => {
+        const { a, b, link } = tradePair([tradeItem(40, 'sword')], [tradeItem(40, 'gloves')]);
+        await a.bot.offerTrade('Brin', { give: [40] });
+        const swapping = b.bot.trade('Alda', { give: ['gloves'] });
+        await until(() => b.w.sentOf('tradeAccept').length === 1);
+        link.drop(b.w, 40);
+        expect(await swapping).toMatchObject({ success: false, reason: 'offer_changed', gave: [] });
+        expect(b.w.sentOf('tradeAccept')).toHaveLength(1);
+        expect(b.w.sentOf('tradeCancel')).toHaveLength(1);
+        expect(await a.bot.acceptTrade()).toMatchObject({ success: false, reason: 'cancelled' });
+        expect(a.w.state.inventory.map(i => i.name)).toEqual(['sword']);
+        expect(b.w.state.inventory.map(i => i.name)).toEqual(['gloves']);
+    });
+
+    test('a client without the trade code says so at once, also to a waiter', async () => {
+        const { b } = tradePair();
+        b.w.state.trade = undefined; // an older client's state has no such field
+        b.w.publish();
+        const started = Date.now();
+        expect(await b.bot.trade('Alda')).toMatchObject({ success: false, reason: 'unknown_action' });
+        expect(await b.bot.acceptTrade()).toMatchObject({ success: false, reason: 'unknown_action' });
+        expect(Date.now() - started).toBeLessThan(1000);
+    });
+
+    test('an abort of a waiter sends the cancel too', async () => {
+        const { b } = tradePair();
+        await expect(abortAfter(30, () => b.bot.acceptTrade())).rejects.toThrow('cancelled');
+        expect(b.w.sentOf('tradeCancel')).toHaveLength(1);
+    });
+});
+
+describe('cancelTrade', () => {
+    test('closes a window on both sides, and the partner reads cancelled', async () => {
+        const { a, b } = tradePair();
+        const taking = b.bot.trade('Alda', { accept: () => false });
+        await a.bot.offerTrade('Brin', { give: [40] });
+        await until(() => b.sdk.getTrade());
+        expect(await a.bot.cancelTrade()).toMatchObject({ success: true });
+        expect(a.sdk.getTrade()).toBeNull();
+        expect(await taking).toMatchObject({ success: false, reason: 'cancelled' });
+    });
+
+    test('no window is a success, and the close still goes: it cures a phantom', async () => {
+        const { a } = tradePair();
+        expect(await a.bot.cancelTrade()).toMatchObject({ success: true });
+        expect(a.w.sentOf('tradeCancel')).toHaveLength(1);
+    });
+
+    test('a window that stays open is a timeout', async () => {
+        const { a } = tradePair();
+        a.w.state.trade = { id: 8, revision: 1, partnerName: 'Brin', mySlots: [], myMoney: 0, partnerItems: [], partnerMoney: 0 };
+        a.w.publish();
+        a.w.handlers.tradeCancel = () => {};
+        expect(await a.bot.cancelTrade()).toMatchObject({ success: false, reason: 'timeout' });
+    });
+
+    test('a commit that won the race is already_completed', async () => {
+        const { a } = tradePair();
+        a.w.state.trade = { id: 9, revision: 1, partnerName: 'Brin', mySlots: [40], myMoney: 0, partnerItems: [], partnerMoney: 0 };
+        a.w.publish();
+        a.w.handlers.tradeCancel = (_action, w) => {
+            w.message('Trade Completed. 1 items for 0 items.');
+            w.state.trade = null;
+        };
+        expect(await a.bot.cancelTrade()).toMatchObject({ success: false, reason: 'already_completed', message: 'Trade Completed. 1 items for 0 items.' });
     });
 });

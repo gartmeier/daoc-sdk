@@ -469,6 +469,7 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
             sdkSessions.set(sessionId, session);
             wsToType.set(ws, { type: 'sdk', id: sessionId });
 
+            const bot = botSessions.get(targetUsername);
             if (mode === 'control') {
                 for (const old of sdksForBot(targetUsername)) {
                     if (old.mode !== 'control' || old.sessionId === sessionId) continue;
@@ -477,11 +478,13 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
                     sdkSessions.delete(old.sessionId);
                     wsToType.delete(old.ws);
                     try { old.ws.close(); } catch {}
+                    // The old script can't close its trade window any more, and its accept may stand there: a
+                    // partner's accept would commit with nobody to report it. An action without an id has no answer.
+                    if (bot?.ws && bot.lastState?.trade) sendToBot(bot, { type: 'action', action: { type: 'tradeCancel' } });
                 }
             }
 
             log(`SDK connected: ${sdkClientId} -> ${targetUsername} (mode: ${mode})`);
-            const bot = botSessions.get(targetUsername);
             sendToSDK(session, { type: 'sdk_connected', success: true, mode, otherControllers: 0, maxMessageLength: bot?.maxMessageLength });
             if (bot?.lastState) {
                 sendToSDK(session, { type: 'sdk_state', state: bot.lastState, stateReceivedAt: bot.lastStateReceivedAt });

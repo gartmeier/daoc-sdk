@@ -200,6 +200,47 @@ export const SELL_REFUSALS = [
     'you must target a merchant',
 ] as const;
 
+/**
+ * Refusals of an add to a trade window, with their reason. Anchored, so speech can't match (a speech line
+ * starts `X says, "`). Sources: PlayerMoveItemRequestHandler.cs:146-166, NormalServerRules.cs:181,
+ * GamePlayer.cs:6270-6286, GamePlayer.txt:102/261/264.
+ */
+export const TRADE_REFUSALS: ReadonlyArray<readonly [RegExp, string]> = [
+    [/^Invalid trade target\.$/, 'not_found'],
+    [/^Can't trade with inactive players\.$/, 'refused'],
+    [/^You can't trade with yourself/, 'refused'],
+    [/^You can't trade with enemy realm!$/, 'wrong_realm'],
+    [/^You are too far away to give anything to /, 'out_of_range'],
+    [/^You are still (trading with |selfcrafting)/, 'self_busy'],
+    [/^\S+ is still (trading with |selfcrafting)/, 'busy'],
+    [/^You can't trade this item!$/, 'refused'],
+];
+
+/** Lines of a commit that failed; the window stays open with both accepts reset (PlayerTradeWindow.cs:437-451, :521-527). */
+export const TRADE_COMMIT_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
+    [/^You don't have enough money\.$/, 'insufficient_funds'],
+    [/^\S+ doesn't have enough money\.$/, 'partner_insufficient_funds'],
+    [/^You don't have enough space in your inventory\.$/, 'inventory_full'],
+    [/^\S+ doesn't have enough space in his inventory\.$/, 'partner_inventory_full'],
+];
+
+/** PlayerTradeWindow.cs:676-677. It comes before the close, after the inventory changes. */
+export const TRADE_COMPLETED = /^Trade Completed\. \d+ items for \d+ items\.$/;
+
+export interface TradeLine {
+    reason: string;
+    text: string;
+}
+
+/** The first message on one of those tables, with its reason. */
+export function firstTradeLine(messages: readonly GameMessage[], table: ReadonlyArray<readonly [RegExp, string]>): TradeLine | null {
+    for (const m of messages) {
+        const hit = table.find(([pattern]) => pattern.test(m.text));
+        if (hit) return { reason: hit[1], text: m.text };
+    }
+    return null;
+}
+
 export const PICKUP_REFUSALS = [
     "that loot doesn't belong to you",
     'your backpack is full',
