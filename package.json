@@ -1,6 +1,7 @@
 {
   "name": "daoc-sdk",
   "private": true,
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "check": "bun run typecheck && bun run test",
