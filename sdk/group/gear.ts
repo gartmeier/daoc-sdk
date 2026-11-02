@@ -392,11 +392,10 @@ export const WEAPON_RESERVE = CLOAK_RESERVE;
 
 export interface WeaponOptions {
     /**
-     * Also take what the server says needs a higher level. Each capital's "Orbs" lists are plain
-     * GameMerchants selling level 51 gear for 10,000-20,000c, Level Requirement 45. The requirement
-     * only gates the item's proc (GameLiving.cs:853-855), so at level 20 such an axe still gives its
-     * Strength and Axe bonuses. Leaving these out is the default, so that a town visit doesn't
-     * hand endgame gear to a level 5 character; a bot that wants them says so.
+     * Also take what the server says needs a higher level. The requirement only gates the item's
+     * proc (GameLiving.cs:853-855), so at level 20 a level 51 axe still gives its Strength and Axe
+     * bonuses. Leaving these out is the default, so that a town visit doesn't hand endgame gear to
+     * a level 5 character; a bot that wants them says so.
      */
     overLevel?: boolean;
 }
@@ -427,7 +426,7 @@ function ceiling(i: Pick<MerchantItem, 'value1' | 'spdAbs' | 'hand'>, needs: Wea
 
 type WeaponActions = Pick<BotActions, 'equipItem' | 'buyItem' | 'closeMerchant' | 'walkTo' | 'delveItem' | 'delveMerchantItem' | 'openMerchant'>;
 /** A group member or party member (see GearMember) that can also shop and read its specs. */
-export type WeaponMember = { sdk: Pick<BotSDK, 'getEquipment' | 'getInventory' | 'getPlayer' | 'getSkills'> } & ({ actions: WeaponActions } | { bot: WeaponActions });
+export type WeaponMember = { sdk: Pick<BotSDK, 'getEquipment' | 'getInventory' | 'getPlayer' | 'getSkills' | 'getMerchant'> } & ({ actions: WeaponActions } | { bot: WeaponActions });
 
 const weaponActions = (m: WeaponMember) => ('actions' in m ? m.actions : m.bot);
 
@@ -562,6 +561,8 @@ export async function buyWeapons(m: WeaponMember, opts: WeaponOptions & { town?:
             }
             const shop = await act.openMerchant(s.name);
             if (!shop.success) { out.push(`${s.name}: ${shop.reason} ${shop.message}`); continue; }
+            // Only eMerchantWindowType.Normal (0) charges copper. The static data that chose this seller can be older than the server's.
+            if (m.sdk.getMerchant()?.windowType) { out.push(`${s.name}: doesn't take copper`); continue; }
             const budget = m.sdk.getPlayer()!.money.totalCopper - (opts.reserve ?? WEAPON_RESERVE);
             const fits = (i: MerchantItem) => weaponSlots(i, needs).find(to => handsOf(hand).includes(to));
             const goods = shop.items.filter(i => i.usable && i.price <= budget && fits(i) !== undefined && !foreignTo(realmId(p.realm), s.itemsListTemplateId!, i)).sort((a, b) => b.value1 - a.value1);

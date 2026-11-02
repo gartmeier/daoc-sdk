@@ -48,6 +48,8 @@ Accounts are created automatically on first login (`AUTO_ACCOUNT_CREATION=True` 
 
 `down -v` deletes the `db-data` volume. The next `up` re-imports the dump from scratch.
 
+The pinned dump still has the capitals' 13 Item Merchants charging copper for level 50-51 gear (learnings/merchants.md). The fix is commit `dc4ddaa` on branch `item-merchants-bounty-points` in `server/db`, which isn't published yet, so a re-import loses it. Check that branch out first, or apply this afterwards and restart the game server: `UPDATE mob SET ClassType='DOL.GS.GameBountyMerchant' WHERE Guild='Item Merchant' AND ClassType='DOL.GS.GameMerchant';`
+
 ## `server:setup` (scripts/setup-server.ts)
 
 The script waits for MariaDB, then checks each property key and value type against the `[ServerProperty]` attributes in `server/core/GameServer`. It updates rows, or inserts them if missing, and verifies the values with SQL. If anything changed, it restarts the **gameserver container only**, then waits until the server answers a real 0xF4 → 0x22 handshake. A plain TCP connect isn't enough, because Docker's port proxy accepts connections before the server is listening.

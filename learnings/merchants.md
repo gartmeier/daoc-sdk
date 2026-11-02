@@ -29,7 +29,7 @@ await bot.closeMerchant();
   - **A shop item has no worn slot.** For armour, join the static list: `getMerchantItems(...)` and `getItemTemplate(e.itemTemplateId).itemType`, as `groups/camelot/town.ts` does.
 - **Delve shows what the window can't:** bonuses, and the effective damage. A plain long sword reads "2.4 Base DPS", "2.4 Clamped DPS", "85% Quality", "Effective Damage: 2.0 DPS". 0xD8 type 4, object id `page * 30 + slot`, with the merchant targeted (DetailDisplayHandler.cs:311-318).
 - **Range:** the methods walk within 150 of the merchant (the server allows 256), and target and open the window first.
-- **Prices:** `price` is in copper for the whole purchase unit. 20 bolts cost 19c.
+- **Prices:** `price` is in copper for the whole purchase unit at an ordinary merchant. 20 bolts cost 19c. Some windows charge something else: see "A price isn't always copper" below.
 - **Sale price is 50 % of value** (`item_sell_ratio`). Bolts bought for 19c sold for 9c, and a looted staff or pair of cloth gloves sold for 1c each.
 - **Refusals** come back with `success: false`:
   - Zero-value items: "X isn't interested in the practice sword." The starting gear and the Personal Bind Recall Stone are worth nothing.
@@ -53,7 +53,11 @@ await bot.closeMerchant();
 - **`InventoryItem.hand`** comes straight from the server's item data, so backpack items are judged the same way as window items.
 - **`equipItem` refusals are immediate now:** "You have no skill in using this weapon type!", "You have no skill in wearing this armor type!" and "... can't go there!" give `refused`, not a 3 s `timeout`.
 
-**Level 51 gear for 15,000c:** each capital has "Item Merchants" (`OrbsMidgardWeapons`, `OrbsAlbionArmor`, ...: Midgard Weapons in Jordheim, 32435, 29214) that are plain `GameMerchant`s taking copper: 10,000-20,000c for level 50-51 items with Level Requirement 45. The server sells them at any level. The requirement only gates the proc (`GameLiving.cs:853-855`) and any use charge (`GamePlayer.cs:7045`), the DPS clamps as usual, and the bonuses work up to the level's caps: Dragonmight is Strength +24, Axe +4, Body and Heat 9 %. `buyWeapons` and `wearWeapons` leave anything with a Level Requirement above the character's level alone unless told `{ overLevel: true }`. Armour, jewellery and the other realms' lists are there too, and not looked at here.
+**A weapon above your level:** a Level Requirement only gates the proc (`GameLiving.cs:853-855`) and any use charge (`GamePlayer.cs:7045`). The DPS clamps as usual, and the bonuses work up to the level's caps. `buyWeapons` and `wearWeapons` leave anything with a Level Requirement above the character's level alone unless told `{ overLevel: true }`.
+
+**Item Merchants don't take copper:** each capital has NPCs with the guild `Item Merchant`, 13 in all (Midgard Weapons in Jordheim, 32435, 29214). Their `Orbs*` and `World*` lists hold level 36-51 gear at 10,000-20,000 and respec stones at 1,000-3,500. Those prices were Atlas Orbs, a currency upstream removed (db87083 turned the NPCs into plain `GameMerchant`s and left the prices), so until 2026-11-02 they took copper: 15,000c for Dragonmight, level 51, Strength +24, Axe +4, bought at level 20. Now they are `GameBountyMerchant`s and the same numbers are bounty points, which effectively closes them: every character has 0, battleground kills pay none, and a level 50 solo kill pays 31. Their rows are changed in the live DB and on `server/db` branch `item-merchants-bounty-points`, not in the pinned dump, so see docs/SERVER.md before a re-import.
+
+**A price isn't always copper:** `sdk.getMerchant().windowType` says what a window charges: 0 money, 1 bounty points, 2 an item. `buyWeapons` only shops at 0. `bot.buyItem` assumes copper at every window, so at a bounty merchant "You need 15000 BPs to buy this." comes back as `refused`, but with enough points and too little copper it wrongly says `insufficient_funds`, and a successful purchase waits 4 s and reports "for 0c" (read from the code; no character has points to try it). `formatMoney` and the viewer show these prices as money too.
 
 **Verified live (2026-11-02, Jordheim; numbers in `groups/midgard/lab_log.md` if you have that group):**
 

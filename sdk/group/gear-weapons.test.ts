@@ -151,12 +151,17 @@ describe('weaponSellers (real merchant data)', () => {
         expect(found.map(s => s.spawn.itemsListTemplateId).sort()).toEqual(['MidAxesClaws', 'MidLargeWeapons']);
     });
 
-    test("the capital's level 51 list is not on the way unless asked for", () => {
-        const near = { ...JORDHEIM, x: 32435, y: 29214 };
-        const needs = weaponNeeds(specs(WARRIOR))!;
-        expect(weaponSellers(near, needs, 1000).map(s => s.spawn.itemsListTemplateId)).toEqual([]);
-        expect(weaponSellers(near, needs, 1000, { overLevel: true }).map(s => s.spawn.itemsListTemplateId)).toEqual(['OrbsMidgardWeapons']);
-        expect(weaponSellers({ ...near, level: 45 }, needs, 1000).map(s => s.spawn.itemsListTemplateId)).toEqual(['OrbsMidgardWeapons']);
+    test("the capital's Item Merchants are not on the way, as a copper shop or a bounty one", () => {
+        expect(weaponSellers({ ...JORDHEIM, x: 32435, y: 29214 }, weaponNeeds(specs(WARRIOR))!, 1000)).toEqual([]);
+    });
+
+    test('a Level Requirement above ours is off the list unless asked for: big shillelagh, level 2, needs 27', () => {
+        const near = { regionId: 201, x: 28867, y: 29515, realm: 'hibernia' as const, level: 20 };
+        const needs = weaponNeeds(specs([['Large Weapons', 20], ['Shields', 5]]))!;
+        const sold = (p: typeof near, opts = {}) => weaponSellers(p, needs, 300, opts).flatMap(s => s.weapons.map(w => w.name));
+        expect(sold(near)).not.toContain('big shillelagh');
+        expect(sold(near, { overLevel: true })).toContain('big shillelagh');
+        expect(sold({ ...near, level: 27 })).toContain('big shillelagh');
     });
 
     test('nothing near, nothing found', () => {
@@ -203,6 +208,8 @@ interface Opts {
     bonus?: Record<string, string[]>;
     /** Item name → its Level Requirement. */
     required?: Record<string, number>;
+    /** Seller → its window type, for a shop that doesn't charge copper. */
+    windowTypes?: Record<string, number>;
     refuse?: RegExp;
     /** Where the player stands: Jordheim's market by default. */
     at?: { x: number; y: number };
@@ -224,6 +231,7 @@ function world(o: Opts = {}) {
     ];
     const answer = (lines: string[], name = '') => ({ success: true, message: 'ok', lines, levelRequirement: o.required?.[name] ?? null, bonuses: o.bonus && lines.some(l => /Strength/.test(l)) ? [{ category: 'stat', stat: 'STR', name: 'Strength', value: 7, unit: 'pts', text: '' }] : [], unknown: [], bonusLevel: null, item: null });
     const shops = o.shops ?? { Gymir: GYMIR, Saga: SAGA };
+    let opened = '';
     const actions = {
         delveItem: async (item: InventoryItem) => {
             f.delves.push(item.name);
@@ -236,6 +244,7 @@ function world(o: Opts = {}) {
         },
         openMerchant: async (name: string) => {
             f.calls.push(`open ${name}`);
+            opened = name;
             return { success: true, message: 'ok', merchant: { name }, items: shops[name] ?? [] };
         },
         buyItem: async (seller: string, at: { page: number; slot: number }) => {
@@ -272,6 +281,7 @@ function world(o: Opts = {}) {
         getInventory: () => f.inventory,
         getPlayer: () => player,
         getSkills: () => ({ specializations: specs(o.specs ?? WARRIOR) }),
+        getMerchant: () => ({ windowType: o.windowTypes?.[opened] ?? 0 }),
     };
     f.member = { sdk, actions } as unknown as WeaponMember;
     return f;
@@ -367,6 +377,16 @@ describe('buyWeapons', () => {
         expect((await buyWeapons(plain.member, jordheim))[0]).toStartWith('bought alloy double-bladed axe');
         const asked = world({ shops, required });
         expect((await buyWeapons(asked.member, { ...jordheim, overLevel: true }))[0]).toStartWith('bought Dragonmight');
+    });
+
+    test("a window that doesn't charge copper is left alone, whatever the static data said, and the next seller gets its turn", async () => {
+        const warrior = world({ windowTypes: { Gymir: 1 } });
+        expect(await buyWeapons(warrior.member, jordheim)).toEqual(["Gymir: doesn't take copper"]);
+        expect(warrior.delves).toEqual(['training axe']);
+        const skald = world({ specs: SKALD, className: 'Skald', windowTypes: { Gymir: 1 } });
+        const lines = await buyWeapons(skald.member, jordheim);
+        expect(lines[0]).toBe("Gymir: doesn't take copper");
+        expect(lines[1]).toStartWith('bought fine alloy large axe from Saga');
     });
 
     test('the server refuses the weapon: bought and said so, not worn', async () => {
