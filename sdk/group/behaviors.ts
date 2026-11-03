@@ -116,10 +116,23 @@ const CC_IMMUNE_MS = 60_000;
  * hostile spell (observeState), so a caster nuking `m` from 1500 targets it too; but players have no
  * aggro table, so running to the tank or a taunt doesn't take that one off. flee() drew casters into
  * the melee with every nuke on them. A monster targeting `m` by its spell alone is the same for flee(),
- * though a taunt does take it off: peelTarget counts it wherever it stands.
+ * though a taunt does take it off: see casterToPeel.
  */
 export function onMember(t: Contact, m: Point & { name: string }): boolean {
     return t.target === m.name && !t.cc && ((t.kind !== 'player' && !t.targetBySpell) || dist(t, m) <= MELEE_REACH);
+}
+
+/**
+ * A monster casting at a member from where it stands, worth the tank's walk: not mezzed, not while the focus is
+ * an enemy player (the orders ignore monsters while players are about, rvr.ts), and like an enemy player inside
+ * the leash and clear of a keep's guards. Nothing else stops the walk, since it won't come to us.
+ */
+function casterToPeel(ctx: MemberContext<TacticsSettings>, t: Contact): boolean {
+    if (t.kind !== 'npc' || !t.targetBySpell || t.cc || ctx.focus()?.kind === 'player') return false;
+    const leash = ctx.settings.chaseLeash;
+    const anchor = ctx.orders().anchor;
+    if (leash !== undefined && !!anchor && dist(t, anchor) > leash) return false;
+    return clearOf(t, keepCircles(ctx));
 }
 
 const alive = isAlive;
@@ -490,7 +503,7 @@ export function peelTarget(ctx: MemberContext<TacticsSettings>): Contact | null 
     const now = Date.now();
     const soft = new Map(ctx.members().filter(m => !m.isDead && m.role !== 'tank' && m.role !== 'melee').map(m => [m.name, m]));
     return ctx.threats()
-        .filter(t => t.objectId !== o.focus && !t.stale && alive(t) && t.target !== null && soft.has(t.target) && (onMember(t, soft.get(t.target)!) || (t.kind === 'npc' && t.targetBySpell && !t.cc)) && !beyondLeash(ctx, t))
+        .filter(t => t.objectId !== o.focus && !t.stale && alive(t) && t.target !== null && soft.has(t.target) && (onMember(t, soft.get(t.target)!) || casterToPeel(ctx, t)) && !beyondLeash(ctx, t))
         .filter(t => uncontrolled(ctx, t, now))
         .sort((a, b) => a.hostileSince - b.hostileSince)[0] ?? null;
 }

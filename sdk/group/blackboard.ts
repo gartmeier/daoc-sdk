@@ -152,6 +152,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     const sightings: Sighting[] = [];
     for (const n of state.nearbyNpcs) {
         const spell = spellAim.get(n.objectId);
+        const aimed = aim.get(n.objectId)?.targetId;
         if (n.distance2d > sightRadius) continue;
         if (n.healthPercent <= 0) { deaths.push(n.objectId); continue; }
         if (!isKillable(n, p)) continue;
@@ -163,6 +164,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
             // a mezz stops the cast under way and any new one (CrowdControlECSEffect.cs OnHardCCStart,
             // CastingComponent.cs CanCastSpell), a bolt shows at launch, and DoT ticks show nothing (DoTSpellHandler.cs).
             swinging: lastSwing.has(n.objectId) || (spell !== undefined && now - spell.at < SWING_WINDOW_MS),
+            aimedAtPlayer: aimed !== undefined && isPlayer.has(aimed) ? aimed : null,
         });
     }
     for (const o of state.nearbyPlayers) {
@@ -305,8 +307,9 @@ export class Blackboard {
             // Its spell names the target the server doesn't. Not while it is crowd-controlled: that spell is from
             // before, and it would hold a mezzed add as a threat for the whole aim window (behaviors.ts position()
             // counts on them dropping out). Not on a dead member either: nothing else would end it.
+            // In combat with no target it is running (the 65535 below), so it isn't standing to cast.
             const spellTarget = sighted.spellTargetId ?? null;
-            const bySpell = sighted.targetId === null && spellTarget !== null && !this.contacts.get(key)?.cc && !deadIds.has(spellTarget);
+            const bySpell = sighted.targetId === null && !sighted.inCombat && spellTarget !== null && !this.contacts.get(key)?.cc && !deadIds.has(spellTarget);
             const s = bySpell ? { ...sighted, targetId: spellTarget } : sighted;
             const dead = this.killed.get(key);
             let deathEchoUntil = 0;
@@ -350,7 +353,9 @@ export class Blackboard {
             if (onMember || targetedByUs.has(s.objectId)) c.engaged = true;
             // A player's swing or cast start on someone we can't name is hostile only near us: its
             // combat reaches every client within 6000, so far off it is two other realms' fight.
-            const fighting = s.swinging && (s.kind === 'npc' || nearUs(s));
+            // A monster's hit or spell on a player outside the group isn't our fight (pve.ts rejectPull: 'fighting someone else').
+            const onStranger = s.kind === 'npc' && s.aimedAtPlayer != null && !memberById.has(s.aimedAtPlayer);
+            const fighting = s.swinging && !onStranger && (s.kind === 'npc' || nearUs(s));
             if (onMember || fighting || attackedByUs.has(s.objectId) || hitByUs.has(s.objectId)) {
                 if (now - c.lastHostile > this.hostileMs) c.hostileSince = now;
                 c.lastHostile = now;

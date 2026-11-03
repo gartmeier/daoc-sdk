@@ -118,6 +118,8 @@ export interface Sighting {
     swinging: boolean;
     /** Monsters: whom its latest hostile spell effect landed on in the last few seconds. The server reports no target for a mob mid-cast. */
     spellTargetId?: number | null;
+    /** Monsters: the player its latest swing or hostile spell in the last few seconds was aimed at, if it was at a player. */
+    aimedAtPlayer?: number | null;
     /**
      * Players: it started a cast in the last few seconds (0x72 spell cast animation). The
      * server never sends an enemy player's target, so `targetId` for a player is inferred
