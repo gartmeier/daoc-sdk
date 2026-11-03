@@ -160,10 +160,11 @@ The game server is the source of truth and is well tested. When something fails,
 bots/<name>/      bot.env (credentials + character), script.ts, lab_log.md, character.ts (its routine in a group), runs/history.jsonl
 bots/examples/    grinder.ts, merchant-run.ts, gear-care.ts, caster.ts, explorer.ts, duo.ts (bun bots/examples/<x>.ts <bot>); script-args.ts
 groups/<group>/   group.json (members, roles), strategy.ts, hunt.ts, lab_log.md, runs/ (observer reports); create-group.ts, _template/
-learnings/        topic notes from live runs
+learnings/        topic notes from live runs; classes/<class>.md: builds, how to play it, what has been tested
 sdk/              BotSDK (index.ts), BotActions (actions.ts), runner.ts, cli.ts, chat.ts, API.md
+sdk/classes/      standard class kits (role, spec plans) a bot imports into its character.ts and tunes
 sdk/group/        group coordination: blackboard, member agents + behaviours, coordinator, pve strategy, observer, runner, cli
 client/           headless DAoC client (runner.ts, swarm.ts for many bots in one process)
-data/             static world data: findNpcSpawns, getMerchantItems, estimateZ, validateCharacter, ...
+data/             static world data: findNpcSpawns, getMerchantItems, estimateZ, validateCharacter, ...; bun data/class-sheet.ts <class> prints a class's spells and spec points
 docs/SERVER.md    server properties, GM commands, SQL access
 ```
