@@ -63,6 +63,8 @@ From `getStartupLocation` and `findNpcSpawns` (levels 0–1, realm 0, not peacef
 
 ## Class notes
 
+One class at a time: [classes/](classes/mentalist.md) has a guide for each class the RvR groups play, and `bun sdk/classes/reach.ts <class> "<build>"` says what a build reaches and which behaviour casts it. What follows is what the base classes share.
+
 - **Melee (Fighter, Viking, Naturalist):**
   - They start with weapon, shield and a full armour set equipped; `killNpc` works from the first second.
   - The Fighter has Crush/Slash/Thrust at 1, Sprint, and no styles until promotion.

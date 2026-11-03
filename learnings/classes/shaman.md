@@ -1,0 +1,66 @@
+# Shaman
+
+Midgard's second healer and spec buffer: Augmentation's stat buffs, Mending's heals, Subterranean's DoTs and roots. For every spell, level and cost on this server run `bun data/class-sheet.ts Shaman`; for what a build reaches and which behaviour casts it, `bun sdk/classes/reach.ts Shaman "Buffer healer"`. This file holds what those don't say.
+
+- **Verified:** measured live on this server.
+- **Server code:** read from the server source or data, or worked out by the same `Spellbook` a member fights with.
+- **Community, unverified:** other players' advice, written for other servers and patches.
+
+## The kit
+
+`sdk/classes/shaman.ts` is a healer that casts on the focus when it has nothing to heal:
+
+```typescript
+import { shaman } from '../../sdk/classes/shaman';
+export default shaman();
+```
+
+- **Why:** the healer's list has no `assist`, so a Shaman deals nothing. Midgard's strategy gives Ulfgar one in PvE (`memberBehaviors`), with `holdMs` 2.5 s beside Hrafna's: 18 runs measured the hold, with no caster targeted ([spiritmaster.md](spiritmaster.md)). Its RvR strategy has no such entry: Ulfgar dealt 0 damage in 46 minutes, with "nothing to do" as his idle reason 362 times.
+- **Not played in RvR.** Ulfgar has no `character.ts`, and this kit changes nothing until he does. Heals stay above it in the list. Compare his damage and the group's deaths.
+
+## Builds
+
+`bots/<bot>/build.ts` starts as a copy from `data/builds/shaman.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
+
+| Character level | Points | Buffer healer: Subterranean / Mending / Augmentation | Augmentation buffer: Subterranean / Augmentation / Mending | Cave nuker: Mending / Subterranean / Augmentation |
+|---|---|---|---|---|
+| 10 | 54 | 1 / 1 / 10 | 1 / 10 / 1 | 1 / 9 / 4 |
+| 20 | 209 | 1 / 6 / 19 | 1 / 20 / 1 | 1 / 19 / 4 |
+| 24 | 299 | 3 / 14 / 19 | 4 / 22 / 8 | 1 / 20 / 13 |
+| 30 | 464 | 18 / 14 / 19 | 18 / 22 / 8 | 7 / 25 / 13 |
+| 40 | 819 | 27 / 22 / 19 | 27 / 28 / 8 | 7 / 37 / 13 |
+| 50 | 1494 | 27 / 28 / 37 | 27 / 46 / 8 | 7 / 41 / 34 |
+
+Ulfgar plays Buffer healer. **Community, unverified:** Uthgard calls Augmentation buffer "pretty standard"; Blackthorn lists Buffer healer's shape first. The Cave nuker needs a `nuker` role, which this kit doesn't set.
+
+**The line is `Subterranean`.** Items and guides call it Cave Magic. `train` once dropped that name without a word, and Ulfgar's Subterranean stayed at 1 ([builds.md](../builds.md)).
+
+## Buffer healer at 24 in Thidranki
+
+**Server code,** Augmentation 19, Mending 14, Subterranean 3:
+
+- **Buffs:** the group's spec buffs are his: Might of the Deep (Str/Con 37, 13 concentration) and Murk's Guide (Dex/Qui 31), Sight of the Deep for Hrafna, and the damage add and shield on the melee. 19 buffs for 138 of about 210 concentration. Sigrid, listed before him, holds the base buffs ([healer.md](healer.md)).
+- **Might of the Deep is why it's Augmentation 19:** at 18 he'd have a lower rank. Augmentation 22 (Wisdom of the Deep, Earth Invigoration) is the other build.
+- **Heals:** cheapest that covers, up to Major Recovery (136, 3.2 s, 24 power). No instant.
+- **Crowd control:** a root, Holding Creepers (2.5 s, range 1500, 43 s), baseline.
+- **Rez:** Arrival from Valhalla, 10 % health. Reception from Valhalla, 30 %, is Mending 15, one level on and 15 points; he has 1 left and Augmentation 18 would lose Might of the Deep. So Sigrid should do the rezzing when she can, and nothing makes her.
+- **Damage, with the kit:** Fungal Erosion (DoT, 35 every 4 s for 24 s, range 1500, 3 s cast, 12 power), then Fungal Pin (a bolt of 7, 20 s between uses). That DoT is 210 for 12 power against Hrafna's 90 for 14, though at Subterranean 3 its minimum is low ([mentalist.md](mentalist.md)).
+- **Reached, and no behaviour casts it:** Infectious Spores (disease), Fungal Mud, the group heal Group Reparation, the cures, Lesser Earth Invigoration (an endurance buff, which shares the `regen` slot with Frigg's Medicant, so only one of them is kept up).
+
+## What the reports show
+
+**Verified,** six Midgard RvR rounds at level 24, 46 minutes, to 2026-11-03 21:42:
+
+| Deaths | Crowd control | Heals | `heal:crowd_controlled` | `heal:interrupted` | Targeted | In melee | Idle in fights |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 6 | 47 | 38 | 34 | 30 | 24 % | 14 % | 23 % |
+
+- 64 of his heals failed against 38 that landed, where Sigrid's were 31 against 36. He stands on the same `combatRange`.
+- `rez: Thorgrim out of reach` came 21 times.
+
+
+## Not supported yet
+
+- **Disease:** Infectious Spores and at Subterranean 27 Mold Cloud, the instant area disease every level 50 spec stops for (**community, unverified**). Nothing casts a debuff that isn't damage.
+- **Group heals** and **cures,** as for the Healer ([healer.md](healer.md)).
+- **Who rezzes:** `rez` runs in every list and the first to act does it, whatever it restores.
