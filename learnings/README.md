@@ -19,7 +19,7 @@ Notes from live runs against the local OpenDAoC server. Each topic file says wha
 | [group-coordination.md](group-coordination.md) | groups of bots: shared picture, coordinator, role behaviours, strategies, observer reports |
 | [rvr.md](rvr.md) | battlegrounds: getting in and out, PvP rules, killPlayer, the rvr-roam strategy, three groups fighting each other |
 | [classes-and-races.md](classes-and-races.md) | what can be created, start points per class |
-| [classes/](classes/mentalist.md) | one class at a time: role, spec builds, how to play it, what's been tested (so far the Mentalist). `bun data/class-sheet.ts <class>` gives the facts for any class |
+| [classes/](classes/mentalist.md) | one class at a time: role, spec builds, how to play it, what's been tested (so far the Mentalist and the Enchanter). `bun data/class-sheet.ts <class>` gives the facts for any class |
 | [regions-and-zones.md](regions-and-zones.md) | coordinates, regions, zones, teleporters, zone points, static data |
 
 ## Two environments

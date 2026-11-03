@@ -29,6 +29,8 @@ export interface SpellPick {
     damage: number;
     /** Shared by every rank of one spell (Illusory Ache..Anguish are all 4611); 0 when the DB has none. */
     spellGroup: number;
+    /** eDamageType (13 heat). A resist debuff's names the resist it lowers. */
+    damageType: number;
     /** Server stacking keys: DoTs conflict by effect group, else (same type) by tick frequency. */
     effectGroup: number;
     frequency: number;
@@ -72,7 +74,7 @@ export function slotOf(type: string): BuffSlot | null {
 export function toPick(spell: Spell, info: SpellInfo): SpellPick {
     return {
         spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, recast: info.recastDelay ?? 0, concentration: info.concentration,
-        pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0, value: info.value ?? 0, damage: info.damage ?? 0, spellGroup: info.spellGroup ?? 0,
+        pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0, value: info.value ?? 0, damage: info.damage ?? 0, spellGroup: info.spellGroup ?? 0, damageType: info.damageType ?? 0,
         effectGroup: info.effectGroup ?? 0, frequency: info.frequency ?? 0,
     };
 }
