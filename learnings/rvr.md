@@ -154,3 +154,35 @@ Two groups of five in Thidranki, starter gear, 5 minutes each, counted by each b
 - **Pets** (Theurgist, Spiritmaster, Enchanter, Druid): no SDK pet commands; a pet's owner shares its realm, so enemy pets aren't board contacts.
 - **Stealth:** none of the 15 bots stealths; a stealthed enemy appears only within detection range.
 - **Keep ownership:** Thidranki Faste is Albion's in the dump. If someone takes it, set `keepOwners` (the strategy doesn't watch the lord).
+
+## The wolf pack (`sdk/group/pack.ts`, `rvrPack`)
+
+Hit and run for one group, as an alternative to `rvr-roam`: `defineStrategy(rvrPack, { name: '<group>-pack' })`. Live on 2026-11-03 for Hibernia against Midgard and Camelot on roaming, with the user watching and correcting.
+
+**The cycle:** walk at the nearest enemy, Bard in front; at 1450 open a raid: Hero on the nearest (anchor on the focus, leash 800), casters on the same target from where they stand, area mezz on the biggest cluster without the focus, single mezz on the rest. 8 s, or 3 enemies on the casters: run 1500 (sprint), turn, kill whatever is near for up to 12 s, run again. Enemies in sight of at most 2, and us two more: hunt them, no raid clock. Rest only when the healer or Bard is low, two nukers are, or someone is badly hurt, and stick to it until `ready`; rest where it stands, moving off first if enemies are within 2500.
+
+**Nobody walks alone:** a released member waits in the keep (`waiting: pickup`, `holdFormation` holds it) and the pack comes for it; fewer than 3 alive: everyone goes home; then a rebuff before it starts over. A rez only in `recover`, from within 2000 of the corpse.
+
+**Bard:** interrupts (`interrupt()`): Minor Lullaby, instant, range 2300, 5 s, clears the target's cast (`AmnesiaSpellHandler.cs:50-51`); Concussive Yell, instant, range 700. Then crowd control, heals only as a backup (`backupHealWanted`: the healer dead or attacked, two members low, or one out of its reach), then a confusion on a known healer or caster: range 1350, 3.5 s, interrupts even when resisted.
+
+**Focus:** the nearest, a known caster first, a known healer only when nothing else is in reach. Round 9 spent over 5 minutes on one Troll healer whose health kept coming back. Healers get the mezz.
+
+**What wakes a mezzed enemy** (`GameLiving.cs:1716-1727`): any damage, any melee swing even a miss, and non-damaging roots, stuns, confusions, amnesia, disease, nearsight and resist debuffs. Another mezz doesn't. So nothing but a mezz goes on a mezzed target, area Lullabies stay out, and a root keeps 350 from where the Bard's mezz can land. A resisted spell other than a mezz wakes it too (`:1729`).
+
+**A speed song doesn't take on anyone in combat in the last 10 s** (`SpeedEnhancementSpellHandler.cs:69`): the first stretch of a run is sprint alone.
+
+**Spec and damage:** a spell's lowest roll depends on the spec of its line (`SpellHandler.CalculateLowerVarianceBound`): Light 1 at target level 24 rolls 21-100 %, Light 22 91-100 %. Round 9's Mana Enchanter averaged 58 a nuke with Sun Streak (88), and Niamh picked Sun Streak (level 24) over Glittering Visions (102, level 22) by level; `strongestNuke` picks by damage.
+
+| Round | Length | Strategy | Kills / deaths | RP | Spread | Change before it |
+|---|---|---|---|---|---|---|
+| c1 | 11 min | roaming | 10 / 4 | 82 | | control |
+| s4 | 6 min | pack | 12 / 0 | 110 | 261 | head on, broken only below 3 alive, anchor on the focus |
+| s5 | 9 min | pack | 8 / 0 | 38 | 352 | wound down early: it flipped between hunting and walking off |
+| s6 | 10 min | pack | 13 / 0 | 145 | 287 | commits to resting until ready |
+| s7 | 10 min | pack | 13 / 0 | 55 | 288 | one low nuker doesn't make five rest |
+| s8 | 10 min | pack | 17 / 0 | 160 | 366 | same |
+| c2 | 11 min | roaming | 10 / 6 | 24 | | control |
+
+Pack 63 kills, 0 deaths in 45 minutes; roaming 20 kills, 10 deaths in 22, on the same characters against the same groups: well beyond these groups' round-to-round noise, but Midgard and Camelot were restarted during s4 and they don't adapt. Realm points per kill vary a lot (who else hit it).
+
+**Not done:** Oisin's mezz cure (Clarifying Harmonies): a member's report doesn't say it's mezzed. The Hero's post-block stuns. A member rezzed in the field isn't told apart from a released one for the rebuff.
