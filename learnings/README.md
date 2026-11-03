@@ -8,7 +8,7 @@ Notes from live runs against the local OpenDAoC server. Each topic file says wha
 | [combat.md](combat.md) | finding targets, con colours, killNpc, grind, styles |
 | [spells.md](spells.md) | castSpell, buffs, interrupts, caster tactics |
 | [npc-dialog.md](npc-dialog.md) | talkTo, [keywords], whisper, trainers, promotion, teleporters |
-| [merchants.md](merchants.md) | open, buy, sell, merchant data offline |
+| [merchants.md](merchants.md) | open, buy, sell, better weapons, merchant data offline |
 | [looting.md](looting.md) | autoloot, lootNearby, inventory deltas, cloaks and jewellery, delve and gear scoring per class |
 | [gear-care.md](gear-care.md) | what wears and how fast by level, repairs at a smith, the vault, the level limit on gear |
 | [trading.md](trading.md) | trade, offerTrade, acceptTrade: range, stacks, 10 per side, who accepts, what resets an accept, failure reasons (not yet verified live) |

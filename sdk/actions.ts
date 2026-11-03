@@ -108,6 +108,8 @@ const GENERAL_VAULT_SLOT = 601;
 const VAULT_SLOTS = 40;
 /** eInventorySlot.PlayerPaperDoll: the server picks the item's own equipment slot (PlayerMoveItemRequestHandler.cs:28). */
 const PAPER_DOLL_SLOT = 100;
+/** What the server says when a slot won't take an item (GamePlayerInventory.cs CheckItemSlotRestriction). */
+const MOVE_REFUSALS = [/you can't|you cannot|you are not|you must|can't go there|you have no skill/i];
 /** Server dialog code for a group invite (PacketLib168.SendGroupInviteCommand). */
 const GROUP_INVITE_DIALOG = 0x05;
 /** Bound on one route plan when walkTo has no explicit timeout (its deadline follows the plan). */
@@ -2975,10 +2977,10 @@ export class BotActions {
         try {
             const r = await this.sdk.sendMoveItem(item.slot, toSlot);
             if (!r.success) return { ...r, item, messages: [] };
-            const got = await this.helpers.waitFor(s => done(s) ? 'ok' : watch.find([/you can't|you cannot|you are not|you must/i]) ? 'refused' : null, 3000);
+            const got = await this.helpers.waitFor(s => done(s) ? 'ok' : watch.find(MOVE_REFUSALS) ? 'refused' : null, 3000);
             const messages = watch.messages().slice();
             if (got === 'ok') return { success: true, message: okMessage, item, messages };
-            return { ...fail(got === 'refused' ? watch.findText([/you can't|you cannot|you are not|you must/i])! : `No change observed for ${item.name}`, got === 'refused' ? 'refused' : 'timeout', {}), item, messages };
+            return { ...fail(got === 'refused' ? watch.findText(MOVE_REFUSALS)! : `No change observed for ${item.name}`, got === 'refused' ? 'refused' : 'timeout', {}), item, messages };
         } finally {
             watch.dispose();
         }

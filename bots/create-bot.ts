@@ -11,7 +11,7 @@ import { cp, readFile, readdir, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomInt } from 'crypto';
 import { join } from 'path';
-import { getClass, getPlayableRacesForClass, getStarterArmour, getStartingClasses, realmName, validateCharacter } from '../data/index';
+import { classAfterCreation, getClass, getPlayableRacesForClass, getStarterArmour, getStartingClasses, realmName, validateCharacter } from '../data/index';
 import { defaultCharName } from '../client/client';
 import { parseEnvFile } from '../sdk/index';
 
@@ -19,9 +19,8 @@ type RealmName = 'albion' | 'midgard' | 'hibernia';
 
 const REALMS: RealmName[] = ['albion', 'midgard', 'hibernia'];
 // Melee base classes that start with weapon, shield and a full armour set.
-// Not Guardian: its starter armour rows name leaf_tacuil_* templates that are
-// missing from itemtemplate, so the server skips them (StartupEquipment.cs:82-86)
-// and a Guardian starts with sword and shield only (see getStarterArmour).
+// Not Guardian: on a DB seeded before our fork's starterequipment fix (docs/SERVER.md)
+// it starts with sword and shield only (learnings/classes-and-races.md).
 export const DEFAULTS: Record<RealmName, { class: string; race: string }> = {
     albion: { class: 'Fighter', race: 'Briton' },
     midgard: { class: 'Viking', race: 'Norseman' },
@@ -76,13 +75,12 @@ function listClasses(): never {
 }
 
 /**
- * Why a class starts unarmoured, or null. The server hands out the starter gear
- * of the class sent at creation (StartupEquipment.cs:125), so with
- * start_as_base_class on an advanced class gets its base class's gear.
+ * Why a class starts unarmoured, or null. With start_as_base_class on, the class
+ * is already reverted when the server hands out the starter gear
+ * (StartupEquipment.cs:125), so an advanced class gets its base class's gear.
  */
 export function starterArmourWarning(classId: number): string | null {
-    const cls = getClass(classId);
-    const startAs = cls && (cls.isBaseClass ? cls : getClass(cls.baseClassId) ?? cls);
+    const startAs = getClass(classAfterCreation(classId));
     if (!startAs) return null;
     const { armour, missing } = getStarterArmour(startAs.id);
     if (armour.length) return null;

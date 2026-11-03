@@ -1278,6 +1278,23 @@ describe('items', () => {
         expect(r.reason).toBe('timeout');
     });
 
+    test.each([
+        ['You have no skill in using this weapon type!'],
+        ['You have no skill in wearing this armor type!'],
+        ["The great axe can't go there!"],
+    ])('a slot refusal comes back at once: %s', async text => {
+        const { w, bot } = world();
+        const axe = { ...w.state.inventory[0]!, slot: 45, name: 'great axe' };
+        w.state.inventory = [...w.state.inventory, axe];
+        w.publish();
+        w.handlers.moveItem = (_a, world) => { world.message(text); };
+        const started = Date.now();
+        const r = await bot.equipItem(axe, { slot: 10 });
+        expect(r.reason).toBe('refused');
+        expect(r.message).toBe(text);
+        expect(Date.now() - started).toBeLessThan(2500);
+    });
+
     test('drop, destroy and use', async () => {
         const { w, bot } = world();
         const remove = (a: BotAction, world: FakeWorld) => {
@@ -1501,7 +1518,7 @@ describe('merchants', () => {
 
 describe('smiths', () => {
     const smith = makeNpc({ objectId: 210, name: 'Judan Hammerfel', guildName: 'Smith', role: 'smith', realm: 'albion', isPeaceful: true, x: 560050, y: 511000 });
-    const worn: InventoryItem = { slot: 10, name: 'long sword', level: 5, count: 1, model: 3, objectType: 3, condition: 88, durability: 100, quality: 90, weight: 30, value1: 27, value2: 30 };
+    const worn: InventoryItem = { slot: 10, name: 'long sword', level: 5, count: 1, model: 3, objectType: 3, hand: 0, condition: 88, durability: 100, quality: 90, weight: 30, value1: 27, value2: 30 };
     const box = (text: string) => ({ isOpen: true, code: 6, data: [5, 1, 0, 0] as [number, number, number, number], type: 1, text, receivedAt: Date.now() });
 
     /** A smith that asks `price` for what it's given, and on a yes takes the money and restores the item. */
@@ -1620,7 +1637,7 @@ describe('smiths', () => {
 
 describe('the vault', () => {
     const keeper = makeNpc({ objectId: 211, name: 'Lord Urqhart', guildName: 'Vault Keeper', role: 'vault', realm: 'albion', isPeaceful: true, x: 560050, y: 511000 });
-    const axe: InventoryItem = { slot: 40, name: 'Dragonmight', level: 51, count: 1, model: 3, objectType: 17, condition: 100, durability: 100, quality: 100, weight: 30, value1: 165, value2: 37 };
+    const axe: InventoryItem = { slot: 40, name: 'Dragonmight', level: 51, count: 1, model: 3, objectType: 17, hand: 0, condition: 100, durability: 100, quality: 100, weight: 30, value1: 165, value2: 37 };
 
     /** A keeper that opens the window, and moves that go where the server would put them. */
     function atKeeper(overrides: Partial<BotWorldState> = {}) {
@@ -2132,7 +2149,7 @@ describe('static data', () => {
 // ── Player trade: two bots and the server between them ──────────────────────
 
 const tradeItem = (slot: number, name: string, count = 1): InventoryItem =>
-    ({ slot, name, level: 1, count, model: 99, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 5, value1: 0, value2: 0 });
+    ({ slot, name, level: 1, count, model: 99, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 5, value1: 0, value2: 0, hand: 0 });
 
 /**
  * Plays the server over two FakeWorlds: the first add opens both windows, every change is a 0xEA on both

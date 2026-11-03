@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-    defaultStats, estimateZ, findItemTemplates, findNpcSpawns, getClass, getClasses, getItemTemplate, getMerchantItems,
+    classAfterCreation, defaultStats, estimateZ, findItemTemplates, findNpcSpawns, getClass, getClasses, getItemTemplate, getMerchantItems,
     getNpcSpawns, getPlayableRacesForClass, getRace, getRacesForClass, getSpell, getSpellLine, getStartingClasses, getStartupLocation,
     getStarterArmour, getStarterEquipment, getStylesFor, getZoneAt, getZonePoint, getZonePointsFrom, nearestBindpoint, realmId, statPointCost, toStats, validateCharacter,
 } from './index';
@@ -119,9 +119,31 @@ describe('bind points, zone points, startup', () => {
         expect(getZonePoint(999_999, 'midgard')).toBeUndefined();
     });
 
-    test('startup location for Briton Armsman is Camelot Hills', () => {
-        const s = getStartupLocation({ realm: 'albion', raceId: 1, classId: 2 });
-        expect(s).toMatchObject({ regionId: 1, x: 574123, y: 530520, z: 2933, heading: 3077 });
+    test('startup location: a base class starts on its own row', () => {
+        expect(getStartupLocation({ realm: 'albion', raceId: 1, classId: 18 })).toMatchObject({ classId: 18, regionId: 1, x: 559975, y: 513748, z: 2619 });
+        expect(getStartupLocation({ realm: 'albion', raceId: 1, classId: 14 })).toMatchObject({ classId: 14, regionId: 1, x: 574797, y: 530161, z: 2896 });
+    });
+
+    // Every spawn below was seen on a real character.
+    test('startup location: an advanced class starts on its base class\'s row', () => {
+        expect(getStartupLocation({ realm: 'albion', raceId: 1, classId: 8 })).toMatchObject({ classId: 18, regionId: 1, x: 559975, y: 513748, z: 2619 }); // Briton Sorcerer → Mage
+        expect(getStartupLocation({ realm: 'albion', raceId: 13, classId: 12 })).toMatchObject({ classId: 20, regionId: 51, x: 532903, y: 549729 }); // Inconnu Necromancer → Disciple
+        expect(getStartupLocation({ realm: 'midgard', raceId: 6, classId: 22 })).toMatchObject({ classId: 35, regionId: 100, x: 797625, y: 893738 }); // Troll Warrior → Viking
+        expect(getStartupLocation({ realm: 'hibernia', raceId: 11, classId: 40 })).toMatchObject({ classId: 51, regionId: 200, x: 346073, y: 490855 }); // Elf Eldritch → Magician
+    });
+
+    test('startup location: with start_as_base_class off, a class keeps its own row', () => {
+        expect(getStartupLocation({ realm: 'albion', raceId: 1, classId: 8, startAsBaseClass: false })).toMatchObject({ classId: 8, regionId: 1, x: 472952, y: 628137 });
+        expect(getStartupLocation({ realm: 'albion', raceId: 4, classId: 12, startAsBaseClass: false })).toMatchObject({ classId: 12, regionId: 51, x: 532950, y: 549779 });
+        expect(getStartupLocation({ realm: 'albion', raceId: 1, classId: 18, startAsBaseClass: false })).toMatchObject({ classId: 18, x: 559975, y: 513748 });
+    });
+
+    test('startup location: the pairs without a row', () => {
+        expect(getStartupLocation({ realm: 'albion', raceId: 4, classId: 12 })).toBeUndefined(); // Saracen Necromancer → Disciple
+        expect(getStartupLocation({ realm: 'albion', raceId: 4, classId: 20 })).toBeUndefined(); // Saracen Disciple
+        expect(getStartupLocation({ realm: 'albion', raceId: 13, classId: 16 })).toBeUndefined(); // Inconnu Acolyte
+        expect(getStartupLocation({ realm: 'albion', raceId: 4, classId: 20, startAsBaseClass: false })).toBeUndefined();
+        expect(getStartupLocation({ realm: 'albion', raceId: 13, classId: 16, startAsBaseClass: false })).toBeUndefined();
     });
 });
 
@@ -168,22 +190,46 @@ describe('classes and races', () => {
         expect(validateCharacter({ realm: 'none', class: 'Fighter', race: 'Briton' }).valid).toBe(false);
     });
 
-    test('startup location: every creatable pair but two has one', () => {
-        const missing: string[] = [];
-        for (const c of getClasses().filter(x => x.creatable)) {
-            for (const r of c.creatableRaceIds) {
-                const v = validateCharacter({ realm: c.realm, class: c.id, race: r });
-                if (v.warnings.length) missing.push(`${c.key}/${v.raceInfo!.name}`);
+    test('classAfterCreation: an advanced class reverts to its base class unless start_as_base_class is off', () => {
+        expect(classAfterCreation(8)).toBe(18);
+        expect(classAfterCreation(18)).toBe(18);
+        expect(classAfterCreation(8, false)).toBe(8);
+        expect(classAfterCreation(999)).toBe(999);
+        for (const c of getClasses()) if (c.isBaseClass) expect(classAfterCreation(c.id)).toBe(c.id);
+    });
+
+    test('startup location: every creatable pair but three has one', () => {
+        const missing = (startAsBaseClass?: boolean) => {
+            const out: string[] = [];
+            for (const c of getClasses().filter(x => x.creatable)) {
+                for (const r of c.creatableRaceIds) {
+                    const v = validateCharacter({ realm: c.realm, class: c.id, race: r, startAsBaseClass });
+                    if (v.warnings.length) out.push(`${c.key}/${v.raceInfo!.name}`);
+                }
             }
-        }
-        expect(missing.sort()).toEqual(['Acolyte/Inconnu', 'Disciple/Saracen']);
+            return out.sort();
+        };
+        expect(missing()).toEqual(['Acolyte/Inconnu', 'Disciple/Saracen', 'Necromancer/Saracen']);
+        expect(missing(false)).toEqual(['Acolyte/Inconnu', 'Disciple/Saracen']);
         expect(validateCharacter({ realm: 'albion', class: 'Armsman', race: 'Briton' }).warnings).toEqual([]);
+    });
+
+    test('a refused pair is still server-valid, and its warning names the class the server looks up', () => {
+        const necro = validateCharacter({ realm: 'albion', class: 'Necromancer', race: 'Saracen' });
+        expect(necro.valid).toBe(true);
+        expect(necro.warnings[0]).toContain('Saracen Disciple (a Necromancer starts as one)');
+        const disciple = validateCharacter({ realm: 'albion', class: 'Disciple', race: 'Saracen' });
+        expect(disciple.valid).toBe(true);
+        expect(disciple.warnings[0]).toContain('no startuplocation row for Saracen Disciple:');
     });
 
     test('getPlayableRacesForClass drops the pairs without a startup location', () => {
         expect(getRacesForClass('Acolyte', 'albion').map(r => r.name)).toContain('Inconnu');
         expect(getPlayableRacesForClass('Acolyte', 'albion').map(r => r.name)).toEqual(['Briton', 'Avalonian', 'Highlander']);
         expect(getPlayableRacesForClass('Disciple', 'albion').map(r => r.name)).toEqual(['Briton', 'Inconnu']);
+        expect(getRacesForClass('Necromancer', 'albion').map(r => r.name)).toContain('Saracen');
+        expect(getPlayableRacesForClass('Necromancer', 'albion').map(r => r.name)).toEqual(['Briton', 'Inconnu']);
+        expect(getPlayableRacesForClass('Necromancer', 'albion', false).map(r => r.name)).toEqual(['Briton', 'Saracen', 'Inconnu']);
         expect(getPlayableRacesForClass('Fighter', 'albion').map(r => r.name)).toEqual(getRacesForClass('Fighter', 'albion').map(r => r.name));
         expect(getPlayableRacesForClass('Nope')).toEqual([]);
     });
@@ -233,19 +279,25 @@ describe('classes and races', () => {
 });
 
 describe('starter equipment', () => {
-    test('melee base classes start armoured, except Guardian whose templates are missing', () => {
-        // starterequipment rows 8/107-112 (Fighter), 64-93 (Viking), 43-90 (Naturalist): all templates exist.
-        for (const [cls, realm] of [['Fighter', 'albion'], ['Viking', 'midgard'], ['Naturalist', 'hibernia']] as const) {
+    test('melee base classes start armoured', () => {
+        // starterequipment rows 8/107-112 (Fighter), 64-93 (Viking), 43-90 (Naturalist), 13-109 (Guardian): all templates exist.
+        for (const [cls, realm] of [['Fighter', 'albion'], ['Viking', 'midgard'], ['Naturalist', 'hibernia'], ['Guardian', 'hibernia']] as const) {
             const { armour } = getStarterArmour(cls, realm);
             expect(armour.map(a => a.itemType).sort(), cls).toEqual([21, 22, 23, 25, 27, 28]);
         }
-        // Rows 13, 14, 76, 77, 78, 109 ('52;44;43;45;') name leaf_tacuil_* but only leaf_tacuil_*3 exist,
-        // so the server skips them (StartupEquipment.cs:82-86): a Guardian gets sword and shield only.
-        const guardian = getStarterArmour('Guardian', 'hibernia');
-        expect(guardian.armour).toEqual([]);
-        expect(guardian.missing).toEqual(expect.arrayContaining(['leaf_tacuil_vest', 'leaf_tacuil_helm', 'leaf_tacuil_boots']));
         expect(getStarterEquipment('Guardian', 'hibernia').filter(s => s.item).map(s => s.templateId))
             .toEqual(expect.arrayContaining(['training_sword_hib', 'training_shield']));
+    });
+
+    test('Guardian and the classes that start as Guardian get one set each', () => {
+        // Rows 13, 14, 76, 77, 78, 109 are class 52 only and rows 125-130 are 43;44;45, so that no class is in both:
+        // with start_as_base_class off, that would put a second set in the backpack.
+        for (const cls of ['Guardian', 'Blademaster', 'Hero', 'Champion']) {
+            const { armour, missing } = getStarterArmour(cls, 'hibernia');
+            expect(armour.map(a => a.itemType).sort(), cls).toEqual([21, 22, 23, 25, 27, 28]);
+            expect(armour.every(a => a.name.startsWith('leaf tacuil')), cls).toBe(true);
+            expect(missing.filter(t => t.startsWith('leaf_tacuil')), cls).toEqual([]);
+        }
     });
 
     test('class-0 rows apply only to classes with rows of their own', () => {

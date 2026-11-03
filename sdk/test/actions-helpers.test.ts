@@ -8,7 +8,7 @@ import type { GameMessage, InventoryItem } from '../types';
 import { makeMessage, makeNpc, makePlayer, makeState } from './fixtures';
 
 const item = (slot: number, name: string, count = 1): InventoryItem => ({
-    slot, name, count, level: 1, model: 1, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 1, value1: 0, value2: 0,
+    slot, name, count, level: 1, model: 1, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 1, value1: 0, value2: 0, hand: 0,
 });
 
 describe('parseMoneyText', () => {

@@ -8,7 +8,7 @@ import { upgradeGains, GearDelves, type GearMember } from './gear';
 import { careDue, classCouldUse, keepForLater, nearestSmith, nearestVaultKeeper, needsRepair, repairGear, stashInVault, takeFromVault, vaultDue, type CareMember } from './gear-care';
 
 const item = (slot: number, name: string, over: Partial<InventoryItem> = {}): InventoryItem => ({
-    slot, name, level: 20, count: 1, model: 1, objectType: 35, condition: 100, durability: 100, quality: 90, weight: 10, value1: 40, value2: 27, ...over,
+    slot, name, level: 20, count: 1, model: 1, objectType: 35, condition: 100, durability: 100, quality: 90, weight: 10, value1: 40, value2: 27, hand: 0, ...over,
 });
 
 describe('how fast gear wears', () => {

@@ -1137,6 +1137,6 @@ function toInventoryItem(slot: number, d: ItemData): InventoryItem {
     return {
         slot, name: d.name, level: d.level, count: d.count, model: d.model, objectType: d.objectType,
         condition: d.condition, durability: d.durability, quality: d.quality, weight: d.weight,
-        value1: d.value1, value2: d.value2,
+        value1: d.value1, value2: d.value2, hand: d.hand,
     };
 }

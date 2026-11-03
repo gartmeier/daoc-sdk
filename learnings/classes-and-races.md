@@ -14,12 +14,13 @@ bun bots/create-bot.ts mymage --class=Mage                       # realm inferre
 - **`start_as_base_class` is on,** so advanced classes start as their base class:
   - In Albion: Armsman, Paladin, Mercenary and Reaver → Fighter; Wizard and Theurgist → Elementalist; Sorcerer and Cabalist → Mage; Cleric and Friar → Acolyte; Scout, Minstrel and Infiltrator → Rogue; Necromancer → Disciple.
   - `getClass(name, realm).baseClassName` gives the base class for any realm.
-  - Pick the base class directly unless you want the advanced class's start point and stats.
+  - An advanced class gets its base class's start point and gear. Only its starting stats (`defaultStats`) are its own, so pick the base class directly unless you want those.
   - Promotion at level 5 is verified for Fighter → Armsman: see [npc-dialog.md](npc-dialog.md#promotion). Base classes have no styles until then ([combat.md](combat.md)).
 - **Not creatable on this server:**
   - Classes: Valkyrie and Bainshee (no eligible races), and Heretic, Warlock, Vampiir and the Maulers (not starting classes).
   - Races: Half Ogre, Frostalf, Shar and the Minotaurs.
-  - Inconnu Acolyte and Saracen Disciple pass the server's checks but have no start location (they would spawn at 0,0,0). create-bot refuses them, and `--list` leaves them out (`getPlayableRacesForClass`).
+  - Inconnu Acolyte, Saracen Disciple and Saracen Necromancer (which starts as a Disciple) pass the server's checks but have no start location. create-bot refuses them, and `--list` leaves them out (`getPlayableRacesForClass`).
+  - Verified live on all three: the server logs "startup location not found", the row stays at 0,0,0 in region 0, and the client times out entering the world (loading the character throws in `GuildMgr`). A second login of the Necromancer failed the same way. With `start_as_base_class` off a Saracen Necromancer starts normally (Isle of Glass), and a Saracen Disciple still doesn't.
 - **Names:**
   - The character name defaults to the account name with digits mapped to letters (`ux1` → `Uxb`, `bot12` → `Botbc`).
   - Names must be letters only, at least 3, start with a capital, and be unique on the server. Override with `--char=Name` or `CHAR_NAME=`.
@@ -53,9 +54,9 @@ From `getStartupLocation` and `findNpcSpawns` (levels 0–1, realm 0, not peacef
 | Midgard Mystic (Kobold) | 100 Gotar, 749110, 814677 | vein spiderling ~4300 |
 | Hibernia Guardian *(live)* | 200 Shannon Estuary, 296516, 641415 | badger cub, large frog ~2400 |
 | Hibernia Naturalist *(live)* | 200 Shannon Estuary, 294768, 641635 | large frog (L1) ~2700, badger cub (L0) ~3100 |
-| Hibernia Magician (Elf) | 200 Lough Derg, 346073, 490855 | annoying lucradan ~2100 |
+| Hibernia Magician (Elf) *(live)* | 200 Lough Derg, 346073, 490855 | annoying lucradan ~2100 |
 
-- **Start points depend on the class sent at creation,** and also on the race.
+- **Start points depend on the class the server looks up,** and also on the race. With `start_as_base_class` on, the class is already reverted by then, because the server's handler chain runs the newest handler first and `StartAsBaseClass` registers after `StartupLocations`. So a Briton Sorcerer starts on the Briton Mage row. `getStartupLocation` takes the class you create and follows this; pass `startAsBaseClass: false` for a server with the property off.
 - **The template script walks for you:** when no monster is in view, `bots/_template/script.ts` and `bots/examples/caster.ts` walk to the nearest easy spawn point from the data.
 
 ## Class notes
@@ -64,14 +65,11 @@ From `getStartupLocation` and `findNpcSpawns` (levels 0–1, realm 0, not peacef
   - They start with weapon, shield and a full armour set equipped; `killNpc` works from the first second.
   - The Fighter has Crush/Slash/Thrust at 1, Sprint, and no styles until promotion.
   - Live, a fresh Naturalist killed three badger cubs (L0–L1, +17/+35/+35 XP, level 1 → 2), taking 1–4 per hit. An L1 large frog, the template's first pick, killed it at 16 % frog health.
-- **Guardian starts unarmoured** (and so do Blademaster, Hero and Champion, which start as Guardian):
-  - Its starterequipment rows (ids 13, 14, 76, 77, 78, 109, class list `52;44;43;45;`) name `leaf_tacuil_{vest,helm,boots,gauntlets,sleeves,leggings}`. Only the `leaf_tacuil_*3` templates exist, so the server skips those rows with "Cannot Find Item Template" at startup (StartupEquipment.cs:58, :82-86).
-  - A Guardian gets only the training sword and shield. With start_as_base_class on, a Blademaster is turned into a Guardian before the gear is handed out, so it gets nothing either (verified live: Fxdod, slots 10, 11, 40).
-  - Live: an L1 badger cub hit the Guardian for 10–11 and killed it; the same mob hit the armoured Naturalist for 1–4.
-  - `getStarterArmour(cls)` in data shows it (`armour: []`, `missing: [...]`), and create-bot warns and marks it `[no starter armour]` in `--list`. Not fixed by `server:setup` (it changes only server properties). To fix it on your own server, point the six rows at the `*3` templates (unverified live), then restart the gameserver; characters made earlier keep their inventory:
-    ```sh
-    docker compose -f server/docker/docker-compose.yml exec -T db mariadb -uroot -pdaoc-sdk opendaoc -e "UPDATE starterequipment SET TemplateID=CONCAT(TemplateID,'3') WHERE StarterEquipmentID IN (13,14,76,77,78,109);"
-    ```
+- **Guardian's starter armour is a fix in our fork** (it also covers Blademaster, Hero and Champion, which start as Guardian):
+  - In upstream's dump, rows 13, 14, 76, 77, 78 and 109 (class list `52;44;43;45;`) name `leaf_tacuil_{vest,helm,boots,gauntlets,sleeves,leggings}`. Only the `leaf_tacuil_*3` templates exist, so the server skips those rows with "Cannot Find Item Template" at startup (StartupEquipment.cs:58, :82-86) and a Guardian gets only the training sword and shield. An L1 badger cub hit such a Guardian for 10–11 and killed it; the same mob hit the armoured Naturalist for 1–4.
+  - The fork points those rows at the `*3` templates for class 52 only (docs/SERVER.md). Rows 125-130 already give classes 43, 44 and 45 the same set, which only comes into play with start_as_base_class off. Keeping those classes in both hands them a second set in the backpack (seen on a test server: 6 worn, 6 in bags).
+  - Verified 2026-11-03 on a server seeded from the fork: new Guardians, Heroes, Blademasters and Champions start with six pieces worn and none in bags, with start_as_base_class on and off.
+  - `getStarterArmour(cls)` in data shows a class's set, and create-bot warns about a class with none (`[no starter armour]` in `--list`). Both read the dump checked out in `server/db`, not the DB, so they say nothing on a DB seeded before the fix (docs/SERVER.md). Characters made earlier keep their inventory.
 - **Casters (Mage, Elementalist, Magician, Mystic, ...):**
   - Tiny mana at level 1: a Mage has 10 power.
   - Interrupted by melee. See [spells.md](spells.md).
