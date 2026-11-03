@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import type { CastResult, KillPlayerOptions, KillPlayerResult } from '../actions';
 import { executionContext } from '../execution-context';
 import type { NearbyNpc, NearbyPlayer } from '../types';
-import { assist, ckey, crowdControl, fightRejoin, flee, holdFormation, leashFallback, onMember, peelTarget, tank, type TacticsSettings } from './behaviors';
+import { assist, ckey, crowdControl, fightRejoin, flee, holdFormation, leashFallback, onMember, peelTarget, pull, tank, type TacticsSettings } from './behaviors';
 import { contact, enemy, picture, report } from './fixtures';
 import type { MemberContext } from './member';
 import { PVE_SETTINGS } from './pve';
@@ -57,6 +57,7 @@ function stub(o: StubOptions) {
             return c && visible(id) ? { ...nearby(c), kind: 'npc', speed: 0, model: 0, guildName: '', targetObjectId: null } as unknown as NearbyNpc : null;
         },
         sendAttack: async () => ({ success: true, message: '' }),
+        waitForCondition: async () => null,
         getSkills: () => ({ styles: [] }),
         getState: () => ({ effects: [] }),
     };
@@ -114,9 +115,36 @@ describe('onMember: what counts as an add on a member', () => {
         expect(onMember(foe(52, 11_500, 10_000, { target: 'Nuker' }), nuker)).toBe(false);
         expect(onMember(contact(60, { x: 11_500, y: 10_000, target: 'Nuker' }), nuker)).toBe(true);
     });
+    test('a monster on a member by its spell alone: only in melee reach, like a player (flee() would draw the member into the melee)', () => {
+        const caster = (x: number) => contact(60, { x, y: 10_000, target: 'Nuker', targetBySpell: true });
+        expect(onMember(caster(10_300), nuker)).toBe(true);
+        expect(onMember(caster(10_446), nuker)).toBe(false);
+    });
     test('never one that targets someone else or is crowd-controlled', () => {
         expect(onMember(foe(52, 10_100, 10_000, { target: 'Tank' }), nuker)).toBe(false);
         expect(onMember(foe(52, 10_100, 10_000, { target: 'Nuker', cc: { by: 'Healer', kind: 'mezz', until: Date.now() + 9000 } }), nuker)).toBe(false);
+    });
+});
+
+describe('pull', () => {
+    const pulling = (over: Partial<Contact>) => stub({
+        name: 'Tank', role: 'tank', at: { x: ANCHOR.x + 1500, y: ANCHOR.y },
+        contacts: [contact(60, { regionId: R, x: ANCHOR.x + 2000, y: ANCHOR.y, target: 'Tank', ...over })],
+        orders: { phase: 'pull', puller: 'Tank', focus: 60 }, settings: PVE_SETTINGS,
+    });
+
+    test('a mob the server has on the puller is walked back to the anchor', async () => {
+        const s = pulling({});
+        expect(await pull().run(s.ctx)).toBe(true);
+        expect(s.calls.walkTo.length).toBe(1);
+        expect(s.calls.attack).toEqual([]);
+    });
+
+    test('a caster on the puller by its spell alone is hit: it stands and casts, and walking back would leave the group waiting under its nukes', async () => {
+        const s = pulling({ targetBySpell: true });
+        expect(await pull().run(s.ctx)).toBe(true);
+        expect(s.calls.walkTo).toEqual([]);
+        expect(s.calls.attack).toEqual([60]);
     });
 });
 
@@ -158,6 +186,22 @@ describe('tank: peels and the chase leash', () => {
         const mob = contact(60, { regionId: R, x: 11_500, y: 11_500, threat: true, target: 'Healer', hostileSince: Date.now() - 1000 });
         const pve = stub({ name: 'Tank', role: 'tank', at: ANCHOR, members: [healer(10_000, 11_500)], contacts: [contact(51, { regionId: R, x: 10_300, y: 10_000, threat: true }), mob], orders: { focus: 51 }, settings: PVE_SETTINGS });
         expect(peelTarget(pve.ctx)?.objectId).toBe(60);
+    });
+
+    test('a monster casting at the healer from range is a peel, since a taunt takes it off; not while it is mezzed', () => {
+        const caster = (over: Partial<Contact> = {}) => contact(60, { regionId: R, x: 11_500, y: 11_500, threat: true, target: 'Healer', targetBySpell: true, hostileSince: Date.now() - 1000, ...over });
+        const pve = (add: Contact) => stub({ name: 'Tank', role: 'tank', at: ANCHOR, members: [healer(10_000, 11_500)], contacts: [contact(51, { regionId: R, x: 10_300, y: 10_000, threat: true }), add], orders: { focus: 51 }, settings: PVE_SETTINGS });
+        expect(peelTarget(pve(caster()).ctx)?.objectId).toBe(60);
+        expect(peelTarget(pve(caster({ cc: { by: 'Healer', kind: 'mezz', until: Date.now() + 9000 } })).ctx)).toBeNull();
+    });
+
+    test('with a leash, such a caster is a peel only inside it, and never away from an enemy player', () => {
+        const caster = (x: number) => contact(60, { regionId: R, x, y: 10_000, threat: true, target: 'Healer', targetBySpell: true, hostileSince: Date.now() - 1000 });
+        const monster = contact(51, { regionId: R, x: 10_300, y: 10_000, threat: true });
+        const leashed = (focus: Contact, add: Contact) => stub({ name: 'Tank', role: 'tank', at: ANCHOR, members: [healer(10_000, 11_500)], contacts: [focus, add], orders: { focus: 51 } });
+        expect(peelTarget(leashed(monster, caster(11_500)).ctx)?.objectId).toBe(60);
+        expect(peelTarget(leashed(monster, caster(12_500)).ctx)).toBeNull();
+        expect(peelTarget(leashed(focusAt(10_300), caster(11_500)).ctx)).toBeNull();
     });
 
     test('the focus beyond the leash: the tank fights the nearest enemy inside it instead', async () => {

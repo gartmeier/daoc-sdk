@@ -66,6 +66,11 @@ describe('dangerStops', () => {
         expect(dangerStops([wolf()], members(near), me, NOW)).toEqual([{ x: WOLF.x, y: WOLF.y, objectId: 587, toward: null }]);
     });
 
+    test('a monster casting at the tank from range, not running at him, stops where it is', () => {
+        const tank = { x: WOLF.x + 400, y: WOLF.y };
+        expect(dangerStops([wolf({ targetBySpell: true })], members(tank), me, NOW)).toEqual([{ x: WOLF.x, y: WOLF.y, objectId: 587, toward: null }]);
+    });
+
     test('a threat on us is left to flee(); one targeting nobody we know stops where it is', () => {
         expect(dangerStops([wolf({ target: 'Ciaran' })], members(), me, NOW)).toEqual([]);
         expect(dangerStops([wolf({ target: null })], members(), me, NOW)).toEqual([{ ...WOLF, objectId: 587, toward: null }]);

@@ -114,8 +114,12 @@ export interface Sighting {
     hp: number;
     targetId: number | null;
     inCombat: boolean;
-    /** It swung at someone in the last ~2 s (a mezz on it is broken). */
+    /** It swung at someone or, a monster, landed a hostile spell on someone in the last ~2 s (a mezz on it is broken). */
     swinging: boolean;
+    /** Monsters: whom its latest hostile spell effect landed on in the last few seconds. The server reports no target for a mob mid-cast. */
+    spellTargetId?: number | null;
+    /** Monsters: the player its latest swing or hostile spell in the last few seconds was aimed at, if it was at a player. */
+    aimedAtPlayer?: number | null;
     /**
      * Players: it started a cast in the last few seconds (0x72 spell cast animation). The
      * server never sends an enemy player's target, so `targetId` for a player is inferred
@@ -135,6 +139,8 @@ export interface Contact extends Sighting {
      * of reach), the last known target and targetId are kept.
      */
     target: string | null;
+    /** `target` comes from its spell alone: a monster casting from where it stands. A taunt can take it off; running to the tank can't. */
+    targetBySpell?: boolean;
     /** When it started targeting `target` (how long the tank has held it). */
     targetSince: number;
     /** When the coordinator first ordered engage with it as the focus; 0 until then. */

@@ -78,8 +78,8 @@ export interface DangerStop extends Point {
 /**
  * Where the threats that could hit us will stop: for each threat that is fresh and alive, does
  * not target us (flee() handles that) and isn't held by crowd control for 3 s more, the position
- * of the member it targets when it is more than 260 from that member (running at them), else
- * its own position. `threats` is ctx.threats(), `members` ctx.members(), `me` anything with our name.
+ * of the member it targets when it is more than 260 from that member (running at them, unless
+ * it only casts at them), else its own position. `threats` is ctx.threats(), `members` ctx.members(), `me` anything with our name.
  */
 export function dangerStops(threats: readonly Contact[], members: readonly { name: string; x: number; y: number }[], me: { name: string }, now: number): DangerStop[] {
     const out: DangerStop[] = [];
@@ -87,7 +87,7 @@ export function dangerStops(threats: readonly Contact[], members: readonly { nam
         if (c.stale || !isAlive(c) || c.target === me.name) continue;
         if (c.cc && c.cc.until - now >= CC_ENDING_MS) continue;
         const m = c.target ? members.find(x => x.name === c.target) : undefined;
-        out.push(m && dist(c, m) > RUNNING_AT
+        out.push(m && !c.targetBySpell && dist(c, m) > RUNNING_AT
             ? { x: m.x, y: m.y, objectId: c.objectId, toward: m.name }
             : { x: c.x, y: c.y, objectId: c.objectId, toward: null });
     }

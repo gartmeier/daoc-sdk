@@ -16,6 +16,12 @@
 // on a member, fights us, or swings or casts within hostileRadius of a member:
 // in a three-realm battleground the other two fighting each other are not.
 //
+// A monster's target comes from the server, but only while it is in attack state and
+// within its attack range (PacketLib168.cs): one starting a timed cast leaves attack
+// state, so a caster nuking a member from range reports none. Its hostile spell effects
+// stand in for that target. Spell effects only: a swing would keep a mob's old target
+// after a reset, and the server keeps naming the target of a mob that swings.
+//
 // A player dies only by its death event or isDead, never by 0 % health: the
 // server rounds health down (GameLiving.cs:2621), so a living player with a few
 // hit points reads 0.
@@ -79,6 +85,8 @@ export interface Observation {
 const SWING_WINDOW_MS = 2000;
 /** An enemy player's target: its latest swing or hostile spell this recent (longer than a slow weapon's swing). */
 const PLAYER_TARGET_MS = PLAYER_AIM_MS;
+/** A monster the server names no target for: its latest hostile spell effect this recent. */
+const SPELL_TARGET_MS = PLAYER_AIM_MS;
 /**
  * A dead player's model entry counts as a death only this fresh. A release moves the player within
  * the region without telling those who saw it die (GamePlayer.MoveTo), so its entry stays dead at the
@@ -110,6 +118,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     // Hostile spell effects and cast starts in the swing window: a player's swing (see its sighting).
     const lastSpell = new Set<number>();
     const aim = new Map<number, { targetId: number; at: number }>();
+    const spellAim = new Map<number, { targetId: number; at: number }>();
     const casting = new Set<number>();
     const helped = new Set<number>();
     const deaths: number[] = [];
@@ -130,6 +139,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         if (e.kind === 'melee' && age < SWING_WINDOW_MS) lastSwing.add(by);
         if (hostile && e.kind === 'spellEffect' && age < SWING_WINDOW_MS) lastSpell.add(by);
         if (hostile && on !== null && age < PLAYER_TARGET_MS && e.receivedAt >= (aim.get(by)?.at ?? -Infinity)) aim.set(by, { targetId: on, at: e.receivedAt });
+        if (hostile && e.kind === 'spellEffect' && age < SPELL_TARGET_MS && e.receivedAt >= (spellAim.get(by)?.at ?? -Infinity)) spellAim.set(by, { targetId: on!, at: e.receivedAt });
         // Any swing shows its aim, only one that landed did damage.
         const landed = e.kind !== 'melee' || e.result === undefined || e.result === 'hit' || e.result === 'styledHit';
         if (hostile && landed && by === p.objectId && isPlayer.has(on!) && age < PLAYER_TARGET_MS) hits.add(on!);
@@ -141,13 +151,20 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     }
     const sightings: Sighting[] = [];
     for (const n of state.nearbyNpcs) {
+        const spell = spellAim.get(n.objectId);
+        const aimed = aim.get(n.objectId)?.targetId;
         if (n.distance2d > sightRadius) continue;
         if (n.healthPercent <= 0) { deaths.push(n.objectId); continue; }
         if (!isKillable(n, p)) continue;
         sightings.push({
             objectId: n.objectId, kind: 'npc', name: n.name, level: n.level, realm: n.realm,
             x: n.x, y: n.y, z: n.z, hp: n.healthPercent, targetId: n.targetObjectId, inCombat: n.inCombat,
-            swinging: lastSwing.has(n.objectId),
+            spellTargetId: spell?.targetId ?? null,
+            // A spell that landed counts, not a cast start, which may be a self-buff. Like a swing it ends a mezz:
+            // a mezz stops the cast under way and any new one (CrowdControlECSEffect.cs OnHardCCStart,
+            // CastingComponent.cs CanCastSpell), a bolt shows at launch, and DoT ticks show nothing (DoTSpellHandler.cs).
+            swinging: lastSwing.has(n.objectId) || (spell !== undefined && now - spell.at < SWING_WINDOW_MS),
+            aimedAtPlayer: aimed !== undefined && isPlayer.has(aimed) ? aimed : null,
         });
     }
     for (const o of state.nearbyPlayers) {
@@ -282,10 +299,18 @@ export class Blackboard {
         const hitByUs = new Set(obs.hits);
         const living = [...this.reports.values()].filter(m => m.regionId === r.regionId && !m.isDead);
         const nearUs = (s: Sighting) => living.some(m => Math.hypot(m.x - s.x, m.y - s.y) < this.hostileRadius);
+        const deadIds = new Set([...this.reports.values()].filter(m => m.isDead).map(m => m.objectId));
 
         const seen = new Set<string>();
-        for (const s of obs.sightings) {
-            const key = `${r.regionId}:${s.objectId}`;
+        for (const sighted of obs.sightings) {
+            const key = `${r.regionId}:${sighted.objectId}`;
+            // Its spell names the target the server doesn't. Not while it is crowd-controlled: that spell is from
+            // before, and it would hold a mezzed add as a threat for the whole aim window (behaviors.ts position()
+            // counts on them dropping out). Not on a dead member either: nothing else would end it.
+            // In combat with no target it is running (the 65535 below), so it isn't standing to cast.
+            const spellTarget = sighted.spellTargetId ?? null;
+            const bySpell = sighted.targetId === null && !sighted.inCombat && spellTarget !== null && !this.contacts.get(key)?.cc && !deadIds.has(spellTarget);
+            const s = bySpell ? { ...sighted, targetId: spellTarget } : sighted;
             const dead = this.killed.get(key);
             let deathEchoUntil = 0;
             if (dead) {
@@ -300,7 +325,7 @@ export class Blackboard {
             const target = s.targetId !== null ? memberById.get(s.targetId) ?? null : null;
             let c = this.contacts.get(key);
             if (!c) {
-                c = { ...s, regionId: r.regionId, target, targetSince: now, engagedAt: 0, movedAt: 0, seenBy: [], firstSeen: now, lastSeen: r.at, stale: false, threat: false, hostileSince: 0, cc: null, engaged: false, hit: false, ccSince: 0, lastHostile: 0, deathEchoUntil };
+                c = { ...s, targetBySpell: bySpell, regionId: r.regionId, target, targetSince: now, engagedAt: 0, movedAt: 0, seenBy: [], firstSeen: now, lastSeen: r.at, stale: false, threat: false, hostileSince: 0, cc: null, engaged: false, hit: false, ccSince: 0, lastHostile: 0, deathEchoUntil };
                 if (s.kind === 'player') Object.assign(c, { healer: false, caster: false });
                 this.contacts.set(key, c);
             } else if (r.at >= c.lastSeen) {
@@ -310,13 +335,13 @@ export class Blackboard {
                 // and observeState already keeps its target PLAYER_TARGET_MS after the last hit.
                 const unknown = s.kind === 'npc' && s.targetId === null && s.inCombat;
                 if (unknown && c.targetId !== null) {
-                    Object.assign(c, s, { targetId: c.targetId, target: c.target, lastSeen: r.at });
+                    Object.assign(c, s, { targetId: c.targetId, target: c.target, targetBySpell: false, lastSeen: r.at });
                     // Running before the engage order: a carried pull (its hold counts from engagedAt).
                     if (c.engagedAt === 0) c.movedAt = now;
                 } else {
                     // A new target, or none after a reset or leash (no longer in combat).
                     if (c.targetId !== s.targetId) c.targetSince = now;
-                    Object.assign(c, s, { target, lastSeen: r.at });
+                    Object.assign(c, s, { target, targetBySpell: bySpell, lastSeen: r.at });
                 }
             }
             if (!c.seenBy.includes(r.name)) c.seenBy.push(r.name);
@@ -328,12 +353,15 @@ export class Blackboard {
             if (onMember || targetedByUs.has(s.objectId)) c.engaged = true;
             // A player's swing or cast start on someone we can't name is hostile only near us: its
             // combat reaches every client within 6000, so far off it is two other realms' fight.
-            const fighting = s.swinging && (s.kind === 'npc' || nearUs(s));
+            // A monster's hit or spell on a player outside the group isn't our fight (pve.ts rejectPull: 'fighting someone else').
+            const onStranger = s.kind === 'npc' && s.aimedAtPlayer != null && !memberById.has(s.aimedAtPlayer);
+            const fighting = s.swinging && !onStranger && (s.kind === 'npc' || nearUs(s));
             if (onMember || fighting || attackedByUs.has(s.objectId) || hitByUs.has(s.objectId)) {
                 if (now - c.lastHostile > this.hostileMs) c.hostileSince = now;
                 c.lastHostile = now;
             }
-            // A mezzed mob does not swing: a swing after the cc landed means it broke.
+            // A mezzed mob neither swings nor casts: either after the cc landed means it broke. A rooted one can
+            // still cast, and then it isn't controlled either: the group must be free to kill it.
             if (c.cc && s.swinging && now - c.ccSince > SWING_WINDOW_MS) {
                 this.emit({ at: now, kind: 'note', member: c.cc.by, targetId: c.objectId, text: `${c.cc.kind} on ${c.name} broke` });
                 c.cc = null;
