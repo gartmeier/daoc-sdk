@@ -67,6 +67,8 @@ await bot.closeMerchant();
 - A slow weapon lands fewer styles (a 4.2 s axe about 5 a run, a 2.5 s one 13-20), so a tank taunts less often. Its damage covered that against single wolves. Harder fights and RvR are untried.
 - Not tried live: the left hand and other realms (unit tests only), and a town script calling it.
 
+**Verified live (2026-11-03, after a game server restart):** Gmadmin, a level 1 Albion GM with 0 bounty points and 0c, jumped to all 13 Item Merchants, including the other realms'. Every window opened as type 1 with its list intact (3 to 102 items), and `sdk.sendBuy` on the cheapest item got "You need 10000 BPs to buy this." (1000 at the respec stones), with the purse and bags unchanged. An ordinary merchant in Camelot still opens as type 0. An NPC's class is only read when its region loads, so nothing changes before that restart.
+
 ## Merchant inventories offline
 
 Merchant item lists are in the DB dump, so you can plan purchases without walking anywhere:
