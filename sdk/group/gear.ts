@@ -21,7 +21,7 @@ import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import { parseWeaponDelve } from '../delve';
 import { EquipmentSlot, isArmor, isWeapon, ItemHand, ObjectType, type InventoryItem, type ItemBonus, type MerchantItem, type PlayerState, type Specialization, type WeaponDelve } from '../types';
-import { armorGain, armorSwing, armorValue, statScore, WEAPON_STAT_SWING, weaponScore, weaponValue } from './gear-score';
+import { armorGain, armorSwing, armorValue, focusCover, isFocusCaster, statScore, WEAPON_STAT_SWING, weaponScore, weaponValue } from './gear-score';
 import { DUAL_LINES, WEAPON_LINES } from './styles';
 
 const { Jewelry, Cloak, Neck, Waist, LeftBracer, RightBracer, LeftRing, RightRing } = EquipmentSlot;
@@ -383,6 +383,8 @@ const MAX_WEAPON_TRIES = 4;
 export const WEAPON_STEP = 1.1;
 /** How much better a weapon from the backpack must be to swap: it's free, but rounding shouldn't trade places. */
 export const WEAPON_SWAP = 1.02;
+/** A focus staff's bonuses move its score by little and the swap is free, so any real difference counts: Hits 17, Piety 9 scored 1.07 over Crush 3 %, Energy 2 % at 1.05. */
+const STAFF_SWAP = 1.001;
 /** Scores this close count as equal, and the cheaper one wins: above the level clamp, price buys nothing. */
 const WEAPON_TIE = 1.01;
 /** How far a town visit walks for a weapon, as for a cloak. */
@@ -459,37 +461,76 @@ async function wornScore(m: WeaponMember, needs: WeaponNeeds, slot: number, out:
 const round = (n: number) => String(Number(n.toFixed(2)));
 
 /**
- * Wear the weapons in the backpack that beat what's worn, on the character's trained line. What the
- * server refuses stays there and isn't tried again in this call, and the next best gets its turn.
+ * Put on the best of the backpack if it beats what's worn. What the server refuses stays there and
+ * isn't tried again in this call (`settled`), and the next best gets its turn.
  */
+async function wearBest(m: WeaponMember, settled: Set<number>, out: string[], rowOf: (item: InventoryItem) => Promise<WeaponRow<InventoryItem> | null>, wornNow: () => Promise<number>, step = WEAPON_SWAP): Promise<void> {
+    const act = weaponActions(m);
+    for (let tries = 0; tries < MAX_WEAPON_TRIES; tries++) {
+        const rows: WeaponRow<InventoryItem>[] = [];
+        for (const item of m.sdk.getInventory().filter(i => i.slot >= 40 && i.slot <= 79 && !settled.has(i.slot))) {
+            const row = await rowOf(item);
+            if (row) rows.push(row);
+        }
+        const current = await wornNow();
+        const pick = bestWeapon(rows, current, step);
+        if (!pick) return;
+        const r = await act.equipItem(pick.item, { slot: pick.slot });
+        settled.add(pick.item.slot);
+        if (r.success) {
+            out.push(`wield ${pick.item.name}, score ${round(pick.score)} over ${round(current)}`);
+            return;
+        }
+        out.push(`can't wield ${pick.item.name}: ${r.message}`);
+    }
+}
+
+/**
+ * A focus caster trains no weapon line: what it wants from a staff is the focus, which works from
+ * the moment it's worn (GamePlayer.cs:8912), and a staff without one is worth nothing. Among staffs
+ * that reach as far, the bonuses decide.
+ */
+async function wearFocusStaff(m: WeaponMember, classInfo: ClassInfo, opts: WeaponOptions): Promise<string[]> {
+    const p = m.sdk.getPlayer()!;
+    const specs = m.sdk.getSkills().specializations;
+    const act = weaponActions(m);
+    const score = (bonuses: readonly ItemBonus[]) => weaponScore(focusCover(bonuses, specs), statScore(bonuses.filter(b => b.category !== 'focus'), classInfo, p.level));
+    const out: string[] = [];
+    await wearBest(m, new Set(), out, async item => {
+        if (item.objectType !== ObjectType.Staff) return null;
+        const r = await act.delveItem(item);
+        return r.success && levelAllows(r.levelRequirement, p.level, opts) ? { item, slot: TwoHand, score: score(r.bonuses), price: 0 } : null;
+    }, async () => {
+        const held = m.sdk.getEquipment().find(e => e.slot === TwoHand);
+        if (!held) return 0;
+        const r = await act.delveItem(held);
+        if (r.success) return score(r.bonuses);
+        out.push(`delve ${held.name}: ${r.reason}; keeping it`);
+        return Infinity;
+    }, STAFF_SWAP);
+    return out;
+}
+
+/** Wear the weapons in the backpack that beat what's worn: on the character's trained line, or a focus caster's staff. */
 export async function wearWeapons(m: WeaponMember, opts: WeaponOptions = {}): Promise<string[]> {
     const p = m.sdk.getPlayer();
+    if (!p || p.isDead) return [];
     const needs = weaponNeeds(m.sdk.getSkills().specializations);
-    if (!p || p.isDead || !needs) return [];
+    if (!needs) {
+        const c = getClass(p.className, p.realm);
+        return c && isFocusCaster(c) ? wearFocusStaff(m, c, opts) : [];
+    }
     const out: string[] = [];
     const act = weaponActions(m);
     const settled = new Set<number>();
     for (const hand of handsFor(needs)) {
-        for (let tries = 0; tries < MAX_WEAPON_TRIES; tries++) {
-            const rows: WeaponRow<InventoryItem>[] = [];
-            for (const item of m.sdk.getInventory().filter(i => i.slot >= 40 && i.slot <= 79 && !settled.has(i.slot))) {
-                const to = weaponSlots(item, needs).find(s => handsOf(hand).includes(s));
-                if (to === undefined) continue;
-                const r = await act.delveItem(item);
-                const facts = r.success ? parseWeaponDelve(r.lines) : null;
-                if (facts && levelAllows(r.levelRequirement, p.level, opts)) rows.push({ item, slot: to, score: scoreOf(m, needs, to, facts, r.bonuses), price: 0 });
-            }
-            const current = await wornScore(m, needs, hand, out);
-            const pick = bestWeapon(rows, current, WEAPON_SWAP);
-            if (!pick) break;
-            const r = await act.equipItem(pick.item, { slot: pick.slot });
-            settled.add(pick.item.slot);
-            if (r.success) {
-                out.push(`wield ${pick.item.name}, score ${round(pick.score)} over ${round(current)}`);
-                break;
-            }
-            out.push(`can't wield ${pick.item.name}: ${r.message}`);
-        }
+        await wearBest(m, settled, out, async item => {
+            const to = weaponSlots(item, needs).find(s => handsOf(hand).includes(s));
+            if (to === undefined) return null;
+            const r = await act.delveItem(item);
+            const facts = r.success ? parseWeaponDelve(r.lines) : null;
+            return facts && levelAllows(r.levelRequirement, p.level, opts) ? { item, slot: to, score: scoreOf(m, needs, to, facts, r.bonuses), price: 0 } : null;
+        }, () => wornScore(m, needs, hand, out));
     }
     return out;
 }
