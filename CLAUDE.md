@@ -126,6 +126,7 @@ From `sdk.*`, the common calls are `getState`, `getPlayer`, `getInventory`, `fin
 
 ## Troubleshooting
 
+- **Tests fail on missing `server/` or `data/generated` files, or `bun run test` stops at `missing git submodule(s)`:** the checkout isn't set up. A new git worktree has no submodules, `node_modules` or `data/generated`. A SessionStart hook (`.claude/settings.json`) fills them in and prints what it did. A session that moved into a worktree later, or sits on a branch from before the hook, runs `bun run setup:worktree` itself (about 20 s). Build the data there rather than copying it from another checkout: a copy can predate this commit's `server/db` pin, and nothing notices while `server/db` is empty.
 - **"No game client is attached"** means nothing is publishing state for the bot. Start `bun client/runner.ts <name>` and wait for `in game`. Its log is in your shell, or in `bots/<name>/client.log` when MCP started it.
 - **Login refused with 0x2C code 0x11 / `AccountIsInLogoutProcedure`:** the character is still in the world, link-dead. This happens when a client dropped without quitting. Wait 60 s and retry; the runner backs off on its own.
   - To stop a client cleanly, use a quit action: `await sdk.sendQuit()`, MCP `disconnect_bot`, or `bun client/dev/swarm-check.ts <bot> [<bot> ...] --seconds=0 --quit` (the runner logs out, then exits 0). Ctrl+C is clean only when typed in the client's own console. Never kill it outright.

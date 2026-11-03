@@ -6,7 +6,8 @@
   "scripts": {
     "check": "bun run typecheck && bun run test",
     "typecheck": "tsc --noEmit",
-    "test": "bun test ./sdk ./client ./gateway ./mcp ./data ./scripts ./bots",
+    "test": "bun scripts/check-submodules.ts && bun test ./sdk ./client ./gateway ./mcp ./data ./scripts ./bots",
+    "setup:worktree": "bun scripts/setup-worktree.ts",
     "gateway": "bun gateway/gateway.ts",
     "client": "bun client/runner.ts",
     "mcp": "bun mcp/server.ts",
