@@ -11,7 +11,7 @@
 import { getClass, type ClassInfo, type StatName } from '../../data/index';
 import { conLevel } from '../actions-helpers';
 import { ALL_FOCUS, SKILLS, specOf } from '../delve';
-import { ObjectType, type InventoryItem, type ItemBonus, type SkillGroup, type WeaponDelve } from '../types';
+import { ObjectType, type InventoryItem, type ItemBonus, type SkillGroup, type Specialization, type WeaponDelve } from '../types';
 
 /** Per stat point, by the class's data (classes.json): the higher applies when one stat holds two roles. */
 export const STAT_WEIGHTS = { primary: 1, secondary: 0.6, tertiary: 0.3, mana: 0.8 };
@@ -34,7 +34,7 @@ export const BONUS_WEIGHTS = {
 const NO_ACUITY = new Set(['Scout', 'Hunter', 'Ranger', 'Nightshade']);
 /** IsFocusCaster: these base classes and their subclasses (playerclasses/base/*.cs), but not the Valewalker (ClassValewalker.cs:24). Nothing else gets anything from a focus (FocusLevelCalculator.cs:28, SpellHandler.cs:1204). */
 const FOCUS_CASTERS = new Set(['Disciple', 'Elementalist', 'Forester', 'Mage', 'Magician', 'Mystic']);
-const isFocusCaster = (c: ClassInfo) => c.name !== 'Valewalker' && FOCUS_CASTERS.has(c.baseClassName);
+export const isFocusCaster = (c: ClassInfo) => c.name !== 'Valewalker' && FOCUS_CASTERS.has(c.baseClassName);
 /** Whether the class fights in melee. The server's ListCaster flag says no, also for two that do: ClassForester.cs:41-44 for the Valewalker, ClassVampiir.cs:42-45. */
 const swings = (c: ClassInfo) => c.classType !== 'ListCaster' || c.name === 'Valewalker' || c.name === 'Vampiir';
 
@@ -128,6 +128,21 @@ function bonusWeight(b: ItemBonus, c: ClassInfo, level: number): number {
 /** What these bonuses are worth to this class at this level. A plain item is 0, a penalty negative. */
 export function statScore(bonuses: readonly ItemBonus[], classInfo: ClassInfo, level: number): number {
     return bonuses.reduce((sum, b) => sum + Math.min(b.value, bonusCap(b, level)) * bonusWeight(b, classInfo, level), 0);
+}
+
+const MAGIC_SPECS = new Set(SKILLS.magic.map(specOf));
+
+/**
+ * How much of a focus caster's training a staff's focus reaches, 0 to 1: line by line, up to the
+ * line's spec, which is as high as its spells go. A spell costs 120 % of base with no focus and 80 %
+ * at a focus as high as its level (SpellHandler.cs:1204-1222). A line's own focus and ALL Spell
+ * Lines don't add up: the higher counts (FocusLevelCalculator.cs:30-31).
+ */
+export function focusCover(bonuses: readonly ItemBonus[], specs: readonly Pick<Specialization, 'name' | 'level'>[]): number {
+    const focus = (line: string) => Math.max(0, ...bonuses.filter(b => b.category === 'focus' && (b.name === ALL_FOCUS || b.spec === line)).map(b => b.value));
+    const lines = specs.filter(s => MAGIC_SPECS.has(s.name));
+    const total = lines.reduce((sum, s) => sum + s.level, 0);
+    return total ? lines.reduce((sum, s) => sum + Math.min(focus(s.name), s.level), 0) / total : 0;
 }
 
 // ── Wear ────────────────────────────────────────────────────────────────────
