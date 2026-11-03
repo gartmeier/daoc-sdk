@@ -17,6 +17,7 @@ Notes from live runs against the local OpenDAoC server. Each topic file says wha
 | [group-coordination.md](group-coordination.md) | groups of bots: shared picture, coordinator, role behaviours, strategies, observer reports |
 | [rvr.md](rvr.md) | battlegrounds: getting in and out, PvP rules, killPlayer, the rvr-roam strategy, three groups fighting each other |
 | [classes-and-races.md](classes-and-races.md) | what can be created, start points per class |
+| [classes/](classes/mentalist.md) | one class at a time: role, spec builds, how to play it, what's been tested (so far the Mentalist). `bun data/class-sheet.ts <class>` gives the facts for any class |
 | [regions-and-zones.md](regions-and-zones.md) | coordinates, regions, zones, teleporters, zone points, static data |
 
 ## Two environments
@@ -76,6 +77,7 @@ if (import.meta.main) await runScript(main, { args: { pattern: scriptArgs()[0] }
   - Skills: `getSpell`, `getStylesFor(classId, spec?)`, `getSpecialization(spec)`, `specKey(name)`, `specDisplayName(name)` (a line's names: [npc-dialog.md](npc-dialog.md)).
   - Places: `getZoneAt(region, x, y)`, `nearestBindpoint`, `getZonePointsFrom(region)`.
   - Height: `estimateZ(region, x, y)`.
+  - Classes: `classSheet`, `specPointsAt`, `specLevelsAt` from `data/class-sheet.ts`.
   - Characters: `validateCharacter`, `getStartingClasses`, `getPlayableRacesForClass`, `getStarterArmour` (what a new character really gets).
   - The data says where things spawn; `sdk.getNearbyNpcs()` says what is actually there now.
 - `bots/examples/` holds working scripts for grinding, selling, casting, exploring and grouping.
