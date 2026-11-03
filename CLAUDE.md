@@ -60,6 +60,7 @@ bun groups/<group>/battleground.ts [--via=x,y,z]      # into Thidranki (levels 2
 bun groups/<group>/rvr.ts 300                         # roam the battleground and fight the other realms (learnings/rvr.md)
 bun groups/<group>/cloak-trip.ts [--stay]              # out of the battleground, capital, a cloak each, back in; --stay stops in the capital
 bun groups/<group>/gear-care.ts                        # in a town: vault what's too high to wear, take out what fits, repair (learnings/gear-care.md); a group older than the script copies it from groups/_template/
+bun groups/<group>/gear-template.ts                    # every member in custom gear at its level's caps, by a GM (learnings/gear-template.md); a group older than the script copies it from groups/_template/
 bun groups/<group>/train.ts [--respec] [--radius=<n>]  # anywhere: each member spends its points by bots/<bot>/build.ts; --respec walks to its trainer (learnings/builds.md); a group older than the script copies it from groups/_template/
 ```
 

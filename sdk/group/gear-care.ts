@@ -9,7 +9,7 @@ import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import { isArmor, isWeapon, ObjectType, type InventoryItem, type PlayerState } from '../types';
 import { accessorySlots, CLOAK_RADIUS, CLOAK_RESERVE, CLOAK_TOWN_RANGE } from './gear';
-import { REPAIR_BELOW, tooHighLevel, wornDown } from './gear-score';
+import { isTemplatePiece, REPAIR_BELOW, tooHighLevel, wornDown } from './gear-score';
 
 /** How far a town visit walks to a smith or vault keeper, as for a cloak. */
 export const CARE_RADIUS = CLOAK_RADIUS;
@@ -95,7 +95,7 @@ export function classCouldUse(item: Pick<InventoryItem, 'objectType'>, p: Pick<P
  * restart can undo a move. What the class can never use isn't kept: it sells, as loot should.
  */
 export const keepForLater = (item: Pick<InventoryItem, 'name' | 'objectType' | 'level'>, p: Pick<PlayerState, 'level' | 'className' | 'realm'>, opts: Pick<CareOptions, 'maxCon'> = {}) =>
-    wearable(item) && tooHighLevel(item, p.level, opts.maxCon) && classCouldUse(item, p);
+    isTemplatePiece(item) || (wearable(item) && tooHighLevel(item, p.level, opts.maxCon) && classCouldUse(item, p));
 
 /** What's worn that a smith should see: the lowest reading first. */
 export function needsRepair(m: Pick<CareMember, 'sdk'>, opts: Pick<CareOptions, 'repairBelow'> = {}): InventoryItem[] {

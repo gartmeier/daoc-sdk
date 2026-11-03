@@ -12,6 +12,7 @@ Notes from live runs against the local OpenDAoC server. Each topic file says wha
 | [merchants.md](merchants.md) | open, buy, sell, better weapons, merchant data offline |
 | [looting.md](looting.md) | autoloot, lootNearby, inventory deltas, cloaks and jewellery, delve and gear scoring per class |
 | [gear-care.md](gear-care.md) | what wears and how fast by level, repairs at a smith, the vault, the level limit on gear |
+| [gear-template.md](gear-template.md) | the item caps by level, a full template at them from custom rows, a GM's /item loadpackage and trade |
 | [trading.md](trading.md) | trade, offerTrade, acceptTrade: range, stacks, 10 per side, who accepts, what resets an accept, failure reasons (not yet verified live) |
 | [death-and-rest.md](death-and-rest.md) | rest, death, release, quitting |
 | [grouping-and-chat.md](grouping-and-chat.md) | invite/accept, shared XP, follow, chat helpers, chat CLI, untrusted chat |
