@@ -12,7 +12,7 @@ git submodule update --init server/core server/db   # required; reference/rs-sdk
 
 `bun run server:up` refuses to start while either one is empty (`scripts/check-submodules.ts`).
 
-`server/db` comes from our fork, [gartmeier/OpenDAoC-Database](https://github.com/gartmeier/OpenDAoC-Database): upstream's dump plus one commit on branch `item-merchants-bounty-points`, which stops the capitals' 13 Item Merchants selling level 50-51 gear for copper (learnings/merchants.md). A clone from before the fork runs `git submodule sync server/db` once. To take newer upstream dumps, merge OpenDAoC's `master` into that branch, push it to the fork and bump the pin here.
+`server/db` comes from our fork, [gartmeier/OpenDAoC-Database](https://github.com/gartmeier/OpenDAoC-Database): [OpenDAoC's dump](https://github.com/OpenDAoC/OpenDAoC-Database) plus one commit on branch `item-merchants-bounty-points`, which stops the capitals' 13 Item Merchants selling level 50-51 gear for copper (learnings/merchants.md). A clone from before the fork runs this once in its main checkout, not a worktree: `git submodule sync server/db && git submodule update server/db`. Until the update, `git status` shows `server/db` as modified, and committing that puts the old dump back. To take newer upstream dumps, merge OpenDAoC's `master` into that branch, push it to the fork, check the new commit out in `server/db` and commit it in this repo.
 
 ```
 bun run server:up       # docker compose -f server/docker/docker-compose.yml up -d --build
@@ -50,7 +50,7 @@ Accounts are created automatically on first login (`AUTO_ACCOUNT_CREATION=True` 
 
 `down -v` deletes the `db-data` volume. The next `up` re-imports the dump from scratch.
 
-It reads whatever is checked out in `server/db`, so run `git submodule update server/db` first. A DB seeded from a dump older than the fork keeps the Item Merchants on copper until then. To fix one without a re-import, run this and restart the game server: `UPDATE mob SET ClassType='DOL.GS.GameBountyMerchant' WHERE Guild='Item Merchant' AND ClassType='DOL.GS.GameMerchant';`
+The re-import reads whatever is checked out in `server/db`, so run `git submodule update server/db` before `down -v`. Updating alone doesn't change a DB that's already seeded, because the dump is only imported into an empty volume. A DB seeded from a dump older than the fork keeps the Item Merchants on copper until it's re-imported, or until you run this and restart the game server: `UPDATE mob SET ClassType='DOL.GS.GameBountyMerchant' WHERE Guild='Item Merchant' AND ClassType='DOL.GS.GameMerchant';`
 
 ## `server:setup` (scripts/setup-server.ts)
 
