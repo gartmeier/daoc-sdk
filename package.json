@@ -17,6 +17,7 @@
     "server:up": "bun scripts/check-submodules.ts && docker compose -f server/docker/docker-compose.yml up -d --build",
     "server:down": "docker compose -f server/docker/docker-compose.yml down",
     "server:setup": "bun scripts/setup-server.ts",
+    "server:throwaway": "bun scripts/throwaway-server.ts",
     "navmesh:build": "bun scripts/build-navmesh.ts",
     "terrain:build": "bun scripts/build-terrain.ts"
   },

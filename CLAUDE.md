@@ -18,6 +18,8 @@ Before writing logic for a topic (walking, combat, spells, merchants, looting, g
 
 MCP `execute_code` does steps 3–4 itself. Scripts and the CLIs never start a client.
 
+**Disposable server:** for a live check that must leave the shared stack alone, `bun run server:throwaway up` exits 0 once logins work and prints the port for `SERVER=` in bot.env; `down` removes it (docs/SERVER.md "Throwaway stacks").
+
 ## Session loop
 
 1. **Look** before acting: `bun sdk/cli.ts <name>`. If the character is dead, the first action is `bot.releaseAndRespawn()`.
