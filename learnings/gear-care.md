@@ -63,7 +63,7 @@ await bot.withdrawItem('Lord Urqhart', /Dragon/);       // reason inventory_full
 - **Not saved at once:** a move stays in memory until the next save (every 10 minutes, on quit, or on level-up). A restart of the gameserver could put an item back in the bag, which is one more reason `keepForLater` guards the sale.
 - **The server doesn't check you're near a keeper:** a client could move items from anywhere. These methods walk there, as a player must. Only reading the contents needs the keeper.
 
-**Where they stand:** smiths are near almost every town, keepers aren't. The hubs the group scripts use have a smith within 2,500 and no keeper for 14,000 or more: Fort Atla's is 54,756 away, Prydwen Keep's 51,871, Connla's 14,176. Thidranki has neither. These teleport destinations have a keeper within `CARE_RADIUS` (distance from the landing; `getTeleportsForRealm` and `nearestVaultKeeper` find the rest, 24 in all, most of them in the Shrouded Isles):
+**Where they stand:** smiths are near most towns, keepers aren't. Of the hubs the group scripts use, most have a smith within 2,500, Tir na mBeo's is 2,835 away and Ardagh's 25,849. None has a keeper within 14,000: Fort Atla's is 54,756 away, Prydwen Keep's 51,871, Connla's 14,176. Thidranki has neither. These teleport destinations have a keeper within `CARE_RADIUS` (distance from the landing; `getTeleportsForRealm` and `nearestVaultKeeper` find the rest, 24 in all, most of them in the Shrouded Isles):
 
 | Realm | Destination | Keeper | Smith |
 |---|---|---|---|
@@ -76,6 +76,8 @@ await bot.withdrawItem('Lord Urqhart', /Dragon/);       // reason inventory_full
 | Hibernia | Druim Ligen | Yralun Trallae, 1,518, on the tower | Lonrah, 1,068 |
 | Hibernia | Innis Carthaig | Blanchefleur, 961 | Siobhan, 1,000 |
 | Hibernia | Shannon Estuary | Ghearic Chauclon, 280 | none |
+
+**Getting back from a frontier keep:** the NPC there with the realm's usual teleporter name (Glasny, Stor Gothi Annark, Master Visur) is an `OFTeleporter` and ignores town keywords. Young Seoltoir, Young Gothi and Young Elementalist are `InlandTeleporter`s and answer them (the first two seen live), so look a teleporter up by `classType: /LiveTeleporter|InlandTeleporter/`. If the teleport home fails, don't bind: the keep's stone is in reach, and every later death would land there.
 
 **A keeper may speak first:** Jarl Yuliwyf says a line on every interact, before the window. `openVault` waits for the window whatever comes first, but a plain `interactWith` reports `dialog` for him.
 
@@ -94,12 +96,13 @@ r.push(...await repairGear(m));         // what's worn below 93 %, worst first: 
 All of them take a group member (`m.actions`) or a party member (`m.bot`), return log lines, and walk only as far as `CARE_RADIUS` (6,000). Pass `{ town }` when a teleport can fail. `bun bots/examples/gear-care.ts <bot>` runs them for one bot. A group made since has `bun groups/<group>/gear-care.ts`, and an older one can copy it from `groups/_template/`. Neither script has an armour or weapon pass, so what comes out of the vault waits in the backpack for the bot's own.
 
 - **The level limit:** `tooHighLevel(item, level)` is red or purple (con above `GEAR_MAX_CON`, orange) and at least `GEAR_MIN_GAP` (4) levels up. At low levels a level or two is already red, and a bot gets there within the hour. So at level 10 the limit starts at 14, at 20 it's 24, at 22 it's 26, at 30 it's 34, at 40 it's 46, and at 50 it's 56. It's a judgement, and `{ maxCon }` moves it. On 2026-11-03 it affected nothing worn by the regular bots: everything they wore above their level was orange.
-- **Who it stops:** `upgradeGains` no longer offers anything too high, so every town script's armour pass obeys it. A piece already worn stays worn: it's only ever going to fit better.
+- **Who it stops:** `upgradeGains` no longer offers anything too high, so a town script's armour pass that goes through it obeys the limit. A bot script with a pass of its own has to ask `tooHighLevel` itself. A piece already worn stays worn: it's only ever going to fit better.
 - **Who it doesn't stop:** `wearAccessories`. Jewellery doesn't wear, so a level 50 ring goes on at level 22 if its bonuses win, up to the level's caps. What isn't worn goes in the vault.
 - **Above the limit is also worth less:** DPS is capped at `1.2 + 0.3 x level` and item AF at `2 x level` (cloth `1 x level`), before quality and condition, and procs and charges wait for the Level Requirement. Bonuses work up to the level's caps.
 - **Repair at 93:** `REPAIR_BELOW`. Below 91 wear doubles, so repairing before that gets twice the fighting out of the same Durability.
 - **What counts as worn in a comparison:** `armorValue` treats a piece a smith can restore as whole, so a worn one doesn't lose to a weaker one, or to a shop copy, over a few silver. With durability 0 it counts what's left, as the server does.
 - **Starting a trip for it:** `careDue(m)` says a visit is due, and `vaultDue(m)` that it has to reach a keeper. The table above says where. A client knows the vault only once it has opened it, so gear that has come to fit starts no trip after a restart: it comes out at the next visit to a keeper, whatever brought the bot there.
+- **What comes out needs a pass to judge it:** a town visit's armour pass skips a weapon its class has no entry for, so out of the vault it would only meet the next sale. `{ judged }` on `takeFromVault`, `vaultDue` and `careDue` leaves the rest in the vault, and it starts no trip.
 - **Selling:** `sellItems` sells what its filter says. A filter that sells by name needs `!keepForLater(item, player)` in it, because a keeper isn't always in reach and a restart can undo a move.
 - **Only what the class could use:** `keepForLater` asks `classCouldUse` first, from the class's abilities at any level, with a base class's advanced classes. Chain on a Spiritmaster isn't kept: it sells.
 - **Kept gear is weight until it reaches a keeper:** a hunt's `shedLoad` at 95 % load drops everything else first, and kept gear only when nothing else is left outside the group's `keepItems`, because an overloaded character can't move at all.
@@ -118,4 +121,11 @@ Wear was set by SQL while it was logged out.
 - At Castle Sauvage: the walk up to Earl Grael on the tower, 768 units above the landing, then down to Fial Bronzearm.
 - Gearmid, a throwaway level 22 Midgard Viking: Jarl Yuliwyf's vault despite his line, Kiarr 4,870 from him with no navmesh, then Hralyvar on the tower at Svasud Faste, 832 up, and Kay-En. The DB showed both axes at slots 110-111 after the quit.
 
-**Not tried live:** the gear pass refusing a real too-high candidate (unit tests only), a full vault, Druim Ligen's keeper, and a group's `gear-care.ts`. The wear numbers come from the code and the DB, not from watching an item fall.
+- Each realm's town visit, on these characters and Gearhib, a throwaway level 22 Hibernian Guardian:
+  - Hibernia through Druim Ligen: the sale took a level 20 blade and left the level 45 one, Yralun Trallae's vault took it, Lonrah repaired 88 % to 100 % for 2,213c, Young Seoltoir sent it home, and it bound at Ardagh.
+  - Midgard through Svasud Faste: two level 51 axes went in, level 20 leggings came out and went on, and it bound at Mularn.
+  - Camelot: a level 45 sword stayed off and went in the vault, while a level 20 sword came out and went on. The sale took a robe, and the worn vest was repaired.
+- A teleport home that couldn't happen, 63,469 from a teleporter: "not at Ardagh: not binding", with the bind point unchanged in the DB.
+- A group's `gear-care.ts`, a one-member group at Svasud Faste with the visit's `judged`: level 20 sleeves came out and went on, a level 20 axe stayed in the vault, and a jerkin was repaired for 22c.
+
+**Not tried live:** a full vault. The wear numbers come from the code and the DB, not from watching an item fall.
