@@ -104,6 +104,8 @@ export interface NukeOptions {
     dotAbove?: number;
     /** Allow area spells (they break mezz on nearby adds). */
     aoe?: boolean;
+    /** The hardest hit instead of the highest spell level: a spec line's rank can beat a later baseline one (Glittering Visions 102 at 22, Sun Streak 88 at 24). */
+    byDamage?: boolean;
     /** Castable now (power, cooldown); default: every spell. */
     ready?: (s: SpellPick) => boolean;
 }
@@ -124,7 +126,8 @@ export function pickNuke(picks: SpellPick[], opts: NukeOptions = {}): SpellPick 
     const top = best(ok.filter(s => !isDot(s)));
     const dot = best(ok.filter(s => isDot(s) && ready(s) && !opts.dotted?.has(dotFamily(s)) && (!top || s.damage >= DOT_MIN_SHARE * top.damage)));
     if (dot && (opts.targetHp ?? 100) > (opts.dotAbove ?? 40)) return dot;
-    return best(ok.filter(s => !isDot(s) && ready(s)));
+    const left = ok.filter(s => !isDot(s) && ready(s));
+    return opts.byDamage ? [...left].sort((a, b) => b.damage - a.damage || b.spell.level - a.spell.level)[0] ?? null : best(left);
 }
 
 /** Hit points a heal restores: a negative value is a percent of the caster's own full health, whoever it lands on (HealSpellHandler.cs:33). */
@@ -168,6 +171,26 @@ export class Spellbook {
     mezz(opts: { aoe?: boolean } = {}): SpellPick | null {
         const ok = this.all().filter(s => isMezz(s) && s.target === 'Enemy' && s.range > 0 && this.ready(s));
         return best(ok.filter(s => s.radius === 0)) ?? (opts.aoe ? best(ok) : null);
+    }
+
+    /** The strongest area mezz that reaches from where we stand (not a point-blank one), for a group of enemies. */
+    areaMezz(): SpellPick | null {
+        return best(this.all().filter(s => isMezz(s) && s.target === 'Enemy' && s.range > 0 && s.radius > 0 && this.ready(s)));
+    }
+
+    /**
+     * Instant single-target spells that stop a cast, ready now, farthest reach first: a Lullaby (Amnesia, which
+     * clears the target's cast, AmnesiaSpellHandler.cs:50-51) and a shout (damage interrupts, GameLiving.StartInterruptTimer).
+     * Area Lullabies are left out: anything hostile but a mezz wakes a mezzed neighbour (GameLiving.cs:1716-1727).
+     */
+    interrupts(): SpellPick[] {
+        return this.all().filter(s => s.target === 'Enemy' && s.castTime === 0 && s.range > 0 && s.radius === 0 && (s.type === 'Amnesia' || s.type === 'DirectDamage') && this.ready(s))
+            .sort((a, b) => b.range - a.range || b.spell.level - a.spell.level);
+    }
+
+    /** A Confusion spell: it interrupts on landing, and being timed, also when resisted (ConfusionSpellHandler.cs:46, SpellHandler.StartSpellNegatedInterruptTimer). */
+    confuse(): SpellPick | null {
+        return best(this.all().filter(s => s.type === 'Confusion' && s.target === 'Enemy' && s.range > 0 && s.radius === 0 && this.ready(s)));
     }
 
     /** Crowd control for an add: a mezz when one is ready (area ones only with `aoe`), else a root. */

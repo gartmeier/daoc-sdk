@@ -123,6 +123,13 @@ export interface RunReport {
         /** RvR: distinct enemy players the group saw, and fights with at least one enemy player. */
         enemiesSeen?: number;
         engagements?: number;
+        /** RvR: average distance (units) of the living from the centre of the largest cluster of them, and how many stood beyond 2500 of it (% of samples). */
+        spreadAvg?: number;
+        strayedPct?: number;
+        /** RvR: share of member time alive (%). */
+        alivePct?: number;
+        /** RvR: deaths with fewer than two living members within 1500. */
+        deathsAlone?: number;
     };
     /** % of run time per phase. */
     phases: Partial<Record<Phase, number>>;
@@ -200,6 +207,12 @@ export class GroupObserver {
     private wipes = 0;
     private playerKills = 0;
     private deathsToPlayers = 0;
+    private memberSamples = 0;
+    private aliveSamples = 0;
+    private spreadSum = 0;
+    private spreadSamples = 0;
+    private strayedSamples = 0;
+    private deathsAlone = 0;
     /** Enemy player contacts ever seen, by region:objectId. */
     private readonly enemies = new Set<string>();
     private timer: ReturnType<typeof setInterval> | null = null;
@@ -233,6 +246,24 @@ export class GroupObserver {
     }
 
     /** Feed one picture (the board does this every sampleMs). */
+    /** Who stood where this sample: the largest cluster within 2500 and each member's distance from its centre. */
+    private sampleTogether(p: GroupPicture): void {
+        this.memberSamples += p.members.length;
+        const alive = p.members.filter(m => !m.isDead);
+        this.aliveSamples += alive.length;
+        const near = (a: { x: number; y: number }, b: { x: number; y: number }, r: number) => Math.hypot(a.x - b.x, a.y - b.y) <= r;
+        const lead = [...alive].sort((a, b) => alive.filter(o => o.regionId === b.regionId && near(o, b, 2500)).length - alive.filter(o => o.regionId === a.regionId && near(o, a, 2500)).length)[0];
+        if (!lead) return;
+        const core = alive.filter(m => m.regionId === lead.regionId && near(m, lead, 2500));
+        const c = { x: core.reduce((a, m) => a + m.x, 0) / core.length, y: core.reduce((a, m) => a + m.y, 0) / core.length };
+        for (const m of alive) {
+            const d = m.regionId === lead.regionId ? Math.hypot(m.x - c.x, m.y - c.y) : 25_000;
+            this.spreadSum += d;
+            this.spreadSamples++;
+            if (d > 2500) this.strayedSamples++;
+        }
+    }
+
     sample(p: GroupPicture): void {
         const dt = Math.max(0, p.at - this.last);
         this.last = p.at;
@@ -240,6 +271,7 @@ export class GroupObserver {
         const phase = inferPhase(p);
         inc(this.phaseMs, phase, dt);
         const threats = p.contacts.filter(c => c.threat);
+        this.sampleTogether(p);
         for (const m of p.members) {
             let t = this.members.get(m.name);
             if (!t) {
@@ -362,6 +394,8 @@ export class GroupObserver {
             if (e.member) this.fight?.deaths.push(e.member);
             const p = this.latest;
             if (p && p.members.length && p.members.every(m => m.isDead || m.name === e.member)) this.wipes++;
+            const me = p?.members.find(m => m.name === e.member);
+            if (me && p!.members.filter(m => m !== me && !m.isDead && m.regionId === me.regionId && Math.hypot(m.x - me.x, m.y - me.y) <= 1500).length < 2) this.deathsAlone++;
         }
         if (e.kind === 'orders') {
             // One retreat however many orders it takes: every leg's new retreatTo is a material change,
@@ -445,6 +479,8 @@ export class GroupObserver {
             Object.assign(report.totals, {
                 playerKills: this.playerKills, deathsToPlayers: this.deathsToPlayers, realmPoints: rpTotal, rpPerHour: Math.round(rpTotal / hours),
                 enemiesSeen: this.enemies.size, engagements: this.fights.filter(f => f.enemyPlayers).length,
+                spreadAvg: this.spreadSamples ? Math.round(this.spreadSum / this.spreadSamples) : 0, strayedPct: pct(this.strayedSamples, this.spreadSamples),
+                alivePct: pct(this.aliveSamples, this.memberSamples), deathsAlone: this.deathsAlone,
             });
         }
         report.findings = findingsFor(report);
@@ -544,6 +580,7 @@ export function formatReport(r: RunReport): string {
     ];
     const rvr = isRvr(r);
     if (rvr) lines.push(`RvR: ${t.enemiesSeen ?? 0} enemy players seen, ${t.engagements ?? 0} engagements, ${t.playerKills ?? 0} player kills, ${t.deathsToPlayers ?? 0} deaths to players, ${t.realmPoints ?? 0} realm points (${t.rpPerHour ?? 0}/h).`);
+    if (rvr && t.alivePct !== undefined) lines.push(`Together: ${t.spreadAvg} units from the group's centre on average, ${t.strayedPct}% of the time beyond 2500; alive ${t.alivePct}% of the time; ${t.deathsAlone} deaths with fewer than two near.`);
     if (r.previous) lines.push(`Against the previous run: ${Object.entries(r.previous).map(([k, v]) => `${k} ${v}`).join(', ')}.`);
     lines.push('', '## Findings', '');
     if (!r.findings.length) lines.push('None.');

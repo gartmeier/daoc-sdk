@@ -174,6 +174,8 @@ export interface Contact extends Sighting {
     healer?: boolean;
     /** Players: seen casting (Sighting.casting) since the group first saw it. Sticky: a caster, not a melee fighter. */
     caster?: boolean;
+    /** Players: when it was last seen starting a cast. What an interrupt goes on (behaviors.ts interrupt). */
+    castingAt?: number;
 }
 
 export type Phase = 'idle' | 'gather' | 'travel' | 'recover' | 'pull' | 'engage' | 'retreat';

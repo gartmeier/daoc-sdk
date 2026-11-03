@@ -26,6 +26,12 @@ import type { BuffSlot, Contact, MemberReport, Point, Role } from './types';
 
 /** Settings the behaviours read; strategies extend this. */
 export interface TacticsSettings {
+    /** Nobody walks to reach a target: casters cast at what is in range from where they stand, else they wait (hit-and-run, pack.ts). */
+    standGround?: boolean;
+    /** Open with an area mezz when it catches at least this many free enemies and not the focus (areaMezzCatch). */
+    areaMezzMin?: number;
+    /** Nuke with the hardest hit rather than the highest spell level (NukeOptions.byDamage). */
+    strongestNuke?: boolean;
     /** How far a member walks to a healer for lost constitution or sickness (default 4000). */
     healerRadius?: number;
     /** How a corpse waits for a rez and how far rezzers go for one (default REZ_SETTINGS). */
@@ -566,11 +572,18 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         const visible = (c: Contact) => !!foeInView(ctx, c.objectId);
         const target = assigned.find(visible) ?? extra.find(visible);
         if (!target) return assigned.length || extra.length ? ctx.skip('cc: target not in view') : false;
-        const sp = ctx.spells.cc({ aoe: ctx.settings.aoe });
+        const area = ctx.settings.areaMezzMin ? ctx.spells.areaMezz() : null;
+        const caught = area ? areaMezzCatch(target, ctx.picture().contacts, area.radius, o.focus) : [];
+        const useArea = area && caught.length >= ctx.settings.areaMezzMin! ? { ...area, kind: 'mezz' as const } : null;
+        const sp = useArea ?? ctx.spells.cc({ aoe: ctx.settings.aoe });
         if (!sp) return ctx.skip('cc: no mezz or root ready');
+        const stand = !!ctx.settings.standGround;
+        if (stand && (foeInView(ctx, target.objectId)?.distance ?? Infinity) > sp.range) return ctx.skip('cc: out of reach, holding ground');
+        // A root that lands on a mezzed enemy wakes it (GameLiving.cs:1716-1727): not while a mezz is on its way there.
+        if (stand && sp.kind === 'root' && mezzComing(ctx, target)) return ctx.skip('cc: a mezz is on its way there');
         await stopSwinging(ctx);
         ctx.doing('cc', target.objectId, sp.spell.name);
-        const c = await ctx.bot.castSpell(sp.spell, target.objectId);
+        const c = await ctx.bot.castSpell(sp.spell, target.objectId, stand ? { approach: false } : {});
         ctx.result('cc', c, target.objectId);
         // The cast went off, but the target is already mezzed or still immune from the last one (a player for 60 s
         // after a mezz ends, a mob after repeated ones: CCSpellHandler.CheckSpellResist): not controlled, and
@@ -582,7 +595,10 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
             // "immune" says nothing about the mezzers' chances, and it stays in our own memory.
             if (sp.kind === 'mezz') ctx.markCcImmune(target.objectId, CC_IMMUNE_MS);
         }
-        else if (c.success && !c.resisted) ctx.markCc(target.objectId, sp.kind, Math.max(3000, sp.duration * 900));
+        else if (c.success && !c.resisted) {
+            ctx.markCc(target.objectId, sp.kind, Math.max(3000, sp.duration * 900));
+            if (useArea) for (const n of caught) if (n.objectId !== target.objectId) ctx.markCc(n.objectId, sp.kind, Math.max(3000, sp.duration * 900));
+        }
         else if (await waitOutSelfCc(c)) return true;
         // PvP immunity (reason 'immune': up to 10 s after a port, login or release) and "You must wait": try again shortly.
         else if (c.retryAfterMs) await Bun.sleep(Math.min(c.retryAfterMs, 3000));
@@ -591,6 +607,100 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         return true;
     },
 });
+
+/**
+ * The free enemy players an area mezz on `target` would catch, `target` first, or none at all when the
+ * focus stands in its radius: mezzing what we are about to hit wastes the spell.
+ */
+export function areaMezzCatch(target: Contact, contacts: readonly Contact[], radius: number, focus: number | null): Contact[] {
+    const near = contacts.filter(c => c.kind === 'player' && !c.stale && alive(c) && dist(c, target) <= radius);
+    if (near.some(c => c.objectId === focus)) return [];
+    return near.filter(c => !c.cc && (c.ccImmuneUntil ?? 0) <= Date.now());
+}
+
+/** How near another member's mezz may be for a root to wait: the largest radius an area mezz has at these levels. */
+const MEZZ_SPLASH = 350;
+
+/** Another member is casting crowd control at `target` or next to it, or has been told to. */
+function mezzComing(ctx: MemberContext<TacticsSettings>, target: Contact): boolean {
+    const near = (id: number | null | undefined) => { const c = id ? ctx.contact(id) : undefined; return !!c && dist(c, target) <= MEZZ_SPLASH; };
+    return ctx.orders().cc.some(a => a.by !== ctx.name && near(a.targetId))
+        || ctx.members().some(m => m.name !== ctx.name && !m.isDead && m.activity.kind === 'cc' && near(m.activity.targetId));
+}
+
+/** An enemy player started a cast this long ago at most, so an interrupt can still catch it. */
+const INTERRUPT_WINDOW_MS = 2000;
+
+/**
+ * Stop an enemy's cast with an instant spell, healers before others: Lullaby from far, a shout from close. Never at
+ * one that is mezzed (it would wake it). Instant, so it costs the Bard no crowd control time.
+ */
+export const interrupt = (): Behavior<TacticsSettings> => ({
+    name: 'interrupt',
+    interruptible: false,
+    async run(ctx) {
+        if (ctx.orders().phase !== 'engage') return false;
+        const spells = ctx.spells.interrupts();
+        if (!spells.length) return false;
+        const now = Date.now();
+        const casting = ctx.picture().contacts
+            .filter(c => c.kind === 'player' && !c.stale && alive(c) && !c.cc && now - (c.castingAt ?? 0) <= INTERRUPT_WINDOW_MS)
+            .sort((a, b) => Number(!!b.healer) - Number(!!a.healer));
+        for (const foe of casting) {
+            const d = foeInView(ctx, foe.objectId)?.distance ?? Infinity;
+            const sp = spells.find(s => d <= s.range);
+            if (!sp) continue;
+            ctx.doing('interrupt', foe.objectId, sp.spell.name);
+            ctx.result('interrupt', await ctx.bot.castSpell(sp.spell, foe.objectId, { approach: false }), foe.objectId);
+            return true;
+        }
+        return false;
+    },
+});
+
+/**
+ * Nothing to mezz: keep a known healer or caster from casting with a confusion. It has a long cast and wakes a mezzed
+ * target, so it goes on free ones only, and one at a time (it lasts a minute on a monster, but a player only loses the cast).
+ */
+export const confuse = (): Behavior<TacticsSettings> => ({
+    name: 'confuse',
+    interruptible: false,
+    async run(ctx) {
+        const o = ctx.orders();
+        if (o.phase !== 'engage') return false;
+        const sp = ctx.spells.confuse();
+        if (!sp) return false;
+        const target = ctx.picture().contacts
+            .filter(c => c.kind === 'player' && !c.stale && alive(c) && !c.cc && (c.healer || c.caster) && c.objectId !== o.focus && (foeInView(ctx, c.objectId)?.distance ?? Infinity) <= sp.range && !o.cc.some(a => a.targetId === c.objectId))
+            .sort((a, b) => Number(!!b.healer) - Number(!!a.healer))[0];
+        if (!target) return false;
+        ctx.doing('confuse', target.objectId, sp.spell.name);
+        ctx.result('confuse', await ctx.bot.castSpell(sp.spell, target.objectId, { approach: false }), target.objectId);
+        return true;
+    },
+});
+
+/**
+ * Whether a member with crowd control as its main job should heal now: nobody else can (no healer alive, or the healer
+ * is under attack), the group is taking a lot of damage (two members low), or the one who is hurt is out of the healer's reach.
+ */
+export function backupHealWanted(me: Pick<MemberReport, 'regionId' | 'x' | 'y'>, members: readonly MemberReport[], threats: readonly Contact[], emergency: number): boolean {
+    const living = members.filter(m => !m.isDead && m.regionId === me.regionId);
+    const healer = living.find(m => m.role === 'healer');
+    const hurt = living.filter(m => m.hp < emergency + 20);
+    if (!hurt.length) return false;
+    if (!healer || threats.some(t => t.target === healer.name) || hurt.length >= 2) return true;
+    return hurt.some(m => dist(m, healer) >= 2000 && dist(m, me) < 2000);
+}
+
+/** heal() only when backupHealWanted says so. */
+export const backupHeal = (): Behavior<TacticsSettings> => {
+    const h = heal();
+    return {
+        ...h, name: 'backupHeal',
+        run: ctx => (backupHealWanted(ctx.me(), ctx.members(), ctx.threats(), ctx.settings.heal.emergency) ? h.run(ctx) : Promise.resolve(false)),
+    };
+};
 
 /**
  * Puller: hit the focus until it turns on us, then walk it back to the anchor
@@ -863,6 +973,7 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
         const seen = foeInView(ctx, mob.objectId);
         if (seen && isDown(seen)) return ctx.skip('assist: focus just died');
         if (!seen) {
+            if (ctx.settings.standGround) return ctx.skip('assist: focus not in view, holding ground');
             // Others see it, we don't (beyond our view): close in on where the group last saw it.
             const me0 = ctx.me();
             const d = dist(me0, mob);
@@ -885,11 +996,13 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
             const live = new Set(ctx.picture().contacts.map(c => `dotted:${ckey(c)}`));
             for (const k of [...ctx.memory.keys()]) if (k.startsWith('dotted:') && !live.has(k)) ctx.memory.delete(k);
             const dotted: Set<string> = ctx.memory.get(key) ?? new Set();
-            const sp = ctx.spells.nuke({ dotted, targetHp: mob.hp, aoe: ctx.settings.aoe });
+            const sp = ctx.spells.nuke({ dotted, targetHp: mob.hp, aoe: ctx.settings.aoe, byDamage: ctx.settings.strongestNuke });
             if (sp) {
+                const stand = !!ctx.settings.standGround;
+                if (stand && seen.distance > sp.range) return ctx.skip('assist: focus out of reach, holding ground');
                 await stopSwinging(ctx);
                 ctx.doing('nuke', mob.objectId, sp.spell.name);
-                const c = await ctx.bot.castSpell(sp.spell, mob.objectId);
+                const c = await ctx.bot.castSpell(sp.spell, mob.objectId, stand ? { approach: false } : {});
                 ctx.result('nuke', c, mob.objectId);
                 if (sp.type === 'DamageOverTime' && (c.success || /already has that effect/i.test(c.message ?? ''))) { dotted.add(dotFamily(sp)); ctx.memory.set(key, dotted); }
                 if (await waitOutSelfCc(c)) return true;
@@ -982,6 +1095,8 @@ export const holdFormation = (): Behavior<TacticsSettings> => ({
         const o = ctx.orders();
         if (!o.anchor || o.phase === 'retreat') return false;
         if (o.phase === 'pull' && o.puller === ctx.name) return false;
+        // Nobody walks alone: the group is on its way to pick us up (pack.ts).
+        if (o.waiting.some(w => w.name === ctx.name && w.why === 'pickup')) return ctx.skip('waiting to be picked up');
         const me = ctx.me();
         // In a fight only a member far from it moves here (back from a release, or tank and melee left beyond
         // the leash): the others' fight behaviours place them.
