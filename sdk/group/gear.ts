@@ -397,13 +397,17 @@ export interface WeaponOptions {
      * Also take what the server says needs a higher level. The requirement only gates the item's
      * proc (GameLiving.cs:853-855), so at level 20 a level 51 axe still gives its Strength and Axe
      * bonuses. Leaving these out is the default, so that a town visit doesn't hand endgame gear to
-     * a level 5 character; a bot that wants them says so.
+     * a level 5 character; a bot that wants them says so. It also lifts the level limit below.
      */
     overLevel?: boolean;
+    /** Too high above this con (default GEAR_MAX_CON): tooHighLevel, as for armour. */
+    maxCon?: number;
 }
 
 /** The server's word on a delved item: its Level Requirement isn't above this character's. */
 const levelAllows = (required: number | null | undefined, level: number, opts: WeaponOptions) => !!opts.overLevel || !required || required <= level;
+/** Within the level limit: above it a weapon wears faster, and its DPS is clamped to the level anyway. One already held stays held. */
+const withinLimit = (item: { level: number }, level: number, opts: WeaponOptions) => !!opts.overLevel || !tooHighLevel(item, level, opts.maxCon);
 
 export interface WeaponRow<T> {
     item: T;
@@ -474,7 +478,7 @@ export async function wearWeapons(m: WeaponMember, opts: WeaponOptions = {}): Pr
     for (const hand of handsFor(needs)) {
         for (let tries = 0; tries < MAX_WEAPON_TRIES; tries++) {
             const rows: WeaponRow<InventoryItem>[] = [];
-            for (const item of m.sdk.getInventory().filter(i => i.slot >= 40 && i.slot <= 79 && !settled.has(i.slot))) {
+            for (const item of m.sdk.getInventory().filter(i => i.slot >= 40 && i.slot <= 79 && !settled.has(i.slot) && withinLimit(i, p.level, opts))) {
                 const to = weaponSlots(item, needs).find(s => handsOf(hand).includes(s));
                 if (to === undefined) continue;
                 const r = await act.delveItem(item);
@@ -513,7 +517,7 @@ export function weaponSellers(p: Pick<PlayerState, 'regionId' | 'x' | 'y' | 'rea
         lists.add(list);
         const weapons = getMerchantItems(list).filter(e => {
             const t = getItemTemplate(e.itemTemplateId);
-            return !!t && weaponSlots(t, needs).length > 0 && levelAllows(t.levelRequirement, p.level, opts) && !foreignTo(realm, list, e);
+            return !!t && weaponSlots(t, needs).length > 0 && levelAllows(t.levelRequirement, p.level, opts) && withinLimit(t, p.level, opts) && !foreignTo(realm, list, e);
         });
         if (weapons.length) out.push({ spawn, weapons });
     }
@@ -567,7 +571,7 @@ export async function buyWeapons(m: WeaponMember, opts: WeaponOptions & { town?:
             if (m.sdk.getMerchant()?.windowType) { out.push(`${s.name}: doesn't take copper`); continue; }
             const budget = m.sdk.getPlayer()!.money.totalCopper - (opts.reserve ?? WEAPON_RESERVE);
             const fits = (i: MerchantItem) => weaponSlots(i, needs).find(to => handsOf(hand).includes(to));
-            const goods = shop.items.filter(i => i.usable && i.price <= budget && fits(i) !== undefined && !foreignTo(realmId(p.realm), s.itemsListTemplateId!, i)).sort((a, b) => b.value1 - a.value1);
+            const goods = shop.items.filter(i => i.usable && i.price <= budget && fits(i) !== undefined && withinLimit(i, p.level, opts) && !foreignTo(realmId(p.realm), s.itemsListTemplateId!, i)).sort((a, b) => b.value1 - a.value1);
             let delves = 0;
             for (const item of goods) {
                 // Under what's already found, however good: its delve couldn't change the answer.

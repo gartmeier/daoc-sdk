@@ -164,6 +164,14 @@ describe('weaponSellers (real merchant data)', () => {
         expect(sold({ ...near, level: 27 })).toContain('big shillelagh');
     });
 
+    test('above the level limit is off the list unless asked for: fine alloy spiked axe, level 24, no Level Requirement', () => {
+        const sold = (p: typeof JORDHEIM, opts = {}) => weaponSellers(p, weaponNeeds(specs(WARRIOR))!, 1500, opts).flatMap(s => s.weapons.map(w => w.name));
+        expect(sold(JORDHEIM)).toContain('alloy double-bladed axe');
+        expect(sold(JORDHEIM)).not.toContain('fine alloy spiked axe');
+        expect(sold(JORDHEIM, { overLevel: true })).toContain('fine alloy spiked axe');
+        expect(sold({ ...JORDHEIM, level: 21 })).toContain('fine alloy spiked axe');
+    });
+
     test('nothing near, nothing found', () => {
         expect(weaponSellers({ ...JORDHEIM, x: 1, y: 1 }, weaponNeeds(specs(WARRIOR))!, 100)).toEqual([]);
     });
@@ -379,6 +387,12 @@ describe('buyWeapons', () => {
         expect((await buyWeapons(asked.member, { ...jordheim, overLevel: true }))[0]).toStartWith('bought Dragonmight');
     });
 
+    test('above the level limit stays on the shelf, with no Level Requirement, unless the bot asks for it', async () => {
+        const shops = { Gymir: [...GYMIR, shopItem(3, 7, 'Towering Axe', ObjectType.Axe, 0, 8.4, 4.6, 15000, { level: 24 })], Saga: [] };
+        expect((await buyWeapons(world({ shops }).member, jordheim))[0]).toStartWith('bought alloy double-bladed axe');
+        expect((await buyWeapons(world({ shops }).member, { ...jordheim, overLevel: true }))[0]).toStartWith('bought Towering Axe');
+    });
+
     test("a window that doesn't charge copper is left alone, whatever the static data said, and the next seller gets its turn", async () => {
         const warrior = world({ windowTypes: { Gymir: 1 } });
         expect(await buyWeapons(warrior.member, jordheim)).toEqual(["Gymir: doesn't take copper"]);
@@ -418,7 +432,7 @@ describe('buyWeapons', () => {
 });
 
 describe('wearWeapons', () => {
-    const LOOT = { ...worn(45, 'Serrated Axe', ObjectType.Axe, 8.3, 2.7, 95), level: 24 };
+    const LOOT = { ...worn(45, 'Serrated Axe', ObjectType.Axe, 8.3, 2.7, 95), level: 23 };
 
     test('a looted axe on the line goes on, clamped by its delve', async () => {
         const f = world({ inventory: [LOOT] });
@@ -438,6 +452,22 @@ describe('wearWeapons', () => {
         const f = world({ inventory: [LOOT], required });
         expect(await wearWeapons(f.member)).toEqual([]);
         expect((await wearWeapons(world({ inventory: [LOOT], required }).member, { overLevel: true }))[0]).toStartWith('wield Serrated Axe');
+    });
+
+    test('above the level limit stays in the bag, with no Level Requirement, unless the bot asks for it', async () => {
+        const high = { ...LOOT, level: 24 };
+        const f = world({ inventory: [high] });
+        expect(await wearWeapons(f.member)).toEqual([]);
+        expect(f.calls).toEqual([]);
+        expect((await wearWeapons(world({ inventory: [high] }).member, { overLevel: true }))[0]).toStartWith('wield Serrated Axe');
+        expect((await wearWeapons(world({ inventory: [high] }).member, { maxCon: 2 }))[0]).toStartWith('wield Serrated Axe');
+    });
+
+    test('one above the limit already in hand stays there until something beats it', async () => {
+        const held = { ...worn(10, 'Old Relic', ObjectType.Axe, 8.3, 2.7, 95), level: 40 };
+        const f = world({ equipment: [held, SHIELD] });
+        expect(await wearWeapons(f.member)).toEqual([]);
+        expect(inHand(f, 10)).toBe('Old Relic');
     });
 
     test('a refusal is reported and the bag keeps it', async () => {

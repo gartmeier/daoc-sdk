@@ -1518,7 +1518,7 @@ describe('merchants', () => {
 
 describe('smiths', () => {
     const smith = makeNpc({ objectId: 210, name: 'Judan Hammerfel', guildName: 'Smith', role: 'smith', realm: 'albion', isPeaceful: true, x: 560050, y: 511000 });
-    const worn: InventoryItem = { slot: 10, name: 'long sword', level: 5, count: 1, model: 3, objectType: 3, condition: 88, durability: 100, quality: 90, weight: 30, value1: 27, value2: 30 };
+    const worn: InventoryItem = { slot: 10, name: 'long sword', level: 5, count: 1, model: 3, objectType: 3, hand: 0, condition: 88, durability: 100, quality: 90, weight: 30, value1: 27, value2: 30 };
     const box = (text: string) => ({ isOpen: true, code: 6, data: [5, 1, 0, 0] as [number, number, number, number], type: 1, text, receivedAt: Date.now() });
 
     /** A smith that asks `price` for what it's given, and on a yes takes the money and restores the item. */
@@ -1637,7 +1637,7 @@ describe('smiths', () => {
 
 describe('the vault', () => {
     const keeper = makeNpc({ objectId: 211, name: 'Lord Urqhart', guildName: 'Vault Keeper', role: 'vault', realm: 'albion', isPeaceful: true, x: 560050, y: 511000 });
-    const axe: InventoryItem = { slot: 40, name: 'Dragonmight', level: 51, count: 1, model: 3, objectType: 17, condition: 100, durability: 100, quality: 100, weight: 30, value1: 165, value2: 37 };
+    const axe: InventoryItem = { slot: 40, name: 'Dragonmight', level: 51, count: 1, model: 3, objectType: 17, hand: 0, condition: 100, durability: 100, quality: 100, weight: 30, value1: 165, value2: 37 };
 
     /** A keeper that opens the window, and moves that go where the server would put them. */
     function atKeeper(overrides: Partial<BotWorldState> = {}) {
