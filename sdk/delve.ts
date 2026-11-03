@@ -147,7 +147,8 @@ export function parseDelve(lines: readonly string[]): ParsedDelve {
 /**
  * A weapon's damage lines (GameInventoryItem.cs:1156-1197, also through a shop's delve). The clamped
  * figure is the item's DPS at this character's level; a shield's lines have a "Shield Speed" and no
- * quality, so they are null here, as is anything with parts missing.
+ * quality, so they are null here, as is anything with parts missing. The exception is condition: the
+ * server leaves its line out at 0 (:1182), which here reads 0.
  */
 export function parseWeaponDelve(lines: readonly string[]): WeaponDelve | null {
     const figure = (what: string) => {
@@ -155,9 +156,9 @@ export function parseWeaponDelve(lines: readonly string[]): WeaponDelve | null {
         return hit ? Number(hit[1]!.replace(',', '.')) : null;
     };
     const baseDps = figure('Base DPS'), clampedDps = figure('Clamped DPS'), speed = figure('Weapon Speed');
-    const quality = figure('Quality'), condition = figure('Condition');
-    if (baseDps === null || clampedDps === null || speed === null || quality === null || condition === null) return null;
-    return { baseDps, clampedDps, speed, quality, condition };
+    const quality = figure('Quality');
+    if (baseDps === null || clampedDps === null || speed === null || quality === null) return null;
+    return { baseDps, clampedDps, speed, quality, condition: figure('Condition') ?? 0 };
 }
 
 /**

@@ -231,6 +231,14 @@ export function weaponValue(w: Pick<WeaponDelve, 'clampedDps' | 'speed' | 'quali
     return w.clampedDps * slow * twoHanded * (w.quality / 100) * (w.condition / 100);
 }
 
+/**
+ * A held or backpack weapon's delve as a comparison should count it: condition only when a smith
+ * can't restore it, as armorValue. A level 19 sword from 80 % costs 9,504c to repair and 47,520c new,
+ * and at about 90 % its own shop copy would clear WEAPON_STEP. A delve doesn't say Durability; the
+ * inventory row does. A shop item has none, and goes by its delve.
+ */
+export const asRepaired = (w: WeaponDelve, item: Pick<InventoryItem, 'durability'>): WeaponDelve => (item.durability === 0 ? w : { ...w, condition: 100 });
+
 /** One stat score point moves a weapon's score this much: a point of weapon stat is 0.5 % of weapon skill (GamePlayer.cs:5476). */
 export const WEAPON_STAT_RATE = 0.005;
 /** However good the bonuses, they move a weapon's score by at most this share, as ARMOR_STAT_SWING does. */
