@@ -68,7 +68,7 @@ From `getStartupLocation` and `findNpcSpawns` (levels 0–1, realm 0, not peacef
   - In upstream's dump, rows 13, 14, 76, 77, 78 and 109 (class list `52;44;43;45;`) name `leaf_tacuil_{vest,helm,boots,gauntlets,sleeves,leggings}`. Only the `leaf_tacuil_*3` templates exist, so the server skips those rows with "Cannot Find Item Template" at startup (StartupEquipment.cs:58, :82-86) and a Guardian gets only the training sword and shield. An L1 badger cub hit such a Guardian for 10–11 and killed it; the same mob hit the armoured Naturalist for 1–4.
   - The fork points those rows at the `*3` templates for class 52 only (docs/SERVER.md). Rows 125-130 already give classes 43, 44 and 45 the same set, which only comes into play with start_as_base_class off. Keeping those classes in both hands them a second set in the backpack (seen on a test server: 6 worn, 6 in bags).
   - Verified 2026-11-03 on a server seeded from the fork: new Guardians, Heroes, Blademasters and Champions start with six pieces worn and none in bags, with start_as_base_class on and off.
-  - `getStarterArmour(cls)` in data shows a class's set, and create-bot warns about a class with none (`[no starter armour]` in `--list`). Characters made earlier keep their inventory.
+  - `getStarterArmour(cls)` in data shows a class's set, and create-bot warns about a class with none (`[no starter armour]` in `--list`). Both read the dump checked out in `server/db`, not the DB, so they say nothing on a DB seeded before the fix (docs/SERVER.md). Characters made earlier keep their inventory.
 - **Casters (Mage, Elementalist, Magician, Mystic, ...):**
   - Tiny mana at level 1: a Mage has 10 power.
   - Interrupted by melee. See [spells.md](spells.md).
