@@ -137,6 +137,49 @@ describe('WorldModel', () => {
         expect(m.self.isDead).toBe(false);
     });
 
+    describe('a rez spell\'s question', () => {
+        const REZ = 'Do you allow Nimue to resurrected you\n with 30 percent hits/power?';
+        const box = (text: string) => W().u8(0).u8(6).u16(7).u16(1).u16(0).u16(0).u8(1).u8(0).bytes(encodeCp1252(text)).u8(0).toBytes();
+        const dead = () => {
+            const m = new WorldModel();
+            m.self.objectId = 123;
+            m.handle(ServerOp.PlayerDeath, W().u16(123).u16(500).fill(0, 4).toBytes());
+            m.handle(ServerOp.Dialog, box(REZ));
+            return m;
+        };
+
+        test('carries the offer', () => {
+            expect(dead().dialog).toMatchObject({ isOpen: true, code: 6, data: [7, 1, 0, 0], resurrection: { caster: 'Nimue', healthPercent: 30 } });
+        });
+
+        test('another box carries none', () => {
+            const m = new WorldModel();
+            m.handle(ServerOp.Dialog, box('Do you accept?'));
+            expect(m.dialog?.isOpen).toBe(true);
+            expect(m.dialog?.resurrection).toBeUndefined();
+        });
+
+        test('closes with the revive: the server sends no close (0x89)', () => {
+            const m = dead();
+            m.handle(ServerOp.PlayerRevive, W().u16(123).u16(0).toBytes());
+            expect(m.dialog?.isOpen).toBe(false);
+        });
+
+        test('closes when it expires', () => {
+            const m = dead();
+            m.handle(ServerOp.Message, W().u8(0).cString('Your resurrection spell has expired.').toBytes());
+            expect(m.messages.at(-1)?.text).toBe('Your resurrection spell has expired.');
+            expect(m.dialog?.isOpen).toBe(false);
+        });
+
+        test('a revive leaves another box open: a healer\'s offer comes while alive', () => {
+            const m = dead();
+            m.handle(ServerOp.Dialog, box('It will cost 188 copper to have your lost constitution restored. Do you accept?'));
+            m.handle(ServerOp.PlayerRevive, W().u16(123).u16(0).toBytes());
+            expect(m.dialog?.isOpen).toBe(true);
+        });
+    });
+
     test('skills: spec/ability/style split and skillIndex excludes specs', () => {
         const m = new WorldModel();
         const p = W().u8(1).u8(3).u8(3).u8(0)

@@ -9,7 +9,7 @@ import type {
 } from '../../sdk/types';
 import { getZone } from '../../data/zones';
 import { ServerOp } from '../protocol/opcodes';
-import { chatTypeName, decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseSpeech } from '../protocol/incoming/chat';
+import { chatTypeName, decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseResurrectionOffer, parseSpeech } from '../protocol/incoming/chat';
 import {
     decodeAttackMode, decodeChangeGroundTarget, decodeChangeTarget, decodeCombatAnimation, decodeConcentrationList, decodeDisableSkills,
     decodeInterrupt, decodePlayerDeath, decodeRevive, decodeSpellCastAnimation, decodeSpellEffect, decodeUpdateIcons,
@@ -530,6 +530,7 @@ export class WorldModel {
                 });
                 if (d.health > 0 && wasDead) {
                     s.isDead = false;
+                    this.closeResurrectionOffer();
                     this.signal('revived');
                 } else if (d.health === 0 && d.maxHealth > 0 && !wasDead) {
                     this.markSelfDead(now);
@@ -592,7 +593,8 @@ export class WorldModel {
                 return true;
             case ServerOp.Dialog: {
                 const d = decodeDialog(p);
-                this.dialog = { isOpen: true, code: d.code, data: d.data, type: d.type, text: d.text, receivedAt: now };
+                const resurrection = parseResurrectionOffer(d.text);
+                this.dialog = { isOpen: true, code: d.code, data: d.data, type: d.type, text: d.text, receivedAt: now, ...(resurrection ? { resurrection } : {}) };
                 this.signal('dialog');
                 return true;
             }
@@ -718,6 +720,7 @@ export class WorldModel {
                 const d = decodeRevive(p);
                 if (d.objectId === this.self.objectId) {
                     this.self.isDead = false;
+                    this.closeResurrectionOffer();
                     this.signal('revived');
                 }
                 const pl = this.players.get(d.objectId);
@@ -861,6 +864,7 @@ export class WorldModel {
             sender: speech?.sender ?? null, popup: d.popup, receivedAt: now,
         };
         this.messages.push(msg);
+        if (d.text === 'Your resurrection spell has expired.') this.closeResurrectionOffer();
         if (this.messages.length > MAX_MESSAGES) this.messages.splice(0, this.messages.length - MAX_MESSAGES);
 
         // NPC dialog: GameNPC.SayTo sends CT_System with the '##' popup prefix (GameNPC.cs:2579-2601),
@@ -887,6 +891,15 @@ export class WorldModel {
         if (target && target.name.toLowerCase() === lower) return target;
         for (const n of this.npcs.values()) if (n.name.toLowerCase() === lower) return n;
         return undefined;
+    }
+
+    /**
+     * The server sends no close for a dialog, so a rez question left open would stay open: it expires after
+     * 15 s (ResurrectSpellHandler.cs:215-222), and a release or a revive ends it. Code that answers "the
+     * open box" must not take it for its own.
+     */
+    private closeResurrectionOffer(): void {
+        if (this.dialog?.isOpen && this.dialog.resurrection) this.dialog = { ...this.dialog, isOpen: false };
     }
 
     private markSelfDead(now: number): void {

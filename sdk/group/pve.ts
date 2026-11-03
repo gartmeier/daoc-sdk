@@ -370,7 +370,7 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     // ── Gather and recover ──
     if (away.length) return { ...calm, phase: 'gather', anchor: base, facing, waiting: away.map(m => ({ name: m.name, why: 'away' })), reason: `waiting for ${names(away)}` };
     const deadMembers = p.members.filter(m => m.isDead);
-    if (deadMembers.length) return { ...calm, phase: 'recover', anchor: base, facing, waiting: deadMembers.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadMembers)} to release and come back` };
+    if (deadMembers.length) return { ...calm, phase: 'recover', anchor: base, facing, waiting: deadMembers.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadMembers)}: a rez, or a release and the way back` };
     const waiting = alive.flatMap(m => [
         ...(m.hp < s.ready.hp ? [{ name: m.name, why: 'health' }] : []),
         ...(usesMana(m) && m.mana < s.ready.mana ? [{ name: m.name, why: 'power' }] : []),

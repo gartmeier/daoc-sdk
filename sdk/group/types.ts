@@ -45,6 +45,8 @@ export interface Capabilities {
     heal: boolean;
     cc: boolean;
     nuke: boolean;
+    /** Knows a resurrection spell and has the rez behaviour; absent in reports from before it. */
+    rez?: boolean;
     /** Buff spell names it can cast. */
     buffs: string[];
     /** The same buffs with slot, target and concentration (who buffs whom: buffs.ts). */
