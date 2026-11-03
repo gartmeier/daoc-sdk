@@ -73,7 +73,7 @@ if (import.meta.main) await runScript(main, { args: { pattern: scriptArgs()[0] }
 - `data/index.ts` (import from `../../data/index` in scripts): static world data parsed from the DB dump.
   - Spawns: `findNpcSpawns({ name, guild, classType, regionId, near, radius, levelRange, realm })`.
   - Items and merchants: `getMerchantItems(listId)`, `findItemTemplates`.
-  - Skills: `getSpell`, `getStylesFor(classId)`.
+  - Skills: `getSpell`, `getStylesFor(classId, spec?)`, `getSpecialization(spec)`, `specKey(name)`, `specDisplayName(name)` (a line's names: [npc-dialog.md](npc-dialog.md)).
   - Places: `getZoneAt(region, x, y)`, `nearestBindpoint`, `getZonePointsFrom(region)`.
   - Height: `estimateZ(region, x, y)`.
   - Characters: `validateCharacter`, `getStartingClasses`, `getPlayableRacesForClass`, `getStarterArmour` (what a new character really gets).

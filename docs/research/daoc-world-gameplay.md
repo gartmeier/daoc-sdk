@@ -147,7 +147,7 @@ File: `GameServer/packets/Client/168/CharacterCreateRequestHandler.cs`, client o
 - `/stuck` (warp to the last safe position), `/target <playerName>`, `/assist [name]`, `/faceloc x y` (zone coordinates), `/facegloc`, `/gloc`, `/where <npc>`.
 - `/release [city|bind|house]` (allowed 10 s after death; automatic after 900 s).
 - `/sit` (`/rest`), `/stand`, `/sprint`, `/bind`, `/autoloot on|off`.
-- `/train` (`/trainline`, `/trainskill`) `<line> <amount>`, `/respec`, `/level` (instant level 20 if the account has a level 50), `/xp`, `/stats`, `/quit`.
+- `/train` (`/trainline`, `/trainskill`) `<prefix of the line's KeyName> <target level>`, `/respec`, `/level` (instant level 20 if the account has a level 50), `/xp`, `/stats`, `/quit`.
 - `/whisper` (`/whis`): this is **how NPC dialogs, trainers, teleporters and quests work**. Target the NPC and whisper the `[keyword]` shown in its text.
 - `/say`, `/group`, `/invite`, `/disband`, `/makeleader`, `/buff`, `/backupstyle`, `/cancelstyle`, `/range`, `/time`, `/region`.
 
