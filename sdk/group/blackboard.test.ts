@@ -612,4 +612,59 @@ describe('a monster casting at a member from range', () => {
         b.publish(o, T + 100);
         expect(b.picture(T + 100).contacts[0]).toMatchObject({ target: null, targetId: stranger });
     });
+
+    describe('fighting someone outside the group is not our fight', () => {
+        const STRANGER = 700;
+        const see = (ms: number, combatEvents: CombatEvent[], extra: { attacking?: boolean } = {}) => observeState(makeState({
+            timestamp: T + ms, player: makePlayer({ objectId: ME, ...extra, ...(extra.attacking ? { targetObjectId: MOB } : {}) }), nearbyNpcs: [mob()],
+            nearbyPlayers: [makePlayerObj({ objectId: STRANGER, name: 'Stranger', realm: 'albion' })], combatEvents,
+        }), self)!;
+        const threat = (b: Blackboard, ms: number) => b.picture(T + ms).contacts[0]!.threat;
+
+        test('its spell or its swing on a stranger makes no threat, wherever it stands: a damage spell also arrives as a swing', () => {
+            for (const kind of ['spellEffect', 'melee'] as const) {
+                const b = new Blackboard();
+                b.publish(see(100, [ev(kind, MOB, STRANGER, 0)]), T + 100);
+                expect(threat(b, 100)).toBe(false);
+            }
+        });
+
+        test('its next hit on us does', () => {
+            const b = new Blackboard();
+            b.publish(see(100, [ev('melee', MOB, STRANGER, 0)]), T + 100);
+            b.publish(see(200, [ev('melee', MOB, STRANGER, 0), ev('melee', MOB, ME, 150)]), T + 200);
+            expect(threat(b, 200)).toBe(true);
+        });
+
+        test('so does the group hitting it', () => {
+            const b = new Blackboard();
+            b.publish(see(100, [ev('melee', MOB, STRANGER, 0)], { attacking: true }), T + 100);
+            b.publish(see(200, [ev('melee', MOB, STRANGER, 0)], { attacking: true }), T + 200);
+            expect(threat(b, 200)).toBe(true);
+        });
+
+        test('its swing on something that is no player, a pet of ours for one, still counts', () => {
+            const b = new Blackboard();
+            b.publish(see(100, [ev('melee', MOB, 900, 0)]), T + 100);
+            expect(threat(b, 100)).toBe(true);
+        });
+    });
+
+    describe('only a mob standing to cast is on a member by its spell', () => {
+        test('a target the server names that differs from the spell is the server\'s', () => {
+            const { step } = board();
+            const c = step(100, [ev('spellEffect', MOB, HEALER, 0)], mob({ targetObjectId: ME, inCombat: true }));
+            expect(c.targetId).toBe(ME);
+            expect(c.targetBySpell).toBe(false);
+        });
+
+        test('in combat with no target it is running: not by spell, and the target it had is kept', () => {
+            const { step } = board();
+            step(100, [], mob({ targetObjectId: HEALER, inCombat: true }));
+            const c = step(200, [ev('spellEffect', MOB, HEALER, 150)], mob({ inCombat: true }));
+            expect(c.targetBySpell).toBe(false);
+            expect(c.target).toBe('Friend');
+            expect(c.movedAt).toBeGreaterThan(0);
+        });
+    });
 });

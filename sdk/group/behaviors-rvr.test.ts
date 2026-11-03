@@ -195,6 +195,15 @@ describe('tank: peels and the chase leash', () => {
         expect(peelTarget(pve(caster({ cc: { by: 'Healer', kind: 'mezz', until: Date.now() + 9000 } })).ctx)).toBeNull();
     });
 
+    test('with a leash, such a caster is a peel only inside it, and never away from an enemy player', () => {
+        const caster = (x: number) => contact(60, { regionId: R, x, y: 10_000, threat: true, target: 'Healer', targetBySpell: true, hostileSince: Date.now() - 1000 });
+        const monster = contact(51, { regionId: R, x: 10_300, y: 10_000, threat: true });
+        const leashed = (focus: Contact, add: Contact) => stub({ name: 'Tank', role: 'tank', at: ANCHOR, members: [healer(10_000, 11_500)], contacts: [focus, add], orders: { focus: 51 } });
+        expect(peelTarget(leashed(monster, caster(11_500)).ctx)?.objectId).toBe(60);
+        expect(peelTarget(leashed(monster, caster(12_500)).ctx)).toBeNull();
+        expect(peelTarget(leashed(focusAt(10_300), caster(11_500)).ctx)).toBeNull();
+    });
+
     test('the focus beyond the leash: the tank fights the nearest enemy inside it instead', async () => {
         const s = stub({
             name: 'Tank', role: 'tank', at: ANCHOR,
