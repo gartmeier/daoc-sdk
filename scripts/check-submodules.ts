@@ -2,7 +2,7 @@
 // Fails fast when the git submodules the server and data/ need are not checked out,
 // and warns when server/db is on another commit than this repo pins.
 //
-//   bun scripts/check-submodules.ts     (run by `bun run server:up` before docker compose, and by `bun run test`)
+//   bun scripts/check-submodules.ts     (run by `bun run server:up` before docker compose)
 //
 // server/docker/docker-compose.yml builds the gameserver from ../core and seeds
 // MariaDB from ../db/opendaoc-db-core; data/build.ts reads both. After a plain
@@ -61,7 +61,7 @@ if (import.meta.main) {
     if (missing.length) {
         console.error(`missing git submodule(s): ${missing.join(', ')}`);
         console.error(`run: git submodule update --init ${missing.join(' ')}`);
-        console.error('(or clone with: git clone --recurse-submodules <url>; in a git worktree: bun run setup:worktree)');
+        console.error('(or clone with: git clone --recurse-submodules <url>)');
         process.exit(1);
     }
     const warning = dbPinWarning(root);
