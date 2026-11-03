@@ -115,10 +115,11 @@ const CC_IMMUNE_MS = 60_000;
  * enemy player also stands in melee reach. A player's target is inferred from its latest swing or
  * hostile spell (observeState), so a caster nuking `m` from 1500 targets it too; but players have no
  * aggro table, so running to the tank or a taunt doesn't take that one off. flee() drew casters into
- * the melee with every nuke on them.
+ * the melee with every nuke on them. A monster targeting `m` by its spell alone is the same for flee(),
+ * though a taunt does take it off: peelTarget counts it wherever it stands.
  */
 export function onMember(t: Contact, m: Point & { name: string }): boolean {
-    return t.target === m.name && !t.cc && (t.kind !== 'player' || dist(t, m) <= MELEE_REACH);
+    return t.target === m.name && !t.cc && ((t.kind !== 'player' && !t.targetBySpell) || dist(t, m) <= MELEE_REACH);
 }
 
 const alive = isAlive;
@@ -409,7 +410,8 @@ export const pull = (): Behavior<TacticsSettings> => ({
         if (!mob) return ctx.skip('pull: focus unknown');
         const me = ctx.me();
         const far = !!o.anchor && dist(mob, o.anchor) > ctx.settings.pullDistance;
-        if (mob.target === ctx.name) {
+        // A caster with us as the target of its spell alone stands and casts, and may not follow: go on and hit it.
+        if (mob.target === ctx.name && !mob.targetBySpell) {
             if (!o.anchor || dist(me, o.anchor) < 120) return ctx.skip('pull: waiting for it at the anchor');
             await stopSwinging(ctx);
             ctx.doing('pull', mob.objectId, 'back to the anchor');
@@ -488,7 +490,7 @@ export function peelTarget(ctx: MemberContext<TacticsSettings>): Contact | null 
     const now = Date.now();
     const soft = new Map(ctx.members().filter(m => !m.isDead && m.role !== 'tank' && m.role !== 'melee').map(m => [m.name, m]));
     return ctx.threats()
-        .filter(t => t.objectId !== o.focus && !t.stale && alive(t) && t.target !== null && soft.has(t.target) && onMember(t, soft.get(t.target)!) && !beyondLeash(ctx, t))
+        .filter(t => t.objectId !== o.focus && !t.stale && alive(t) && t.target !== null && soft.has(t.target) && (onMember(t, soft.get(t.target)!) || (t.kind === 'npc' && t.targetBySpell && !t.cc)) && !beyondLeash(ctx, t))
         .filter(t => uncontrolled(ctx, t, now))
         .sort((a, b) => a.hostileSince - b.hostileSince)[0] ?? null;
 }
