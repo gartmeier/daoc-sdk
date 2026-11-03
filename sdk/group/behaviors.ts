@@ -831,9 +831,9 @@ export const rest = (): Behavior<TacticsSettings> => ({
         const r = ctx.settings.rest;
         const caster = me.maxMana > 0;
         if (me.healthPercent >= r.hp && (!caster || me.manaPercent >= r.mana)) return false;
-        // rest() refuses while any NPC in view targets us, even one leashing home far away.
+        // rest() refuses while any NPC in view targets us or just hit us, even one leashing home far away.
         const on = ctx.bot.getAttackers()[0] ?? ctx.bot.getPlayerAttackers()[0];
-        if (on) return ctx.skip(`rest: ${on.name} targets us (${Math.round(on.distance)} away)`);
+        if (on) return ctx.skip(`rest: ${on.name} is on us (${Math.round(on.distance)} away)`);
         ctx.doing('rest');
         const res = await ctx.bot.rest({ healthPercent: r.hp, manaPercent: caster ? r.mana : undefined, timeout: 120_000 });
         if (!res.success) { ctx.result('rest', res); return ctx.skip(`rest: ${res.reason}`); }

@@ -6,6 +6,7 @@ bots/*/
 *.log
 .env
 server/navmesh/
+server/docker/throwaway/
 server/OpenDAoC-Core
 
 groups/*/

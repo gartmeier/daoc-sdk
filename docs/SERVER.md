@@ -52,6 +52,33 @@ Accounts are created automatically on first login (`AUTO_ACCOUNT_CREATION=True` 
 
 The re-import reads whatever is checked out in `server/db`, so run `git submodule update server/db` before `down -v`. Updating alone doesn't change a DB that's already seeded, because the dump is only imported into an empty volume. A DB seeded from a dump older than the fork keeps both problems until it's re-imported, or until you run these and restart the game server: `UPDATE mob SET ClassType='DOL.GS.GameBountyMerchant' WHERE Guild='Item Merchant' AND ClassType='DOL.GS.GameMerchant';` and `UPDATE starterequipment SET Class='52;', TemplateID=CONCAT(TRIM(TRAILING '3' FROM TemplateID),'3') WHERE StarterEquipmentID IN (13,14,76,77,78,109);`. Characters made earlier keep their inventory.
 
+## Throwaway stacks (scripts/throwaway-server.ts)
+
+A live check that must leave the shared stack alone gets its own compose project, volume and ports, generated from `server/docker/docker-compose.yml` and running `daoc-sdk-gameserver:latest`.
+
+```bash
+bun run server:throwaway up     # exits 0 once logins work, and prints the ports
+bun run server:throwaway down   # removes this stack and its volume
+```
+
+Point a bot at it with `SERVER=127.0.0.1:<port>` in `bot.env`, or give a `DaocClient` the host and port (no gateway needed, as in `client/dev/smoke.ts`). Use one account per character.
+
+- **Names.** The default is the checkout's folder, so each worktree has its own stack; `--name=<name>` makes another. `up` on a stack that is up starts nothing and prints its ports again.
+- **Ports.** The first of nine slots with nothing published: `10300+10n` game, `10400+10n` UDP, `13306+10n` MariaDB. A slot another `up` takes first moves this one to the next. Docker Desktop doesn't report a port held by a program outside Docker: `up` then fails at the handshake, after the server is listening.
+- **Readiness.** `up` waits for this boot's `Server is now listening` line, then for the 0xF4 handshake on the published port. A crash fails it at once with the end of the log.
+- **What differs from the shared stack.** No navmeshes, so NPCs walk straight. Only the two account limits of `server:setup` are set (`time_between_account_creation_sameip`, `total_accounts_allowed_sameip`), so `xp_rate`, the quit timer and the rest stay stock. `restart: "no"`, so a forgotten stack stays down after a Docker restart. `oom_score_adj: 500`, so it goes before the shared gameserver if the Docker VM runs out of memory. Each stack holds about 2-2.5 GiB there.
+- **Image.** `up` never builds. It warns when the image is older than the last commit that moved the `server/core` pin. `docker compose -f server/docker/docker-compose.yml build gameserver` replaces the image without touching the running shared stack.
+- **Seed volume.** The first `up` stops its stack once booted, copies the database into a volume `daoc-seed-<hash>`, and later ones restore that copy. It holds no accounts, because no client has connected yet. The hash covers the dump's commit and uncommitted changes, the image id, the shared `db` service and the two limits, so a rebuilt image or a moved pin costs one cold boot and a new seed, which replaces the older ones. `down` leaves the seed (about 400 MB); `docker volume rm` the name from `docker volume ls --filter name=daoc-seed-` to get the space back. `--cold` seeds from the dump and neither uses nor saves a seed, for a check of the seeding itself.
+
+| `up` | Seconds | Where they go |
+|---|---|---|
+| First, saving a seed | 74 | as `--cold`, plus 3 to save and 6 to start MariaDB again |
+| From the seed | 25-31 | restore 2, MariaDB start 6, gameserver boot 15-22 |
+| `--cold` | 63-72 | MariaDB 26-31 (18-23 of it the SQL import), first boot 17-19, restart and second boot 16-19 |
+| On a stack that is up | 4 | |
+
+Measured 2026-11-03 with the shared stack and up to three other throwaway stacks running. Turning off InnoDB durability saved 4 s of the import, and a 2 s healthcheck interval 4 s of a cold boot and nothing from the seed, so the stack keeps the shared file's settings.
+
 ## `server:setup` (scripts/setup-server.ts)
 
 The script waits for MariaDB, then checks each property key and value type against the `[ServerProperty]` attributes in `server/core/GameServer`. It updates rows, or inserts them if missing, and verifies the values with SQL. If anything changed, it restarts the **gameserver container only**, then waits until the server answers a real 0xF4 → 0x22 handshake. A plain TCP connect isn't enough, because Docker's port proxy accepts connections before the server is listening.

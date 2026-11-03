@@ -72,7 +72,7 @@ export function isCrowdControlled(text: string): boolean {
  * sends another player's target, only its swings, and a swing round lasts the weapon's speed
  * (AttackComponent.AttackSpeed): two-handed weapons and bows of levels 18-26 mostly swing every
  * 4-5.4 s (SPD_ABS 40-54 in itemtemplate.sql), so a shorter window drops the target between two
- * swings at the same victim.
+ * swings at the same victim. attackers() keeps an NPC on us this long after a hit too.
  */
 export const PLAYER_AIM_MS = 6000;
 
@@ -627,11 +627,32 @@ export class ActionHelpers {
             ?? this.sdk.findInventoryItem(target.name);
     }
 
-    /** NPCs whose current target is us. */
+    /**
+     * NPCs fighting us: their reported target is us, or their swing or spell landed on us within PLAYER_AIM_MS.
+     * The target alone misses a caster or a running mob: the server sends it only for a mob in attack state, able to
+     * turn, that stands within its attack range (PacketLib168.cs:820-828), and a mob starting a timed cast
+     * leaves attack state (StandardMobBrain.cs:442-443). A hit from something we couldn't fight, such as a realm NPC's buff, doesn't count.
+     */
     attackers(state: BotWorldState | null = this.sdk.getState()): NearbyNpc[] {
-        const me = state?.player?.objectId;
-        if (!me) return [];
-        return (state?.nearbyNpcs ?? []).filter(n => n.targetObjectId === me && n.healthPercent > 0);
+        const p = state?.player;
+        if (!state || !p) return [];
+        const hitBy = this.hitUsBy(state, PLAYER_AIM_MS);
+        return state.nearbyNpcs.filter(n => n.healthPercent > 0 && (n.targetObjectId === p.objectId || (hitBy.has(n.objectId) && isAttackable(n, p))));
+    }
+
+    /** Who swung at us (hit or miss) or landed a spell effect on us within `windowMs` of the snapshot. */
+    private hitUsBy(state: BotWorldState, windowMs: number): Set<number> {
+        const me = state.player?.objectId;
+        const since = state.timestamp - windowMs;
+        const ids = new Set<number>();
+        for (const e of state.combatEvents) {
+            // The next object in the region takes a dead mob's id (Region.cs): its hits aren't from that one.
+            if (e.kind === 'death' && e.targetObjectId !== null) ids.delete(e.targetObjectId);
+            else if ((e.kind === 'melee' || e.kind === 'spellEffect') && e.targetObjectId === me && e.attackerObjectId !== null && e.receivedAt >= since) {
+                ids.add(e.attackerObjectId);
+            }
+        }
+        return ids;
     }
 
     /**
@@ -643,13 +664,7 @@ export class ActionHelpers {
     playerAttackers(state: BotWorldState | null = this.sdk.getState(), windowMs: number = PLAYER_AIM_MS): NearbyPlayer[] {
         const p = state?.player;
         if (!state || !p) return [];
-        const since = state.timestamp - windowMs;
-        const ids = new Set<number>();
-        for (const e of state.combatEvents) {
-            if ((e.kind === 'melee' || e.kind === 'spellEffect') && e.targetObjectId === p.objectId && e.attackerObjectId !== null && e.receivedAt >= since) {
-                ids.add(e.attackerObjectId);
-            }
-        }
+        const ids = this.hitUsBy(state, windowMs);
         return state.nearbyPlayers.filter(pl => ids.has(pl.objectId) && pl.realm !== p.realm && !pl.isDead);
     }
 

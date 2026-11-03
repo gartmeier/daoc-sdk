@@ -98,7 +98,7 @@ gateway/         gateway.ts (rs-sdk-compatible router), groups.ts (group views),
 sdk/             index.ts (BotSDK), actions.ts (BotActions), runner.ts, cli.ts, chat.ts, API.md
 mcp/             server.ts (execute_code, list_bots, disconnect_bot), api/ (BotManager)
 data/            DB dump parsers and query helpers; generated/ is a cache
-scripts/         setup-server.ts, build-data.ts, check-submodules.ts, setup-worktree.ts
+scripts/         setup-server.ts, build-data.ts, check-submodules.ts
 LICENSES/        third-party license texts (rs-sdk MIT, OpenDAoC GPL-3.0)
 server/          docker/ (compose + Dockerfile), core/ (OpenDAoC source), db/ (DB dump)
 learnings/       per-topic notes for agents

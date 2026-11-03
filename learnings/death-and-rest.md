@@ -9,7 +9,7 @@ const r = await bot.rest({ healthPercent: 90 });                 // casters: add
 
 - **Sitting:** `rest` sits, and waits for the server's "You sit down." (a refused sit fails). It stands up again when the thresholds are reached, on failure, and on cancel.
 - **Live:** health went from 89 % to 100 % in 18 s at level 1. (DAoC regenerates faster sitting; standing rates were not measured.) A level-5 Blademaster from 16-34 % took about 96-160 s including its walks, and about 80 s at level 6. `rest` stops at 120 s by default, so size a script's timeout for that.
-- **Attacked while sitting:** a mob attacking you while you sit ends the rest with `attacked`. Fight it (`bot.getAttackers()[0]`), then rest again. `rest` refuses to start while something targets you (`in_combat`).
+- **Attacked while sitting:** a mob attacking you while you sit ends the rest with `attacked`. Fight it (`bot.getAttackers()[0]`), then rest again. `rest` refuses to start while an NPC in view targets you or hit you in the last 6 s (`in_combat`).
 - **No sitting:** `bot.waitForHealth(percent)` waits without sitting.
 - **Healers** (Brother Maynard <Healer>, near the Albion start) answer interact. In DAoC they remove constitution loss after deaths; untested here.
 
@@ -31,6 +31,16 @@ You know you died when `bot.isDead()` / `player.isDead` is true. `player.deathCo
 - **Viewers:** a real client shows a player as dead from the state byte of its 0xA9 (0x14, SITTING|SWIMMING), and the server relays that byte as the player's client sent it. The client sends it while `player.isDead`. Without it a real client showed the corpse dying and vanishing over and over, with one 0xAE and no remove or create from the server; with it the corpse lies still (verified in a real 1.127 client). Moving, turning and jumping are refused while dead.
 - **Nobody releases an idle corpse for you:** without a running script a dead bot lies there for the server's full release timer, 900 s.
 - **Bind points:** `nearestBindpoint(regionId, x, y, realm)` from `data/index`. Binding elsewhere: `/bind` near a bind stone answers "You are now bound to this location." (verified live at Ardagh).
+- **Graves:** a death that costs XP leaves a gravestone holding that XP. At the level's XP floor there is nothing to lose, so no grave (`GamePlayer.cs:1645-1653`). Experience never took a Warden below level 15's floor, over 4 deaths at that level.
+- **Praying** gets a grave's XP back. There is no `bot.*` method yet:
+  ```typescript
+  const grave = sdk.getNearbyObjects().find(o => /grave/i.test(o.name));
+  if (grave) {
+      await sdk.sendSetTarget(grave.objectId);
+      await sdk.sendCommand('/pray');
+  }
+  ```
+  It needs your own grave targeted, within 2000 units, standing still and not riding (`GamePlayer.Pray`), so a grave in a camp can be reached from outside it. You sit for 5 s, then the grave's XP comes back and it's gone. Live at level 15: 19,800 and 41,400 XP from 2 graves.
 - **Unverified:** the XP and constitution loss penalties at low level.
 
 ## Quitting and the 60 s lockout
