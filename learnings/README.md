@@ -79,7 +79,7 @@ if (import.meta.main) await runScript(main, { args: { pattern: scriptArgs()[0] }
   - Skills: `getClassSkills(class)` (what each line gives, trained or not: [builds.md](builds.md)), `getSpell`, `getStylesFor(classId, spec?)`, `getSpecialization(spec)`, `specKey(name)`, `specDisplayName(name)` (a line's names: [npc-dialog.md](npc-dialog.md)).
   - Places: `getZoneAt(region, x, y)`, `nearestBindpoint`, `getZonePointsFrom(region)`.
   - Height: `estimateZ(region, x, y)`.
-  - Classes: `classSheet`, `specPointsAt`, `specLevelsAt` from `data/class-sheet.ts`.
+  - Classes: `classSheet`, `classSpecs`, `classSpellLines` from `data/class-sheet.ts`. Spec points: `earnedSpecPoints`, `specCost`, `buildPath` from `data/builds` ([builds.md](builds.md)).
   - Characters: `validateCharacter`, `getStartingClasses`, `getPlayableRacesForClass`, `getStarterArmour` (what a new character really gets).
   - The data says where things spawn; `sdk.getNearbyNpcs()` says what is actually there now.
 - `bots/examples/` holds working scripts for grinding, selling, casting, exploring and grouping.
