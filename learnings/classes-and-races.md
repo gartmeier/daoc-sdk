@@ -64,14 +64,11 @@ From `getStartupLocation` and `findNpcSpawns` (levels 0–1, realm 0, not peacef
   - They start with weapon, shield and a full armour set equipped; `killNpc` works from the first second.
   - The Fighter has Crush/Slash/Thrust at 1, Sprint, and no styles until promotion.
   - Live, a fresh Naturalist killed three badger cubs (L0–L1, +17/+35/+35 XP, level 1 → 2), taking 1–4 per hit. An L1 large frog, the template's first pick, killed it at 16 % frog health.
-- **Guardian starts unarmoured** (and so do Blademaster, Hero and Champion, which start as Guardian):
-  - Its starterequipment rows (ids 13, 14, 76, 77, 78, 109, class list `52;44;43;45;`) name `leaf_tacuil_{vest,helm,boots,gauntlets,sleeves,leggings}`. Only the `leaf_tacuil_*3` templates exist, so the server skips those rows with "Cannot Find Item Template" at startup (StartupEquipment.cs:58, :82-86).
-  - A Guardian gets only the training sword and shield. With start_as_base_class on, a Blademaster is turned into a Guardian before the gear is handed out, so it gets nothing either (verified live: Fxdod, slots 10, 11, 40).
-  - Live: an L1 badger cub hit the Guardian for 10–11 and killed it; the same mob hit the armoured Naturalist for 1–4.
-  - `getStarterArmour(cls)` in data shows it (`armour: []`, `missing: [...]`), and create-bot warns and marks it `[no starter armour]` in `--list`. Not fixed by `server:setup` (it changes only server properties). To fix it on your own server, point the six rows at the `*3` templates (unverified live), then restart the gameserver; characters made earlier keep their inventory:
-    ```sh
-    docker compose -f server/docker/docker-compose.yml exec -T db mariadb -uroot -pdaoc-sdk opendaoc -e "UPDATE starterequipment SET TemplateID=CONCAT(TemplateID,'3') WHERE StarterEquipmentID IN (13,14,76,77,78,109);"
-    ```
+- **Guardian's starter armour is a fix in our fork** (it also covers Blademaster, Hero and Champion, which start as Guardian):
+  - In upstream's dump, rows 13, 14, 76, 77, 78 and 109 (class list `52;44;43;45;`) name `leaf_tacuil_{vest,helm,boots,gauntlets,sleeves,leggings}`. Only the `leaf_tacuil_*3` templates exist, so the server skips those rows with "Cannot Find Item Template" at startup (StartupEquipment.cs:58, :82-86) and a Guardian gets only the training sword and shield. An L1 badger cub hit such a Guardian for 10–11 and killed it; the same mob hit the armoured Naturalist for 1–4.
+  - The fork points those rows at the `*3` templates for class 52 only (docs/SERVER.md). Rows 125-130 already give classes 43, 44 and 45 the same set, which only comes into play with start_as_base_class off. Keeping those classes in both hands them a second set in the backpack (seen on a test server: 6 worn, 6 in bags).
+  - Verified 2026-11-03 on a server seeded from the fork: new Guardians, Heroes, Blademasters and Champions start with six pieces worn and none in bags, with start_as_base_class on and off.
+  - `getStarterArmour(cls)` in data shows a class's set, and create-bot warns about a class with none (`[no starter armour]` in `--list`). Characters made earlier keep their inventory.
 - **Casters (Mage, Elementalist, Magician, Mystic, ...):**
   - Tiny mana at level 1: a Mage has 10 power.
   - Interrupted by melee. See [spells.md](spells.md).

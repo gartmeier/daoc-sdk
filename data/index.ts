@@ -268,8 +268,8 @@ const ARMOUR_SLOTS = new Set([21, 22, 23, 25, 27, 28]);
 /**
  * What a new character of this class really starts with: the armour pieces it
  * gets, and the template ids the server skips because they are missing. An
- * empty `armour` with a non-empty `missing` means the class starts unarmoured
- * (Guardian: its leaf_tacuil_* rows point at templates that do not exist).
+ * empty `armour` with a non-empty `missing` means the class starts unarmoured,
+ * as Guardian did in upstream's dump (learnings/classes-and-races.md).
  */
 export function getStarterArmour(cls: number | string, realm?: Realm | number): { armour: ItemTemplate[]; missing: string[] } {
     const armour: ItemTemplate[] = [];

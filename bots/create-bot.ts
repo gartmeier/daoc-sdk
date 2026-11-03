@@ -19,9 +19,8 @@ type RealmName = 'albion' | 'midgard' | 'hibernia';
 
 const REALMS: RealmName[] = ['albion', 'midgard', 'hibernia'];
 // Melee base classes that start with weapon, shield and a full armour set.
-// Not Guardian: its starter armour rows name leaf_tacuil_* templates that are
-// missing from itemtemplate, so the server skips them (StartupEquipment.cs:82-86)
-// and a Guardian starts with sword and shield only (see getStarterArmour).
+// Not Guardian: on a DB seeded before our fork's starterequipment fix (docs/SERVER.md)
+// it starts with sword and shield only (learnings/classes-and-races.md).
 export const DEFAULTS: Record<RealmName, { class: string; race: string }> = {
     albion: { class: 'Fighter', race: 'Briton' },
     midgard: { class: 'Viking', race: 'Norseman' },
