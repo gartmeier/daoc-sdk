@@ -21,7 +21,7 @@ import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import { parseWeaponDelve } from '../delve';
 import { EquipmentSlot, isArmor, isWeapon, ItemHand, ObjectType, type InventoryItem, type ItemBonus, type MerchantItem, type PlayerState, type Specialization, type WeaponDelve } from '../types';
-import { armorGain, armorSwing, armorValue, focusCover, isFocusCaster, statScore, tooHighLevel, WEAPON_STAT_SWING, weaponScore, weaponValue } from './gear-score';
+import { armorGain, armorSwing, armorValue, asRepaired, focusCover, isFocusCaster, statScore, tooHighLevel, WEAPON_STAT_SWING, weaponScore, weaponValue } from './gear-score';
 import { DUAL_LINES, WEAPON_LINES } from './styles';
 
 const { Jewelry, Cloak, Neck, Waist, LeftBracer, RightBracer, LeftRing, RightRing } = EquipmentSlot;
@@ -445,9 +445,9 @@ function scoreOf(m: WeaponMember, needs: WeaponNeeds, slot: number, w: WeaponDel
 }
 
 /**
- * What's worn in these hands is worth, by its delve. Off the line it's 0: it swings at spec 1 with no
- * styles, so anything on the line replaces it. A shield is not a weapon here. A worn weapon that
- * won't delve is Infinity: nothing replaces what can't be compared.
+ * What's worn in these hands is worth, by its delve and as a smith would leave it (asRepaired). Off
+ * the line it's 0: it swings at spec 1 with no styles, so anything on the line replaces it. A shield
+ * is not a weapon here. A worn weapon that won't delve is Infinity: nothing replaces what can't be compared.
  */
 async function wornScore(m: WeaponMember, needs: WeaponNeeds, slot: number, out: string[]): Promise<number> {
     let best = 0;
@@ -459,7 +459,7 @@ async function wornScore(m: WeaponMember, needs: WeaponNeeds, slot: number, out:
             out.push(`delve ${w.name}: ${r.reason ?? 'no weapon lines'}; keeping it`);
             return Infinity;
         }
-        best = Math.max(best, scoreOf(m, needs, w.slot, facts, r.bonuses));
+        best = Math.max(best, scoreOf(m, needs, w.slot, asRepaired(facts, w), r.bonuses));
     }
     return best;
 }
@@ -535,7 +535,7 @@ export async function wearWeapons(m: WeaponMember, opts: WeaponOptions = {}): Pr
             if (to === undefined || !withinLimit(item, p.level, opts)) return null;
             const r = await act.delveItem(item);
             const facts = r.success ? parseWeaponDelve(r.lines) : null;
-            return facts && levelAllows(r.levelRequirement, p.level, opts) ? { item, slot: to, score: scoreOf(m, needs, to, facts, r.bonuses), price: 0 } : null;
+            return facts && levelAllows(r.levelRequirement, p.level, opts) ? { item, slot: to, score: scoreOf(m, needs, to, asRepaired(facts, item), r.bonuses), price: 0 } : null;
         }, () => wornScore(m, needs, hand, out));
     }
     return out;
