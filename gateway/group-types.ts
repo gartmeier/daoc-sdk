@@ -102,7 +102,7 @@ export interface RunMemberView {
     role: Role;
     activity: Activity;
     effects: string[];
-    can: { heal: boolean; cc: boolean; nuke: boolean };
+    can: { heal: boolean; cc: boolean; nuke: boolean; rez?: boolean };
     /** Cumulative realm points (MemberReport.realmPoints), when the runner reports them. */
     realmPoints?: number;
     /** Runner clock. */

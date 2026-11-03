@@ -58,7 +58,7 @@ The PvE leveling policy (`decidePve`):
 | `retreat` | off by default (`retreat.enabled`). When on: the tank is dead, 3+ adds (not the focus) are neither controlled nor assigned to a mezzer, 2+ members are dead, or the tank is under 25 % while the focus has over half. Runs 2500 away from the attackers until nothing follows (max 25 s) |
 | `travel` | most of the group is far from the base. Legs of 1500 along a route around every aggro zone (`safePath`); the next leg once everyone is within 1200 of this one (or after 30 s) |
 | `gather` | a few members are away from the base |
-| `recover` | someone is dead (waiting for release and return) or below `ready.hp` / `ready.mana` |
+| `recover` | someone is dead (waiting for a rez, or for release and return) or below `ready.hp` / `ready.mana` |
 | `pull` | everyone is ready: the tank body-pulls the best target (highest con in the window, nearest to the base) |
 | `idle` | nothing to pull; the reason lists why each monster was rejected (`3 con -3, 22 near aggressive mobs, 4 too far`). Moves the base after 25 s, picks another camp after 2 min |
 
@@ -75,12 +75,18 @@ A member runs its role's **behaviour list** top to bottom every turn; the first 
 
 | Role | Behaviours (in order) |
 |---|---|
-| tank | release, retreat, pull, tank, guard, shedLoad, holdFormation, buff, rest |
-| healer | release, retreat, emergencyHeal, flee, heal, crowdControl (assigned), position, shedLoad, holdFormation, buff, rest |
-| support | release, retreat, emergencyHeal, flee, crowdControl, heal, position, shedLoad, holdFormation, buff, rest |
-| nuker | release, retreat, flee, crowdControl (assigned), emergencyHeal, position, assist, shedLoad, holdFormation, buff, rest |
-| melee | release, retreat, assistMelee, shedLoad, holdFormation, buff, rest |
+| tank | release, retreat, rez, pull, tank, guard, shedLoad, holdFormation, buff, rest |
+| healer | release, retreat, emergencyHeal, flee, rez, heal, crowdControl (assigned), position, shedLoad, holdFormation, buff, rest |
+| support | release, retreat, emergencyHeal, flee, rez, crowdControl, heal, position, shedLoad, holdFormation, buff, rest |
+| nuker | release, retreat, flee, rez, crowdControl (assigned), emergencyHeal, position, assist, shedLoad, holdFormation, buff, rest |
+| melee | release, retreat, rez, assistMelee, shedLoad, holdFormation, buff, rest |
 
+- **Resurrection** (settings `rez: { holdMs, radius, sit, reserve, inFight }`, default 120 s, 4000, sits for its power, no reserve, not in a fight; RvR differs, see learnings/rvr.md; `--rez.holdMs=0` releases at once as before):
+  - `release` says yes to any offer. With a living member within `radius` in the region whose list casts a rez, and who could pay for this corpse, it waits up to `holdMs`, and longer while a rez is being cast on it; otherwise it releases.
+  - `rez` runs in every list and acts only for a member who knows a rez, so a Bard or Warden does it too. In recover, gather and idle with nothing fighting the group, and with `inFight` also during engage when `rezPressure` finds nothing: not in travel, which in RvR can be falling back from a force the board has no threat for yet. Short of power it sits for what the rez costs, not for `rest.mana`. It walks to the edge of the range, not to the corpse, since the rezzed member appears at the caster, and not to within 1500 of an enemy player.
+  - Rezzers come back first, then the tank. The claim is the activity on the corpse (`rez_prep` sitting or walking, `rez` casting), so a second healer takes the next one. Only `rez` holds a release past `holdMs`.
+  - A run that is ending waits for a corpse with a rezzer near, up to the hard stop. A member rezzed in the field skips the visit to a town healer for the illness alone.
+  - A strategy with its own role lists adds `rez()` itself. Without it the member casts none, and corpses don't wait for it (`capabilities.rez` needs the behaviour in the list).
 - A behaviour sees its own character in full (`ctx.bot`, `ctx.sdk`) and everyone else only through the picture (`ctx.members()`, `ctx.tank()`, `ctx.threats()`, `ctx.focus()`). That keeps the information honest.
 - **Routes avoid aggressive mobs** (`safePath`, used for travel legs, by members more than 2500 from their slot, and by `groups/hibernia/town.ts`):
   - A mob aggroes only on players it doesn't con grey to (`StandardMobBrain.CanAggroTarget`: "Only attack if green+ to target"), and only within its aggro range, mostly 500 (`CheckPlayerAggro`).

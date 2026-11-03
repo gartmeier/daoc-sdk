@@ -45,8 +45,11 @@
 | Signature | Description |
 |---|---|
 | `async interactWith(target: ObjectTarget, options: InteractOptions = {}): Promise<InteractResult>` | Walk within ~150 of an NPC/object and interact (right-click). Success needs a response: merchant/trainer window, NPC dialog, dialog box, text window or a message from the NPC. |
+| `async acceptResurrection(options: { timeout?: number } = {}): Promise<AcceptResurrectionResult>` | Wait for a resurrection offer, say yes and observe the revive. We come back standing at the caster, with the spell's health and power (10 % and none for a baseline rez). That saves the release's XP loss, grave and constitution loss; resurrection illness comes all the same. Reasons: not_in_game, not_dead, timeout (no offer came), expired (the offer was gone when we answered). |
 | `async useAbility(name: NamePattern): Promise<SkillUseResult>` | Use an ability (e.g. Sprint); success when the server answers without a refusal or an effect appears. |
 | `isInCombat(): boolean` | In combat: attack mode on, recently hit, an NPC is fighting us (getAttackers) or an enemy player hit us (getPlayerAttackers). |
+| `resurrectSpell(): Spell \| null` | Our strongest resurrection spell, or null. The higher its level, the more it restores: 10 %, then 30, 50 and 100 % on a spec line. |
+| `async resurrect(target: PlayerTarget, options: ResurrectOptions = {}): Promise<ResurrectResult>` | Resurrect a dead player of our realm: walk into range, cast, and wait for its answer. Success means it is alive again: a finished cast only asks, and a corpse no script controls never answers (the power is gone then). It comes back at our feet. It must be in view. Costs half our full power at equal level (resurrectCost), paid when the cast ends. Reasons: those of castSpell, plus spell_not_found, not_found, invalid_target, not_dead (alive, or released meanwhile), no_power, already_considering (someone else's rez waits for its answer), no_answer. |
 | `getSpellInfo(spell: NamePattern \| Spell): SpellInfo \| null` | Static data for a known spell (type, target, range, cast time, power), from the DB dump; null when unknown. |
 | `isDead(): boolean` | Our character is dead. |
 | `freeBackpackSlots(): number` | Free backpack slots (of 40). |
@@ -210,6 +213,7 @@
 | `getTrainer(): TrainerState \| null` | Open trainer window, or null when none is open. |
 | `getTrade(): TradeWindow \| null` | Open player trade window, or null when none is open. Its partnerItems carry the partner's slots, never ours. |
 | `getDialog(): DialogBox \| null` | Open 0x81 dialog box (group invite, quest offer, yes/no), or null. Answer with sendRespondDialog. |
+| `getResurrectionOffer(): ResurrectionOffer \| null` | The resurrection offer waiting for our answer, or null. Answer with bot.acceptResurrection or bot.respondToDialog. |
 | `getNpcDialog(): NpcDialog \| null` | Last NPC dialogue with its [keywords]; answer with sendWhisper(npcObjectId, keyword). |
 | `getTextWindow(): TextWindow \| null` | Last custom text window (0xC4), or null. |
 | `getGroup(): GroupMember[]` | Group members (empty when not grouped). |
@@ -693,6 +697,19 @@ interface DialogBox {
   type: number;
   text: string;
   receivedAt: number;
+  /** Set when this box is a resurrection offer. */
+  resurrection?: ResurrectionOffer;
+}
+```
+
+### ResurrectionOffer
+
+Another player's rez waiting for our answer: who cast it and the health it restores. It expires after 15 s, and the caster's power is gone then.
+
+```typescript
+interface ResurrectionOffer {
+  caster: string;
+  healthPercent: number;
 }
 ```
 
@@ -1250,6 +1267,38 @@ KillResult's numbers for an enemy player. A player kill gives realm points: rpGa
 ```typescript
 interface KillPlayerResult extends Omit<KillResult, 'npc'> {
   player: NearbyPlayer | null;
+}
+```
+
+### ResurrectOptions
+
+```typescript
+interface ResurrectOptions {
+  /** The rez to cast; default our strongest (resurrectSpell). */
+  spell?: Spell;
+  /** How long to wait for the target's answer once the cast is done (default 16 s: its question expires after 15 s). */
+  answerMs?: number;
+  /** Walk into range (default true). */
+  approach?: boolean;
+}
+```
+
+### ResurrectResult
+
+```typescript
+interface ResurrectResult extends ActionResult {
+  spell: Spell | null;
+  target: NearbyPlayer | null;
+  /** The cast itself. A finished cast only asks the target. */
+  cast: CastResult | null;
+}
+```
+
+### AcceptResurrectionResult
+
+```typescript
+interface AcceptResurrectionResult extends ActionResult {
+  offer: ResurrectionOffer | null;
 }
 ```
 

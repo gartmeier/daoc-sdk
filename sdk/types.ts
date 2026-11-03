@@ -485,6 +485,14 @@ export interface DialogBox {
     type: number;
     text: string;
     receivedAt: number;
+    /** Set when this box is a resurrection offer. */
+    resurrection?: ResurrectionOffer;
+}
+
+/** Another player's rez waiting for our answer: who cast it and the health it restores. It expires after 15 s, and the caster's power is gone then. */
+export interface ResurrectionOffer {
+    caster: string;
+    healthPercent: number;
 }
 
 export type BonusCategory =

@@ -14,7 +14,7 @@ nuke.details;                                   // from the server: castTimeMs, 
 - **The tooltip's wording is its own.** `SpellInfo.description` comes from the database and `spell.details.description` from the server's handler, and they differ: "Heals the target for 36" against "Heals the target for 38 hit points.", "increased by 123%" against "increased to 123% of normal". Test a regex on what the client really holds. A routine reading a tooltip's wording silently never fired on the database's.
 - **A negative heal value is a percent of the caster's own full health,** not the target's (`HealSpellHandler.cs:33`): "Heals the target for 33% hit points." A Healer with 600 health heals 198 with it, on a tank of any size.
 - **A negative `powerCost` or `info.power` is a percent of the pool:** Nature's Ward -8 costs 8 % of full power (`SpellHandler.cs` PowerCost). 267 spell rows, among them pets, skins and hybrid self-buffs.
-- `info.target` is one of `Enemy`, `Self`, `Realm`, `Group` or `Pet`.
+- `info.target` is one of `Enemy`, `Self`, `Realm`, `Group`, `Pet` or `Corpse` (resurrection: `bot.resurrect`, learnings/death-and-rest.md).
 - Common `info.type` values: `DirectDamage`, `Bolt`, `DamageOverTime`, `Lifedrain`, `Heal`, `BaseArmorFactorBuff`, `DamageAdd`, `DamageShield`, `SpeedDecrease`, `Mesmerize`.
 - **Hybrid classes** (Fighter-type classes that later gain spells, and the Cleric/Acolyte line) keep their spells in the skills list instead of a spell line: `lineIndex` is -1 and `skillIndex` is set. `castSpell` handles both forms.
 

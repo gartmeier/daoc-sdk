@@ -4,12 +4,13 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { BotSDK } from '../index';
 import { BotActions, castFailureReason, tradeSlotWait } from '../actions';
+import { resurrectCost } from '../actions-helpers';
 import { ChatHistory } from '../chat-history';
 import { setDefaultPathProvider, StraightLinePathProvider, type PathProvider } from '../pathfinding';
 import { executionContext, throwIfExecutionAborted } from '../execution-context';
 import type { Build } from '../../data/builds/types';
 import { specKey } from '../../data/spec-names';
-import type { ActionResult, BotAction, BotWorldState, GameMessage, InventoryItem, NearbyNpc, NearbyPlayer, PlayerState } from '../types';
+import type { ActionResult, BotAction, BotWorldState, GameMessage, InventoryItem, NearbyNpc, NearbyPlayer, PlayerState, Spell } from '../types';
 import { makeMessage, makeNpc, makeObject, makePlayer, makePlayerObj, makeState } from './fixtures';
 
 // Fixed straight-line paths: a locally built server/navmesh/zone000.nav would otherwise route every walk here.
@@ -902,6 +903,141 @@ describe('castSpell', () => {
         const r = await bot.castSpell('Ward Blow', 'sewer rat');
         expect(r.success).toBeTrue();
         expect(w.sentOf('moveTo')).toHaveLength(0);
+    });
+});
+
+// ── Resurrection ────────────────────────────────────────────────────────────
+
+describe('resurrection', () => {
+    // Revive 1315: a baseline Cleric rez in the spell data.
+    const makeSpell = (s: Pick<Spell, 'name' | 'level' | 'internalId' | 'spellIndex'>): Spell => ({ lineName: 'Rejuvenation', lineIndex: 0, cooldownRemaining: 0, ...s });
+    const revive = makeSpell({ name: 'Revive', level: 10, internalId: 1315, spellIndex: 3 });
+    const skills = () => ({ ...makeState().skills, spells: [revive] });
+    const corpse = (over: Partial<NearbyPlayer> = {}) => makePlayerObj({ objectId: 301, name: 'Tank', level: 20, isDead: true, healthPercent: 0, distance: 300, distance2d: 300, ...over });
+    const scene = (over: Partial<NearbyPlayer> = {}, player: Partial<PlayerState> = {}) =>
+        world({ skills: skills(), nearbyPlayers: [corpse(over)], player: makePlayer({ level: 20, mana: 1000, maxMana: 1000, ...player }) });
+    const finishes = (w: FakeWorld) => {
+        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('You cast a Revive spell!', { type: 'spell' }), 10); };
+    };
+
+    test('resurrectCost: half at equal level, by the level gap, never under a tenth (ResurrectSpellHandler.cs:68)', () => {
+        expect(resurrectCost(1000, 20, 20)).toBe(500);
+        expect(resurrectCost(1000, 20, 25)).toBe(750);
+        expect(resurrectCost(1000, 20, 5)).toBe(100);
+        expect(resurrectCost(1000, 20, 1)).toBe(100);
+    });
+
+    test('resurrectSpell knows a rez by its type, and takes the strongest', () => {
+        const { bot } = world({ skills: skills() });
+        expect(bot.resurrectSpell()?.name).toBe('Revive');
+        const raise = makeSpell({ name: 'Raise Fallen', level: 15, internalId: 1361, spellIndex: 4 });
+        const both = world({ skills: { ...skills(), spells: [revive, raise] } });
+        expect(both.bot.resurrectSpell()?.name).toBe('Raise Fallen');
+        expect(world().bot.resurrectSpell()).toBeNull();
+    });
+
+    test('success: the target shows health again', async () => {
+        const { w, bot } = scene();
+        finishes(w);
+        w.onTick = world => {
+            if (world.sentOf('castSpell').length) { const c = world.state.nearbyPlayers[0]!; c.isDead = false; c.healthPercent = 10; c.x = world.player.x; c.y = world.player.y; }
+        };
+        const r = await bot.resurrect(301);
+        expect(r).toMatchObject({ success: true, cast: { success: true } });
+        expect(w.sentOf('setTarget')[0]).toMatchObject({ objectId: 301 });
+    });
+
+    test('a release in view is no success: alive, but at its bind point', async () => {
+        const { w, bot } = scene();
+        finishes(w);
+        w.onTick = world => {
+            if (world.sentOf('castSpell').length) { const c = world.state.nearbyPlayers[0]!; c.isDead = false; c.healthPercent = 100; c.x = world.player.x + 4000; }
+        };
+        expect(await bot.resurrect(301, { answerMs: 80 })).toMatchObject({ success: false, reason: 'not_dead' });
+    });
+
+    test('another corpse\'s yes tells nothing about this one: the realm points name nobody (:201)', async () => {
+        const { w, bot } = scene();
+        w.handlers.castSpell = (_a, world) => {
+            setTimeout(() => world.message('You cast a Revive spell!', { type: 'spell' }), 10);
+            setTimeout(() => world.message('The player you resurrected was not worth realm points on death.'), 30);
+        };
+        expect(await bot.resurrect(301, { answerMs: 80 })).toMatchObject({ success: false, reason: 'no_answer' });
+    });
+
+    test('a finished cast with no answer is no success', async () => {
+        const { w, bot } = scene();
+        finishes(w);
+        expect(await bot.resurrect(301, { answerMs: 50 })).toMatchObject({ success: false, reason: 'no_answer', cast: { success: true } });
+    });
+
+    test('refuses without casting: not dead, another realm, no spell, unknown target, too little power', async () => {
+        const check = async (made: ReturnType<typeof scene>, reason: string, target: number = 301) => {
+            expect(await made.bot.resurrect(target)).toMatchObject({ success: false, reason });
+            expect(made.w.sentOf('castSpell')).toHaveLength(0);
+        };
+        await check(scene({ isDead: false, healthPercent: 50 }), 'not_dead');
+        await check(scene({ realm: 'midgard' }), 'invalid_target');
+        await check(world({ nearbyPlayers: [corpse()] }), 'spell_not_found');
+        await check(scene(), 'not_found', 999);
+        await check(scene({}, { mana: 400 }), 'no_power');
+        await check(scene({}, { isDead: true }), 'dead');
+    });
+
+    test('the cost follows the target\'s level', async () => {
+        const low = scene({ level: 5 }, { mana: 400 });
+        finishes(low.w);
+        expect(await low.bot.resurrect(301, { answerMs: 20 })).toMatchObject({ reason: 'no_answer' });
+    });
+
+    test.each([
+        ['This spell only works on dead members of your realm!', 'not_dead'],
+        ['Your target is already considering a resurrection!', 'already_considering'],
+    ])('the server\'s refusal: %s', async (text, reason) => {
+        const { w, bot } = scene();
+        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message(text), 10); };
+        expect(await bot.resurrect(301)).toMatchObject({ success: false, reason });
+    });
+
+    const offered = { isOpen: true, code: 6, data: [7, 1, 0, 0] as [number, number, number, number], type: 1, text: 'Do you allow Nimue to resurrected you\n with 30 percent hits/power?', receivedAt: 1, resurrection: { caster: 'Nimue', healthPercent: 30 } };
+    const dead = () => makePlayer({ isDead: true, healthPercent: 0 });
+
+    test('getResurrectionOffer reads the open box only', () => {
+        expect(world({ dialog: offered }).sdk.getResurrectionOffer()).toEqual({ caster: 'Nimue', healthPercent: 30 });
+        expect(world({ dialog: { ...offered, isOpen: false } }).sdk.getResurrectionOffer()).toBeNull();
+        expect(world({ dialog: { ...offered, resurrection: undefined } }).sdk.getResurrectionOffer()).toBeNull();
+    });
+
+    test('acceptResurrection says yes and sees the revive', async () => {
+        const { w, bot } = world({ dialog: offered, player: dead() });
+        w.handlers.respondDialog = (_a, world) => {
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            setTimeout(() => { world.player.isDead = false; world.player.x += 400; }, 10);
+        };
+        expect(await bot.acceptResurrection()).toMatchObject({ success: true, offer: { caster: 'Nimue' } });
+        expect(w.sentOf('respondDialog')[0]).toMatchObject({ accept: true });
+    });
+
+    test('acceptResurrection waits for an offer, and gives up', async () => {
+        const later = world({ player: dead() });
+        later.w.handlers.respondDialog = (_a, world) => { setTimeout(() => { world.player.isDead = false; }, 10); };
+        setTimeout(() => { later.w.state.dialog = offered; }, 30);
+        expect(await later.bot.acceptResurrection({ timeout: 2000 })).toMatchObject({ success: true });
+        const none = world({ player: dead() });
+        expect(await none.bot.acceptResurrection({ timeout: 20 })).toMatchObject({ success: false, reason: 'timeout' });
+    });
+
+    test('acceptResurrection: alive, or the offer gone', async () => {
+        expect(await world({ dialog: offered }).bot.acceptResurrection()).toMatchObject({ success: false, reason: 'not_dead' });
+        const { w, bot } = world({ dialog: offered, player: dead() });
+        w.handlers.respondDialog = (_a, world) => { setTimeout(() => world.message('No one is currently trying to resurrect you.'), 10); };
+        expect(await bot.acceptResurrection()).toMatchObject({ success: false, reason: 'expired' });
+    });
+
+    test('another box is not taken for an offer', async () => {
+        const { w, bot } = world({ dialog: { ...offered, resurrection: undefined, text: 'Do you accept?' }, player: dead() });
+        expect(await bot.acceptResurrection({ timeout: 20 })).toMatchObject({ success: false, reason: 'timeout' });
+        expect(w.sentOf('respondDialog')).toHaveLength(0);
     });
 });
 

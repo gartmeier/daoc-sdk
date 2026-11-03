@@ -19,6 +19,7 @@ import type {
     ConnectionMode,
     ConnectionState,
     DialogBox,
+    ResurrectionOffer,
     Effect,
     GameMessage,
     GroupMember,
@@ -831,6 +832,11 @@ export class BotSDK {
     /** Open 0x81 dialog box (group invite, quest offer, yes/no), or null. Answer with sendRespondDialog. */
     getDialog(): DialogBox | null {
         return this.state?.dialog?.isOpen ? this.state.dialog : null;
+    }
+
+    /** The resurrection offer waiting for our answer, or null. Answer with bot.acceptResurrection or bot.respondToDialog. */
+    getResurrectionOffer(): ResurrectionOffer | null {
+        return this.getDialog()?.resurrection ?? null;
     }
 
     /** Last NPC dialogue with its [keywords]; answer with sendWhisper(npcObjectId, keyword). */
