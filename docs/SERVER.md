@@ -10,7 +10,7 @@ The game server source (`server/core`) and the DB dump (`server/db`) are git sub
 git submodule update --init server/core server/db   # required; reference/rs-sdk and server/buildnav are optional
 ```
 
-`bun run server:up` refuses to start while either one is empty (`scripts/check-submodules.ts`).
+`bun run server:up` refuses to start while either one is empty, and warns when `server/db` isn't on the commit this repo pins, because an empty `db-data` volume is seeded from whatever is checked out; `git submodule update server/db` fixes it (`scripts/check-submodules.ts`). It only warns: a different dump can be deliberate, and a volume that's already seeded isn't affected.
 
 ```
 bun run server:up       # docker compose -f server/docker/docker-compose.yml up -d --build
