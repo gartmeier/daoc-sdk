@@ -64,12 +64,23 @@ describe('create-bot', () => {
         const line = (cls: string) => r.out.split('\n').find(l => l.trim().startsWith(`${cls} `)) ?? '';
         expect(line('Acolyte')).not.toContain('Inconnu');
         expect(line('Disciple')).not.toContain('Saracen');
+        expect(line('Necromancer')).not.toContain('Saracen'); // starts as a Disciple
         expect(line('Fighter')).toContain('Inconnu');
         expect(line('Guardian')).not.toContain('[no starter armour]');
         expect(line('Naturalist')).not.toContain('[no starter armour]');
         // Every listed pair is one createBot accepts.
         expect(run('cbaco', '--class=Acolyte').code).toBe(0);
         expect(env('cbaco').RACE).toBe('Briton');
+    });
+
+    test('refuses the pairs with no start location, an advanced class by its base class', () => {
+        for (const cls of ['Necromancer', 'Disciple']) {
+            const r = run('cbsaracen', `--class=${cls}`, '--race=Saracen');
+            expect(r.code).toBe(1);
+            expect(r.err).toContain('no startuplocation row for Saracen Disciple');
+            expect(existsSync(join(dir, 'cbsaracen'))).toBe(false);
+        }
+        expect(run('cbnecro', '--class=Necromancer', '--race=Inconnu').code).toBe(0);
     });
 
     test('refuses a character name another local bot already uses', () => {
