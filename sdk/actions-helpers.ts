@@ -391,6 +391,16 @@ export interface InventoryDelta {
     lost: InventoryItem[];
 }
 
+/**
+ * Two readings of one item, as far as the client can tell: what tells it from an equal-named one a swap put in
+ * its slot. Equal readings can still be two items: bonuses never reach the client, and condition and durability
+ * come as whole percents.
+ */
+export function sameItem(a: InventoryItem, b: InventoryItem): boolean {
+    return a.name === b.name && a.level === b.level && a.condition === b.condition && a.durability === b.durability
+        && a.quality === b.quality && a.value1 === b.value1 && a.value2 === b.value2 && a.model === b.model && a.weight === b.weight;
+}
+
 /** Per-name count deltas between two backpack snapshots. */
 export function diffInventory(before: readonly InventoryItem[], after: readonly InventoryItem[]): InventoryDelta {
     const count = (items: readonly InventoryItem[]) => {
