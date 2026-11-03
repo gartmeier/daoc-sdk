@@ -69,7 +69,7 @@ describe('decidePack: stalking', () => {
 
     test('hurt and attacked: walks off to rest', () => {
         const m: any = {};
-        const u = decidePack(ctx(picture(team({ Menta: { mana: 10 } }), [foe(101, 11_000, 10_000, { target: 'Tank' }), foe(102, 11_100), foe(103, 11_200)]), { memory: m }));
+        const u = decidePack(ctx(picture(team({ Menta: { mana: 10 }, Encha: { mana: 10 } }), [foe(101, 11_000, 10_000, { target: 'Tank' }), foe(102, 11_100), foe(103, 11_200)]), { memory: m }));
         expect(u.phase).toBe('travel');
         expect(m.pack).toBe('leave');
     });
@@ -78,7 +78,7 @@ describe('decidePack: stalking', () => {
 describe('decidePack: resting', () => {
     test('low on power it rests where it stands, and stays resting until ready, whatever comes into sight', () => {
         const m: any = {};
-        expect(decidePack(ctx(picture(team({ Menta: { mana: 10 } }), [foe(101, 14_000)]), { memory: m })).phase).toBe('recover');
+        expect(decidePack(ctx(picture(team({ Menta: { mana: 10 }, Encha: { mana: 10 } }), [foe(101, 14_000)]), { memory: m })).phase).toBe('recover');
         expect(m.resting).toBe(true);
         // Above the low mark but not ready: still resting, with two stragglers in sight that would otherwise be prey.
         expect(decidePack(ctx(picture(team({ Menta: { mana: 40 } }), [foe(101, 14_000), foe(102, 14_200)]), { memory: m })).phase).toBe('recover');
@@ -88,10 +88,22 @@ describe('decidePack: resting', () => {
     });
 
     test('enemies near: it moves off first; on us: it leaves', () => {
-        expect(decidePack(ctx(picture(team({ Menta: { mana: 10 } }), [foe(101, 12_000)]))).reason).toContain('moving off');
+        expect(decidePack(ctx(picture(team({ Menta: { mana: 10 }, Encha: { mana: 10 } }), [foe(101, 12_000)]))).reason).toContain('moving off');
         const m: any = {};
-        decidePack(ctx(picture(team({ Menta: { mana: 10 } }), [foe(101, 11_000)]), { memory: m }));
+        decidePack(ctx(picture(team({ Menta: { mana: 10 }, Encha: { mana: 10 } }), [foe(101, 11_000)]), { memory: m }));
         expect(m.pack).toBe('leave');
+    });
+});
+
+describe('decidePack: who makes it rest', () => {
+    const hunting = (over: Partial<Record<string, Partial<MemberReport>>>) => { const m: any = {}; decidePack(ctx(picture(team(over), [foe(101, 14_000)]), { memory: m })); return !!m.resting; };
+
+    test('not one nuker low; the Druid, the Bard, two nukers or anyone badly hurt', () => {
+        expect(hunting({ Menta: { mana: 10 } })).toBe(false);
+        expect(hunting({ Druid: { mana: 10 } })).toBe(true);
+        expect(hunting({ Bard: { mana: 10 } })).toBe(true);
+        expect(hunting({ Menta: { mana: 10 }, Encha: { mana: 10 } })).toBe(true);
+        expect(hunting({ Tank: { hp: 30 } })).toBe(true);
     });
 });
 

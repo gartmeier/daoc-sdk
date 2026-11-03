@@ -341,16 +341,21 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // Low on power or hurt: rest until settings.ready, and stick to it. Live (s5) the pack flipped every second between hunting
     // two stragglers and walking off from a third that came into sight, so it neither rested nor fought. Rest where we stand
     // unless enemies are near (walking regenerates nothing): the Bard's power song and sitting come with 'recover'.
-    if (short.length) mem.resting = true;
+    // One nuker low doesn't stop five (s6: resting 23 % of the round, Ciaran's 197 power is 13 nukes): the healer or the Bard low does, or anyone badly hurt, or two nukers.
+    const mustRest = short.some(m => m.hp < k.raidReady.hp || m.role === 'healer' || m.role === 'support') || short.length >= 2;
+    if (mustRest) mem.resting = true;
     if (mem.resting && !main.some(m => m.hp < s.ready.hp || (usesMana(m) && m.mana < s.ready.mana))) mem.resting = false;
     if (mem.resting) {
         const who = main.filter(m => m.hp < s.ready.hp || (usesMana(m) && m.mana < s.ready.mana));
         if (onUsNow || d <= k.reach) return startLeave(`${who.map(m => m.name).join(', ')} resting, and they are on us`);
-        if (d <= k.restClear) {
+        // Moving off goes on until well clear: at one line it flipped every second (s6).
+        if (d <= k.restClear + (mem.movingOff ? 800 : 0)) {
+            mem.movingOff = true;
             const goal = spotAlong(trip, centre, runWay(centre, seen, homeSpot), s.huntRadius);
             stepLeg(trip, 'avoid', goal, { from: centre, movers: main, replan: 2000 });
             return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'keep away while resting', reason: `resting: ${who.map(m => m.name).join(', ')}, moving off (nearest ${Math.round(d)} away)` });
         }
+        mem.movingOff = false;
         return say({ ...none, phase: 'recover', anchor: stay, objective: 'rest', waiting: who.map(m => ({ name: m.name, why: 'power' })), reason: `resting: ${who.map(m => m.name).join(', ')} (nearest enemy ${Math.round(d)} away)` });
     }
     // Prey: all that is in sight is a couple of stragglers and we clearly outnumber them. No cooldown, no stand-off and no
