@@ -1481,6 +1481,106 @@ describe('items', () => {
         expect(r.reason).toBe('timeout');
     });
 
+    describe('a swap with an equal-named item', () => {
+        // As the wire has them: condition and durability in whole percents.
+        const helm = { slot: 50, name: 'Speedy Reinforced Helm', level: 14, condition: 97, durability: 100, quality: 98, value1: 28, value2: 19, model: 1234, weight: 24 };
+        const swaps = (w: FakeWorld, worn: InventoryItem, target: number, says?: string) => {
+            w.handlers.moveItem = (a, world) => {
+                if (a.type !== 'moveItem') return;
+                const s = world.state;
+                const item = s.inventory.find(i => i.slot === a.fromSlot)!;
+                s.inventory = [...s.inventory.filter(i => i !== item), { ...worn, slot: a.fromSlot }];
+                s.equipment = [...s.equipment.filter(e => e.slot !== target), { ...item, slot: target }];
+                if (says) world.message(says);
+            };
+        };
+        const setup = (differ: Partial<InventoryItem>) => {
+            const { w, bot } = world();
+            const pack = { ...w.state.inventory[0]!, ...helm };
+            const worn = { ...pack, ...differ, slot: 21 };
+            w.state.inventory = [...w.state.inventory, pack];
+            w.state.equipment = [...w.state.equipment, worn];
+            w.publish();
+            return { w, bot, pack, worn };
+        };
+        const FLOWS = 'The magic of the Speedy Reinforced Helm flows through you.';
+
+        test.each([
+            ['another level', { level: 15 }],
+            ['another condition', { condition: 90 }],
+            ['another durability', { durability: 97 }],
+            ['another quality', { quality: 95 }],
+            ['another armour factor', { value1: 30 }],
+            ['another absorption', { value2: 27 }],
+            ['another model', { model: 822 }],
+            ['another weight', { weight: 30 }],
+        ])('is a success, with %s, through the paper doll and into a named slot', async (_what, differ) => {
+            for (const options of [{}, { slot: 21 }]) {
+                const { w, bot, pack, worn } = setup(differ);
+                swaps(w, worn, 21);
+                expect((await bot.equipItem(pack, options)).success).toBeTrue();
+                expect(w.state.equipment.find(e => e.slot === 21)).toMatchObject({ level: 14, condition: 97, durability: 100, quality: 98, value1: 28, value2: 19, model: 1234, weight: 24 });
+                expect(w.state.inventory.find(i => i.slot === 50)).toMatchObject(differ);
+            }
+        });
+
+        test.each([
+            ['another level, through the paper doll', { level: 15 }, {}],
+            ['another level, into a named slot', { level: 15 }, { slot: 21 }],
+            ['the same level, through the paper doll', { condition: 90 }, {}],
+            ['the same level, into a named slot', { condition: 90 }, { slot: 21 }],
+        ])('that the server refuses without a word is no success, with %s', async (_what, differ, options) => {
+            const { bot, pack } = setup(differ);
+            const r = await bot.equipItem(pack, options);
+            expect(r.success).toBeFalse();
+            expect(r.reason).toBe('timeout');
+        });
+
+        test('with one that reads the same, a magical piece is a success on what the server says as it goes on', async () => {
+            const { w, bot, pack, worn } = setup({});
+            swaps(w, worn, 21, FLOWS);
+            const started = Date.now();
+            const r = await bot.equipItem(pack);
+            expect(r.success).toBeTrue();
+            expect(Date.now() - started).toBeLessThan(2500);
+            expect(r.messages?.map(m => m.text)).toContain(FLOWS);
+        });
+
+        test('with one that reads the same, a message about another piece says nothing about this one', async () => {
+            const { w, bot, pack, worn } = setup({});
+            swaps(w, worn, 21, 'The magic of the Adroit Ring flows through you.');
+            expect((await bot.equipItem(pack)).reason).toBe('timeout');
+        });
+
+        test('with one that reads the same, a plain piece has nothing to go by', async () => {
+            const { w, bot, pack, worn } = setup({});
+            swaps(w, worn, 21);
+            expect((await bot.equipItem(pack)).reason).toBe('timeout');
+        });
+
+        test('with another piece worn the slots decide, whatever the server says', async () => {
+            const { w, bot, pack } = setup({ level: 15 });
+            w.handlers.moveItem = (_a, world) => { world.message(FLOWS); };
+            expect((await bot.equipItem(pack)).reason).toBe('timeout');
+        });
+
+        test('its twin going to an empty slot, a second ring, is a success', async () => {
+            const { w, bot } = world();
+            const ring = { ...w.state.inventory[0]!, ...helm, name: 'Adroit Ring', slot: 45 };
+            w.state.inventory = [...w.state.inventory, ring];
+            w.state.equipment = [...w.state.equipment, { ...ring, slot: 35 }];
+            w.publish();
+            w.handlers.moveItem = (a, world) => {
+                if (a.type !== 'moveItem') return;
+                const s = world.state;
+                s.inventory = s.inventory.filter(i => i.slot !== a.fromSlot);
+                s.equipment = [...s.equipment, { ...ring, slot: 36 }];
+            };
+            expect((await bot.equipItem(ring)).success).toBeTrue();
+            expect(w.state.equipment.filter(e => e.name === 'Adroit Ring').map(e => e.slot)).toEqual([35, 36]);
+        });
+    });
+
     test.each([
         ['You have no skill in using this weapon type!'],
         ['You have no skill in wearing this armor type!'],

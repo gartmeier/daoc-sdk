@@ -75,7 +75,7 @@
 | Signature | Description |
 |---|---|
 | `async lootNearby(options: LootOptions = {}): Promise<LootResult>` | Pick up loot on the ground within `radius` and report what changed in the backpack and purse (autoloot usually already took it during the kill). |
-| `async equipItem(target: InventoryItem \| NamePattern \| number, options: { slot?: number } = {}): Promise<ItemResult>` | Equip a backpack item; the server picks its slot, or takes `options.slot` when given (a worn item there swaps into the backpack). Observed in state.equipment: with a slot, that slot must hold this item, so an equal-named item already worn elsewhere doesn't count. |
+| `async equipItem(target: InventoryItem \| NamePattern \| number, options: { slot?: number } = {}): Promise<ItemResult>` | Equip a backpack item; the server picks its slot, or takes `options.slot` when given (a worn item there swaps into the backpack). Observed in state.equipment: with a slot, that slot must hold this item, so an equal-named item already worn elsewhere doesn't count. What it replaces lands in the backpack slot this one left, so only this very item still there means it didn't move. A swap with a piece that reads the same changes no reading, so a magical piece counts on the server's "The magic of X flows through you". A plain one has nothing that tells them apart and no message: `timeout`. |
 | `async unequipItem(target: number \| NamePattern): Promise<ItemResult>` | Move an equipped item (by slot or name) back into the backpack. |
 | `async dropItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Drop a backpack item on the ground. |
 | `async destroyItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Destroy a backpack item. |
