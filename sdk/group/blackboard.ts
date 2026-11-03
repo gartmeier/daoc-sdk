@@ -359,7 +359,7 @@ export class Blackboard {
             if (!c.seenBy.includes(r.name)) c.seenBy.push(r.name);
             // Sticky, from any member's sighting, fresh or late: one heal on its own realm makes a healer.
             if (s.helped) c.healer = true;
-            if (s.casting) c.caster = true;
+            if (s.casting) { c.caster = true; c.castingAt = now; }
             // The contact's target, which is kept while it runs at a member; an older report's own as a fallback.
             const onMember = c.target ?? target;
             if (onMember || targetedByUs.has(s.objectId)) c.engaged = true;

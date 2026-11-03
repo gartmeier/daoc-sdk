@@ -21,6 +21,7 @@ export { CLASS_KITS, GM_BOT, MAX_BONUSES, SKILL_PROPERTY, TEMPLATE_PACKAGE, audi
 export { statScore, statWeight, bonusCap, armorValue, armorGain, armorSwing, weaponValue, asRepaired, weaponScore, STAT_WEIGHTS, SIDE_STAT_WEIGHT, BONUS_WEIGHTS, ARMOR_STAT_RATE, ARMOR_STAT_SWING, WEAPON_STAT_RATE, WEAPON_STAT_SWING } from './gear-score';
 export { CC_IMMUNE_MS, canControl, ccImmuneTo, immuneKinds, type CcImmunity, type CcKind } from './cc';
 export { rvrRoaming, decideRvr, rvrBehaviors, rvrFindings, pickRvrFocus, homeOf, keepDangers, defaultPatrol, realmOfGroup, BATTLEGROUND_LAYOUTS, THIDRANKI, RVR_SETTINGS, type RvrSettings, type BattlegroundLayout, type Keep, type PlayerRealm } from './rvr';
+export { rvrPack, decidePack, packBehaviors, packCc, pickPackFocus, PACK_SETTINGS, PACK_OPTIONS, type PackSettings, type PackOptions } from './pack';
 export { GroupObserver, findingsFor, formatReport, saveReport, stampOf, inferPhase, type Finding, type FightSummary, type MemberStats, type RunReport } from './observer';
 export { loadGroup, connectBot, connectGroup, formGroup } from './roster';
 export { runGroup, runGroupScript, groupArgs, type GroupRunOptions, type GroupRunResult } from './runner';
