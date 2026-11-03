@@ -30,7 +30,7 @@ MCP `execute_code` does steps 3–4 itself. Scripts and the CLIs never start a c
    export default main;
    if (import.meta.main) await runScript(main, { args: { seconds: Number(scriptArgs()[0] ?? 60) }, timeout: 120_000 });
    ```
-   `scriptArgs()` (from `../examples/script-args`) drops the bot name only when it came from argv, so a copy takes `bun bots/<name>/grinder.ts 60` while the original takes `bun bots/examples/grinder.ts <name> 60`.
+   `scriptArgs()` (from `../examples/script-args`) drops the bot name only when it came from argv, so a copy takes `bun bots/<name>/grinder.ts 60` while the original takes `bun bots/examples/grinder.ts <name> 60`. It also drops anything starting with `-`, so a script with flags reads them from `process.argv`.
 3. **Run** it: `bun bots/<name>/<script>.ts`. Use a short `timeout` first:
 
    | Duration | When |

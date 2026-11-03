@@ -55,6 +55,7 @@ From `getStartupLocation` and `findNpcSpawns` (levels 0–1, realm 0, not peacef
 | Hibernia Guardian *(live)* | 200 Shannon Estuary, 296516, 641415 | badger cub, large frog ~2400 |
 | Hibernia Naturalist *(live)* | 200 Shannon Estuary, 294768, 641635 | large frog (L1) ~2700, badger cub (L0) ~3100 |
 | Hibernia Magician (Elf) *(live)* | 200 Lough Derg, 346073, 490855 | annoying lucradan ~2100 |
+| Hibernia Naturalist (Firbolg), so also its Warden *(live)* | 200 Ardee, 340874, 467150 | large frog (L1) ~2500, annoying lucradan (L0) ~2900 |
 
 - **Start points depend on the class the server looks up,** and also on the race. With `start_as_base_class` on, the class is already reverted by then, because the server's handler chain runs the newest handler first and `StartAsBaseClass` registers after `StartupLocations`. So a Briton Sorcerer starts on the Briton Mage row. `getStartupLocation` takes the class you create and follows this; pass `startAsBaseClass: false` for a server with the property off.
 - **The template script walks for you:** when no monster is in view, `bots/_template/script.ts` and `bots/examples/caster.ts` walk to the nearest easy spawn point from the data.
