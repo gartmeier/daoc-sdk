@@ -16,6 +16,7 @@ import {
     CROWD_CONTROL_REFUSALS,
     CROWD_CONTROLLED_RETRY_MS,
     diffInventory,
+    sameItem,
     experienceFromMessages,
     INTERACT_REFUSALS,
     isFatalAttackRefusal,
@@ -1732,17 +1733,22 @@ export class BotActions {
     /**
      * Equip a backpack item; the server picks its slot, or takes `options.slot` when given (a worn
      * item there swaps into the backpack). Observed in state.equipment: with a slot, that slot must
-     * hold this item, so an equal-named item already worn elsewhere doesn't count.
+     * hold this item, so an equal-named item already worn elsewhere doesn't count. What it replaces lands
+     * in the backpack slot this one left, so only this very item still there means it didn't move. A swap
+     * with a piece that reads the same changes no reading, so a magical piece counts on the server's "The
+     * magic of X flows through you". A plain one has nothing that tells them apart and no message: `timeout`.
      */
     async equipItem(target: InventoryItem | NamePattern | number, options: { slot?: number } = {}): Promise<ItemResult> {
         const item = this.helpers.resolveInventoryItem(target);
         if (!item) return fail(`Item not found in backpack: ${describeTarget(target)}`, 'not_found', { item: null, messages: [] });
         const { slot } = options;
+        const worn = (e: InventoryItem) => e.name === item.name && e.level === item.level;
+        const left = (s: BotWorldState) => !s.inventory.some(i => i.slot === item.slot && sameItem(i, item));
+        const saysSo = this.helpers.state()?.equipment.some(e => sameItem(e, item)) ? `${item.name.toLowerCase()} flows through you` : undefined;
         if (slot !== undefined) {
-            const same = (i: InventoryItem) => i.name === item.name && i.level === item.level;
-            return this.moveObserved(item, slot, s => s.equipment.some(e => e.slot === slot && same(e)) && !s.inventory.some(i => i.slot === item.slot && same(i)), `Equipped ${item.name} in slot ${slot}`);
+            return this.moveObserved(item, slot, s => s.equipment.some(e => e.slot === slot && worn(e)) && left(s), `Equipped ${item.name} in slot ${slot}`, saysSo);
         }
-        return this.moveObserved(item, PAPER_DOLL_SLOT, s => s.equipment.some(e => e.name === item.name) && !s.inventory.some(i => i.slot === item.slot && i.name === item.name), `Equipped ${item.name}`);
+        return this.moveObserved(item, PAPER_DOLL_SLOT, s => s.equipment.some(worn) && left(s), `Equipped ${item.name}`, saysSo);
     }
 
     /** Move an equipped item (by slot or name) back into the backpack. */
@@ -2982,12 +2988,12 @@ export class BotActions {
         }
     }
 
-    private async moveObserved(item: InventoryItem, toSlot: number, done: (s: BotWorldState) => boolean, okMessage: string): Promise<ItemResult> {
+    private async moveObserved(item: InventoryItem, toSlot: number, done: (s: BotWorldState) => boolean, okMessage: string, saysDone?: string): Promise<ItemResult> {
         const watch = this.helpers.watch();
         try {
             const r = await this.sdk.sendMoveItem(item.slot, toSlot);
             if (!r.success) return { ...r, item, messages: [] };
-            const got = await this.helpers.waitFor(s => done(s) ? 'ok' : watch.find(MOVE_REFUSALS) ? 'refused' : null, 3000);
+            const got = await this.helpers.waitFor(s => done(s) || (saysDone && watch.find([saysDone])) ? 'ok' : watch.find(MOVE_REFUSALS) ? 'refused' : null, 3000);
             const messages = watch.messages().slice();
             if (got === 'ok') return { success: true, message: okMessage, item, messages };
             return { ...fail(got === 'refused' ? watch.findText(MOVE_REFUSALS)! : `No change observed for ${item.name}`, got === 'refused' ? 'refused' : 'timeout', {}), item, messages };

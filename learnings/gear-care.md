@@ -143,5 +143,10 @@ Wear was set by SQL while it was logged out.
   - A blade with `hand` 2 and Item_Type 10 got "can't go there!" in the left, and the next best went in, 4.82 over 3.53. A right-only blade that beat the left stayed out, and a shield in the left gave way to a blade.
   - A sale that keeps the 4 highest items, with four higher in the bag: the pass ran first, so the level 14 sword went in hand instead of to the merchant.
   - A one-member group's `gear-care.ts` with `judged` counting blades: the level 14 sword came out at Druim Ligen and went on, a level 24 one went in, and a level 30 one stayed in.
+- Real characters, read back from the DB after the quit:
+  - The midgard group, level 22-23 in Thidranki, by `cloak-trip.ts --stay`, `gear-care.ts` in Jordheim and `cloak-trip.ts`: Dragonmight and the Dragon-shadow Great Axe, both level 51, went in the vault, and Bragi took a Bodybender Greataxe, 10.47 over 8.72. No repair was due, the most worn piece being at 99.4 %. No purse moved, since the medallions are free.
+  - Vefoydheb, a level 15 Blademaster, at Connla with `town.ts`: "no weapon step: best 5.15, worn 5.49" kept the Spiritbender in hand, and a dolomite short sword went left for 28,800c, 4.9 over 3.53.
+  - `town.ts` doesn't start from a battleground: the recall stone doesn't work there, so after the armour pass it spends about 6.5 minutes on "no teleporter in region 252" and binds nowhere. Go out first.
+- A level 14 helm named like the level 15 one he wore: `equipItem` swapped them, reported `timeout`, `wear.ts` gave up, and the sale took the level 15 one. On a disposable stack, after the fix, the better one stayed on from either side, through `wear.ts` and `wearBetter`, and helms that read the same swapped and came back. A real character's repair is still to come: only throwaway characters have been repaired.
 
 **Not tried live:** a full vault. The wear numbers come from the code and the DB, not from watching an item fall.
