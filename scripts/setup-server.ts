@@ -173,7 +173,7 @@ export interface Ctx {
     verbose: boolean;
 }
 
-async function run(cmd: string[], stdin?: string): Promise<{ code: number; stdout: string; stderr: string }> {
+export async function run(cmd: string[], stdin?: string): Promise<{ code: number; stdout: string; stderr: string }> {
     const p = Bun.spawn(cmd, { stdin: stdin !== undefined ? new TextEncoder().encode(stdin) : 'ignore', stdout: 'pipe', stderr: 'pipe' });
     const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
     return { code, stdout, stderr };
@@ -189,7 +189,7 @@ export async function sql(ctx: Ctx, query: string): Promise<string[][]> {
 
 export const sqlString = (s: string) => `'${s.replace(/\\/g, '\\\\').replace(/'/g, "\\'")}'`;
 
-async function waitFor<T>(what: string, timeoutMs: number, fn: () => Promise<T | undefined>): Promise<T> {
+export async function waitFor<T>(what: string, timeoutMs: number, fn: () => Promise<T | undefined>): Promise<T> {
     const t0 = Date.now();
     let lastErr = '';
     let announced = false;
