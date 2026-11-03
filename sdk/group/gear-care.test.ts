@@ -290,6 +290,13 @@ describe('careDue and vaultDue', () => {
         expect(careDue(town({ worn: [worn], copper: 100 }).m, { reserve: 0 })).toBeTrue();
     });
 
+    test('gear that fits but no pass can judge starts no trip', () => {
+        const t = town({ vault: [item(110, 'axe', { level: 24, objectType: 17 })], seen: true });
+        expect(vaultDue(t.m, { judged: i => i.objectType !== 17 })).toBeFalse();
+        expect(careDue(t.m, { judged: i => i.objectType !== 17 })).toBeFalse();
+        expect(vaultDue(t.m, { judged: i => i.objectType === 17 })).toBeTrue();
+    });
+
     test('kept gear starts a trip even with an empty purse: a keeper is free', () => {
         expect(careDue(town({ pack: [relic], copper: 0 }).m)).toBeTrue();
     });
@@ -373,6 +380,16 @@ describe('takeFromVault', () => {
         const t = town({ seen: false });
         expect(await takeFromVault(t.m, { radius: 12_000, town: { x: 0, y: 0 } })).toEqual(['no vault: not in town']);
         expect(t.log).toEqual([]);
+    });
+});
+
+describe('takeFromVault, with a gear pass that judges only some of it', () => {
+    test('what it can judge comes out, and the rest waits for one that can', async () => {
+        const axe = item(110, 'axe', { level: 24, objectType: 17 });
+        const legs = item(111, 'leggings', { level: 24, objectType: 35 });
+        const t = town({ vault: [axe, legs], seen: true });
+        expect(await takeFromVault(t.m, { radius: 12_000, judged: i => i.objectType === 35 })).toEqual(['took leggings L24 out of the vault']);
+        expect(t.vault.map(i => i.name)).toEqual(['axe']);
     });
 });
 

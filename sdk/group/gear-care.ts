@@ -39,6 +39,8 @@ export interface CareOptions {
     reserve?: number;
     /** The landing point of a teleport that can fail: outside CLOAK_TOWN_RANGE of it, nothing happens. */
     town?: { x: number; y: number };
+    /** What the visit's own gear pass can judge. The rest stays in the vault once it fits, and starts no trip, rather than come out to be sold (default: everything). */
+    judged?: (item: InventoryItem) => boolean;
 }
 
 /** The ability a weapon or shield asks of a class (AbstractServerRules.cs CheckAbilityToUseItem, with allow_cross_realm_items off); any one of a list will do. */
@@ -101,19 +103,20 @@ export function needsRepair(m: Pick<CareMember, 'sdk'>, opts: Pick<CareOptions, 
 }
 
 /** What's in the vault and fits now, as far as this client has seen the vault. */
-const fitsNow = (m: Pick<CareMember, 'sdk'>, level: number, opts: Pick<CareOptions, 'maxCon'>) => m.sdk.getVault().filter(i => wearable(i) && !tooHighLevel(i, level, opts.maxCon));
+const fitsNow = (m: Pick<CareMember, 'sdk'>, level: number, opts: Pick<CareOptions, 'maxCon' | 'judged'>) =>
+    m.sdk.getVault().filter(i => wearable(i) && !tooHighLevel(i, level, opts.maxCon) && (opts.judged?.(i) ?? true));
 
 /**
  * Whether a keeper is worth a trip: gear in the backpack to put away, or gear in the vault that fits
  * now. A client that hasn't opened the vault since it started doesn't know the second.
  */
-export function vaultDue(m: Pick<CareMember, 'sdk'>, opts: Pick<CareOptions, 'maxCon'> = {}): boolean {
+export function vaultDue(m: Pick<CareMember, 'sdk'>, opts: Pick<CareOptions, 'maxCon' | 'judged'> = {}): boolean {
     const p = m.sdk.getPlayer();
     return !!p && (backpackOf(m).some(i => keepForLater(i, p, opts)) || fitsNow(m, p.level, opts).length > 0);
 }
 
 /** Whether a town visit is due for gear: a keeper is worth a trip, or something worn needs a smith and the purse can pay one. */
-export function careDue(m: Pick<CareMember, 'sdk'>, opts: Pick<CareOptions, 'repairBelow' | 'maxCon' | 'reserve'> = {}): boolean {
+export function careDue(m: Pick<CareMember, 'sdk'>, opts: Pick<CareOptions, 'repairBelow' | 'maxCon' | 'reserve' | 'judged'> = {}): boolean {
     const p = m.sdk.getPlayer();
     return !!p && (vaultDue(m, opts) || (needsRepair(m, opts).length > 0 && p.money.totalCopper > (opts.reserve ?? REPAIR_RESERVE)));
 }
