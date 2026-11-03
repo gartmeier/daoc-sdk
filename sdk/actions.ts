@@ -58,6 +58,7 @@ import {
     type TradeLine,
     type Point,
 } from './actions-helpers';
+import { spellMessagePattern } from './actions-helpers';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
 import { isDelveOf, parseDelve } from './delve';
 import { botFolder, loadBuild } from './build';
@@ -344,6 +345,19 @@ export interface CastResult extends ActionResult {
      * snare immunity. `resisted` stays false: the target did not resist, nothing could have landed.
      */
     effectImmune?: boolean;
+    /**
+     * The cast went off but the server refused the effect: "{0} already has that effect. Wait until it expires. Spell
+     * failed." The same spell is still on a player (EffectListComponent.cs:689), as for a second root while one holds.
+     */
+    alreadyOn?: boolean;
+    /**
+     * Whether the server said its effect landed: the spell's own line for that ("{0} is entranced!", Message2), sent to the
+     * caster. false when the spell has one and it never came, undefined when it has none. A monster's repeat replaces the
+     * old effect without a word (ECSGameEffect.cs OnEffectStartsMsg).
+     */
+    effectLanded?: boolean;
+    /** The name in that line: an enemy player's real name, which its race-named entry in the world state never shows. */
+    landedOn?: string;
     /**
      * Damage from "You hit X for N damage!" / "Your <this spell> hits X for N damage!" lines that
      * arrived once the cast time was up. Other spells' DoT ticks and "extra damage" lines are left
@@ -1549,10 +1563,22 @@ export class BotActions {
             if (!done) return fail(`${sp.name} started but no completion was observed`, 'timeout', { ...base, castTimeMs, messages });
             // Sent right after "You cast a ..." when the effect can't take (CCSpellHandler.CheckSpellResist).
             const effectImmune = ours.some(m => /your target is immune to this effect/i.test(m.text));
-            const outcome = resisted ? ' (resisted)' : effectImmune ? ' (target immune)' : damage ? ` for ${damage} damage` : '';
+            const alreadyOn = ours.some(m => /already has that effect/i.test(m.text));
+            const starts = info?.effectStarts?.includes('{0}') ? spellMessagePattern(info.effectStarts) : null;
+            // Another member's line of the same spell can come first: a monster's name must match (a player's is its real one, which we don't see).
+            const npcName = obj && 'kind' in obj && obj.kind === 'npc' ? obj.name.toLowerCase() : null;
+            const landedLine = starts && !resisted && !effectImmune && !alreadyOn ? await this.helpers.waitFor(st => {
+                for (const m of landed(st)) {
+                    const hit = starts.exec(m.text);
+                    if (hit && (!npcName || hit[1]!.toLowerCase().endsWith(npcName))) return hit;
+                }
+                return null;
+            }, 500) : null;
+            const outcome = resisted ? ' (resisted)' : effectImmune ? ' (target immune)' : alreadyOn ? ' (already has it)' : damage ? ` for ${damage} damage` : '';
             return {
                 success: true, message: `Cast ${sp.name}${obj ? ` on ${obj.name}` : ''}${outcome}`,
-                spell: sp, target: obj, castTimeMs, completed: true, resisted, effectImmune, damage, messages,
+                spell: sp, target: obj, castTimeMs, completed: true, resisted, effectImmune, alreadyOn, damage, messages: msgs(),
+                ...(starts ? { effectLanded: !!landedLine, ...(landedLine ? { landedOn: landedLine[1]! } : {}) } : {}),
             };
         } finally {
             watch.dispose();

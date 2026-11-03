@@ -4,6 +4,7 @@
 // Everything here is plain JSON, so the same shapes can later travel between
 // processes (a gateway channel) instead of living in one process's blackboard.
 
+import type { CcImmunity, CcKind } from './cc';
 import type { Realm } from '../types';
 
 /** What a member is for. Roles pick a behaviour list; capabilities come from its spells. */
@@ -44,6 +45,8 @@ export interface BuffSpell {
 export interface Capabilities {
     heal: boolean;
     cc: boolean;
+    /** The kinds it can put on someone (what `cc` says it has); absent in reports from before it. */
+    ccKinds?: CcKind[];
     nuke: boolean;
     /** Knows a resurrection spell and has the rez behaviour; absent in reports from before it. */
     rez?: boolean;
@@ -162,14 +165,15 @@ export interface Contact extends Sighting {
     threat: boolean;
     /** Start of the current hostile streak (0 when not a threat). */
     hostileSince: number;
-    /** Crowd control a member put on it, until `until` (ms epoch). */
+    /** Crowd control a member put on it and the group leaves it to, until `until` (ms epoch). A root's ends when it can fight or when it stops holding. */
     cc: { by: string; kind: string; until: number } | null;
     /**
-     * A mezz can't land on it before this (ms epoch): a member's mezz got "Your target is immune to this
-     * effect!" (a player is immune for a while after one ends). Nobody is assigned it meanwhile. A root's
-     * immunity is the server's separate snare immunity and stays with the member who cast it.
+     * Until when each kind can't land on it (ms epoch; cc.ts): one held or the 60 s after one ended, or an answer from the
+     * server ("immune", "already has that effect"). On the board for all: each kind goes by its own, whoever cast it.
      */
-    ccImmuneUntil?: number;
+    ccImmune?: CcImmunity;
+    /** What the server calls it in messages, once a member's cast landed: an enemy player's real name, not the race in `name`. */
+    serverName?: string;
     /** Players: seen helping its own realm (Sighting.helped) since the group first saw it. Sticky: a healer to focus first. */
     healer?: boolean;
     /** Players: seen casting (Sighting.casting) since the group first saw it. Sticky: a caster, not a melee fighter. */

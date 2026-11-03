@@ -224,7 +224,7 @@ describe('pickPackFocus and packCc', () => {
         const a2 = enemy(4, 'midgard', { x: 1300, y: 100 }), a3 = enemy(5, 'midgard', { x: 1200, y: 0 });
         const a = packCc([near, far, a2, a3], [m('Bard', 'support')], [], opts);
         expect([2, 4, 5]).toContain(a[0]!.targetId);
-        const b = packCc([near, { ...far, ccImmuneUntil: 100 }], [m('Bard', 'support')], [], opts);
+        const b = packCc([near, { ...far, ccImmune: { mezz: Date.now() + 60_000 } }], [m('Bard', 'support')], [], opts);
         expect(b).toEqual([]);
     });
 

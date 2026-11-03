@@ -21,6 +21,7 @@ import type { Realm } from '../types';
 import type { Behavior } from './member';
 import { backupHeal, confuse, crowdControl, flee, interrupt, rest, rez, release, retreat, shedLoad, song, sprint, holdFormation, buff } from './behaviors';
 import { isAlive } from './blackboard';
+import { immuneKinds } from './cc';
 import { assignCc } from './pve';
 import { decideRvr, groupRegion, homeOf, keepDangers, mainBody, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
@@ -134,7 +135,7 @@ export function pickPackFocus(pool: readonly Contact[], centre: Point, reach: nu
  * the first hit and keeps her from healing.
  */
 export function packCc(foes: readonly Contact[], members: readonly MemberReport[], current: readonly { targetId: number; by: string }[], o: { centre: Point; focus: Contact | null; areaRadius: number; roots?: boolean; now: number }): { targetId: number; by: string }[] {
-    const pool = foes.filter(c => c.objectId !== o.focus?.objectId && !c.cc && (c.ccImmuneUntil ?? 0) <= o.now);
+    const pool = foes.filter(c => c.objectId !== o.focus?.objectId && !c.cc);
     const catches = (c: Contact) => (o.focus && dist(c, o.focus) <= o.areaRadius ? 0 : pool.filter(n => dist(n, c) <= o.areaRadius).length);
     const order = [...pool].sort((a, b) => catches(b) - catches(a) || Number(!!b.healer) - Number(!!a.healer) || dist(b, o.centre) - dist(a, o.centre));
     const mezzers = members.filter(m => m.capabilities.cc && (m.role === 'support' || m.role === 'nuker' || o.roots));
@@ -145,9 +146,10 @@ export function packCc(foes: readonly Contact[], members: readonly MemberReport[
     const bard = out.filter(a => roleOf(a) === 'support').map(at).filter(c => !!c);
     return out.filter(a => {
         const role = roleOf(a), c = at(a);
-        if (role === 'nuker') return !!c?.healer;
-        if (role === 'healer') return !!c && !bard.some(b => dist(b, c) <= o.areaRadius);
-        return true;
+        if (!c) return false;
+        if (role === 'healer') return !immuneKinds(c).includes('root') && !bard.some(b => dist(b, c) <= o.areaRadius);
+        if (immuneKinds(c).includes('mezz')) return false;
+        return role !== 'nuker' || !!c.healer;
     });
 }
 

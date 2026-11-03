@@ -22,8 +22,9 @@ describe('what points come and what they cost', () => {
         expect(earnedSpecPoints(multiplier, 50)).toBe(at50);
     });
 
-    test('checked on a real server: a multiplier 10 caster has 252 at level 22', () => {
+    test('checked on a real server: a multiplier 10 caster has 252 at level 22, a Hero 490', () => {
         expect(earnedSpecPoints(10, 22)).toBe(252);
+        expect(earnedSpecPoints(20, 22)).toBe(490);
     });
 
     test('levels 2 to 5 give their own number whatever the class', () => {

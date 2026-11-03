@@ -191,6 +191,10 @@ export interface SpellInfo {
     tooltipId: number;
     /** Not 0: a song, on the songs page (Spell.cs:249). */
     instrumentRequirement: number;
+    /** What others read when its effect lands ("{0} is entranced!"): Message2, sent to the caster and to the area (ECSGameEffect.cs SendMessages). */
+    effectStarts: string;
+    /** What the area reads when the effect ends ("{0} is no longer entranced."): Message4; empty for most roots. */
+    effectEnds: string;
 }
 
 export interface SpellLineInfo {
@@ -504,6 +508,7 @@ export function buildSpells(): SpellInfo[] {
         subSpellId: num(r.SubSpellID), sharedTimerGroup: num(r.SharedTimerGroup),
         moveCast: num(r.MoveCast) !== 0, uninterruptible: num(r.Uninterruptible) !== 0, isFocus: num(r.IsFocus) !== 0,
         tooltipId: num(r.TooltipId), instrumentRequirement: num(r.InstrumentRequirement),
+        effectStarts: str(r.Message2), effectEnds: str(r.Message4),
     })).sort((a, b) => a.id - b.id);
 }
 

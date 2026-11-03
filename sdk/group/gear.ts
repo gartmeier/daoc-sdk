@@ -21,7 +21,7 @@ import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import { parseWeaponDelve } from '../delve';
 import { EquipmentSlot, isArmor, isWeapon, ItemHand, ObjectType, type InventoryItem, type ItemBonus, type MerchantItem, type PlayerState, type Specialization, type WeaponDelve } from '../types';
-import { armorGain, armorSwing, armorValue, asRepaired, focusCover, isFocusCaster, statScore, tooHighLevel, WEAPON_STAT_SWING, weaponScore, weaponValue } from './gear-score';
+import { armorGain, armorSwing, armorValue, asRepaired, focusCover, isFocusCaster, isTemplatePiece, statScore, tooHighLevel, WEAPON_STAT_SWING, weaponScore, weaponValue } from './gear-score';
 import { DUAL_LINES, WEAPON_LINES } from './styles';
 
 const { Jewelry, Cloak, Neck, Waist, LeftBracer, RightBracer, LeftRing, RightRing } = EquipmentSlot;
@@ -99,8 +99,8 @@ export function nextAccessory(backpack: InventoryItem[], worn: InventoryItem[], 
             if ((scoreOf(item) ?? 0) < 0) continue;
             return { item, slot: empty, replaces: null };
         }
-        const lowest = worn.filter(w => slots.includes(w.slot)).sort(compare)[0]!;
-        if (compare(item, lowest) > 0) return { item, slot: lowest.slot, replaces: lowest };
+        const lowest = worn.filter(w => slots.includes(w.slot) && !isTemplatePiece(w)).sort(compare)[0];
+        if (lowest && compare(item, lowest) > 0) return { item, slot: lowest.slot, replaces: lowest };
     }
     return null;
 }
@@ -218,7 +218,7 @@ export async function armorUpgradeGain(delves: GearDelves, item: InventoryItem, 
 export async function upgradeGains<T extends { item: InventoryItem; cur?: InventoryItem }>(delves: GearDelves, rows: T[], level: number, score: (i: InventoryItem, level: number) => number, opts: { maxCon?: number } = {}): Promise<(T & { gain: number })[]> {
     const out: (T & { gain: number })[] = [];
     for (const row of rows) {
-        if (tooHighLevel(row.item, level, opts.maxCon)) continue;
+        if (tooHighLevel(row.item, level, opts.maxCon) || (row.cur && isTemplatePiece(row.cur))) continue;
         const gain = isArmor(row.item.objectType)
             ? await armorUpgradeGain(delves, row.item, row.cur, level)
             : score(row.item, level) - (row.cur ? score(row.cur, level) : 0);
@@ -447,11 +447,12 @@ function scoreOf(m: WeaponMember, needs: WeaponNeeds, slot: number, w: WeaponDel
 /**
  * What's worn in these hands is worth, by its delve and as a smith would leave it (asRepaired). Off
  * the line it's 0: it swings at spec 1 with no styles, so anything on the line replaces it. A shield
- * is not a weapon here. A worn weapon that won't delve is Infinity: nothing replaces what can't be compared.
+ * is not a weapon here. A worn weapon that won't delve is Infinity: nothing replaces what can't be compared. Nor a gear template's.
  */
 async function wornScore(m: WeaponMember, needs: WeaponNeeds, slot: number, out: string[]): Promise<number> {
     let best = 0;
     for (const w of m.sdk.getEquipment().filter(e => handsOf(slot).includes(e.slot))) {
+        if (isTemplatePiece(w)) return Infinity;
         if (WEAPON_LINES[w.objectType] !== needs.line) continue;
         const r = await weaponActions(m).delveItem(w);
         const facts = r.success ? parseWeaponDelve(r.lines) : null;
@@ -510,6 +511,7 @@ async function wearFocusStaff(m: WeaponMember, classInfo: ClassInfo, opts: Weapo
     }, async () => {
         const held = m.sdk.getEquipment().find(e => e.slot === TwoHand);
         if (!held) return 0;
+        if (isTemplatePiece(held)) return Infinity;
         const r = await act.delveItem(held);
         if (r.success) return score(r.bonuses);
         out.push(`delve ${held.name}: ${r.reason}; keeping it`);
