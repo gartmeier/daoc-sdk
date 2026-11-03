@@ -13,7 +13,7 @@ const byLevel = bot.findKillableNpc({ maxLevelDiff: 1, minLevelDiff: -1 });
 - **Killable** means the NPC is attackable, has realm `'none'` (a monster, not a realm NPC), and its role isn't one of merchant, trainer, guard, healer, stablemaster, vault, teleporter or service. Roles are guessed from the name and guild text; check `npc.role`.
 - **Engaged mobs are skipped:** ones already fighting someone else, and wounded ones not fighting us. `includeEngaged: true` keeps them.
 - **Con levels** (`conLevel(playerLevel, npcLevel)`, a port of `ConLevelGrid.cs`): -3 grey (no XP), -2 green, -1 blue, 0 yellow, 1 orange, 2 red, 3 purple. `conColor(n)` gives the name. At level 1 a level-0 spirit hound is blue.
-- `bot.getAttackers()` lists the NPCs targeting us, nearest first. Fight those first.
+- `bot.getAttackers()` lists the NPCs fighting us, nearest first: their reported target is us, or their swing or spell landed on us in the last 6 s. Fight those first. `npc.targetObjectId` alone misses a caster or a running mob: the server sends it only for a mob in attack state, able to turn, standing within its attack range, and a mob starting a timed cast leaves attack state (`PacketLib168.cs:820-828`, `StandardMobBrain.cs:442-443`). Seen live: a moss sheerie's spell landed at 427 units with `targetObjectId` null and `inCombat` false, and it stayed null while the mob ran in; a dergan enchanter at 446 reported the same between spells. A hit briefly shows as its target until the mob's next update. A caster that hasn't landed anything yet isn't listed: a cast start doesn't name its target.
 
 ## killNpc
 
