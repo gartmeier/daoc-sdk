@@ -7,10 +7,17 @@ import { buildPath, earnedSpecPoints, getBuild, specCost } from '../../data/buil
 import { getClass, getSpell } from '../../data/index';
 import { defaultBehaviors } from '../group/behaviors';
 import { withCharacter } from '../group/character';
+import { planBuffs } from '../group/buffs';
+import type { MemberContext } from '../group/member';
 import { roleForClass } from '../group/strategy';
-import { reach, reachOfBuild } from './reach';
+import type { MemberReport, Role } from '../group/types';
+import { paladin } from './paladin';
+import { reach, reachOfBuild, type Reach } from './reach';
 import { shaman } from './shaman';
 import { skald } from './skald';
+import { sorcerer } from './sorcerer';
+import { theurgist } from './theurgist';
+import { thrifty } from './thrifty';
 
 const guide = (name: string) => readFileSync(join(import.meta.dir, `../../learnings/classes/${name}.md`), 'utf-8').replaceAll('\r\n', '\n');
 const names = (list: { spell: { name: string } }[]) => list.map(s => s.spell.name);
@@ -212,5 +219,138 @@ describe('spiritmaster guide', () => {
         expect(names(darkness().nukes)).toEqual(['Silence Lifeforce']);
         expect(darkness().nukes[0]!.damageType).toBe(11);
         expect(darkness().cc?.spell.name).toBe('Hold Spirit');
+    });
+});
+
+describe('paladin guide', () => {
+    const chants = () => reachOfBuild(getBuild('Paladin', 'Chants and sword')!, 24);
+
+    test('its table is what the rule gives', () => tableHolds('Paladin', ['Chants and sword', 'Two-Handed hybrid', 'Thrust and chants']));
+
+    test('the tank list has no song; the kit puts it above the fight', () => {
+        expect(defaultBehaviors().tank.map(b => b.name)).not.toContain('song');
+        const list = withCharacter(defaultBehaviors().tank, paladin()).map(b => b.name);
+        expect(list.indexOf('song')).toBe(list.indexOf('tank') - 1);
+    });
+
+    test('it plays Chant of Persistence, from Chants 22', () => {
+        expect(chants().songs.find(s => s.kind === 'endurance')?.spell.name).toBe('Chant of Persistence');
+        expect(reach('Paladin', 24, { Chants: 22 }).songs.find(s => s.kind === 'endurance')?.spell.name).toBe('Chant of Persistence');
+        expect(specCost(1, 24) - specCost(1, 22)).toBe(47);
+    });
+
+    test('its other chants have no behaviour', () => {
+        for (const name of ["Crusader's Refreshment", "Crusader's Defense", 'Aura of Indestructability', 'Aggravate']) expect(chants().unused.map(k => k.name)).toContain(name);
+    });
+});
+
+/** A group's buff plan at 24, each member on the named build. */
+function planOf(members: [string, Role, string, string][]) {
+    const reports = members.map(([name, role, className, build]) => ({
+        name, role, isDead: false, effects: [],
+        capabilities: { buffSpells: reachOfBuild(getBuild(className, build)!, 24).buffs.map(s => ({ name: s.spell.name, slot: s.slot, target: s.target, concentration: s.concentration })) },
+    })) as unknown as MemberReport[];
+    return (caster: string) => planBuffs(caster, reports);
+}
+
+const CAMELOT: [string, Role, string, string][] = [
+    ['Galahad', 'tank', 'Paladin', 'Chants and sword'],
+    ['Nimue', 'healer', 'Cleric', 'Healer'],
+    ['Merlin', 'nuker', 'Sorcerer', 'Balanced body and mind'],
+    ['Morgana', 'nuker', 'Cabalist', 'Matter'],
+    ['Taliesin', 'nuker', 'Theurgist', 'Ice and earth'],
+];
+
+describe('cleric guide', () => {
+    const healer = () => reachOfBuild(getBuild('Cleric', 'Healer')!, 24);
+
+    test('its table is what the rule gives', () => tableHolds('Cleric', ['Healer', 'Buffer', 'Smite']));
+
+    test('her instant is covered by Greater Revival, so the list leaves it out; no crowd control', () => {
+        expect(names(healer().heals).at(-1)).toBe('Greater Revival');
+        expect(names(healer().heals)).not.toContain('Gift of the Heavens');
+        expect(healer().known.some(k => k.name === 'Gift of the Heavens')).toBe(true);
+        expect(healer().cc).toBeNull();
+    });
+
+    test('her plan is 32 buffs for 232 concentration', () => {
+        const tasks = planOf(CAMELOT)('Nimue');
+        expect(tasks.length).toBe(32);
+        expect(tasks.reduce((n, t) => n + t.spell.concentration, 0)).toBe(232);
+    });
+});
+
+describe('sorcerer guide', () => {
+    const balanced = () => reachOfBuild(getBuild('Sorcerer', 'Balanced body and mind')!, 24);
+
+    test('its table is what the rule gives', () => tableHolds('Sorcerer', ['Balanced body and mind', 'Mind crowd control', 'Body nuker', 'Mind and matter charmer']));
+
+    test('the mezz is baseline, and the kit is a nuker with a floor', () => {
+        expect(balanced().cc?.spell.name).toBe('Greater Mesmerization');
+        expect(reach('Sorcerer', 24, {}).cc?.spell.name).toBe('Greater Mesmerization');
+        expect(sorcerer().role).toBe('nuker');
+        expect(sorcerer().fight!.map(b => b.name)).toEqual(['assist']);
+    });
+
+    test('it opens on the DoT and never casts the cheaper Mind Scream', () => {
+        expect(names(balanced().nukes)).toEqual(['Dissolving Smoke', 'Greater Essence Consumption']);
+        expect(balanced().known.some(k => k.name === 'Lesser Mind Scream')).toBe(true);
+    });
+
+    test('Perception of Power goes on himself only: the Cleric provides the regen slot', () => {
+        const plan = planOf(CAMELOT);
+        expect(plan('Merlin').filter(t => t.spell.name === 'Perception of Power').map(t => t.target)).toEqual(['Merlin']);
+        expect(plan('Nimue').filter(t => t.spell.slot === 'regen').map(t => t.target)).toContain('Morgana');
+    });
+});
+
+describe('cabalist guide', () => {
+    const matter = () => reachOfBuild(getBuild('Cabalist', 'Matter')!, 24);
+
+    test('its table is what the rule gives', () => tableHolds('Cabalist', ['Matter', 'Spirit debuffer', 'Tri-spec']));
+
+    test('two DoTs, then the lifedrain; a root; the debuff only at Spirit 22', () => {
+        expect(names(matter().nukes)).toEqual(['Dissolving Smoke', 'Devolution', 'Greater Essence Consumption']);
+        expect(matter().cc?.kind).toBe('root');
+        expect(matter().known.some(k => k.name === 'Diminish Immunities')).toBe(false);
+        expect(reachOfBuild(getBuild('Cabalist', 'Spirit debuffer')!, 24).known.some(k => k.name === 'Diminish Immunities')).toBe(true);
+    });
+});
+
+describe('theurgist guide', () => {
+    const ice = () => reachOfBuild(getBuild('Theurgist', 'Ice and earth')!, 24);
+
+    test('its table is what the rule gives', () => tableHolds('Theurgist', ['Ice and earth', 'Earth and wind', 'Wind nuker']));
+
+    test('one nuke, no DoT; the cheaper snare nuke goes unused; a root', () => {
+        const r: Reach = ice();
+        expect(names(r.nukes)).toEqual(['Ice Blast (Minor)']);
+        expect(r.known.some(k => k.name === 'Ice Blast')).toBe(true);
+        expect(r.cc?.kind).toBe('root');
+    });
+
+    test('the kit is a nuker with a floor', () => {
+        expect(theurgist().role).toBe('nuker');
+        expect(theurgist({ saveBelow: 30 }).fight!.map(b => b.name)).toEqual(['assist']);
+    });
+});
+
+describe('thrifty', () => {
+    const ctx = (manaPercent: number, threats: number[], maxMana = 100) => {
+        const skipped: string[] = [];
+        return { skipped, ctx: { threats: () => threats, me: () => ({ manaPercent, maxMana }), skip: (m: string) => { skipped.push(m); return false; } } as unknown as MemberContext };
+    };
+    const inner = { name: 'assist', run: () => true };
+
+    test('below the floor with enemies about it holds back', async () => {
+        const c = ctx(30, [1]);
+        expect(await thrifty(inner, 40).run(c.ctx)).toBe(false);
+        expect(c.skipped[0]).toContain('saving power');
+    });
+
+    test('above the floor, or with nobody to fight, or with no power at all, it runs', async () => {
+        expect(await thrifty(inner, 40).run(ctx(50, [1]).ctx)).toBe(true);
+        expect(await thrifty(inner, 40).run(ctx(30, []).ctx)).toBe(true);
+        expect(await thrifty(inner, 40).run(ctx(0, [1], 0).ctx)).toBe(true);
     });
 });
