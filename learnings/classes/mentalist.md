@@ -16,30 +16,41 @@ Three kinds of claim here, marked as such:
 import { assist } from '../../sdk/group/behaviors';
 import { mentalist } from '../../sdk/classes/mentalist';
 
-const kit = mentalist({ build: 'rvr' });
+const kit = mentalist();
 export default { ...kit.character, fight: [assist({ holdMs: 1500 })] };
 ```
 
 - `character` only sets the role to `nuker`. The role's list already casts the nukes, buffs, mezzes and emergency heals from whatever the bot knows, so the kit adds no behaviour of its own yet.
-- `specPlan` holds the weights of the chosen build, for the bot's own training script. Nothing applies it on its own: `bot.trainSpec` spends the points, and `/respec` undoes them ([npc-dialog.md](../npc-dialog.md)).
+- Spec points aren't in the kit: they are the character's own `bots/<bot>/build.ts`.
 
 ## Builds
 
-Levels each `MENTALIST_BUILDS` plan gives (`specLevelsAt`):
+A character's `bots/<bot>/build.ts` starts as a copy from the catalogue in `data/builds/mentalist.ts`, and one buying rule spends it: [builds.md](../builds.md) says how to choose, change and check one. The catalogue's `why` and `order` say which spells each number reaches. A respec is free, so a character can level on Mana and move to Light nuker later.
 
-| Character level | Points | `levelling` Mana / Mentalism | `rvr` Light / Mentalism / Mana |
-|---|---|---|---|
-| 10 | 54 | 9 / 4 | 8 / 5 / 3 |
-| 20 | 209 | 19 / 6 | 17 / 10 / 2 |
-| 30 | 464 | 28 / 10 | 25 / 16 / 3 |
-| 40 | 819 | 38 / 12 | 33 / 22 / 3 |
-| 50 | 1494 | 50 / 20 | 46 / 28 / 4 |
+Levels the rule gives each build (`buildPath`), lines in buying order, as a level dings and before its half level:
+
+| Character level | Points | Light nuker: Light / Mentalism / Mana | Mentalism healer: Mentalism / Mana / Light | Mana levelling: Mana / Mentalism / Light |
+|---|---|---|---|---|
+| 10 | 54 | 10 / 1 / 1 | 9 / 4 / 1 | 10 / 1 / 1 |
+| 20 | 209 | 20 / 1 / 1 | 19 / 4 / 1 | 20 / 1 / 1 |
+| 24 | 299 | 22 / 9 / 1 | 23 / 5 / 1 | 24 / 1 / 1 |
+| 30 | 464 | 28 / 9 / 1 | 29 / 5 / 1 | 30 / 1 / 1 |
+| 40 | 819 | 35 / 19 / 1 | 39 / 5 / 1 | 40 / 1 / 1 |
+| 50 | 1494 | 45 / 28 / 10 | 50 / 20 / 4 | 48 / 24 / 5 |
+
+- **The mezz waits its turn.** A line at character level takes every point, so Light nuker has only Enfeeble Mind, the first mezz, until level 23, and Mana levelling until 40.5. A mezz sooner takes a target of its own: `{ level: 20, specs: { Mana: 19, Mentalism: 6 } }` then `{ level: 24, specs: { Mana: 23, Mentalism: 6 } }` buys the Mana spec measured below, with Empowering Tranquility at 25 instead of 24.
+- **Mentalism healer banks points** while Mentalism runs a level or two under character level: 26 at level 40.
 
 **Community, unverified:**
 
 - Full Mana is the usual levelling advice: strong power regen buffs, cheap DoTs, AoE DoTs for farming.
 - 46 Light / 28 Mentalism / 4 Mana is the usual RvR split at 50, with Light's direct damage and Mentalism's crowd control. Mana DoTs are called weak in endgame RvR, and an AoE DoT can break a mezz.
 - Lurikeen is the suggested race, for its Dexterity. Sources also list Shar, which can't be created here ([classes-and-races.md](../classes-and-races.md)).
+
+**Server code,** why the builds at 50 leave that advice:
+
+- **Light nuker is 45 / 28 / 10, not 46 / 28 / 4.** Light has no spell above 45, so the 46th level buys no spell. It does raise the damage floor: against a level 50 target 92.8 % instead of 91.2 % (SpellHandler.cs:2748-2763). Its 46 points buy Mana 4 to 10 for 45 (Lesser Mind Fade, Mind Fade, Curative Trance), leaving 1 of the 1494. Whether that trade is worth it is **untested**.
+- **Mana levelling is 48 / 24 / 5, not full Mana.** It is full Mana up to 40. Mana has no spell above 48, so the half levels go to Mentalism 24 (Paralyze Mind at 23, Eccentricity at 24) and Light 5.
 
 **Server code,** what each line gives:
 
@@ -53,9 +64,11 @@ Levels each `MENTALIST_BUILDS` plan gives (`specLevelsAt`):
 - **Server code:** regen is `2.5 + level x 0.2 + buff` per tick, about every 5 s, cut to a whole number. List casters get half below 50 % power (`PowerRegenerationAmountCalculator.cs`).
 - **Verified:** at level 20, a caster below 50 % power went from 3 to 4 per tick with Empowering Harmony (Mana 14). By the formula, the first rank (+1) gives that caster nothing: `(6.5 + 1) / 2` still rounds down to 3.
 
-## Measured: does the levelling build help a group?
+## Measured: Mana or Light at level 20, in a group
 
-Not in XP, so far. Level-20 hunts of the five-member Hibernia group on a disposable server, with clones reset before every run and only the Mentalist's spec changing. Nobody died in any run and the tank held every mob.
+Does a Mana spec help a group more than a Light one? Not in XP, so far. Level-20 hunts of the five-member Hibernia group on a disposable server, with clones reset before every run and only the Mentalist's spec changing. Nobody died in any run and the tank held every mob.
+
+These are the specs the hunts ran, and neither is a catalogue build. At level 20 Light nuker is Light 20 / Mentalism 1 / Mana 1 and Mana levelling is Mana 20 / Mentalism 1 / Light 1. Both specs below had Cripple Mind (Mentalism 5), which those two don't, so this table doesn't measure them.
 
 | 15 min hunt | XP per hour | Kills | Mentalist dealt | Group dealt | Group waited on Mentalist's power | Group waited on Enchanter's power |
 |---|---|---|---|---|---|---|
@@ -64,9 +77,9 @@ Not in XP, so far. Level-20 hunts of the five-member Hibernia group on a disposa
 | Mana 19 / Mentalism 6 / Light 1 | 22.7M | 18 | 2688 | 9712 | 2 % | 51 % |
 | Mana 19 / Mentalism 6 / Light 1 | 21.7M | 18 | 3029 | 9993 | 9 % | 44 % |
 
-- XP per hour is level: about 22.1M against 22.2M. Six 6-minute hunts of these builds were noisier (17.5M to 25.2M) and pointed the same way.
-- The levelling build's own damage is about 13 % lower. The group dealt about 8 % more and killed two more mobs per hunt, which earned no more XP. Two runs each can't separate that from which mobs were nearby.
-- Waiting on the Mentalist's power is not what slows this group at level 20: about half the waits are on the Enchanter's. Half of each hunt goes to recovering in either build.
+- XP per hour is level: about 22.1M against 22.2M. Six 6-minute hunts of these specs were noisier (17.5M to 25.2M) and pointed the same way.
+- The Mana spec's own damage is about 13 % lower. The group dealt about 8 % more and killed two more mobs per hunt, which earned no more XP. Two runs each can't separate that from which mobs were nearby.
+- Waiting on the Mentalist's power is not what slows this group at level 20: about half the waits are on the Enchanter's. Half of each hunt goes to recovering in either spec.
 - Holding back direct damage below 50 % power was tried and dropped: it showed no gain in two 6-minute hunts.
 
 So choose by what the character will do, and don't expect a respec to change XP at this level. Levels above 20, solo play and RvR are **untested**.

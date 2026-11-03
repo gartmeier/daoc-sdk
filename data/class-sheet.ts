@@ -3,6 +3,7 @@
 //   bun data/class-sheet.ts Mentalist
 //   bun data/class-sheet.ts Mauler --realm=hibernia
 
+import { earnedSpecPoints } from './builds/rule';
 import { getClass, getRacesForClass, getSpell, getSpellLines, getStylesFor, specDisplayName, type ClassInfo, type SpellInfo, type SpellLineInfo } from './index';
 
 /** Careers and other hidden lines start far below 1; the trainable ones are what a class chooses between. */
@@ -20,38 +21,6 @@ export function classSpellLines(cls: ClassInfo): SpellLineInfo[] {
         .sort((a, b) => classSpecs(cls).indexOf(a.spec) - classSpecs(cls).indexOf(b.spec) || Number(b.isBaseLine) - Number(a.isBaseLine));
 }
 
-/**
- * Spec points earned by a level: 14 by level 5, then level * multiplier / 10 per level, and half of
- * that again at each half level from 40.5 on. A list caster's 1494 at 50 is the usual 46/28/4 exactly.
- */
-export function specPointsAt(level: number, multiplier: number): number {
-    if (level <= 5) return Math.max(0, level * 3 - 1);
-    let points = 14;
-    for (let l = 6; l <= level; l++) points += Math.floor(l * multiplier / 10);
-    for (let l = 40; l < level; l++) points += Math.floor(l * multiplier / 20);
-    return points;
-}
-
-/** What a line costs from 1 to `level`: each level costs its own number. */
-export const specCost = (level: number): number => level * (level + 1) / 2 - 1;
-
-/**
- * The levels a weighted plan reaches by a character level, spending as a training plan does: always
- * the line furthest behind its weight, one level at a time, never above the character's level.
- */
-export function specLevelsAt(weights: Record<string, number>, level: number, multiplier: number): Record<string, number> {
-    const out = Object.fromEntries(Object.keys(weights).map(k => [k, 1]));
-    let points = specPointsAt(level, multiplier);
-    for (;;) {
-        const next = Object.keys(weights)
-            .filter(k => out[k]! < level && out[k]! + 1 <= points && weights[k]! > 0)
-            .sort((a, b) => out[a]! / weights[a]! - out[b]! / weights[b]!)[0];
-        if (!next) return out;
-        out[next]! += 1;
-        points -= out[next]!;
-    }
-}
-
 const num = (n: number | undefined) => (n ? String(n) : '');
 
 function spellRow(level: number, s: SpellInfo): string {
@@ -66,7 +35,7 @@ export function classSheet(cls: ClassInfo): string {
         `# ${cls.name}`,
         '',
         `Generated from the DB dump by data/class-sheet.ts. Base class: ${cls.baseClassName ?? 'none'}. Type: ${cls.classType}.`,
-        `Stats: ${cls.primaryStat} / ${cls.secondaryStat} / ${cls.tertiaryStat}; power from ${cls.manaStat ?? 'nothing'}. Spec points x${cls.specializationMultiplier / 10}: ${[10, 20, 30, 40, 50].map(l => `${specPointsAt(l, cls.specializationMultiplier)} at ${l}`).join(', ')} (a line from 1 to N costs N(N+1)/2 - 1).`,
+        `Stats: ${cls.primaryStat} / ${cls.secondaryStat} / ${cls.tertiaryStat}; power from ${cls.manaStat ?? 'nothing'}. Spec points x${cls.specializationMultiplier / 10}: ${[10, 20, 30, 40, 50].map(l => `${earnedSpecPoints(cls.specializationMultiplier, l)} at ${l}`).join(', ')} (a line from 1 to N costs N(N+1)/2 - 1).`,
         `Races: ${getRacesForClass(cls.id).map(r => r.name).join(', ') || 'none'}. Lines: ${specs.map(specDisplayName).join(', ')}.`,
     ];
     for (const line of classSpellLines(cls)) {
