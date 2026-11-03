@@ -23,11 +23,16 @@ import {
     isKillable,
     isPvpImmunity,
     maxCombatEventId,
+    NOTHING_TO_REPAIR,
+    parseMoneyText,
     PICKUP_REFUSALS,
     PLAYER_AIM_MS,
     PVP_IMMUNE_REFUSALS,
     PVP_IMMUNE_RETRY_MS,
     RELEASE_REFUSALS,
+    REPAIR_ANSWERS,
+    REPAIR_OFFER,
+    REPAIR_REFUSALS,
     RETRYABLE_ATTACK_REFUSALS,
     SELL_REFUSALS,
     SIT_REFUSALS,
@@ -86,6 +91,7 @@ const MELEE_REAPPROACH = 118;
 const INTERACT_APPROACH = 150;   // INTERACT_DISTANCE 192, 3D
 const PICKUP_APPROACH = 150;     // world_pickup_distance 256, 2D
 const MERCHANT_APPROACH = 150;   // GameMerchant.OnPlayerBuy 256
+const GIVE_APPROACH = 100;       // GIVE_ITEM_DISTANCE 128, 3D
 const WHISPER_APPROACH = 300;    // WHISPER_DISTANCE 512
 const WHISPER_RATE_LIMIT = /^slow down! think before you say each word/i;
 // NPCs silently ignore a whisper < 1500 ms after the last one they accepted
@@ -94,6 +100,12 @@ const WHISPER_SPACING_MS = 1600;
 /** Gap between bot.say calls (the server drops says < 500 ms apart, say.cs:49-53). */
 const SAY_SPACING_MS = 600;
 const DEFAULT_SPELL_RANGE = 1500;
+/** A 0xDD to an object has toSlot = 1000 + objectId (PlayerMoveItemRequestHandler.cs:20-23). */
+const GIVE_TO_OBJECT = 1000;
+/** eInventorySlot.GeneralVault: the server picks an empty slot on the other side, or a partial stack (PlayerMoveItemRequestHandler.cs:306-337). A full side fails without a word. */
+const GENERAL_VAULT_SLOT = 601;
+/** Personal vault slots 110-149. */
+const VAULT_SLOTS = 40;
 /** eInventorySlot.PlayerPaperDoll: the server picks the item's own equipment slot (PlayerMoveItemRequestHandler.cs:28). */
 const PAPER_DOLL_SLOT = 100;
 /** Server dialog code for a group invite (PacketLib168.SendGroupInviteCommand). */
@@ -119,6 +131,21 @@ export interface WalkOptions {
     speedFactor?: number;
     /** Fail after this long without getting closer (default 8000 ms). */
     stuckMs?: number;
+}
+
+export interface RepairResult extends ActionResult {
+    /** What was handed over; null for repairAll. */
+    item: InventoryItem | null;
+    /** The same item as it is now; null for repairAll. Its `condition` is a percent rounded up, so 100 can still hide wear. */
+    repaired: InventoryItem | null;
+    /** Copper the purse lost. */
+    cost: number;
+    messages: GameMessage[];
+}
+
+export interface VaultResult extends ActionResult {
+    keeper: NearbyNpc | null;
+    items: InventoryItem[];
 }
 
 export interface WalkResult extends ActionResult {
@@ -148,7 +175,7 @@ export interface TargetResult extends ActionResult {
     target: NearbyNpc | NearbyPlayer | NearbyObject | null;
 }
 
-export type InteractResponse = 'merchant' | 'dialog' | 'dialogBox' | 'textWindow' | 'trainer' | 'message';
+export type InteractResponse = 'merchant' | 'dialog' | 'dialogBox' | 'textWindow' | 'trainer' | 'vault' | 'message';
 
 export interface InteractOptions {
     /** Walk until within this 3D distance first (default 150; the server allows 192). */
@@ -833,6 +860,7 @@ export class BotActions {
         const prevBox = before?.dialog?.receivedAt ?? 0;
         const prevText = before?.textWindow?.receivedAt ?? 0;
         const trainerWasOpen = before?.trainer.isOpen ?? false;
+        const prevVault = before?.vaultOpenedAt;
         const watch = this.helpers.watch();
         try {
             const r = await this.sdk.sendInteract(obj.objectId);
@@ -846,6 +874,7 @@ export class BotActions {
                 if (s.dialog?.isOpen && s.dialog.receivedAt !== prevBox) return 'dialogBox';
                 if (s.textWindow && s.textWindow.receivedAt !== prevText) return 'textWindow';
                 if (s.trainer.isOpen && !trainerWasOpen) return 'trainer';
+                if (s.vaultOpenedAt && s.vaultOpenedAt !== prevVault) return 'vault';
                 if (name && watch.messages().some(m => m.text.toLowerCase().startsWith(name))) return 'message';
                 return null;
             }, options.timeout ?? 4000);
@@ -1947,6 +1976,154 @@ export class BotActions {
             reason: sold.length === 0 && items.length > 0 ? 'none_sold' : undefined,
             sold, failed, earned,
         };
+    }
+
+    // ============ Smiths and the vault ============
+
+    /**
+     * Have a smith repair one item, worn or in the backpack: walk within 128 (3D), hand it over, read
+     * the price off the yes/no box, say yes, and observe the smith's answer. Costs the Durability it
+     * restores, and when too little is left it charges in full and restores only that much. Reasons:
+     * `not_found`, `out_of_range`, `no_need` (already whole), `not_repairable`, `too_expensive` (over
+     * `options.maxCost`, declined), `insufficient_funds`, `no_response` (not a smith, or no answer).
+     * A smith takes no jewellery, instruments or stacks: an instrument only through repairAll.
+     */
+    async repairItem(smith: NpcTarget, target: InventoryItem | NamePattern | number, options: { maxCost?: number } = {}): Promise<RepairResult> {
+        const item = this.resolveUsableItem(target);
+        const empty = { item, repaired: null, cost: 0, messages: [] as GameMessage[] };
+        if (!item) return fail(`Item not found: ${describeTarget(target)}`, 'not_found', empty);
+        let n = this.helpers.resolveNpc(smith);
+        if (!n) return fail(`Smith not found: ${describeTarget(smith)}`, 'not_found', empty);
+        if (n.distance > GIVE_APPROACH) {
+            const walk = await this.walkToObject(n, { range: GIVE_APPROACH });
+            if (!walk.success) return fail(walk.message, walk.reason ?? 'out_of_reach', empty);
+            n = this.helpers.resolveNpc(n.objectId) ?? n;
+        }
+        const objectId = n.objectId;
+        if (GIVE_TO_OBJECT + objectId > 0xffff) return fail(`${n.name}'s object id ${objectId} doesn't fit the packet`, 'bad_args', empty);
+        const r = await this.answerRepairBox(n.name, options, () => this.sdk.sendMoveItem(item.slot, GIVE_TO_OBJECT + objectId), 4000);
+        // The item's own update can trail the smith's line by a snapshot.
+        if (r.success) await this.helpers.waitFor(() => (this.resolveUsableItem(item.slot)?.condition ?? 0) > item.condition, 1000);
+        return { ...r, item, repaired: this.resolveUsableItem(item.slot) };
+    }
+
+    /**
+     * Have a smith repair everything at once: worn, backpack and vault, whatever its type, and 20 % over the
+     * single prices (Blacksmith.cs:14, :219-228). The only way to repair an instrument. Success with
+     * cost 0 means nothing needed it. Reasons as repairItem.
+     */
+    async repairAll(smith: NpcTarget, options: { maxCost?: number } = {}): Promise<RepairResult> {
+        const empty = { item: null, repaired: null, cost: 0, messages: [] as GameMessage[] };
+        const n = this.helpers.resolveNpc(smith);
+        if (!n) return fail(`Smith not found: ${describeTarget(smith)}`, 'not_found', empty);
+        let nothingDue = false;
+        const r = await this.answerRepairBox(n.name, options, async () => {
+            const said = await this.whisper(n, 'repair all');
+            nothingDue = NOTHING_TO_REPAIR.test(said.text);
+            return said;
+        }, 2000, () => nothingDue);
+        return nothingDue ? { success: true, message: `${n.name}: nothing to repair`, ...empty, messages: r.messages } : r;
+    }
+
+    /**
+     * Send what brings the smith's box, then answer it: only a box that opened since and names a repair,
+     * because an answer goes to whatever box is open. The next hand-over needs this one answered:
+     * another box in between makes the smith forget the item (Blacksmith.cs:138, PacketLib168.cs:1511-1513).
+     */
+    private async answerRepairBox(smith: string, options: { maxCost?: number }, send: () => Promise<ActionResult>, timeout: number, nothingDue?: () => boolean): Promise<RepairResult> {
+        const empty = { item: null, repaired: null, cost: 0 };
+        const before = this.helpers.state();
+        const money0 = totalCopper(before);
+        const box0 = before?.dialog?.receivedAt;
+        const watch = this.helpers.watch();
+        try {
+            const failed = (message: string, reason: string): RepairResult => ({ ...fail(message, reason, empty), messages: watch.messages().slice() });
+            // Left open by a run that was cut off: a no now, or the smith forgets what comes next.
+            if (before?.dialog?.isOpen && REPAIR_OFFER.test(before.dialog.text)) await this.sdk.sendRespondDialog(false);
+            const sent = await send();
+            if (!sent.success) return failed(sent.message, sent.reason ?? 'dispatch_failed');
+            if (nothingDue?.()) return failed('', 'no_need');
+            const box = await this.helpers.waitFor(s => {
+                if (firstTradeLine(watch.messages(), REPAIR_REFUSALS)) return 'refused' as const;
+                return s.dialog?.isOpen && s.dialog.receivedAt !== box0 && REPAIR_OFFER.test(s.dialog.text) ? s.dialog : null;
+            }, timeout);
+            if (box === 'refused') {
+                const line = firstTradeLine(watch.messages(), REPAIR_REFUSALS)!;
+                return failed(line.text, line.reason);
+            }
+            if (!box) return failed(`${smith} did not offer a repair`, 'no_response');
+            const price = parseMoneyText(REPAIR_OFFER.exec(box.text)![1]!);
+            const decline = async (message: string, reason: string) => {
+                await this.sdk.sendRespondDialog(false);
+                return failed(message, reason);
+            };
+            if (options.maxCost !== undefined && price > options.maxCost) return decline(`${smith} asks ${price}c, over the ${options.maxCost}c allowed`, 'too_expensive');
+            if (price > money0) return decline(`${smith} asks ${price}c, we have ${money0}c`, 'insufficient_funds');
+            const yes = await this.sdk.sendRespondDialog(true);
+            if (!yes.success) return failed(yes.message, yes.reason ?? 'dispatch_failed');
+            const answer = await this.helpers.waitFor(() => firstTradeLine(watch.messages(), REPAIR_ANSWERS), 4000);
+            if (answer && answer.reason !== 'done') return failed(answer.text, answer.reason);
+            if (!answer) return failed(`No answer from ${smith} after the yes`, 'no_response');
+            // The purse and the item's update come with or just after that line.
+            await this.helpers.waitFor(s => price === 0 || totalCopper(s) < money0, 1000);
+            await this.helpers.sleep(250);
+            const cost = Math.max(0, money0 - totalCopper(this.helpers.state()));
+            return { success: true, message: `${smith} repaired it for ${cost}c`, ...empty, cost, messages: watch.messages().slice() };
+        } finally {
+            watch.dispose();
+        }
+    }
+
+    /**
+     * Walk to a vault keeper and open the character's vault. Until then, in each client session,
+     * `sdk.getVault()` is empty whatever the vault holds. Reason `not_a_vault_keeper` for an NPC that answers
+     * some other way. The vault is the character's own: 40 slots, not shared with other bots.
+     */
+    async openVault(keeper: NpcTarget): Promise<VaultResult> {
+        const n = this.helpers.resolveNpc(keeper);
+        if (!n) return fail(`Vault keeper not found: ${describeTarget(keeper)}`, 'not_found', { keeper: null, items: [] });
+        const before = this.helpers.state()?.vaultOpenedAt;
+        if (before === undefined) return fail('This game client is too old to report the vault window: restart it with a quit action', 'unknown_action', { keeper: n, items: [] });
+        const r = await this.interactWith(n, { range: INTERACT_APPROACH });
+        // A keeper can speak first: Interact's ambient line goes out before the window (VaultKeeper.cs:66-78; Jarl Yuliwyf says one every time).
+        const opened = r.response === 'vault' || (r.success && await this.helpers.waitFor(s => !!s.vaultOpenedAt && s.vaultOpenedAt !== before, 1500));
+        if (!opened) return fail(r.success ? `${n.name} answered but no vault opened (${r.response})` : r.message, r.success ? 'not_a_vault_keeper' : r.reason ?? 'no_response', { keeper: n, items: [] });
+        // Past max_items_per_packet (30) the rest comes in a second packet, with window 0 (PacketLib168.cs:1752-1763).
+        await this.helpers.sleep(300);
+        const items = this.sdk.getVault();
+        return { success: true, message: `Opened ${n.name}'s vault (${items.length} items)`, keeper: n, items };
+    }
+
+    /**
+     * Put a backpack item in the vault, at a vault keeper. Vaulted items don't wear, count toward no
+     * weight and can't be sold by `sellItems`, but `repairAll` charges for them if they're worn. A stack goes
+     * onto a partial stack first, and what doesn't fit stays in the backpack: check the count if that matters.
+     * Reasons: `not_found`, `vault_full`, those of openVault, `timeout`.
+     */
+    async depositItem(keeper: NpcTarget, target: InventoryItem | NamePattern | number): Promise<ItemResult> {
+        const item = this.helpers.resolveInventoryItem(target);
+        if (!item) return fail(`Item not found: ${describeTarget(target)}`, 'not_found', { item: null, messages: [] });
+        const open = await this.openVault(keeper);
+        if (!open.success) return fail(open.message, open.reason ?? 'no_response', { item, messages: [] });
+        const merges = item.count > 1 && open.items.some(i => i.name === item.name);
+        if (open.items.length >= VAULT_SLOTS && !merges) return fail(`The vault is full (${VAULT_SLOTS})`, 'vault_full', { item, messages: [] });
+        return this.moveObserved(item, GENERAL_VAULT_SLOT, s => !s.inventory.some(i => i.slot === item.slot && i.name === item.name && i.count === item.count) && s.vault.some(i => i.name === item.name), `Put ${item.name} in the vault`);
+    }
+
+    /**
+     * Take an item out of the vault into the backpack, at a vault keeper. A number is a vault slot
+     * (110-149). A stack behaves as in depositItem. Reasons: `not_found`, `inventory_full`, those of openVault, `timeout`.
+     */
+    async withdrawItem(keeper: NpcTarget, target: InventoryItem | NamePattern | number): Promise<ItemResult> {
+        const open = await this.openVault(keeper);
+        if (!open.success) return fail(open.message, open.reason ?? 'no_response', { item: null, messages: [] });
+        const item = typeof target === 'number' ? open.items.find(i => i.slot === target)
+            : typeof target === 'string' || target instanceof RegExp ? bestNameMatch(open.items, target)
+            : open.items.find(i => i.slot === target.slot && i.name === target.name) ?? open.items.find(i => i.name === target.name);
+        if (!item) return fail(`Not in the vault: ${describeTarget(target)}`, 'not_found', { item: null, messages: [] });
+        const merges = item.count > 1 && this.sdk.getInventory().some(i => i.name === item.name);
+        if (this.sdk.getFreeInventorySlots() <= 0 && !merges) return fail('Backpack is full', 'inventory_full', { item, messages: [] });
+        return this.moveObserved(item, GENERAL_VAULT_SLOT, s => !s.vault.some(i => i.slot === item.slot && i.name === item.name && i.count === item.count) && s.inventory.some(i => i.name === item.name), `Took ${item.name} out of the vault`);
     }
 
     /**

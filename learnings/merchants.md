@@ -2,7 +2,7 @@
 
 ## Finding one
 
-- **In view:** `sdk.findNearbyNpcs(/./).find(n => n.role === 'merchant')`. The role is guessed from the guild text: Weapon Merchant, Armor Merchant, Arrow Merchant, Smith, Dye Merchant, ...
+- **In view:** `sdk.findNearbyNpcs(/./).find(n => n.role === 'merchant')`. The role is guessed from the guild text: Weapon Merchant, Armor Merchant, Arrow Merchant, Dye Merchant, ... A Smith has role `smith`: it buys and sells nothing.
 - **From static data:** `bot.findNpcSpawn(/./, { guild: /merchant/i })` gives the nearest spawn point, then `bot.travelTo(spawn.name)`. `bots/examples/merchant-run.ts` does both.
 - **Around the Albion Fighter start** (Prydwen Keep), within 600 units:
   - Torr Fletcher <Arrow Merchant>, 92 units from the start: 56 items, bolts from 19c.
@@ -54,4 +54,4 @@ const items = getMerchantItems(m.itemsListTemplateId);   // page, slot, itemSlot
 - `openMerchant` across several merchants, and buying 20 bolts for 19c.
 - `sellItem` and `sellItems`: Fortifying Cloth Gloves plus staff for 2c (`bots/examples/merchant-run.ts`, walking 2900 units back from the hound camp).
 - The insufficient-funds refusal.
-- Not tried: vaults (`sdk.getVault()`), item repair at smiths, guard merchants, housing merchants.
+- Not tried: guard merchants, housing merchants. Smiths and the vault: [gear-care.md](gear-care.md).

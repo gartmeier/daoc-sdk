@@ -252,6 +252,8 @@ function newSelf(): SelfState {
 }
 
 export function guessNpcRole(name: string, guild: string): string | null {
+    // Blacksmith.cs's guild: repairs, and buys and sells nothing (PlayerSellRequestHandler.cs:32-40).
+    if (guild === 'Smith') return 'smith';
     const t = `${guild} ${name}`.toLowerCase();
     if (/merchant|vendor|shopkeep|smith|armou?r|weapon|tailor|fletcher|baker|grocer|provision|supplies|arrow|bowyer|dyes?\b|poison/.test(t)) return 'merchant';
     if (/trainer|master\b|mentor|instructor|lord|lady|elder/.test(guild.toLowerCase())) return 'trainer';
@@ -266,6 +268,11 @@ export function guessNpcRole(name: string, guild: string): string | null {
 
 const dist3 = (a: PositionRef, b: PositionRef): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const dist2 = (a: PositionRef, b: PositionRef): number => Math.hypot(a.x - b.x, a.y - b.y);
+
+/** eInventoryWindowType.PlayerVault: the window a vault keeper opens (VaultKeeper.cs:78, IPacketLib.cs:466). */
+const PLAYER_VAULT_WINDOW = 3;
+const FIRST_VAULT_SLOT = 110;
+const LAST_VAULT_SLOT = 149;
 
 /** item.Type_Damage in the merchant window's type byte (PacketLib1125.cs:689). */
 const MERCHANT_DAMAGE_TYPES: Record<number, MerchantItem['damageType']> = { 1: 'crush', 2: 'slash', 3: 'thrust' };
@@ -292,6 +299,8 @@ export class WorldModel {
     npcDialog: NpcDialog | null = null;
     dialog: DialogBox | null = null;
     textWindow: TextWindow | null = null;
+    /** When a vault keeper last opened the vault: an empty one sends nothing else, and a closed one sends nothing at all. */
+    vaultOpenedAt: number | null = null;
     /** Replaced per 0xEA, never mutated: snapshots share it. */
     trade: TradeWindow | null = null;
     merchant: MerchantState = { isOpen: false, merchantObjectId: null, windowType: 0, items: [] };
@@ -567,6 +576,11 @@ export class WorldModel {
                 return this.applyVarious(p);
             case ServerOp.InventoryUpdate: {
                 const d = decodeInventoryUpdate(p);
+                // The first packet of the keeper's answer; a vault past max_items_per_packet goes on with window 0 (PacketLib168.cs:1752-1763).
+                if (d.windowType === PLAYER_VAULT_WINDOW) {
+                    this.vaultOpenedAt = now;
+                    for (const slot of this.items.keys()) if (slot >= FIRST_VAULT_SLOT && slot <= LAST_VAULT_SLOT) this.items.delete(slot);
+                }
                 for (const { slot, item } of d.items) {
                     if (item.empty) this.items.delete(slot);
                     else this.items.set(slot, toInventoryItem(slot, item));

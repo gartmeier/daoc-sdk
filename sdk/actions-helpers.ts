@@ -224,6 +224,41 @@ export const TRADE_COMMIT_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
     [/^\S+ doesn't have enough space in his inventory\.$/, 'partner_inventory_full'],
 ];
 
+/** A smith's price, single item or everything (Blacksmith.txt:10, Blacksmith.cs:231). The text is the box's. */
+export const REPAIR_OFFER = /^It will cost (.+) to repair .+\. Do you accept\?$/;
+
+/** A smith's answer to an item handed over: no box follows. Anchored, as TRADE_REFUSALS (Blacksmith.txt:15-17, GamePlayer.txt). */
+export const REPAIR_REFUSALS: ReadonlyArray<readonly [RegExp, string]> = [
+    [/^Your .+ is already in perfect condition\.$/, 'no_need'],
+    [/^.+ says, "I can't repair that\."$/, 'not_repairable'],
+    [/^.+ doesn't want stacked items\.$/, 'not_repairable'],
+    [/^You are too far away to give anything to /, 'out_of_range'],
+    [/^Invalid trade target\.$/, 'not_found'],
+];
+
+/**
+ * The smith's lines after a yes. A repair-all that can't pay reads with its placeholders still in it
+ * (Blacksmith.cs:267), and a smith that lost track of the item says it can't (:180-186).
+ */
+export const REPAIR_ANSWERS: ReadonlyArray<readonly [RegExp, string]> = [
+    [/^.+ says, "I can't repair that\."$/, 'not_repairable'],
+    [/ says, "There, .+ is ready for combat\."$/, 'done'],
+    [/ says, "Uhh, .+ is rather old\. /, 'done'],
+    [/It costs .+ to repair .+ You don't have that much/, 'insufficient_funds'],
+];
+
+/** "All items are fully repaired already." (Blacksmith.cs:233), in a popup that names the smith. */
+export const NOTHING_TO_REPAIR = /all items are fully repaired already/i;
+
+const COIN_COPPER: Record<string, number> = { copper: 1, silver: 100, gold: 10_000, platinum: 10_000_000, mithril: 10_000_000_000 };
+
+/** The copper in a Money.GetString text: "3 gold, 24 silver", "0 copper pieces" (Money.cs:74, money.txt). */
+export function parseMoneyText(text: string): number {
+    let copper = 0;
+    for (const [, n, coin] of text.matchAll(/(\d+) (copper|silver|gold|platinum|mithril)/g)) copper += Number(n) * COIN_COPPER[coin!]!;
+    return copper;
+}
+
 /** PlayerTradeWindow.cs:676-677. It comes before the close, after the inventory changes. */
 export const TRADE_COMPLETED = /^Trade Completed\. \d+ items for \d+ items\.$/;
 
@@ -315,7 +350,7 @@ export function conColor(level: number): ConColor {
 }
 
 /** NPC roles that are never fight targets. */
-const NON_COMBAT_ROLES = new Set(['merchant', 'trainer', 'guard', 'healer', 'stablemaster', 'vault', 'teleporter', 'service']);
+const NON_COMBAT_ROLES = new Set(['merchant', 'smith', 'trainer', 'guard', 'healer', 'stablemaster', 'vault', 'teleporter', 'service']);
 
 /** A monster we can fight for XP: attackable, realm 'none', not a townsperson. */
 export function isKillable(npc: NearbyNpc, player: PlayerState | null): boolean {

@@ -682,6 +682,8 @@ export interface BotWorldState {
     equipment: InventoryItem[];
     /** Vault items, populated after the vault window has been opened. */
     vault: InventoryItem[];
+    /** When a vault keeper last opened the vault in this client session; null or absent means `vault` says nothing yet. */
+    vaultOpenedAt?: number | null;
     skills: SkillsState;
     effects: Effect[];
     group: GroupMember[];

@@ -223,7 +223,12 @@ export function formatWorldState(state: BotWorldState, stateAgeMs?: number, opti
 
     if ((state.equipment ?? []).length) {
         lines.push('', '## Equipment');
-        for (const item of state.equipment) lines.push(`- [${item.slot}] ${item.name}`);
+        for (const item of state.equipment) lines.push(`- [${item.slot}] ${item.name}${item.condition < 100 ? ` (condition ${item.condition}%)` : ''}`);
+    }
+
+    if ((state.vault ?? []).length) {
+        lines.push('', `## Vault (${state.vault.length} of 40)`);
+        for (const item of state.vault) lines.push(`- [${item.slot}] ${itemLabel(item)}${item.level ? ` L${item.level}` : ''}`);
     }
 
     if ((state.effects ?? []).length) {
