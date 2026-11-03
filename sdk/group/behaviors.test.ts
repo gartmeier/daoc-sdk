@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { beyondLeash, ckey, holdState, needsSlot, openingOf } from './behaviors';
+import { beyondLeash, ckey, holdState, needsSlot, openingOf, shedLoad } from './behaviors';
 import { contact, enemy } from './fixtures';
 import type { MemberContext } from './member';
 import { PVE_SETTINGS } from './pve';
@@ -111,5 +111,29 @@ describe('beyondLeash: tank and melee stay with the fight', () => {
         } finally {
             regionId = 9999;
         }
+    });
+});
+
+describe('shedLoad: what an overloaded member drops', () => {
+    const item = (name: string, level: number, weight: number, objectType = 13) => ({ slot: 40, name, level, weight, count: 1, objectType });
+    const run = async (inventory: object[], keepItems = 'Bind Recall') => {
+        const dropped: string[] = [];
+        const ctx = {
+            settings: { ...PVE_SETTINGS, shedLoadAt: 95, keepItems },
+            me: () => ({ level: 22, className: 'Warrior', realm: 'midgard', encumbrance: { current: 96, max: 100 } }),
+            orders: () => ({ phase: 'idle' }), threats: () => [], doing: () => {}, result: () => {}, skip: () => false,
+            sdk: { getInventory: () => inventory },
+            bot: { dropItem: async (i: { name: string }) => { dropped.push(i.name); return { success: true, message: '' }; } },
+        } as unknown as Parameters<ReturnType<typeof shedLoad>['run']>[0];
+        await shedLoad().run(ctx);
+        return dropped;
+    };
+
+    test('the heaviest of what it has no use for, before heavier gear kept for later', async () => {
+        expect(await run([item('Dragonmight', 51, 40), item('loot axe', 22, 30), item('loot hammer', 22, 10)])).toEqual(['loot axe']);
+    });
+
+    test('kept gear goes only when nothing else is left, because a member that can\'t move is worse', async () => {
+        expect(await run([item('Dragonmight', 51, 40), item('Bind Recall Stone', 1, 1, 0)])).toEqual(['Dragonmight']);
     });
 });

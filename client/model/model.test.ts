@@ -3,7 +3,7 @@ import { encodeCp1252, PacketWriter } from '../protocol/buffer';
 import { ServerOp } from '../protocol/opcodes';
 import { getRacesForClass, getStartingClasses } from '../../data/index';
 import { creationPoints, planCharacter, RACE_MODELS } from './classes';
-import { coinDrops, MAX_COMBAT_EVENTS, WorldModel } from './world-model';
+import { coinDrops, guessNpcRole, MAX_COMBAT_EVENTS, WorldModel } from './world-model';
 
 const W = () => new PacketWriter();
 const ME = { x: 574797, y: 530161, z: 2896 };
@@ -206,6 +206,31 @@ describe('WorldModel', () => {
         expect(m.inventoryList(40, 79)).toEqual([]);
     });
 
+    test('a vault keeper\'s window says it opened, even with nothing in it, and shows what it holds now', () => {
+        const m = new WorldModel();
+        const item = (slot: number, name: string) => W().u8(slot).u16(0).u8(1).u8(0).u8(0).u8(0).u8(0).u8(0).u16(10).u8(100).u8(100).u8(100).u8(0).u8(0).u16(5).u8(0).u16(0).u8(0).u16(0).pascal(name).toBytes();
+        expect(m.vaultOpenedAt).toBeNull();
+        // A move sends the slots with window 0: no window opened, and the slots land.
+        m.handle(ServerOp.InventoryUpdate, Uint8Array.from([2, 0, 0, 0, 0, 0, ...item(40, 'pack'), ...item(112, 'moved')]));
+        expect(m.vaultOpenedAt).toBeNull();
+        expect(m.inventoryList(110, 149).map(i => i.name)).toEqual(['moved']);
+        // The keeper's answer replaces the vault and leaves the rest alone: count 0, window 3 when empty (VaultKeeper.cs:78).
+        m.handle(ServerOp.InventoryUpdate, Uint8Array.from([0, 0, 0, 0, 0, 3]));
+        expect(m.vaultOpenedAt).not.toBeNull();
+        expect(m.inventoryList(110, 149)).toEqual([]);
+        expect(m.inventoryList(40, 79).map(i => i.name)).toEqual(['pack']);
+        m.handle(ServerOp.InventoryUpdate, Uint8Array.from([1, 0, 0, 0, 0, 3, ...item(110, 'axe')]));
+        // A vault past 30 items goes on in a second packet, with window 0.
+        m.handle(ServerOp.InventoryUpdate, Uint8Array.from([1, 0, 0, 0, 0, 0, ...item(140, 'ring')]));
+        expect(m.inventoryList(110, 149).map(i => i.name)).toEqual(['axe', 'ring']);
+    });
+
+    test('a smith has its own role: it buys and sells nothing, and it is no fight target', () => {
+        expect(guessNpcRole('Judan Hammerfel', 'Smith')).toBe('smith');
+        expect(guessNpcRole('Gram Ironhand', 'Armor Merchant')).toBe('merchant');
+        expect(guessNpcRole('Lord Urqhart', 'Vault Keeper')).toBe('vault');
+    });
+
     test('loot judged at spawn survives the 30 s 0xD9 re-create; old objects re-sent near a death are not loot', () => {
         let now = 1000;
         const m = new WorldModel({}, () => now);
@@ -306,6 +331,16 @@ describe('WorldModel fixes', () => {
             .u8(5).u16(14).u8(2).u16(0).u8(0xEE).u16(9).pascal('Odd').toBytes();
         m.handle(ServerOp.VariousUpdate, p);
         expect(m.skills().styles.map(s => s.specName)).toEqual(['Slash', 'Two Handed', null]);
+    });
+
+    test('0x16/01 lists a line under its display name while its style says the key', () => {
+        const m = new WorldModel();
+        const p = W().u8(1).u8(2).u8(3).u8(0)
+            .u8(3).u16(74).u8(0).u16(0).u8(0).u16(1).pascal('Shield')
+            .u8(3).u16(13).u8(2).u16(0).u8(0x2B).u16(8).pascal('Numb').toBytes();
+        m.handle(ServerOp.VariousUpdate, p);
+        expect(m.skills().specializations.map(s => s.name)).toEqual(['Shield']);
+        expect(m.skills().styles.map(s => s.specName)).toEqual(['Shields']);
     });
 
     describe('trainer window lifetime', () => {

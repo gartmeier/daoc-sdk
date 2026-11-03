@@ -497,7 +497,7 @@ u16 d2 u16 d3 u16 d4 (unk)  u16 BE questId  u16 BE questGiverOID
 +32  u32 BE level[n]      // one per DISTINCT code before the terminator, in order; target level; only applied if > 1 and > current
 +64  u32 BE raLevel[50]   // index = position in SkillBase.GetClassRealmAbilities(classId) excluding RR5; value = target level (>0)
 ```
-**Simpler alternative for bots:** `&train <spec> <level>` via 0xAF.
+**Simpler alternative for bots:** `&train <spec> <level>` via 0xAF, where `<spec>` is a prefix of the line's KeyName (`commands/playercommands/train.cs:57`), so `Light`, not the display name `Light Magic`.
 
 **0x7C ChampionTrainHandler** (lines 19-24): `u32 x; u32 y; u8 idLine (>0); u8 unk; u8 row (1-based); u8 skillIndex (1-based)`.
 

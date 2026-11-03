@@ -16,10 +16,11 @@ import { clearOf, keepDangers, type KeepSettings } from './keeps';
 import { type BuffTask, nextBuff, planBuffs, surplusConcentration } from './buffs';
 import { combatSpot, dangerStops, effectiveLimits, focusSettled, safeSpot, trackFocus } from './positioning';
 import { dotFamily } from './spells';
+import { keepForLater } from './gear-care';
 import { chooseSong, SONG_SETTINGS, type SongSettings } from './songs';
 import type { Behavior, MemberContext } from './member';
 import { safePath } from './terrain';
-import type { BotWorldState, NearbyNpc, NearbyPlayer, PlayerState, Style } from '../types';
+import type { BotWorldState, InventoryItem, NearbyNpc, NearbyPlayer, PlayerState, Style } from '../types';
 import type { BuffSlot, Contact, Point, Role } from './types';
 
 /** Settings the behaviours read; strategies extend this. */
@@ -948,8 +949,9 @@ export const buff = (): Behavior<TacticsSettings> => ({
 
 /**
  * While the group waits: near the carry limit (shedLoadAt % load), drop the heaviest
- * backpack item not matching keepItems. Overloaded characters cannot move at all;
- * selling needs a town visit, which leveling strategies do not plan yet.
+ * backpack item not matching keepItems, gear kept for later (gear-care.ts) only when nothing else
+ * is left. Overloaded characters cannot move at all; selling needs a town visit, which leveling
+ * strategies do not plan yet.
  */
 export const shedLoad = (): Behavior<TacticsSettings> => ({
     name: 'shedLoad',
@@ -961,7 +963,8 @@ export const shedLoad = (): Behavior<TacticsSettings> => ({
         const phase = ctx.orders().phase;
         if ((!QUIET_PHASES.has(phase) && phase !== 'travel') || ctx.threats().length) return ctx.skip('shedLoad: not now');
         const keep = new RegExp(ctx.settings.keepItems, 'i');
-        const item = ctx.sdk.getInventory().filter(i => !keep.test(i.name)).sort((a, b) => b.weight * b.count - a.weight * a.count)[0];
+        const kept = (i: InventoryItem) => Number(keepForLater(i, ctx.me()));
+        const item = ctx.sdk.getInventory().filter(i => !keep.test(i.name)).sort((a, b) => kept(a) - kept(b) || b.weight * b.count - a.weight * a.count)[0];
         if (!item) return ctx.skip('shedLoad: nothing droppable');
         ctx.doing('drop', null, item.name);
         const r = await ctx.bot.dropItem(item);

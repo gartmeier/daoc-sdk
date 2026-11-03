@@ -50,6 +50,7 @@
 | `getSpellInfo(spell: NamePattern \| Spell): SpellInfo \| null` | Static data for a known spell (type, target, range, cast time, power), from the DB dump; null when unknown. |
 | `isDead(): boolean` | Our character is dead. |
 | `freeBackpackSlots(): number` | Free backpack slots (of 40). |
+| `async repairAll(smith: NpcTarget, options: { maxCost?: number } = {}): Promise<RepairResult>` | Have a smith repair everything at once: worn, backpack and vault, whatever its type, and 20 % over the single prices (Blacksmith.cs:14, :219-228). The only way to repair an instrument. Success with cost 0 means nothing needed it. Reasons as repairItem. |
 | `findNpcSpawn(pattern: NamePattern, options: { regionId?: number; guild?: NamePattern } = {}): NpcSpawnMatch \| null` | Nearest static spawn (DB `mob` table) in our region matching a name, or null. |
 | `async travelTo(destination: NamePattern \| (Point & { regionId?: number }), options: WalkOptions = {}): Promise<TravelResult>` | Walk (same region, through walkTo: navmesh route when built, else a straight line) to a named spawn from static data or to a point. |
 | `async useZonePoint(target: number \| ZonePoint, options: UseZonePointOptions = {}): Promise<ZonePointResult>` | Use a zone point, by its id or as static data (getZonePointsFrom): walk to its source when farther than `tolerance`, send 0x90 and watch for the jump. Reasons: 'not_found' (no such id), 'wrong_region', 'wrong_realm', 'refused' (a server message said so), 'timeout' (no jump and no word: the server ignores a request it won't take, RegionChangeRequestHandler.cs:41-45), 'dead', and the walk's own ('stuck', 'died', ...). The server checks no distance (the handler reads only the id), so the walk is ours: a real client asks when it steps on the zone point, and a walk that stopped within 400 still asks. The realm is the zone point's in the DB, as for a PrivLevel-1 account (:33-37), and an id with a row per realm means our realm's row. The one other rule (:28, Trials of Atlantis regions go by the zone's realm) has no zone point in the dump. |
@@ -82,6 +83,8 @@
 | `async buyItem(merchant: NpcTarget, item: NamePattern \| { page: number; slot: number }, count: number = 1): Promise<BuyResult>` | Buy `count` of an item (name or page/slot) and observe the backpack and purse. |
 | `async sellItem(merchant: NpcTarget, item: InventoryItem \| NamePattern \| number): Promise<SellResult>` | Sell one backpack item (whole stack) to a merchant and observe the purse. |
 | `async sellItems(merchant: NpcTarget, filter: NamePattern \| ((item: InventoryItem) => boolean)): Promise<SellItemsResult>` | Sell every backpack item matching a predicate or name pattern. |
+| `async repairItem(smith: NpcTarget, target: InventoryItem \| NamePattern \| number, options: { maxCost?: number } = {}): Promise<RepairResult>` | Have a smith repair one item, worn or in the backpack: walk within 128 (3D), hand it over, read the price off the yes/no box, say yes, and observe the smith's answer. Costs the Durability it restores, and when too little is left it charges in full and restores only that much. Reasons: `not_found`, `out_of_range`, `no_need` (already whole), `not_repairable`, `too_expensive` (over `options.maxCost`, declined), `insufficient_funds`, `no_response` (not a smith, or no answer). A smith takes no jewellery, instruments or stacks: an instrument only through repairAll. |
+| `async withdrawItem(keeper: NpcTarget, target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Take an item out of the vault into the backpack, at a vault keeper. A number is a vault slot (110-149). A stack behaves as in depositItem. Reasons: `not_found`, `inventory_full`, those of openVault, `timeout`. |
 
 ### Status & Recovery
 
@@ -89,6 +92,7 @@
 |---|---|
 | `async rest(options: RestOptions = {}): Promise<RestResult>` | Sit until health (and optionally mana/endurance) reach the thresholds, then stand. Fails if attacked. |
 | `async releaseAndRespawn(options: { timeout?: number } = {}): Promise<RespawnResult>` | Release after death (retrying until the server allows it) and observe being alive at the bind point. |
+| `async depositItem(keeper: NpcTarget, target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Put a backpack item in the vault, at a vault keeper. Vaulted items don't wear, count toward no weight and can't be sold by `sellItems`, but `repairAll` charges for them if they're worn. A stack goes onto a partial stack first, and what doesn't fit stays in the backpack: check the count if that matters. Reasons: `not_found`, `vault_full`, those of openVault, `timeout`. |
 
 ### Condition Waiting
 
@@ -103,11 +107,17 @@
 | `async openMerchant(merchant: NpcTarget): Promise<MerchantResult>` | Walk to a merchant and open its window; observed via state.merchant. |
 | `async closeMerchant(): Promise<ActionResult>` | Close the merchant window (client-side state). |
 
+### Vault
+
+| Signature | Description |
+|---|---|
+| `async openVault(keeper: NpcTarget): Promise<VaultResult>` | Walk to a vault keeper and open the character's vault. Until then, in each client session, `sdk.getVault()` is empty whatever the vault holds. Reason `not_a_vault_keeper` for an NPC that answers some other way. The vault is the character's own: 40 slots, not shared with other bots. |
+
 ### Training
 
 | Signature | Description |
 |---|---|
-| `async trainSpec(trainer: NpcTarget, specName: NamePattern, levels: number = 1): Promise<TrainResult>` | Train a specialization at a trainer of our class: target it, open the trainer window (falling back to '/train'), and observe the spec level rise. |
+| `async trainSpec(trainer: NpcTarget, specName: NamePattern, levels: number = 1): Promise<TrainResult>` | Train a specialization at a trainer of our class: target it, open the trainer window (falling back to '/train'), and observe the spec level rise. `specName` is any name of the line (sdk.findSpecialization); a name no line answers to gives 'spec_not_found'. |
 
 ### Group
 
@@ -188,7 +198,7 @@
 | `getObject(objectId: number): NearbyNpc \| NearbyPlayer \| NearbyObject \| null` | Any nearby NPC, player or object by object id. |
 | `getTarget(): NearbyNpc \| NearbyPlayer \| NearbyObject \| null` | Our current target (player.targetObjectId) when it is nearby. |
 | `getSkills(): SkillsState` | Specializations, abilities, styles and spells. |
-| `findSpecialization(pattern: NamePattern): Specialization \| null` | Specialization by name (shortest name wins). |
+| `findSpecialization(pattern: NamePattern): Specialization \| null` | Specialization by any name of its line: as listed ('Shield'), its DB key ('Shields', from classes.json, Style.specName or ItemBonus.spec) or an item's bonus name ('Cave Magic'). Failing those, by part of the listed name (shortest wins). Look lines up here rather than with === on the list, which only knows the listed name. |
 | `findSpell(pattern: NamePattern): Spell \| null` | Spell by name; pass its lineIndex/spellIndex to sendCastSpell. Highest level wins among equal names. |
 | `findStyle(pattern: NamePattern): Style \| null` | Combat style by name; pass its skillIndex to sendUseSkill. |
 | `findAbility(pattern: NamePattern): Ability \| null` | Ability by name; pass its skillIndex to sendUseSkill. |
@@ -480,6 +490,7 @@ interface InventoryItem {
 
 ```typescript
 interface Specialization {
+  /** The server's display name, not always the key elsewhere: 'Shield' (key Shields), 'Light Magic' (key Light). sdk.findSpecialization takes either. */
   name: string;
   level: number;
   internalId: number;
@@ -566,6 +577,7 @@ interface Style {
   name: string;
   internalId: number;
   specLevel: number;
+  /** The line's DB key, so 'Shields' where the skill list says 'Shield': find its level with sdk.findSpecialization(specName). */
   specName: string | null;
   /** Index to pass to the useSkill action. */
   skillIndex: number;
@@ -696,7 +708,7 @@ interface ItemBonus {
   unit: 'pts' | '%' | 'lvls' | null;
   /** category 'stat'. */
   stat?: 'STR' | 'DEX' | 'CON' | 'QUI' | 'INT' | 'PIE' | 'EMP' | 'CHR' | 'ACU';
-  /** category 'skill' and 'focus': the specialization's name in classes.json, null when no class has one. */
+  /** category 'skill' and 'focus': the specialization's DB key, as in classes.json (sdk.findSpecialization takes it), null when no class has one. */
   spec?: string | null;
   /** category 'skill': its ePropertyType group; 'skillGroup': the group it raises, null for "All Skills". */
   group?: SkillGroup | null;
@@ -788,6 +800,7 @@ interface MerchantState {
 ```typescript
 interface TrainerSpec {
   index: number;
+  /** The server's display name, as in Specialization.name. */
   name: string;
   level: number;
   /** Cost in spec points to train the next level. */
@@ -918,6 +931,8 @@ interface BotWorldState {
   equipment: InventoryItem[];
   /** Vault items, populated after the vault window has been opened. */
   vault: InventoryItem[];
+  /** When a vault keeper last opened the vault in this client session; null or absent means `vault` says nothing yet. */
+  vaultOpenedAt?: number | null;
   skills: SkillsState;
   effects: Effect[];
   group: GroupMember[];
@@ -1048,6 +1063,29 @@ interface WalkOptions {
   speedFactor?: number;
   /** Fail after this long without getting closer (default 8000 ms). */
   stuckMs?: number;
+}
+```
+
+### RepairResult
+
+```typescript
+interface RepairResult extends ActionResult {
+  /** What was handed over; null for repairAll. */
+  item: InventoryItem | null;
+  /** The same item as it is now; null for repairAll. Its `condition` is a percent rounded up, so 100 can still hide wear. */
+  repaired: InventoryItem | null;
+  /** Copper the purse lost. */
+  cost: number;
+  messages: GameMessage[];
+}
+```
+
+### VaultResult
+
+```typescript
+interface VaultResult extends ActionResult {
+  keeper: NearbyNpc | null;
+  items: InventoryItem[];
 }
 ```
 
@@ -1416,6 +1454,7 @@ interface SellItemsResult extends ActionResult {
 
 ```typescript
 interface TrainResult extends ActionResult {
+  /** The line as the skill list names it, whichever of its names was asked for. */
   spec: string | null;
   fromLevel: number;
   toLevel: number;

@@ -2,7 +2,7 @@
 
 ## Finding one
 
-- **In view:** `sdk.findNearbyNpcs(/./).find(n => n.role === 'merchant')`. The role is guessed from the guild text: Weapon Merchant, Armor Merchant, Arrow Merchant, Smith, Dye Merchant, ...
+- **In view:** `sdk.findNearbyNpcs(/./).find(n => n.role === 'merchant')`. The role is guessed from the guild text: Weapon Merchant, Armor Merchant, Arrow Merchant, Dye Merchant, ... A Smith has role `smith`: it buys and sells nothing.
 - **From static data:** `bot.findNpcSpawn(/./, { guild: /merchant/i })` gives the nearest spawn point, then `bot.travelTo(spawn.name)`. `bots/examples/merchant-run.ts` does both.
 - **Around the Albion Fighter start** (Prydwen Keep), within 600 units:
   - Torr Fletcher <Arrow Merchant>, 92 units from the start: 56 items, bolts from 19c.
@@ -54,7 +54,7 @@ await bot.closeMerchant();
 - **`InventoryItem.hand`** comes straight from the server's item data, so backpack items are judged the same way as window items.
 - **`equipItem` refusals are immediate now:** "You have no skill in using this weapon type!", "You have no skill in wearing this armor type!" and "... can't go there!" give `refused`, not a 3 s `timeout`.
 
-**A weapon above your level:** a Level Requirement only gates the proc (`GameLiving.cs:853-855`) and any use charge (`GamePlayer.cs:7045`). The DPS clamps as usual, and the bonuses work up to the level's caps. `buyWeapons` and `wearWeapons` leave anything with a Level Requirement above the character's level alone unless told `{ overLevel: true }`.
+**A weapon above your level:** a Level Requirement only gates the proc (`GameLiving.cs:853-855`) and any use charge (`GamePlayer.cs:7045`). The DPS clamps as usual, and the bonuses work up to the level's caps. `buyWeapons` and `wearWeapons` leave anything with a Level Requirement above the character's level alone, and anything above the level limit (`tooHighLevel`, learnings/gear-care.md), unless told `{ overLevel: true }`.
 
 **Item Merchants don't take copper:** each capital has NPCs with the guild `Item Merchant`, 13 in all (Midgard Weapons in Jordheim, 32435, 29214). Their `Orbs*` and `World*` lists hold level 36-51 gear at 10,000-20,000 and respec stones at 1,000-3,500. Those prices were Atlas Orbs, a currency upstream removed (db87083 turned the NPCs into plain `GameMerchant`s and left the prices), so until 2026-11-02 they took copper: 15,000c for Dragonmight, level 51, Strength +24, Axe +4, bought at level 20. Now they are `GameBountyMerchant`s and the same numbers are bounty points, which effectively closes them: every character has 0, battleground kills pay none, and a level 50 solo kill pays 31. The fix is a commit in `server/db`, which is our fork of upstream's dump (docs/SERVER.md).
 
@@ -85,4 +85,4 @@ const items = getMerchantItems(m.itemsListTemplateId);   // page, slot, itemSlot
 - `openMerchant` across several merchants, and buying 20 bolts for 19c.
 - `sellItem` and `sellItems`: Fortifying Cloth Gloves plus staff for 2c (`bots/examples/merchant-run.ts`, walking 2900 units back from the hound camp).
 - The insufficient-funds refusal.
-- Not tried: vaults (`sdk.getVault()`), item repair at smiths, guard merchants, housing merchants.
+- Not tried: guard merchants, housing merchants. Smiths and the vault: [gear-care.md](gear-care.md).

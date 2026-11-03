@@ -14,8 +14,10 @@ import {
     type MerchantEntry, type MerchantsFile, type NpcSpawn, type RaceInfo, type SpecializationInfo, type SpellInfo,
     type SpellLineInfo, type StarterEquipment, type StartupLocation, type StatName, type StyleInfo, type Teleport, type ZonePoint,
 } from './build';
+import { specKey } from './spec-names';
 
 export * from './zones';
+export * from './spec-names';
 export type {
     AbilityInfo, BindPoint, ClassesFile, ClassInfo, ItemTemplate, MerchantEntry, NpcSpawn, RaceInfo,
     SpecializationInfo, SpellInfo, SpellLineInfo, StarterEquipment, StartupLocation, StatName, StyleInfo, Teleport, ZonePoint,
@@ -306,14 +308,15 @@ export function getSpellLine(keyName: string): SpellLineInfo | undefined {
     return lineIndex().get(keyName.toLowerCase());
 }
 
-/** Styles for a class (style.ClassId), optionally one spec line, sorted by spec level. */
-export function getStylesFor(classId: number, specKeyName?: string): StyleInfo[] {
-    const spec = specKeyName?.toLowerCase();
+/** Styles for a class (style.ClassId), optionally one spec line under any of its names, sorted by spec level. */
+export function getStylesFor(classId: number, specName?: string): StyleInfo[] {
+    const spec = specName === undefined ? undefined : specKey(specName).toLowerCase();
     return getStyles().filter(s => s.classId === classId && (spec === undefined || s.specKeyName.toLowerCase() === spec));
 }
 
-export function getSpecialization(keyName: string): SpecializationInfo | undefined {
-    return specIndex().get(keyName.toLowerCase());
+/** A specialization under any of its names; `keyName` and `name` then give the line's key and display name. */
+export function getSpecialization(specName: string): SpecializationInfo | undefined {
+    return specIndex().get(specKey(specName).toLowerCase());
 }
 
 export function getAbility(keyName: string): AbilityInfo | undefined {

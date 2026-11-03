@@ -21,7 +21,7 @@ import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import { parseWeaponDelve } from '../delve';
 import { EquipmentSlot, isArmor, isWeapon, ItemHand, ObjectType, type InventoryItem, type ItemBonus, type MerchantItem, type PlayerState, type Specialization, type WeaponDelve } from '../types';
-import { armorGain, armorSwing, armorValue, focusCover, isFocusCaster, statScore, WEAPON_STAT_SWING, weaponScore, weaponValue } from './gear-score';
+import { armorGain, armorSwing, armorValue, focusCover, isFocusCaster, statScore, tooHighLevel, WEAPON_STAT_SWING, weaponScore, weaponValue } from './gear-score';
 import { DUAL_LINES, WEAPON_LINES } from './styles';
 
 const { Jewelry, Cloak, Neck, Waist, LeftBracer, RightBracer, LeftRing, RightRing } = EquipmentSlot;
@@ -213,10 +213,12 @@ export async function armorUpgradeGain(delves: GearDelves, item: InventoryItem, 
 /**
  * Each candidate's gain over what its slot holds. Armour counts its bonuses (armorUpgradeGain);
  * weapons and shields stay on the caller's `score`, by DPS or block alone: their bonuses aren't weighed yet.
+ * A candidate too high for this level (tooHighLevel, `maxCon`) isn't one, however good: it wears too fast.
  */
-export async function upgradeGains<T extends { item: InventoryItem; cur?: InventoryItem }>(delves: GearDelves, rows: T[], level: number, score: (i: InventoryItem, level: number) => number): Promise<(T & { gain: number })[]> {
+export async function upgradeGains<T extends { item: InventoryItem; cur?: InventoryItem }>(delves: GearDelves, rows: T[], level: number, score: (i: InventoryItem, level: number) => number, opts: { maxCon?: number } = {}): Promise<(T & { gain: number })[]> {
     const out: (T & { gain: number })[] = [];
     for (const row of rows) {
+        if (tooHighLevel(row.item, level, opts.maxCon)) continue;
         const gain = isArmor(row.item.objectType)
             ? await armorUpgradeGain(delves, row.item, row.cur, level)
             : score(row.item, level) - (row.cur ? score(row.cur, level) : 0);
@@ -397,13 +399,17 @@ export interface WeaponOptions {
      * Also take what the server says needs a higher level. The requirement only gates the item's
      * proc (GameLiving.cs:853-855), so at level 20 a level 51 axe still gives its Strength and Axe
      * bonuses. Leaving these out is the default, so that a town visit doesn't hand endgame gear to
-     * a level 5 character; a bot that wants them says so.
+     * a level 5 character; a bot that wants them says so. It also lifts the level limit below.
      */
     overLevel?: boolean;
+    /** Too high above this con (default GEAR_MAX_CON): tooHighLevel, as for armour. */
+    maxCon?: number;
 }
 
 /** The server's word on a delved item: its Level Requirement isn't above this character's. */
 const levelAllows = (required: number | null | undefined, level: number, opts: WeaponOptions) => !!opts.overLevel || !required || required <= level;
+/** Within the level limit: above it a weapon wears faster, and its DPS is clamped to the level anyway. One already held stays held. */
+const withinLimit = (item: { level: number }, level: number, opts: WeaponOptions) => !!opts.overLevel || !tooHighLevel(item, level, opts.maxCon);
 
 export interface WeaponRow<T> {
     item: T;
@@ -497,7 +503,7 @@ async function wearFocusStaff(m: WeaponMember, classInfo: ClassInfo, opts: Weapo
     const score = (bonuses: readonly ItemBonus[]) => weaponScore(focusCover(bonuses, specs), statScore(bonuses.filter(b => b.category !== 'focus'), classInfo, p.level));
     const out: string[] = [];
     await wearBest(m, new Set(), out, async item => {
-        if (item.objectType !== ObjectType.Staff) return null;
+        if (item.objectType !== ObjectType.Staff || !withinLimit(item, p.level, opts)) return null;
         const r = await act.delveItem(item);
         return r.success && levelAllows(r.levelRequirement, p.level, opts) ? { item, slot: TwoHand, score: score(r.bonuses), price: 0 } : null;
     }, async () => {
@@ -526,7 +532,7 @@ export async function wearWeapons(m: WeaponMember, opts: WeaponOptions = {}): Pr
     for (const hand of handsFor(needs)) {
         await wearBest(m, settled, out, async item => {
             const to = weaponSlots(item, needs).find(s => handsOf(hand).includes(s));
-            if (to === undefined) return null;
+            if (to === undefined || !withinLimit(item, p.level, opts)) return null;
             const r = await act.delveItem(item);
             const facts = r.success ? parseWeaponDelve(r.lines) : null;
             return facts && levelAllows(r.levelRequirement, p.level, opts) ? { item, slot: to, score: scoreOf(m, needs, to, facts, r.bonuses), price: 0 } : null;
@@ -552,7 +558,7 @@ export function weaponSellers(p: Pick<PlayerState, 'regionId' | 'x' | 'y' | 'rea
         lists.add(list);
         const weapons = getMerchantItems(list).filter(e => {
             const t = getItemTemplate(e.itemTemplateId);
-            return !!t && weaponSlots(t, needs).length > 0 && levelAllows(t.levelRequirement, p.level, opts) && !foreignTo(realm, list, e);
+            return !!t && weaponSlots(t, needs).length > 0 && levelAllows(t.levelRequirement, p.level, opts) && withinLimit(t, p.level, opts) && !foreignTo(realm, list, e);
         });
         if (weapons.length) out.push({ spawn, weapons });
     }
@@ -606,7 +612,7 @@ export async function buyWeapons(m: WeaponMember, opts: WeaponOptions & { town?:
             if (m.sdk.getMerchant()?.windowType) { out.push(`${s.name}: doesn't take copper`); continue; }
             const budget = m.sdk.getPlayer()!.money.totalCopper - (opts.reserve ?? WEAPON_RESERVE);
             const fits = (i: MerchantItem) => weaponSlots(i, needs).find(to => handsOf(hand).includes(to));
-            const goods = shop.items.filter(i => i.usable && i.price <= budget && fits(i) !== undefined && !foreignTo(realmId(p.realm), s.itemsListTemplateId!, i)).sort((a, b) => b.value1 - a.value1);
+            const goods = shop.items.filter(i => i.usable && i.price <= budget && fits(i) !== undefined && withinLimit(i, p.level, opts) && !foreignTo(realmId(p.realm), s.itemsListTemplateId!, i)).sort((a, b) => b.value1 - a.value1);
             let delves = 0;
             for (const item of goods) {
                 // Under what's already found, however good: its delve couldn't change the answer.
