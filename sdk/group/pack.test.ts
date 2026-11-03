@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { areaMezzCatch, backupHealWanted } from './behaviors';
+import { areaMezzCatch, backupHealWanted, standStepTo } from './behaviors';
 import { enemy, picture, report } from './fixtures';
 import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings } from './pack';
 import { RVR_SETTINGS, rvrBehaviors, rvrRoaming } from './rvr';
@@ -292,6 +292,17 @@ describe('backupHealWanted: the Bard heals only as a backup', () => {
         expect(backupHealWanted(bard, team({ Menta: { hp: 40 }, Encha: { hp: 50 } }), [], 40)).toBe(true);
         const stretched = team({ Menta: { hp: 40, x: 10_500, y: 10_000 }, Druid: { x: 8_000, y: 10_000 } });
         expect(backupHealWanted(stretched.find(x => x.name === 'Bard')!, stretched, [], 40)).toBe(true);
+    });
+});
+
+describe('standStepTo', () => {
+    const me = { x: 0, y: 0 };
+    test('steps just far enough, not when too far or onto an enemy', () => {
+        const f = { x: 1700, y: 0, distance: 1700 };
+        expect(standStepTo(me, f, 1500, 500, [])!.x).toBeCloseTo(300);
+        expect(standStepTo(me, { x: 2500, y: 0, distance: 2500 }, 1500, 500, [])).toBeNull();
+        expect(standStepTo(me, f, 1500, 0, [])).toBeNull();
+        expect(standStepTo(me, f, 1500, 500, [enemy(1, 'midgard', { x: 500, y: 100 })])).toBeNull();
     });
 });
 

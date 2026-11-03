@@ -29,6 +29,8 @@ import type { BuffSlot, Contact, MemberReport, Point, Role } from './types';
 export interface TacticsSettings {
     /** Nobody walks to reach a target: casters cast at what is in range from where they stand, else they wait (hit-and-run, pack.ts). */
     standGround?: boolean;
+    /** With standGround: a caster steps up to this far to bring the focus in range, if no free enemy stands within its melee distance there. */
+    standStep?: number;
     /** Open with an area mezz when it catches at least this many free enemies and not the focus (areaMezzCatch). */
     areaMezzMin?: number;
     /** Nuke with the hardest hit rather than the highest spell level (NukeOptions.byDamage). */
@@ -612,6 +614,18 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
     },
 });
 
+/** Where a caster steps to bring `focus` in range, or null when it is too far off or the step ends next to a free enemy. */
+export function standStepTo(me: Point, focus: Point & { distance: number }, range: number, step: number, contacts: readonly Contact[]): Point | null {
+    const need = focus.distance - range + 100;
+    if (step <= 0 || need > step) return null;
+    const d = dist(me, focus);
+    if (d < 1) return null;
+    const to = { x: me.x + (focus.x - me.x) * need / d, y: me.y + (focus.y - me.y) * need / d };
+    return contacts.some(c => c.kind === 'player' && !c.stale && alive(c) && !c.cc && dist(c, to) <= STEP_CLEAR) ? null : to;
+}
+/** A step in stays this far from any free enemy player. */
+const STEP_CLEAR = 500;
+
 /**
  * The free enemy players an area mezz on `target` would catch, `target` first, or none at all when the
  * focus stands in its radius: mezzing what we are about to hit wastes the spell.
@@ -1003,7 +1017,14 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
             const sp = ctx.spells.nuke({ dotted, targetHp: mob.hp, aoe: ctx.settings.aoe, byDamage: ctx.settings.strongestNuke });
             if (sp) {
                 const stand = !!ctx.settings.standGround;
-                if (stand && seen.distance > sp.range) return ctx.skip('assist: focus out of reach, holding ground');
+                if (stand && seen.distance > sp.range) {
+                    // Just out of reach: a short step in, unless that means walking onto enemies (standStep). Further: hold.
+                    const step = standStepTo(ctx.me(), seen, sp.range, ctx.settings.standStep ?? 0, ctx.picture().contacts);
+                    if (!step) return ctx.skip('assist: focus out of reach, holding ground');
+                    ctx.doing('move', mob.objectId, 'step in range');
+                    await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 });
+                    return true;
+                }
                 await stopSwinging(ctx);
                 ctx.doing('nuke', mob.objectId, sp.spell.name);
                 const c = await ctx.bot.castSpell(sp.spell, mob.objectId, stand ? { approach: false } : {});

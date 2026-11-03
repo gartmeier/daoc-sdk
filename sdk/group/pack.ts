@@ -101,6 +101,7 @@ export const PACK_OPTIONS: PackOptions = {
 export const PACK_SETTINGS: PackSettings = {
     ...RVR_SETTINGS,
     standGround: true,
+    standStep: 500,
     areaMezzMin: 2,
     strongestNuke: true,
     // The Hero stands in front of the casters and hits what reaches them; he doesn't charge.
