@@ -8,7 +8,7 @@ It is the DAoC counterpart of [rs-sdk](https://github.com/MaxBittker/rs-sdk) and
 
 Requirements: [Bun](https://bun.sh) 1.1+, Docker, git.
 
-The OpenDAoC server source (`server/core`) and its DB dump (`server/db`, our fork with one fix: see docs/SERVER.md) are git submodules. Clone with `git clone --recurse-submodules <url>`, or fetch them in an existing clone; `reference/rs-sdk` and `server/buildnav` are optional.
+The OpenDAoC server source (`server/core`) and its DB dump (`server/db`, our fork with one fix: see docs/SERVER.md) are git submodules. Clone with `git clone --recurse-submodules https://github.com/gartmeier/daoc-sdk.git`, or fetch them in an existing clone; `reference/rs-sdk` and `server/buildnav` are optional.
 
 ```sh
 git submodule update --init server/core server/db   # required: the server build and data/ read them
