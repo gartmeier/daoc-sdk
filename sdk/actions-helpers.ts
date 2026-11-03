@@ -285,14 +285,28 @@ export const PICKUP_REFUSALS = [
     'below your battlegroups lootlevel',
 ] as const;
 
+/** What training gets with no trainer targeted while allow_train_anywhere is off (train.cs:150). */
+export const TRAINER_WANTED = 'you must select a valid trainer';
+
 export const TRAIN_REFUSALS = [
-    'you must select a valid trainer',
+    TRAINER_WANTED,
     'specialization points!',
     'you cannot train',
     "you can't train",
     'you have already trained',
     'could not be found',
     'not enough',
+] as const;
+
+/** The yes/no box /respec opens (respec.cs:107, 178). */
+export const RESPEC_OFFER = /all respec changes are final/i;
+
+/** What /respec says instead of that box (respec.cs:66, 102, 159, 169, 174). */
+export const RESPEC_REFUSALS = [
+    'you must be speaking with your trainer',
+    "you don't seem to have any",
+    'no line with name',
+    'line is less than 2',
 ] as const;
 
 export const RELEASE_REFUSALS = [

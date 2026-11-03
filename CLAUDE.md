@@ -2,16 +2,16 @@
 
 You play Dark Age of Camelot on a local OpenDAoC server by writing bot scripts. Start small, make one step toward the goal, then learn and grow the script as you go. Characters are **persistent**: every session continues where the last one ended.
 
-Before writing logic for a topic (walking, combat, spells, merchants, looting, gear care, trading, trainers, death, classes, zones, grouping/chat, group coordination, RvR), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
+Before writing logic for a topic (walking, combat, spells, merchants, looting, gear care, trading, trainers, builds, death, classes, zones, grouping/chat, group coordination, RvR), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
 
 ## First-time setup
 
 1. **Server.** The server source and DB dump are git submodules: if `server/core/GameServer` or `server/db/opendaoc-db-core` is empty, run `git submodule update --init server/core server/db` first (`bun bots/create-bot.ts` and `data/` need them too). Check `docker compose -f server/docker/docker-compose.yml ps`. If the gameserver is not up: `bun run server:up`, then `bun run server:setup`. Done when TCP 10300 answers (setup waits for it).
-2. **Bot.** Ask the user for a name: up to 12 letters and digits. If they skip it, omit the name and a random one is used. Choose a realm and class from `bun bots/create-bot.ts --list` (default: Albion Fighter). Then run:
+2. **Bot.** Ask the user for a name: up to 12 letters and digits. If they skip it, omit the name and a random one is used. Choose a realm and class from `bun bots/create-bot.ts --list` (default: Albion Fighter), and for an advanced class its build from `bun bots/create-bot.ts --builds=<class>`. Then run:
    ```bash
-   bun bots/create-bot.ts <name> [--realm=midgard] [--class=Mage] [--race=..] [--gender=..]
+   bun bots/create-bot.ts <name> [--realm=hibernia] [--class=Enchanter --build="Mana nuker"] [--race=..] [--gender=..]
    ```
-   This writes `bots/<name>/bot.env` (credentials plus character), `script.ts` and `lab_log.md`. The account and character are created on first login.
+   This writes `bots/<name>/bot.env` (credentials plus character), `script.ts`, `lab_log.md` and, with a build, `build.ts`. An advanced class needs `--build`, or `--no-build` for a test character. A base class chooses before it promotes: `bun bots/choose-build.ts <name> "<build>" --class=<advanced class>`. The account and character are created on first login.
 3. **Gateway.** `curl -s localhost:7780/status` must answer; otherwise start `bun gateway/gateway.ts` in the background. It listens on 127.0.0.1 only and checks no passwords there; see README "Gateway access" for `GATEWAY_HOSTNAME` / `GATEWAY_AUTH`.
 4. **Client.** Start `bun client/runner.ts <name>` in the background and leave it running, one process per bot. It is ready when its log shows `in game (phase playing)`.
 5. **State.** `bun sdk/cli.ts <name>` shows position, health, inventory, skills and nearby NPCs. Done when it prints `In Game: true`.
@@ -60,6 +60,7 @@ bun groups/<group>/battleground.ts [--via=x,y,z]      # into Thidranki (levels 2
 bun groups/<group>/rvr.ts 300                         # roam the battleground and fight the other realms (learnings/rvr.md)
 bun groups/<group>/cloak-trip.ts [--stay]              # out of the battleground, capital, a cloak each, back in; --stay stops in the capital
 bun groups/<group>/gear-care.ts                        # in a town: vault what's too high to wear, take out what fits, repair (learnings/gear-care.md); a group older than the script copies it from groups/_template/
+bun groups/<group>/train.ts [--respec] [--radius=<n>]  # anywhere: each member spends its points by bots/<bot>/build.ts; --respec walks to its trainer (learnings/builds.md); a group older than the script copies it from groups/_template/
 ```
 
 The loop is the session loop at group scale: run, read the report (findings name the setting to change), change one thing in `strategy.ts`, run again and compare, note it in the group's `lab_log.md`. A group run controls every member, so don't drive a member separately meanwhile: taking control of one member aborts the whole run. To stop a hunt early, wind it down (`--wind-down`, or the button on the group page). The browser view is `http://localhost:7780/viewer/group/<group>`: every member on one map, orders, base plan, enemies, events, deaths and recent runs.
@@ -116,7 +117,9 @@ A new call for the same bot cancels the one still running. Every result includes
 | `openMerchant` / `buyItem` / `sellItem` / `sellItems(m, filter)` / `delveMerchantItem(m, item)` | Shops (sell price is 50 % of value); `shop.items` carry type, hand, DPS and speed |
 | `repairItem(smith, item, {maxCost})` / `repairAll(smith, {maxCost})` | A smith repairs one item, or everything for 20 % more; reports `cost`; reason `no_need`, `not_repairable`, `too_expensive`, `insufficient_funds`, ... (learnings/gear-care.md) |
 | `openVault(keeper)` / `depositItem(keeper, item)` / `withdrawItem(keeper, item)` | The character's vault at a vault keeper; `sdk.getVault()` is empty until opened; reason `vault_full`, `inventory_full`, ... |
-| `trainSpec(trainer, spec, levels)` | Spend specialization points; `spec` is any name of the line (Shield or Shields). Read a line's level with `sdk.findSpecialization(name)` (learnings/npc-dialog.md) |
+| `trainBuild(trainer, build?)` | Spend the points by the bot's `bots/<name>/build.ts`, in its listed order, at a trainer or with `null` where it stands, as `bun bots/examples/train-build.ts <bot>` does; reports `trained`, `waiting`, `done`, `over`; reason `no_build`, `wrong_class`, ...; a broken file throws (learnings/builds.md) |
+| `respec(trainer, line?)` | Take the points back from every line or one, free at any level; reports `regained`, `specs`; reason `no_need`, `refused`, ...; ends the character's own buffs and kills its pet |
+| `trainSpec(trainer, spec, levels)` | Raise one line by hand; `spec` is any name of the line (Shield or Shields). Read a line's level with `sdk.findSpecialization(name)` (learnings/npc-dialog.md) |
 | `equipItem` / `unequipItem` / `useItem` / `dropItem` / `destroyItem` | Items |
 | `delveItem(item \| name \| slot)` | An item's real bonuses: `lines`, `bonuses`, `unknown`; reason `empty_slot`, `not_found`, `no_response` (learnings/looting.md) |
 | `trade(player, {give, money, accept})` / `offerTrade` / `acceptTrade` / `cancelTrade` | Trade with a player: both sides call, in any order, within 128 units, between hunts; reports `gave`, `received`, `moneyGiven`, `moneyReceived`; reason `cancelled`, `busy`, `inventory_full`, `partner_no_accept`, ...; an add that opens a window waits for its slot on the clock, up to 750 ms (learnings/trading.md) |
@@ -157,13 +160,15 @@ The game server is the source of truth and is well tested. When something fails,
 ## Project layout
 
 ```
-bots/<name>/      bot.env (credentials + character), script.ts, lab_log.md, character.ts (its routine in a group), runs/history.jsonl
-bots/examples/    grinder.ts, merchant-run.ts, gear-care.ts, caster.ts, explorer.ts, duo.ts (bun bots/examples/<x>.ts <bot>); script-args.ts
+bots/             create-bot.ts, choose-build.ts (a catalogue build to bots/<name>/build.ts)
+bots/<name>/      bot.env (credentials + character), build.ts (its spec points), script.ts, lab_log.md, character.ts (its routine in a group), runs/history.jsonl
+bots/examples/    grinder.ts, merchant-run.ts, gear-care.ts, train-build.ts, caster.ts, explorer.ts, duo.ts (bun bots/examples/<x>.ts <bot>); script-args.ts
 groups/<group>/   group.json (members, roles), strategy.ts, hunt.ts, lab_log.md, runs/ (observer reports); create-group.ts, _template/
 learnings/        topic notes from live runs
 sdk/              BotSDK (index.ts), BotActions (actions.ts), runner.ts, cli.ts, chat.ts, API.md
 sdk/group/        group coordination: blackboard, member agents + behaviours, coordinator, pve strategy, observer, runner, cli
 client/           headless DAoC client (runner.ts, swarm.ts for many bots in one process)
-data/             static world data: findNpcSpawns, getMerchantItems, estimateZ, validateCharacter, ...
+data/             static world data: findNpcSpawns, getMerchantItems, estimateZ, validateCharacter, getClassSkills, ...
+data/builds/      researched builds per class, the buying rule (rule.ts)
 docs/SERVER.md    server properties, GM commands, SQL access
 ```

@@ -35,6 +35,9 @@ function git(cwd: string, ...args: string[]): string | null {
     }
 }
 
+/** The commit `root` pins a submodule to; null if git can't say. */
+export const pinnedCommit = (root: string, path: string): string | null => git(root, 'rev-parse', `HEAD:./${path}`);
+
 /**
  * The warning for a server/db on another commit than `root` pins; null when they match or
  * git can't say. Only server/db: server/core is edited on purpose (docs/SERVER.md). A
@@ -46,7 +49,7 @@ export function dbPinWarning(root: string): string | null {
     // copy), and `rev-parse HEAD` there would answer with the parent's HEAD.
     if (git(db, 'rev-parse', '--show-prefix') !== '') return null;
     const checkedOut = git(db, 'rev-parse', 'HEAD');
-    const pinned = git(root, 'rev-parse', 'HEAD:./server/db');
+    const pinned = pinnedCommit(root, 'server/db');
     if (!checkedOut || !pinned || checkedOut === pinned) return null;
     return [
         `warning: server/db is checked out at ${checkedOut.slice(0, 7)}, but this repo pins ${pinned.slice(0, 7)}`,

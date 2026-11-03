@@ -12,15 +12,16 @@ import {
     buildGenerated, GENERATED_DIR, GENERATED_FILES, isStale,
     type AbilityInfo, type BindPoint, type ClassesFile, type ClassInfo, type CompactTable, type ItemTemplate,
     type MerchantEntry, type MerchantsFile, type NpcSpawn, type RaceInfo, type SpecializationInfo, type SpellInfo,
-    type SpellLineInfo, type StarterEquipment, type StartupLocation, type StatName, type StyleInfo, type Teleport, type ZonePoint,
+    type SpellLineInfo, type StarterEquipment, type StartupLocation, type StatName, type StyleInfo, type StyleProc, type Teleport, type ZonePoint,
 } from './build';
 import { specKey } from './spec-names';
 
 export * from './zones';
 export * from './spec-names';
+export * from './skills';
 export type {
     AbilityInfo, BindPoint, ClassesFile, ClassInfo, ItemTemplate, MerchantEntry, NpcSpawn, RaceInfo,
-    SpecializationInfo, SpellInfo, SpellLineInfo, StarterEquipment, StartupLocation, StatName, StyleInfo, Teleport, ZonePoint,
+    SpecializationInfo, SpellInfo, SpellLineInfo, StarterEquipment, StartupLocation, StatName, StyleInfo, StyleProc, Teleport, ZonePoint,
 };
 
 // ── Loading ─────────────────────────────────────────────────────────────────
@@ -312,6 +313,17 @@ export function getSpellLine(keyName: string): SpellLineInfo | undefined {
 export function getStylesFor(classId: number, specName?: string): StyleInfo[] {
     const spec = specName === undefined ? undefined : specKey(specName).toLowerCase();
     return getStyles().filter(s => s.classId === classId && (spec === undefined || s.specKeyName.toLowerCase() === spec));
+}
+
+/**
+ * What a style procs for a class: the rows of that class, else the rows of class 0 (StyleProcessor.cs:396-423,
+ * and the delve at :818-834). A character only uses a style row of its own class or of class 0, so the
+ * server's third case, a row of the style's class, adds nothing here. No style has RandomProc set today.
+ */
+export function getStyleProcs(style: StyleInfo, classId: number): StyleProc[] {
+    const procs = style.procs ?? [];
+    const own = procs.filter(p => p.classId === classId);
+    return own.length ? own : procs.filter(p => p.classId === 0);
 }
 
 /** A specialization under any of its names; `keyName` and `name` then give the line's key and display name. */

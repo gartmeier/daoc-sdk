@@ -187,6 +187,10 @@ export interface SpellInfo {
     moveCast: boolean;
     uninterruptible: boolean;
     isFocus: boolean;
+    /** What the trainer window and delves call this spell (Spell.cs:365). Rows can share one, within a class they don't. */
+    tooltipId: number;
+    /** Not 0: a song, on the songs page (Spell.cs:249). */
+    instrumentRequirement: number;
 }
 
 export interface SpellLineInfo {
@@ -198,7 +202,17 @@ export interface SpellLineInfo {
     spells: { spellId: number; level: number }[];
 }
 
+/** One stylexspell row, as Style.Procs holds it (StyleProcInfo, Style.cs:271). */
+export interface StyleProc {
+    spellId: number;
+    /** Percent, rolled each time the style lands (StyleProcessor.cs:417). */
+    chance: number;
+    /** 0: every class, unless the character's class has a row of its own. getStyleProcs picks. */
+    classId: number;
+}
+
 export interface StyleInfo {
+    /** style.ID, which many class rows share. Openers name it and procs join on it (DbStyle.cs:335). */
     id: number;
     classId: number;
     name: string;
@@ -215,6 +229,10 @@ export interface StyleInfo {
     growthOffset: number;
     bonusToHit: number;
     bonusToDefense: number;
+    /** style.StyleID, what the trainer window and delves call this style (Style.cs:232). */
+    styleId: number;
+    /** Only on a style that has any. */
+    procs?: StyleProc[];
 }
 
 export interface SpecializationInfo {
@@ -275,6 +293,8 @@ export interface ClassInfo {
     classType: string;
     /** classxspecialization rows for this class (LevelAcquired may be negative for career lines). */
     specializations: { spec: string; levelAcquired: number }[];
+    /** KeyNames of its lines that train for free up to floor(level / 4), at least 1 (GamePlayer.cs:4833). */
+    autotrainSpecs: string[];
 }
 
 export interface RaceInfo {
@@ -483,6 +503,7 @@ export function buildSpells(): SpellInfo[] {
         icon: num(r.Icon), clientEffect: num(r.ClientEffect), spellGroup: num(r.SpellGroup), effectGroup: num(r.EffectGroup),
         subSpellId: num(r.SubSpellID), sharedTimerGroup: num(r.SharedTimerGroup),
         moveCast: num(r.MoveCast) !== 0, uninterruptible: num(r.Uninterruptible) !== 0, isFocus: num(r.IsFocus) !== 0,
+        tooltipId: num(r.TooltipId), instrumentRequirement: num(r.InstrumentRequirement),
     })).sort((a, b) => a.id - b.id);
 }
 
@@ -501,14 +522,25 @@ export function buildSpellLines(): SpellLineInfo[] {
     })).sort((a, b) => a.keyName.localeCompare(b.keyName));
 }
 
-export function buildStyles(): StyleInfo[] {
+export function buildStyles(procRows: SqlRow[] = table('stylexspell'), spellRows: SqlRow[] = table('spell')): StyleInfo[] {
+    // A row's StyleID is style.ID, so it reaches every class row with that ID (DbStyle.cs:335),
+    // and a row whose spell doesn't exist is dropped at load (SkillBase.cs:630-634).
+    const spells = new Set(spellRows.map(r => num(r.SpellID)));
+    const procs = new Map<number, StyleProc[]>();
+    for (const r of procRows) {
+        if (!spells.has(num(r.SpellID))) continue;
+        (procs.get(num(r.StyleID)) ?? procs.set(num(r.StyleID), []).get(num(r.StyleID))!)
+            .push({ spellId: num(r.SpellID), chance: num(r.Chance), classId: num(r.ClassID) });
+    }
+    for (const list of procs.values()) list.sort((a, b) => a.classId - b.classId || a.spellId - b.spellId);
     return table('style').map(r => ({
         id: num(r.ID), classId: num(r.ClassId), name: str(r.Name), specKeyName: str(r.SpecKeyName),
         specLevelRequirement: num(r.SpecLevelRequirement), icon: num(r.Icon), enduranceCost: num(r.EnduranceCost),
         stealthRequirement: num(r.StealthRequirement) !== 0, openingRequirementType: num(r.OpeningRequirementType),
         openingRequirementValue: num(r.OpeningRequirementValue), attackResultRequirement: num(r.AttackResultRequirement),
         weaponTypeRequirement: num(r.WeaponTypeRequirement), growthRate: num(r.GrowthRate), growthOffset: num(r.GrowthOffset),
-        bonusToHit: num(r.BonusToHit), bonusToDefense: num(r.BonusToDefense),
+        bonusToHit: num(r.BonusToHit), bonusToDefense: num(r.BonusToDefense), styleId: num(r.StyleID),
+        ...(procs.has(num(r.ID)) ? { procs: procs.get(num(r.ID))! } : {}),
     })).sort((a, b) => a.classId - b.classId || a.specKeyName.localeCompare(b.specKeyName)
         || a.specLevelRequirement - b.specLevelRequirement || a.id - b.id);
 }
@@ -555,6 +587,28 @@ interface RawClass {
     wsBase?: number;
     classType?: string;
     races?: string[];
+    /** Members of `Specs`, from an override of GetAutotrainableSkills. */
+    autotrain?: string[];
+}
+
+/** The `const string` members of `class Specs` (gameutils/SkillConstants.cs:467): member name -> KeyName. */
+export function parseSpecConstants(src: string): Map<string, string> {
+    const block = /abstract\s+class\s+Specs\b([\s\S]*?)(?=\babstract\s+class\b|$)/.exec(src)?.[1];
+    if (!block) throw new Error('build-data: class Specs not found');
+    return new Map([...block.matchAll(/const\s+string\s+(\w+)\s*=\s*"([^"]*)"/g)].map(m => [m[1]!, m[2]!]));
+}
+
+/**
+ * The `Specs` members a class returns from GetAutotrainableSkills, undefined without an override. Only
+ * the override counts: ClassHunter.cs:9 keeps the array with its override commented out (:23-26), so
+ * `src` comes without comments. An override this can't read fails here, as EligibleRaces does.
+ */
+export function parseAutotrain(src: string): string[] | undefined {
+    if (!/\bGetAutotrainableSkills\s*\(/.test(src)) return undefined;
+    const returnsArray = /\bGetAutotrainableSkills\s*\(\s*\)\s*(?:\{\s*return\s+|=>\s*)AutotrainableSkills\s*;/.test(src);
+    const array = /\bAutotrainableSkills\s*=\s*new\s*(?:string\s*)?\[\s*\]\s*\{([^}]*)\}/.exec(src);
+    if (!returnsArray || !array) throw new Error(`build-data: cannot parse GetAutotrainableSkills in ${/class\s+(\w+)/.exec(src)?.[1]}`);
+    return [...array[1]!.matchAll(/Specs\.(\w+)/g)].map(m => m[1]!);
 }
 
 function parseClassFile(src: string, dir: string): RawClass | null {
@@ -578,6 +632,7 @@ function parseClassFile(src: string, dir: string): RawClass | null {
         mana: field('m_manaStat'), specMult: int('m_specializationMultiplier'), baseHP: int('m_baseHP'),
         wsBase: int('m_wsbase'), classType,
         races: racesBlock ? [...racesBlock[1]!.matchAll(/PlayerRace\.(\w+)/g)].map(m => m[1]!) : undefined,
+        autotrain: parseAutotrain(src),
     };
 }
 
@@ -666,6 +721,13 @@ export function buildClasses(): ClassesFile {
         (csc.get(id) ?? csc.set(id, []).get(id)!).push({ spec: str(r.SpecKeyName), levelAcquired: num(r.LevelAcquired) });
     }
 
+    const specConstants = parseSpecConstants(readCs('gameutils/SkillConstants.cs'));
+    const autotrainOf = (c: RawClass, lines: { spec: string }[]): string[] => (inherit(c, 'autotrain') ?? []).map(member => {
+        const spec = specConstants.get(member);
+        if (spec === undefined) throw new Error(`build-data: ${c.cls} autotrains Specs.${member}, which SkillConstants.cs doesn't define`);
+        return spec;
+    }).filter(spec => lines.some(l => l.spec === spec));   // ClassRanger.cs:9 and ClassScout.cs:9 name Archery, no line of theirs
+
     const classes: ClassInfo[] = [];
     for (const c of raw.values()) {
         const id = classEnum.get(c.key);
@@ -677,6 +739,7 @@ export function buildClasses(): ClassesFile {
         const eligibleIds = [...new Set(eligible)].sort((a, b) => a - b);
         const creatableRaceIds = eligibleIds.filter(r => races.find(x => x.id === r)?.creatable);
         const startable = (startingClasses[String(realm)] ?? []).includes(id);
+        const specializations = (csc.get(id) ?? []).sort((a, b) => a.levelAcquired - b.levelAcquired || a.spec.localeCompare(b.spec));
         classes.push({
             id, key: c.key, name: c.name, femaleName: c.femaleName, realm, isBaseClass: isBase,
             baseClassId: base ? classEnum.get(base.key) ?? id : id, baseClassName: c.baseName,
@@ -688,7 +751,7 @@ export function buildClasses(): ClassesFile {
             tertiaryStat: asStat(inherit(c, 'tertiary')), manaStat: asStat(inherit(c, 'mana')),
             specializationMultiplier: inherit(c, 'specMult') ?? 10, baseHP: inherit(c, 'baseHP') ?? 700,
             wsBase: inherit(c, 'wsBase') ?? 400, classType: inherit(c, 'classType') ?? 'ListCaster',
-            specializations: (csc.get(id) ?? []).sort((a, b) => a.levelAcquired - b.levelAcquired || a.spec.localeCompare(b.spec)),
+            specializations, autotrainSpecs: autotrainOf(c, specializations),
         });
     }
     classes.sort((a, b) => a.id - b.id);
@@ -729,12 +792,12 @@ export const GENERATED_FILES: GeneratedFile[] = [
     { file: 'merchants.json', tables: ['merchantitem', 'itemtemplate'], build: () => buildMerchants(), count: (d: MerchantsFile) => Object.keys(d.lists).length },
     { file: 'spells.json', tables: ['spell'], build: buildSpells, count: len },
     { file: 'spelllines.json', tables: ['spellline', 'linexspell'], build: buildSpellLines, count: len },
-    { file: 'styles.json', tables: ['style'], build: buildStyles, count: len },
+    { file: 'styles.json', tables: ['style', 'stylexspell', 'spell'], build: () => buildStyles(), count: len },
     { file: 'specializations.json', tables: ['specialization', 'specxability'], build: buildSpecializations, count: len },
     { file: 'abilities.json', tables: ['ability'], build: buildAbilities, count: len },
     {
         file: 'classes.json', tables: ['race', 'classxspecialization'],
-        cs: ['Enums/eCharacterClass.cs', 'Enums/eRace.cs', 'GlobalConstants.cs', 'gameobjects/PlayerRace.cs', 'gameutils/CharacterStatValidator.cs', 'playerclasses'],
+        cs: ['Enums/eCharacterClass.cs', 'Enums/eRace.cs', 'GlobalConstants.cs', 'gameobjects/PlayerRace.cs', 'gameutils/CharacterStatValidator.cs', 'gameutils/SkillConstants.cs', 'playerclasses'],
         build: buildClasses, count: (d: ClassesFile) => d.classes.length,
     },
 ];

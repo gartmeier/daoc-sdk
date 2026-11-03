@@ -1129,7 +1129,7 @@ export class BotSDK {
         return this.sendAction({ type: 'sell', slot, reason: 'SDK' });
     }
 
-    /** Open the trainer window (stand near a trainer first). */
+    /** Open the trainer window, anywhere while allow_train_anywhere is on (train.cs:143), else with a trainer targeted. */
     async sendOpenTrainer(): Promise<ActionResult> {
         return this.sendAction({ type: 'openTrainer', reason: 'SDK' });
     }

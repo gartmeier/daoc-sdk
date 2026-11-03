@@ -23,6 +23,8 @@ bun sdk/cli.ts mybot                         # what the bot sees
 bun bots/mybot/script.ts                     # starter script: walk, kill a monster, loot
 ```
 
+`create-bot` makes an Albion Fighter by default. An advanced class also names its build, the plan for its spec points: `bun bots/create-bot.ts mybot --class=Enchanter --build="Mana nuker"` (`--builds=<class>` lists them; see [learnings/builds.md](learnings/builds.md)).
+
 Stop a client with a quit action so the character leaves the world: `bun client/dev/swarm-check.ts mybot --seconds=0 --quit`, `await sdk.sendQuit()` in a script, or MCP `disconnect_bot`. Ctrl+C is clean only when typed in the client's own console. On Windows, a signal sent from another process (`Stop-Process`, `taskkill`, `child.kill()`) kills bun outright, and the character then stays link-dead for 60 s, during which logins are refused.
 
 With Claude Code:
@@ -58,7 +60,7 @@ The guarded `export default main` lets MCP run the same file: `execute_code({ bo
 - Full reference: [sdk/API.md](sdk/API.md), generated from source.
 - Topic notes from live runs: [learnings/](learnings/README.md).
 - Examples:
-  - [bots/examples/](bots/examples/): `grinder.ts`, `merchant-run.ts`, `gear-care.ts`, `caster.ts`, `explorer.ts`, `duo.ts`.
+  - [bots/examples/](bots/examples/): `grinder.ts`, `merchant-run.ts`, `gear-care.ts`, `train-build.ts`, `caster.ts`, `explorer.ts`, `duo.ts`.
   - Run one with `bun bots/examples/<x>.ts <bot> [args]`. A copy in `bots/<bot>/` takes the same args without the bot name (`scriptArgs()` in `bots/examples/script-args.ts`), and MCP takes them as `args`.
 
 ## Architecture
@@ -75,7 +77,7 @@ The guarded `export default main` lets MCP run the same file: `execute_code({ bo
 - **The SDK never speaks the DAoC protocol.** It sends `BotAction` JSON and gets `BotWorldState` snapshots ([sdk/types.ts](sdk/types.ts)).
 - **The headless client** (`client/`) owns the TCP session (protocol 1.127, no encryption), the world model, and the mover. DAoC has no click-to-walk, so the client streams position updates itself. It also answers the server's line-of-sight checks with "clear".
 - **The gateway** routes between scripts and clients by username, like rs-sdk's. It also serves `/status`, `/state/<bot>`, `/chat/<bot>`, `POST /say/<bot>`, `POST /dm/<bot>` and a browser viewer at `/viewer`, for one bot, a whole group (`/viewer/group/<group>`) or every bot in a region with each group's run, such as three groups fighting in a battleground (`/viewer/region/<regionId>`). A group run publishes its coordinator's picture there once a second. See [Gateway access](#gateway-access).
-- **Static world data** (`data/`) is parsed from the OpenDAoC DB dump: NPC spawns, merchants' item lists, items, spells, styles, zones, classes and races. It also includes a ground-height estimate, because the server ships no terrain or navmesh. Navmeshes can be generated from a local DAoC client with `bun run navmesh:build` (Windows; `server/buildnav`, output in `server/navmesh/`, not redistributable); `walkTo` then routes over them (learnings/walking.md).
+- **Static world data** (`data/`) is parsed from the OpenDAoC DB dump: NPC spawns, merchants' item lists, items, spells, styles, zones, classes and races, with every skill of every creatable class matched against real trainer windows, and researched builds per class in `data/builds/`. It also includes a ground-height estimate, because the server ships no terrain or navmesh. Navmeshes can be generated from a local DAoC client with `bun run navmesh:build` (Windows; `server/buildnav`, output in `server/navmesh/`, not redistributable); `walkTo` then routes over them (learnings/walking.md).
 
 ### Gateway access
 
@@ -92,13 +94,13 @@ Design notes and protocol research: [docs/DESIGN.md](docs/DESIGN.md), [docs/rese
 ## Layout
 
 ```
-bots/            create-bot.ts, _template/, examples/, and one folder per bot (each bot folder, including bot.env, scripts and lab_log.md, is gitignored)
+bots/            create-bot.ts, choose-build.ts, _template/, examples/, and one folder per bot (each bot folder, including bot.env, build.ts, scripts and lab_log.md, is gitignored)
 client/          headless DAoC client: net/, protocol/, model/, movement.ts, session.ts, runner.ts, swarm.ts
 gateway/         gateway.ts (rs-sdk-compatible router), groups.ts (group views), viewer/
 sdk/             index.ts (BotSDK), actions.ts (BotActions), runner.ts, cli.ts, chat.ts, API.md
 mcp/             server.ts (execute_code, list_bots, disconnect_bot), api/ (BotManager)
-data/            DB dump parsers and query helpers; generated/ is a cache
-scripts/         setup-server.ts, build-data.ts, check-submodules.ts
+data/            DB dump parsers and query helpers; generated/ is a cache; builds/ the build catalogue and buying rule
+scripts/         setup-server.ts, build-data.ts, check-submodules.ts, capture-trainer-windows.ts
 LICENSES/        third-party license texts (rs-sdk MIT, OpenDAoC GPL-3.0)
 server/          docker/ (compose + Dockerfile), core/ (OpenDAoC source), db/ (DB dump)
 learnings/       per-topic notes for agents

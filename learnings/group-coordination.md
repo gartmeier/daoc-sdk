@@ -234,6 +234,6 @@ What this loop did live (3–4 minutes per run, same camp, water beetles L6–8)
 
 - **RvR:** done for battlegrounds, see [rvr.md](rvr.md): enemy players as contacts with an inferred target, healer and caster marks, `killPlayer`, the `rvr-roam` strategy and RvR totals in the reports. Line of sight is still not real (the client always answers "clear").
 - **Pets** (Druid, Enchanter): no SDK pet commands yet.
-- **Town visits** as a phase: not in the PvE policy. `groups/hibernia/town.ts` does it between runs (teleport to the trainer's town, train, wear upgrades, sell, teleport to the hub and `/bind`), and `groups/hibernia/campaign.ts` alternates it with hunts until a target level.
+- **Town visits** as a phase: not in the PvE policy. `groups/hibernia/town.ts` does it between runs (teleport to the trainer's town, train, wear upgrades, sell, teleport to the hub and `/bind`), and `groups/hibernia/campaign.ts` alternates it with hunts until a target level. For the training, `trainingDue` and `trainAtTrainer` are in `sdk/group` ([builds.md](builds.md)).
 - **Across processes:** the blackboard is in-process. A run now publishes it to the gateway (one way, plus wind-down), but separately running per-bot scripts or MCP sessions still can't join one group.
 - **Leaving or disbanding** a group (`/disband` in `formGroup` for members already in another group) is unverified.

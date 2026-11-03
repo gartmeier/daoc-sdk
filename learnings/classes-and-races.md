@@ -6,6 +6,7 @@
 bun bots/create-bot.ts --list                                    # starting classes and their races, per realm
 bun bots/create-bot.ts mybot --realm=midgard --class=Viking --race=Troll
 bun bots/create-bot.ts mymage --class=Mage                       # realm inferred when the class name is unique
+bun bots/create-bot.ts myench --class=Enchanter --build="Mana nuker"   # an advanced class names its build (builds.md)
 ```
 
 `create-bot.ts` checks the choice with `validateCharacter` from `data/index.ts`, which mirrors the server's `IsCharacterValid`. It then writes `REALM`, `CLASS`, `RACE`, `GENDER` and `CHAR_NAME` to bot.env. The headless client creates the character on first login if the account has none.
@@ -14,7 +15,7 @@ bun bots/create-bot.ts mymage --class=Mage                       # realm inferre
 - **`start_as_base_class` is on,** so advanced classes start as their base class:
   - In Albion: Armsman, Paladin, Mercenary and Reaver → Fighter; Wizard and Theurgist → Elementalist; Sorcerer and Cabalist → Mage; Cleric and Friar → Acolyte; Scout, Minstrel and Infiltrator → Rogue; Necromancer → Disciple.
   - `getClass(name, realm).baseClassName` gives the base class for any realm.
-  - An advanced class gets its base class's start point and gear. Only its starting stats (`defaultStats`) are its own, so pick the base class directly unless you want those.
+  - An advanced class gets its base class's start point and gear, and its own starting stats (`defaultStats`) and build ([builds.md](builds.md)). Name the class the character will end as: a base class accepts races its advanced classes refuse, and create-bot checks only the class it is given. A Celt Magician was refused promotion to Enchanter (GameTrainer.cs:300-318, verified live). `choose-build` refuses that class for such a bot.
   - Promotion at level 5 is verified for Fighter → Armsman: see [npc-dialog.md](npc-dialog.md#promotion). Base classes have no styles until then ([combat.md](combat.md)).
 - **Not creatable on this server:**
   - Classes: Valkyrie and Bainshee (no eligible races), and Heretic, Warlock, Vampiir and the Maulers (not starting classes).
