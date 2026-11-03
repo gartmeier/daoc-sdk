@@ -48,7 +48,7 @@ Progress counts the route still ahead, so a detour that first leads away from th
 
 ## Navmesh routing
 
-No navmesh ships with the server. `bun run navmesh:build` generates `server/navmesh/zoneNNN.nav` from the local DAoC client (`C:\Program Files (x86)\OpenDAoC`, or `--daoc=`), using `server/buildnav`, plus `server/navmesh/lib/Detour.dll` (Windows only, needs VS Build Tools, CMake and a .NET 10 SDK). The default build covers regions 1, 100 and 200 (42 zones, ~1.3 GB, ~20 min at `--jobs=8`). `--zones=`, `--regions=`, `--all` and `--skip-existing` pick zones.
+No navmesh ships with the server. `bun run navmesh:build` generates `server/navmesh/zoneNNN.nav` from the local DAoC client (`C:\Program Files (x86)\OpenDAoC`, or `--daoc=`), using `server/buildnav`, plus `server/navmesh/lib/Detour.dll` (Windows only, needs VS Build Tools, CMake and a .NET 10 SDK). The default build covers the home regions 1, 100 and 200 (42 zones), the capitals 10, 101 and 201 (one zone each) and Thidranki 252: 46 zones, ~1.3 GB, ~20 min at `--jobs=8`. `--zones=`, `--regions=`, `--all` and `--skip-existing` pick zones.
 
 When the library and at least one `.nav` exist, `walkTo`/`followPath`/`travelTo` route with `NavmeshPathProvider` (Detour through Bun FFI, the same queries the server's `LocalPathfindingMgr` runs):
 
@@ -56,6 +56,7 @@ When the library and at least one `.nav` exist, `walkTo`/`followPath`/`travelTo`
 - A start or destination whose z is a guess is snapped onto the mesh with growing boxes (taller first, then wider).
 - Zone borders are crossed like the server does it: at the straight-line border point, snapped onto both meshes. Long routes chain past Detour's 256-poly corridor limit (a 62k-unit route across Camelot Hills takes ~250 ms).
 - Any part of the route that can't use a mesh is a straight line, and the walk still arrives. `findPath(...).message` is set whenever any part is such a fallback: the start zone has no `.nav` or its mesh failed to load (the message includes `getNavmeshStore().loadError(zoneId)`), the start is off the mesh, a later zone has no mesh, or the destination is off the mesh or unreachable. A route entirely on the mesh has no message.
+- Capitals are mesh only (no heightmap, so no `.terrain`). Planned offline from each teleporter, not walked live: routes go around buildings, about 1.4× the straight distance, and about 90 % of NPC spawns connect. Most others are on a raised floor or behind a counter and stay in reach of a route that stops under 192 units short (Jordheim's Vault Keeper: 104 short, 41 off in z), so the walk ends with the straight fallback above.
 - A zone's mesh loads on its first query (~0.1 s, 20–50 MB of memory each).
 - `navmeshGroundZ(regionId, x, y, zHint?)` gives the navmesh height (what the server snaps ground targets and mob paths to); `groundAt(regionId, x, y, zHint)` gives the real ground (next section); `getNavmeshStore().at(region, x, y)` gives the raw `NavMesh` (`closestPoint`, `surfaceZ`, `findPath`, `randomPoint`, `raycast`).
 - `DAOC_NAVMESH=off` forces straight lines. `DAOC_NAVMESH_DIR` and `DETOUR_LIB` override the paths.

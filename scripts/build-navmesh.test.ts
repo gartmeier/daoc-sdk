@@ -10,8 +10,8 @@ const TABLE = [zone(0, 1), zone(1, 1), zone(27, 10), zone(100, 100), zone(200, 2
 const CLIENT_MPK = 'C:\\Program Files (x86)\\OpenDAoC\\zones\\zones.mpk';
 
 describe('navmesh:build args', () => {
-    test('defaults to the three home regions, the OpenDAoC client dir and 8 jobs', () => {
-        expect(parseArgs([], {}, TABLE)).toEqual({ daoc: 'C:\\Program Files (x86)\\OpenDAoC', regions: [1, 100, 200], zones: [], all: false, skipExisting: false, jobs: 8 });
+    test('defaults to the home regions, capitals and Thidranki, the OpenDAoC client dir and 8 jobs', () => {
+        expect(parseArgs([], {}, TABLE)).toEqual({ daoc: 'C:\\Program Files (x86)\\OpenDAoC', regions: [1, 100, 200, 10, 101, 201, 252], zones: [], all: false, skipExisting: false, jobs: 8 });
     });
 
     test('explicit zones replace the default regions; DAOC_DIR and flags apply', () => {
