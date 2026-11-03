@@ -87,6 +87,7 @@ export { TerrainStore, getTerrainStore, type TerrainSample } from './terrain';
 
 // Server ranges (world/WorldMgr.cs, GamePlayer.cs) and the margins we approach to.
 const MELEE_APPROACH = 90;       // AttackRange 128 (+32 per moving side), 3D
+const MELEE_RANGE = 128;
 const MELEE_REAPPROACH = 118;
 const INTERACT_APPROACH = 150;   // INTERACT_DISTANCE 192, 3D
 const PICKUP_APPROACH = 150;     // world_pickup_distance 256, 2D
@@ -1505,10 +1506,11 @@ export class BotActions {
         const maxCon = options.maxCon ?? 0;
         const exclude = new Set(options.exclude ?? []);
         const matches = options.pattern !== undefined ? nameMatcher(options.pattern) : () => true;
+        const onUs = new Set(this.helpers.attackers(s).map(n => n.objectId));
         return s.nearbyNpcs
             .filter(n => {
                 if (exclude.has(n.objectId) || !isKillable(n, p) || !matches(n.name)) return false;
-                if (n.healthPercent < 100 && n.targetObjectId !== p.objectId && !options.includeEngaged) return false;
+                if (n.healthPercent < 100 && !onUs.has(n.objectId) && !options.includeEngaged) return false;
                 if (!options.includeEngaged && n.targetObjectId !== null && n.targetObjectId !== p.objectId) return false;
                 const diff = n.level - p.level;
                 if (options.maxLevelDiff !== undefined && diff > options.maxLevelDiff) return false;
@@ -1522,13 +1524,16 @@ export class BotActions {
             .sort((a, b) => (a.distance2d + Math.abs(a.z - p.z)) - (b.distance2d + Math.abs(b.z - p.z)));
     }
 
-    /** In combat: attack mode on, recently hit, an NPC targets us or an enemy player hit us (getPlayerAttackers). */
+    /** In combat: attack mode on, recently hit, an NPC is fighting us (getAttackers) or an enemy player hit us (getPlayerAttackers). */
     isInCombat(): boolean {
         const p = this.helpers.player();
         return !!p && (p.inCombat || p.attacking || this.helpers.attackers().length > 0 || this.helpers.playerAttackers().length > 0);
     }
 
-    /** NPCs currently targeting us, nearest first. */
+    /**
+     * NPCs fighting us, nearest first: their reported target is us, or their swing or spell landed on us within the last 6 s.
+     * The server reports a target only for a mob standing within its attack range and in attack state, so the hits are what shows a caster at range or a mob running at us.
+     */
     getAttackers(): NearbyNpc[] {
         return this.helpers.attackers().sort((a, b) => a.distance - b.distance);
     }
@@ -2555,12 +2560,16 @@ export class BotActions {
             }
             for (const [id, until] of avoid) if (until < Date.now()) avoid.delete(id);
 
-            let target = this.getAttackers()[0] ?? null;
+            // A failed fight rules out a mob hitting us from where we can't get at it, not one in melee range.
+            // Its target doesn't tell them apart: the client shows a spell's hit as its target until its next update.
+            const attackers = this.getAttackers();
+            let target = attackers.find(n => n.distance <= MELEE_RANGE || !avoid.has(n.objectId)) ?? null;
             // Too little time left to pull, walk back or rest: stop rather than overshoot.
             if (!target && remaining() < minEngage()) break;
             if (!target) {
                 const lowMana = options.restBelowMana !== undefined && p.maxMana > 0 && p.manaPercent < options.restBelowMana;
-                if (p.healthPercent < restBelow || lowMana) {
+                const hurt = p.healthPercent < restBelow || lowMana;
+                if (hurt && !attackers.length) {
                     const rested = await this.rest({ healthPercent: restTo, manaPercent: lowMana ? Math.min(100, options.restBelowMana! + 40) : undefined, timeout: Math.max(5000, Math.min(120_000, deadline - Date.now())) });
                     if (!rested.success && rested.reason !== 'attacked') await this.helpers.sleep(1000);
                     idleSince = null; // resting is not idling: count the search time afresh
@@ -2570,7 +2579,8 @@ export class BotActions {
                     await backToAnchor();
                     continue;
                 }
-                target = this.findKillableNpc({
+                // Hurt under fire from a mob ruled out: rest refuses, and no new fight now. It waits for no_targets, the deadline or that mob's 60 s to run out.
+                if (!hurt) target = this.findKillableNpc({
                     pattern: options.pattern, maxLevelDiff: options.maxLevelDiff, minLevelDiff: options.minLevelDiff,
                     minCon: options.minCon, maxCon: options.maxCon, radius, from: anchor, exclude: avoid.keys(),
                 });

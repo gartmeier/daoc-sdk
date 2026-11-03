@@ -661,6 +661,73 @@ describe('attack / findKillableNpc / con', () => {
         expect(bot.isInCombat()).toBeTrue();
         expect(bot.getAttackers().map(n => n.objectId)).toEqual([200]);
     });
+
+    describe('a mob that reports no target', () => {
+        const mob = (objectId: number, over: Partial<NearbyNpc> = {}) => makeNpc({ objectId, name: 'dergan enchanter', level: 5, x: 561000, y: 511000, distance: 900, targetObjectId: null, inCombat: false, ...over });
+
+        test('a caster whose spell landed on us counts, and so does a runner whose swing did', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501), mob(502, { x: 560100, inCombat: true })] });
+            const me = w.player.objectId;
+            w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: me, effectId: 5208 });
+            w.combat({ kind: 'melee', attackerObjectId: 502, targetObjectId: me, result: 'miss' });
+            w.publish();
+            expect(bot.getAttackers().map(n => n.objectId)).toEqual([502, 501]);
+            expect(bot.isInCombat()).toBeTrue();
+        });
+
+        test('a hit too old, or on someone else, does not', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501), mob(502)] });
+            w.state.combatEvents.push({ id: 90, kind: 'spellEffect', attackerObjectId: 501, targetObjectId: w.player.objectId, receivedAt: w.state.timestamp - 7000 });
+            w.combat({ kind: 'spellEffect', attackerObjectId: 502, targetObjectId: 999, effectId: 5208 });
+            w.publish();
+            expect(bot.getAttackers()).toEqual([]);
+        });
+
+        test('hits from before a mob died are not from the next one with its id', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501)] });
+            const me = w.player.objectId;
+            w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: me, effectId: 5208 });
+            w.combat({ kind: 'death', attackerObjectId: null, targetObjectId: 501, targetHealthPercent: 0 });
+            w.publish();
+            expect(bot.getAttackers()).toEqual([]);
+            w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: me, effectId: 5208 });
+            w.publish();
+            expect(bot.getAttackers().map(n => n.objectId)).toEqual([501]);
+        });
+
+        test('nor a cast that has not landed yet: its target is unknown', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501)] });
+            w.combat({ kind: 'spellCast', attackerObjectId: 501, targetObjectId: null, castTimeMs: 2000 });
+            w.publish();
+            expect(bot.getAttackers()).toEqual([]);
+        });
+
+        test('nobody we could not fight anyway: a realm NPC or a peaceful one casting on us, a pet, the dead', async () => {
+            const { w, bot } = world({
+                nearbyNpcs: [mob(501, { realm: 'albion' }), mob(502, { isPeaceful: true }), mob(503, { isPet: true }), mob(504, { isTargetable: false }), mob(505, { healthPercent: 0 })],
+            });
+            for (const id of [501, 502, 503, 504, 505]) w.combat({ kind: 'spellEffect', attackerObjectId: id, targetObjectId: w.player.objectId, effectId: 5208 });
+            w.state.nearbyNpcs[4]!.targetObjectId = w.player.objectId;
+            w.publish();
+            expect(bot.getAttackers()).toEqual([]);
+        });
+
+        test('rest refuses while one hits us, and names one that hits us sitting', async () => {
+            const { w, bot } = world({ player: makePlayer({ health: 50, healthPercent: 50 }), nearbyNpcs: [mob(501)] });
+            setTimeout(() => w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: w.player.objectId, effectId: 5208 }), 60);
+            const sitting = await bot.rest();
+            expect(sitting.reason).toBe('attacked');
+            expect(sitting.message).toContain('dergan enchanter');
+            expect((await bot.rest()).reason).toBe('in_combat');
+        });
+
+        test('findKillableNpc still takes a hurt one that is hitting us, not one hurt by someone else', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501, { healthPercent: 60, distance: 900 }), mob(502, { healthPercent: 60, distance: 100 })] });
+            w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: w.player.objectId, effectId: 5208 });
+            w.publish();
+            expect(bot.findKillableNpcs().map(n => n.objectId)).toEqual([501]);
+        });
+    });
 });
 
 describe('castSpell', () => {
@@ -1986,6 +2053,61 @@ describe('grind', () => {
         expect(r.stopReason).toBe('duration');
         expect(w.sentOf('sit').length).toBeGreaterThanOrEqual(1);
         expect(w.player.healthPercent).toBeGreaterThanOrEqual(90);
+    });
+
+    test('a caster hitting us comes before a nearer mob', async () => {
+        const mobs = [
+            makeNpc({ objectId: 501, name: 'spirit hound', level: 5, x: 560300, y: 511000, distance: 100 }),
+            makeNpc({ objectId: 502, name: 'dergan enchanter', level: 5, x: 560600, y: 511000, distance: 400 }),
+        ];
+        const { w, bot } = world({ nearbyNpcs: mobs, nearbyObjects: [] });
+        fightSim(w, { dmg: 50 });
+        w.combat({ kind: 'spellEffect', attackerObjectId: 502, targetObjectId: w.player.objectId, effectId: 5208 });
+        w.publish();
+        const r = await bot.grind({ maxKills: 1, durationMs: 5000, loot: false });
+        expect(r.killLog.map(k => k.name)).toEqual(['dergan enchanter']);
+    });
+
+    /** A mob on a ledge that goes on casting: every fight with it fails, and each tick its spell lands again. */
+    const onALedge = (over: Partial<NearbyNpc>) => {
+        const { w, bot } = world({ nearbyNpcs: [makeNpc({ objectId: 501, name: 'dergan enchanter', level: 5, x: 560600, y: 511000, ...over })], nearbyObjects: [] });
+        w.onTick = world => world.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: world.player.objectId, effectId: 5208 });
+        const tried: number[] = [];
+        bot.killNpc = (async (t: NearbyNpc) => {
+            tried.push(t.objectId);
+            await Bun.sleep(20);
+            return { success: false, killed: false, reason: 'out_of_reach', message: 'too high', xpGained: 0 };
+        }) as unknown as typeof bot.killNpc;
+        return { w, bot, tried };
+    };
+
+    test('a caster it cannot reach is tried once, not over and over', async () => {
+        const { bot, tried } = onALedge({ targetObjectId: null });
+        await bot.grind({ durationMs: 300, loot: false });
+        expect(tried).toEqual([501]);
+    });
+
+    test('nor when its spells show as its target, as a hit does until the mob\'s next update', async () => {
+        const { bot, tried } = onALedge({ targetObjectId: 100 });
+        await bot.grind({ durationMs: 300, loot: false });
+        expect(tried).toEqual([501]);
+    });
+
+    test('a failed fight does not rule out a mob in melee range', async () => {
+        const { bot, tried } = onALedge({ x: 560050 });
+        await bot.grind({ durationMs: 300, loot: false });
+        expect(tried.length).toBeGreaterThan(1);
+    });
+
+    test('hurt under fire from a mob ruled out, it neither sits nor pulls, and stops at no_targets', async () => {
+        const { w, bot, tried } = onALedge({ targetObjectId: null });
+        w.state.nearbyNpcs.push(makeNpc({ objectId: 502, name: 'spirit hound', level: 5, x: 560900, y: 511000 }));
+        w.player.health = 30;
+        w.player.healthPercent = 30;
+        const r = await bot.grind({ durationMs: 3000, noTargetTimeoutMs: 200, loot: false });
+        expect(r.stopReason).toBe('no_targets');
+        expect(tried).toEqual([501]);
+        expect(w.sentOf('sit')).toEqual([]);
     });
 });
 
