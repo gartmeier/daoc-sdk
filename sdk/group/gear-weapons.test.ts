@@ -2,10 +2,10 @@
 // GameInventoryItem.cs:1156-1197 does, level clamp included; the shop lines come from Gymir and Saga in
 // Jordheim, and the static merchant data is real.
 import { describe, expect, test } from 'bun:test';
-import { parseWeaponDelve } from '../delve';
-import { ObjectType, type InventoryItem, type MerchantItem, type PlayerState } from '../types';
+import { ALL_FOCUS, parseWeaponDelve } from '../delve';
+import { ItemHand, ObjectType, type InventoryItem, type MerchantItem, type PlayerState } from '../types';
 import { bestWeapon, buyWeapons, wearWeapons, weaponNeeds, weaponSellers, weaponSlots, weaponUpgrades, type WeaponMember, type WeaponRow } from './gear';
-import { weaponScore, weaponValue } from './gear-score';
+import { focusCover, weaponScore, weaponValue } from './gear-score';
 
 const WARRIOR = [['Axe', 20], ['Hammer', 1], ['Sword', 1], ['Shield', 1], ['Parry', 20], ['Thrown Weapons', 1]] as const;
 const SKALD = [['Axe', 15], ['Hammer', 1], ['Sword', 1], ['Parry', 7], ['Battlesongs', 17]] as const;
@@ -206,6 +206,10 @@ interface Opts {
     shops?: Record<string, MerchantItem[]>;
     /** Item name → extra delve lines (bonuses). */
     bonus?: Record<string, string[]>;
+    /** Item name → its focus: levels on ALL Spell Lines, or on one line. */
+    focus?: Record<string, number | { line: string; value: number }>;
+    /** Item name → other bonuses its delve reads as. */
+    parsed?: Record<string, object[]>;
     /** Item name → its Level Requirement. */
     required?: Record<string, number>;
     /** Seller → its window type, for a shop that doesn't charge copper. */
@@ -229,7 +233,12 @@ function world(o: Opts = {}) {
         ...(o.bonus?.[name]?.length ? ['Magical Bonuses:', ...o.bonus[name]!, ' '] : []),
         'Total utility: 0.00', ' ', 'Damage Modifiers:', `- ${dps.toFixed(1)} Base DPS`, `- ${Math.min(dps, 1.2 + 0.3 * level).toFixed(1)} Clamped DPS`, `- ${speed.toFixed(1)} Weapon Speed`, `- ${quality}% Quality`, `- ${condition}% Condition`, '- Damage Type: Slash',
     ];
-    const answer = (lines: string[], name = '') => ({ success: true, message: 'ok', lines, levelRequirement: o.required?.[name] ?? null, bonuses: o.bonus && lines.some(l => /Strength/.test(l)) ? [{ category: 'stat', stat: 'STR', name: 'Strength', value: 7, unit: 'pts', text: '' }] : [], unknown: [], bonusLevel: null, item: null });
+    const focusOf = (name: string) => {
+        const fo = o.focus?.[name];
+        if (fo === undefined) return [];
+        return [typeof fo === 'number' ? { category: 'focus', name: ALL_FOCUS, spec: null, value: fo, unit: 'lvls', text: '' } : { category: 'focus', name: `${fo.line} Focus`, spec: fo.line, value: fo.value, unit: 'lvls', text: '' }];
+    };
+    const answer = (lines: string[], name = '') => ({ success: true, message: 'ok', lines, levelRequirement: o.required?.[name] ?? null, bonuses: [...(o.bonus && lines.some(l => /Strength/.test(l)) ? [{ category: 'stat', stat: 'STR', name: 'Strength', value: 7, unit: 'pts', text: '' }] : []), ...focusOf(name), ...(o.parsed?.[name] ?? [])], unknown: [], bonusLevel: null, item: null });
     const shops = o.shops ?? { Gymir: GYMIR, Saga: SAGA };
     let opened = '';
     const actions = {
@@ -466,4 +475,113 @@ describe('wearWeapons', () => {
         expect(await wearWeapons(f.member)).toEqual([]);
         expect(f.calls).toEqual([]);
     });
+});
+
+describe('wearWeapons, a focus caster', () => {
+    const SPIRITMASTER = [['Darkness', 17], ['Suppression', 10], ['Summoning', 6]] as const;
+    const staff = (slot: number, name: string): InventoryItem => ({ ...worn(slot, name, ObjectType.Staff, 1.2, 4.5), hand: ItemHand.TwoHanded });
+    const BRANCH = staff(12, 'trimmed branch');
+    const hrafna = (o: Opts) => world({ specs: SPIRITMASTER, className: 'Spiritmaster', equipment: [BRANCH], ...o });
+
+    test('a looted Focus Staff replaces a plain one, in the two-hand slot', async () => {
+        const f = hrafna({ inventory: [staff(45, 'Arcane Focus Staff')], focus: { 'Arcane Focus Staff': 20 } });
+        expect(await wearWeapons(f.member)).toEqual(['wield Arcane Focus Staff, score 1 over 0']);
+        expect(inHand(f, 12)).toBe('Arcane Focus Staff');
+        expect(f.inventory.map(i => i.name)).toEqual(['trimmed branch']);
+    });
+
+    test('a staff without a focus stays in the bag', async () => {
+        const f = hrafna({ inventory: [staff(45, 'Mighty Staff')] });
+        expect(await wearWeapons(f.member)).toEqual([]);
+        expect(f.calls).toEqual([]);
+    });
+
+    test('the staff that reaches further wins, and past the spec a higher focus buys nothing', async () => {
+        const f = hrafna({ inventory: [staff(45, 'Low Focus Staff'), staff(46, 'High Focus Staff'), staff(47, 'Higher Focus Staff')], focus: { 'Low Focus Staff': 8, 'High Focus Staff': 17, 'Higher Focus Staff': 40 } });
+        await wearWeapons(f.member);
+        expect(inHand(f, 12)).toBe('High Focus Staff');
+        expect(await wearWeapons(f.member)).toEqual([]);
+    });
+
+    test("one line's focus reaches less than the same on every line", async () => {
+        const f = hrafna({ inventory: [staff(45, 'Dark Focus Staff'), staff(46, 'Arcane Focus Staff')], focus: { 'Dark Focus Staff': { line: 'Darkness', value: 17 }, 'Arcane Focus Staff': 17 } });
+        await wearWeapons(f.member);
+        expect(inHand(f, 12)).toBe('Arcane Focus Staff');
+    });
+
+    test('among staffs that reach as far the bonuses decide: live, Hits and Piety over Crush and Energy', async () => {
+        const f = hrafna({
+            inventory: [staff(45, 'Bluntbender Focus Staff'), staff(46, 'Willful Focus Staff')],
+            focus: { 'Bluntbender Focus Staff': 21, 'Willful Focus Staff': 25 },
+            parsed: {
+                'Bluntbender Focus Staff': [{ category: 'resist', name: 'Crush', value: 3, unit: '%', text: '' }, { category: 'resist', name: 'Energy', value: 2, unit: '%', text: '' }],
+                'Willful Focus Staff': [{ category: 'hits', name: 'Hits', value: 17, unit: 'pts', text: '' }, { category: 'stat', stat: 'PIE', name: 'Piety', value: 9, unit: 'pts', text: '' }],
+            },
+        });
+        await wearWeapons(f.member);
+        expect(inHand(f, 12)).toBe('Willful Focus Staff');
+    });
+
+    test('a worn staff gives way to one with better bonuses, and a second pass changes nothing: live, 1.05 to 1.07', async () => {
+        const f = hrafna({
+            equipment: [{ ...staff(12, 'Bluntbender Focus Staff') }],
+            inventory: [staff(46, 'Willful Focus Staff')],
+            focus: { 'Bluntbender Focus Staff': 21, 'Willful Focus Staff': 25 },
+            parsed: {
+                'Bluntbender Focus Staff': [{ category: 'resist', name: 'Crush', value: 3, unit: '%', text: '' }, { category: 'resist', name: 'Energy', value: 2, unit: '%', text: '' }],
+                'Willful Focus Staff': [{ category: 'hits', name: 'Hits', value: 17, unit: 'pts', text: '' }, { category: 'stat', stat: 'PIE', name: 'Piety', value: 9, unit: 'pts', text: '' }],
+            },
+        });
+        expect((await wearWeapons(f.member))[0]).toStartWith('wield Willful Focus Staff');
+        expect(await wearWeapons(f.member)).toEqual([]);
+        expect(inHand(f, 12)).toBe('Willful Focus Staff');
+    });
+
+    test('after a refusal the next best gets its turn', async () => {
+        const f = hrafna({ inventory: [staff(45, 'Arcane Focus Staff'), staff(46, 'Low Focus Staff')], focus: { 'Arcane Focus Staff': 20, 'Low Focus Staff': 8 }, refuse: /Arcane/ });
+        const lines = await wearWeapons(f.member);
+        expect(lines[0]).toStartWith("can't wield Arcane Focus Staff");
+        expect(lines[1]).toStartWith('wield Low Focus Staff');
+    });
+
+    test('a Level Requirement above ours stays in the bag, unless the bot asks for it', async () => {
+        const o = { inventory: [staff(45, 'Arcane Focus Staff')], focus: { 'Arcane Focus Staff': 45 }, required: { 'Arcane Focus Staff': 45 } };
+        expect(await wearWeapons(hrafna(o).member)).toEqual([]);
+        expect((await wearWeapons(hrafna(o).member, { overLevel: true }))[0]).toStartWith('wield Arcane Focus Staff');
+    });
+
+    test('a staff that will not delve is not replaced', async () => {
+        const f = hrafna({ inventory: [staff(45, 'Arcane Focus Staff')], focus: { 'Arcane Focus Staff': 20 } });
+        const { delveItem } = (f.member as any).actions;
+        (f.member as any).actions.delveItem = async (i: InventoryItem) => i.slot === 12 ? { success: false, reason: 'no_response', message: 'no answer', lines: [], bonuses: [] } : delveItem(i);
+        expect(await wearWeapons(f.member)).toEqual(['delve trimmed branch: no_response; keeping it']);
+        expect(inHand(f, 12)).toBe('trimmed branch');
+    });
+
+    test('a Healer and a Shaman get nothing from a focus and leave the bag alone', async () => {
+        for (const [className, specList] of [['Healer', [['Mending', 17], ['Augmentation', 8]]], ['Shaman', [['Mending', 12], ['Augmentation', 17]]]] as const) {
+            const f = world({ specs: specList, className, inventory: [staff(45, 'Arcane Focus Staff')], focus: { 'Arcane Focus Staff': 20 } });
+            expect(await wearWeapons(f.member)).toEqual([]);
+            expect(f.delves).toEqual([]);
+        }
+    });
+
+    test('buying leaves a focus caster alone', async () => {
+        const f = hrafna({ inventory: [staff(45, 'Arcane Focus Staff')], focus: { 'Arcane Focus Staff': 20 } });
+        await weaponUpgrades(f.member, jordheim);
+        expect(f.calls.filter(c => /^(open|walk|buy)/.test(c))).toEqual([]);
+    });
+});
+
+describe('focusCover', () => {
+    const SPECS = specs([['Darkness', 17], ['Suppression', 10], ['Summoning', 6], ['Axe', 3]]);
+    const all = (value: number) => ({ category: 'focus' as const, name: ALL_FOCUS, spec: null, value, unit: 'lvls' as const, text: '' });
+    const line = (spec: string, value: number) => ({ category: 'focus' as const, name: `${spec} Focus`, spec, value, unit: 'lvls' as const, text: '' });
+
+    test('nothing without a focus', () => expect(focusCover([], SPECS)).toBe(0));
+    test('all of it once the focus reaches the highest spec; weapon lines are no spell lines', () => expect(focusCover([all(17)], SPECS)).toBe(1));
+    test('line by line up to each spec', () => expect(focusCover([all(10)], SPECS)).toBeCloseTo((10 + 10 + 6) / 33));
+    test("one line's focus covers that line", () => expect(focusCover([line('Darkness', 17)], SPECS)).toBeCloseTo(17 / 33));
+    test("a line's focus and all lines don't add up: the higher counts", () => expect(focusCover([all(6), line('Darkness', 10)], SPECS)).toBeCloseTo((10 + 6 + 6) / 33));
+    test('no spell lines, no reach', () => expect(focusCover([all(20)], specs([['Axe', 20]]))).toBe(0));
 });
