@@ -570,6 +570,101 @@ describe('wearWeapons', () => {
     });
 });
 
+describe('wearWeapons, both hands', () => {
+    // A Blademaster's specs and hands, as Vefoydheb's in the DB on 2026-11-03.
+    const BLADEMASTER = [['Blades', 15], ['Blunt', 1], ['Piercing', 1], ['Parry', 6], ['Celtic Dual', 12], ['Shields', 1]] as const;
+    const blade = (slot: number, name: string, dps: number, speed: number, hand: number, level = 14) => ({ ...worn(slot, name, ObjectType.Blades, dps, speed, 95), hand, level });
+    const RIGHT = blade(10, 'Fortifying Sword', 3.3, 3.4, ItemHand.MainHand, 7), LEFT = blade(11, 'Razored Sword', 3.3, 2.9, ItemHand.FitsLeft, 7);
+    const SPIRITBENDER = blade(52, 'Spiritbender Sword', 5.4, 3.5, ItemHand.MainHand);
+    const blademaster = (o: Opts) => world({ specs: BLADEMASTER, className: 'Blademaster', realm: 'hibernia', equipment: [RIGHT, LEFT], ...o });
+
+    test('his bag: the better blade goes right, and a stiletto, a training sword and a shield stay', async () => {
+        const f = blademaster({ inventory: [{ ...worn(42, 'training sword', ObjectType.Blades, 1.2, 2.5), hand: ItemHand.FitsLeft }, { ...worn(43, 'Bluntbender Stiletto', ObjectType.Piercing, 6.3, 3.1, 95), level: 17 }, { ...worn(45, 'Heatbender Small Shield', ObjectType.Shield, 5.4, 3, 97), hand: ItemHand.FitsLeft }, SPIRITBENDER] });
+        const lines = await wearWeapons(f.member);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toStartWith('wield Spiritbender Sword, score');
+        expect(inHand(f, 10)).toBe('Spiritbender Sword');
+        expect(inHand(f, 11)).toBe('Razored Sword');
+        expect(f.inventory.find(i => i.slot === 52)?.name).toBe('Fortifying Sword');
+        expect(await wearWeapons(f.member)).toEqual([]);
+    });
+
+    test('a worse blade stays in the bag, in either hand', async () => {
+        const f = blademaster({ inventory: [blade(42, 'Dull Sword', 2.5, 3, ItemHand.FitsLeft)] });
+        expect(await wearWeapons(f.member)).toEqual([]);
+        expect(f.calls).toEqual([]);
+    });
+
+    test('one that fits left and loses to the right hand goes left', async () => {
+        const f = blademaster({ equipment: [{ ...SPIRITBENDER, slot: 10 }, LEFT], inventory: [blade(42, 'Keen Sword', 4.5, 3, ItemHand.FitsLeft)] });
+        const lines = await wearWeapons(f.member);
+        expect(f.calls).toEqual(['equip Keen Sword -> 11']);
+        expect(lines[0]).toStartWith('wield Keen Sword, score');
+        expect(inHand(f, 10)).toBe('Spiritbender Sword');
+    });
+
+    test('one that only fits right never goes left, however much it beats that hand', async () => {
+        const f = blademaster({ equipment: [{ ...SPIRITBENDER, slot: 10 }, LEFT], inventory: [blade(42, 'Keen Sword', 5, 3, ItemHand.MainHand)] });
+        expect(await wearWeapons(f.member)).toEqual([]);
+        expect(f.calls).toEqual([]);
+    });
+
+    test('what comes off the right hand can go left, in the same pass', async () => {
+        const f = blademaster({ equipment: [{ ...SPIRITBENDER, slot: 10, hand: ItemHand.FitsLeft }, LEFT], inventory: [blade(42, 'Keen Sword', 7, 3.5, ItemHand.MainHand)] });
+        expect(await wearWeapons(f.member)).toHaveLength(2);
+        expect(f.calls).toEqual(['equip Keen Sword -> 10', 'equip Spiritbender Sword -> 11']);
+        expect(inHand(f, 10)).toBe('Keen Sword');
+        expect(inHand(f, 11)).toBe('Spiritbender Sword');
+        expect(f.inventory.map(i => i.name)).toEqual(['Razored Sword']);
+        expect(await wearWeapons(f.member)).toEqual([]);
+    });
+
+    test("what comes off the right hand stays off when it can't go left or loses there", async () => {
+        const f = blademaster({ inventory: [{ ...SPIRITBENDER, hand: ItemHand.FitsLeft }] });
+        expect(await wearWeapons(f.member)).toHaveLength(1);
+        expect(f.calls).toEqual(['equip Spiritbender Sword -> 10']);
+        const g = blademaster({ equipment: [{ ...RIGHT, value1: 30, hand: ItemHand.FitsLeft }, LEFT], inventory: [SPIRITBENDER] });
+        await wearWeapons(g.member);
+        expect(g.calls).toEqual(['equip Spiritbender Sword -> 10']);
+    });
+
+    test('two from the bag: the better right, the other left', async () => {
+        const f = blademaster({ inventory: [blade(42, 'Keen Sword', 5, 3, ItemHand.FitsLeft), { ...SPIRITBENDER, hand: ItemHand.FitsLeft }] });
+        await wearWeapons(f.member);
+        expect(inHand(f, 10)).toBe('Spiritbender Sword');
+        expect(inHand(f, 11)).toBe('Keen Sword');
+    });
+
+    test('a shield in the left hand gives way when Celtic Dual is what he trains, and stays when Shields is', async () => {
+        const f = blademaster({ equipment: [RIGHT, SHIELD], inventory: [blade(42, 'Keen Sword', 3, 3, ItemHand.FitsLeft)] });
+        await wearWeapons(f.member);
+        expect(f.calls).toEqual(['equip Keen Sword -> 11']);
+        const g = blademaster({ specs: [['Blades', 15], ['Celtic Dual', 5], ['Shields', 20]], equipment: [RIGHT, SHIELD], inventory: [blade(42, 'Keen Sword', 3, 3, ItemHand.FitsLeft)] });
+        expect(await wearWeapons(g.member)).toEqual([]);
+        expect(inHand(g, 11)).toBe('small training shield');
+    });
+
+    test('too high for his level stays in the bag', async () => {
+        const f = blademaster({ inventory: [blade(42, 'High Sword', 6.3, 3, ItemHand.FitsLeft, 24)] });
+        expect(await wearWeapons(f.member)).toEqual([]);
+        expect(f.calls).toEqual([]);
+    });
+
+    test('a refusal in the right hand is not tried again in the left', async () => {
+        const f = blademaster({ inventory: [blade(42, 'Odd Sword', 7, 3, ItemHand.FitsLeft)], refuse: /Odd/ });
+        expect(await wearWeapons(f.member)).toEqual(["can't wield Odd Sword: You have no skill in using this weapon type!"]);
+        expect(f.calls).toHaveLength(1);
+    });
+
+    test('a refusal in the left hand gives the next best its turn: 5 Blades templates say they fit left and are not of the type', async () => {
+        const f = blademaster({ equipment: [{ ...SPIRITBENDER, slot: 10 }, LEFT], inventory: [blade(42, 'Odd Sword', 5, 3, ItemHand.FitsLeft), blade(43, 'Keen Sword', 4, 3, ItemHand.FitsLeft)], refuse: /Odd/ });
+        const lines = await wearWeapons(f.member);
+        expect(lines[0]).toStartWith("can't wield Odd Sword");
+        expect(lines[1]).toStartWith('wield Keen Sword');
+        expect(inHand(f, 11)).toBe('Keen Sword');
+    });
+});
+
 describe('wearWeapons, a focus caster', () => {
     const SPIRITMASTER = [['Darkness', 17], ['Suppression', 10], ['Summoning', 6]] as const;
     const staff = (slot: number, name: string): InventoryItem => ({ ...worn(slot, name, ObjectType.Staff, 1.2, 4.5), hand: ItemHand.TwoHanded });
