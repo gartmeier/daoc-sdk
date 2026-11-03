@@ -1278,6 +1278,23 @@ describe('items', () => {
         expect(r.reason).toBe('timeout');
     });
 
+    test.each([
+        ['You have no skill in using this weapon type!'],
+        ['You have no skill in wearing this armor type!'],
+        ["The great axe can't go there!"],
+    ])('a slot refusal comes back at once: %s', async text => {
+        const { w, bot } = world();
+        const axe = { ...w.state.inventory[0]!, slot: 45, name: 'great axe' };
+        w.state.inventory = [...w.state.inventory, axe];
+        w.publish();
+        w.handlers.moveItem = (_a, world) => { world.message(text); };
+        const started = Date.now();
+        const r = await bot.equipItem(axe, { slot: 10 });
+        expect(r.reason).toBe('refused');
+        expect(r.message).toBe(text);
+        expect(Date.now() - started).toBeLessThan(2500);
+    });
+
     test('drop, destroy and use', async () => {
         const { w, bot } = world();
         const remove = (a: BotAction, world: FakeWorld) => {
@@ -2074,7 +2091,7 @@ describe('static data', () => {
 // ── Player trade: two bots and the server between them ──────────────────────
 
 const tradeItem = (slot: number, name: string, count = 1): InventoryItem =>
-    ({ slot, name, level: 1, count, model: 99, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 5, value1: 0, value2: 0 });
+    ({ slot, name, level: 1, count, model: 99, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 5, value1: 0, value2: 0, hand: 0 });
 
 /**
  * Plays the server over two FakeWorlds: the first add opens both windows, every change is a 0xEA on both

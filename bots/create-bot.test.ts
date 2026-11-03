@@ -47,15 +47,15 @@ describe('create-bot', () => {
         expect(env('cbhib').REALM).toBe('hibernia');
     });
 
-    test('the Hibernia default starts armoured (Naturalist, not Guardian)', () => {
+    test('the Hibernia default starts armoured', () => {
         const r = run('cbhibdef', '--realm=hibernia');
         expect(r.code).toBe(0);
         expect(env('cbhibdef')).toMatchObject({ REALM: 'hibernia', CLASS: 'Naturalist', RACE: 'Celt' });
         expect(r.out).not.toContain('warning');
-        // Guardian (and Blademaster/Hero/Champion, which start as Guardian) is still allowed, with a warning.
+        // Blademaster, Hero and Champion start as Guardian, which has its armour in the pinned dump.
         const g = run('cbguard', '--class=Blademaster');
         expect(g.code).toBe(0);
-        expect(g.out).toContain('Guardian gets no starter armour');
+        expect(g.out).not.toContain('no starter armour');
     });
 
     test('--list offers only races create-bot accepts', () => {
@@ -65,7 +65,7 @@ describe('create-bot', () => {
         expect(line('Acolyte')).not.toContain('Inconnu');
         expect(line('Disciple')).not.toContain('Saracen');
         expect(line('Fighter')).toContain('Inconnu');
-        expect(line('Guardian')).toContain('[no starter armour]');
+        expect(line('Guardian')).not.toContain('[no starter armour]');
         expect(line('Naturalist')).not.toContain('[no starter armour]');
         // Every listed pair is one createBot accepts.
         expect(run('cbaco', '--class=Acolyte').code).toBe(0);

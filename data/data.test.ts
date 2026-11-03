@@ -233,19 +233,25 @@ describe('classes and races', () => {
 });
 
 describe('starter equipment', () => {
-    test('melee base classes start armoured, except Guardian whose templates are missing', () => {
-        // starterequipment rows 8/107-112 (Fighter), 64-93 (Viking), 43-90 (Naturalist): all templates exist.
-        for (const [cls, realm] of [['Fighter', 'albion'], ['Viking', 'midgard'], ['Naturalist', 'hibernia']] as const) {
+    test('melee base classes start armoured', () => {
+        // starterequipment rows 8/107-112 (Fighter), 64-93 (Viking), 43-90 (Naturalist), 13-109 (Guardian): all templates exist.
+        for (const [cls, realm] of [['Fighter', 'albion'], ['Viking', 'midgard'], ['Naturalist', 'hibernia'], ['Guardian', 'hibernia']] as const) {
             const { armour } = getStarterArmour(cls, realm);
             expect(armour.map(a => a.itemType).sort(), cls).toEqual([21, 22, 23, 25, 27, 28]);
         }
-        // Rows 13, 14, 76, 77, 78, 109 ('52;44;43;45;') name leaf_tacuil_* but only leaf_tacuil_*3 exist,
-        // so the server skips them (StartupEquipment.cs:82-86): a Guardian gets sword and shield only.
-        const guardian = getStarterArmour('Guardian', 'hibernia');
-        expect(guardian.armour).toEqual([]);
-        expect(guardian.missing).toEqual(expect.arrayContaining(['leaf_tacuil_vest', 'leaf_tacuil_helm', 'leaf_tacuil_boots']));
         expect(getStarterEquipment('Guardian', 'hibernia').filter(s => s.item).map(s => s.templateId))
             .toEqual(expect.arrayContaining(['training_sword_hib', 'training_shield']));
+    });
+
+    test('Guardian and the classes that start as Guardian get one set each', () => {
+        // Rows 13, 14, 76, 77, 78, 109 are class 52 only and rows 125-130 are 43;44;45, so that no class is in both:
+        // with start_as_base_class off, that would put a second set in the backpack.
+        for (const cls of ['Guardian', 'Blademaster', 'Hero', 'Champion']) {
+            const { armour, missing } = getStarterArmour(cls, 'hibernia');
+            expect(armour.map(a => a.itemType).sort(), cls).toEqual([21, 22, 23, 25, 27, 28]);
+            expect(armour.every(a => a.name.startsWith('leaf tacuil')), cls).toBe(true);
+            expect(missing.filter(t => t.startsWith('leaf_tacuil')), cls).toEqual([]);
+        }
     });
 
     test('class-0 rows apply only to classes with rows of their own', () => {

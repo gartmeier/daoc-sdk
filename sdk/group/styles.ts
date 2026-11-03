@@ -12,15 +12,15 @@ export const ANYTIME_STYLE = 0x100;
 type Worn = Pick<InventoryItem, 'slot' | 'objectType'>;
 
 /** The lines whose styles need a weapon in each hand; the tooltip names the line (Style.GetRequiredWeaponName). */
-const DUAL_LINES = new Set(['Dual Wield', 'Left Axe', 'Hand to Hand', 'Celtic Dual']);
+export const DUAL_LINES = new Set(['Dual Wield', 'Left Axe', 'Hand to Hand', 'Celtic Dual']);
 
 /** The spec a weapon type swings with, in the words of a style's tooltip (SkillBase.m_objectTypeToSpec); a left axe counts as an axe (StyleProcessor.CheckWeaponType). */
-const WEAPON_LINES: Partial<Record<number, string>> = {
+export const WEAPON_LINES: Partial<Record<number, string>> = {
     [ObjectType.CrushingWeapon]: 'Crush', [ObjectType.SlashingWeapon]: 'Slash', [ObjectType.ThrustWeapon]: 'Thrust',
     [ObjectType.TwoHandedWeapon]: 'Two Handed', [ObjectType.PolearmWeapon]: 'Polearm', [ObjectType.Staff]: 'Staff', [ObjectType.Flexible]: 'Flexible',
     [ObjectType.Sword]: 'Sword', [ObjectType.Hammer]: 'Hammer', [ObjectType.Axe]: 'Axe', [ObjectType.LeftAxe]: 'Axe', [ObjectType.Spear]: 'Spear',
     [ObjectType.Blades]: 'Blades', [ObjectType.Blunt]: 'Blunt', [ObjectType.Piercing]: 'Piercing', [ObjectType.LargeWeapons]: 'Large Weapons',
-    [ObjectType.CelticSpear]: 'Celtic Spear', [ObjectType.Scythe]: 'Scythe',
+    [ObjectType.CelticSpear]: 'Celtic Spear', [ObjectType.Scythe]: 'Scythe', [ObjectType.HandToHand]: 'Hand to Hand',
 };
 
 /**

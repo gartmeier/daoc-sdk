@@ -12,12 +12,17 @@
 // Accessories have no value1 (their AF/DPS field), so a delve's bonuses are the score. When a delve
 // fails, the item level decides that one comparison: GeneratedUniqueItem scales bonuses with Level,
 // and a plain merchant cloak is level 0.
+//
+// Also weapons: wearing and buying a better one for the character's trained line (learnings/merchants.md
+// "Better weapons").
 
-import { findItemTemplates, findNpcSpawns, getClass, getMerchantItems, realmId, type ClassInfo, type MerchantEntry, type NpcSpawnMatch } from '../../data/index';
+import { findItemTemplates, findNpcSpawns, getClass, getItemTemplate, getMerchantItems, realmId, type ClassInfo, type MerchantEntry, type NpcSpawnMatch } from '../../data/index';
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
-import { EquipmentSlot, isArmor, ObjectType, type InventoryItem, type PlayerState } from '../types';
-import { armorGain, armorSwing, armorValue, statScore, tooHighLevel } from './gear-score';
+import { parseWeaponDelve } from '../delve';
+import { EquipmentSlot, isArmor, isWeapon, ItemHand, ObjectType, type InventoryItem, type ItemBonus, type MerchantItem, type PlayerState, type Specialization, type WeaponDelve } from '../types';
+import { armorGain, armorSwing, armorValue, statScore, tooHighLevel, WEAPON_STAT_SWING, weaponScore, weaponValue } from './gear-score';
+import { DUAL_LINES, WEAPON_LINES } from './styles';
 
 const { Jewelry, Cloak, Neck, Waist, LeftBracer, RightBracer, LeftRing, RightRing } = EquipmentSlot;
 const BRACERS = [LeftBracer, RightBracer] as const;
@@ -325,4 +330,275 @@ export async function buyCloak(m: GearMember, opts: { town?: { x: number; y: num
     const r = await act.buyItem(s.name, { page: pick.page, slot: pick.slot }, 1);
     await act.closeMerchant().catch(() => null);
     return [r.success ? `bought ${pick.name} from ${s.name} ${r.spent}c` : `buy ${pick.name}: ${r.reason} ${r.message}`];
+}
+
+// ── Weapons ─────────────────────────────────────────────────────────────────
+//
+// What a character's lines allow comes from its own specs, what's on offer from the shop window, and
+// what an item does at this level from its delve.
+
+const { RightHand, LeftHand, TwoHand } = EquipmentSlot;
+
+/** A trained line is above the 1 every class starts with. */
+const TRAINED = 2;
+/** Lines with nothing but two-handers: a shield or a left hand can't stop these. */
+const TWO_HANDED_LINES = new Set(['Two Handed', 'Polearm', 'Staff', 'Spear', 'Large Weapons', 'Celtic Spear', 'Scythe']);
+/** The wire calls the line Shield, the DB Shields. */
+const SHIELD_LINE = /^Shields?$/;
+const WEAPON_LINE_NAMES = new Set(Object.values(WEAPON_LINES));
+
+export interface WeaponNeeds {
+    /** The highest trained weapon line: the one styles, weapon skill and variance reward. */
+    line: string;
+    level: number;
+    /** The character trains a left hand, Dual Wield, Left Axe, Celtic Dual or Hand to Hand, over any shield. */
+    left: boolean;
+    /** Nothing depends on the left hand, so a two-hander of the line may compete. */
+    twoHanded: boolean;
+}
+
+/** What a character's specs ask of its hands; null without a trained weapon line (a Healer's hammer stays). */
+export function weaponNeeds(specs: readonly Pick<Specialization, 'name' | 'level'>[]): WeaponNeeds | null {
+    const top = specs.filter(s => WEAPON_LINE_NAMES.has(s.name) && s.level >= TRAINED).sort((a, b) => b.level - a.level)[0];
+    if (!top) return null;
+    const levelOf = (matches: (name: string) => boolean) => Math.max(0, ...specs.filter(s => matches(s.name)).map(s => s.level));
+    const dual = levelOf(n => DUAL_LINES.has(n)), shield = specs.some(s => SHIELD_LINE.test(s.name));
+    // A class with both goes by which it trains: a Blademaster at Shields 20, Celtic Dual 5 keeps the shield.
+    const left = dual >= TRAINED && dual >= levelOf(n => SHIELD_LINE.test(n));
+    return { line: top.name, level: top.level, left, twoHanded: TWO_HANDED_LINES.has(top.name) || (dual < TRAINED && !shield) };
+}
+
+/** The slots a weapon could go in for this character: none off its line, or a two-hander the left hand forbids. */
+export function weaponSlots(w: { objectType: number; hand: number }, needs: WeaponNeeds): number[] {
+    if (!isWeapon(w.objectType) || WEAPON_LINES[w.objectType] !== needs.line) return [];
+    if (w.hand === ItemHand.TwoHanded) return needs.twoHanded ? [TwoHand] : [];
+    return w.hand === ItemHand.FitsLeft && needs.left ? [RightHand, LeftHand] : [RightHand];
+}
+
+/** Right hand and two-hander compete: one of them is out at a time, and putting either on brings it out (GamePlayerInventory.cs:547-560). */
+const handsOf = (slot: number): number[] => (slot === LeftHand ? [LeftHand] : [RightHand, TwoHand]);
+const handsFor = (needs: WeaponNeeds) => (needs.left ? [RightHand, LeftHand] : [RightHand]);
+
+/** Refusals one hand takes from the backpack before it gives up: a weapon another realm's or one the class can't use, and the next best tried. */
+const MAX_WEAPON_TRIES = 4;
+/** How much better a weapon must be to pay for it: the record says it matters most, but not for a few percent. */
+export const WEAPON_STEP = 1.1;
+/** How much better a weapon from the backpack must be to swap: it's free, but rounding shouldn't trade places. */
+export const WEAPON_SWAP = 1.02;
+/** Scores this close count as equal, and the cheaper one wins: above the level clamp, price buys nothing. */
+const WEAPON_TIE = 1.01;
+/** How far a town visit walks for a weapon, as for a cloak. */
+export const WEAPON_RADIUS = CLOAK_RADIUS;
+/** Copper a weapon purchase leaves in the purse. */
+export const WEAPON_RESERVE = CLOAK_RESERVE;
+
+export interface WeaponOptions {
+    /**
+     * Also take what the server says needs a higher level. The requirement only gates the item's
+     * proc (GameLiving.cs:853-855), so at level 20 a level 51 axe still gives its Strength and Axe
+     * bonuses. Leaving these out is the default, so that a town visit doesn't hand endgame gear to
+     * a level 5 character; a bot that wants them says so.
+     */
+    overLevel?: boolean;
+}
+
+/** The server's word on a delved item: its Level Requirement isn't above this character's. */
+const levelAllows = (required: number | null | undefined, level: number, opts: WeaponOptions) => !!opts.overLevel || !required || required <= level;
+
+export interface WeaponRow<T> {
+    item: T;
+    slot: number;
+    score: number;
+    price: number;
+}
+
+/** The row worth having over `current`: the best by score, the cheapest of those about equal; null when it's no step of `step`. */
+export function bestWeapon<T>(rows: readonly WeaponRow<T>[], current: number, step: number): WeaponRow<T> | null {
+    if (!rows.length) return null;
+    const top = Math.max(...rows.map(r => r.score));
+    if (top <= 0 || top < current * step) return null;
+    return rows.filter(r => r.score * WEAPON_TIE >= top).sort((a, b) => a.price - b.price || b.score - a.score)[0]!;
+}
+
+/** The most a shop item can score before its delve: the window's DPS at full quality, under the cap once a delve has shown one, with the best bonuses. */
+function ceiling(i: Pick<MerchantItem, 'value1' | 'spdAbs' | 'hand'>, needs: WeaponNeeds, cap: number): number {
+    const value = weaponValue({ clampedDps: Math.min(i.value1 / 10, cap), speed: i.spdAbs / 10, quality: 100, condition: 100 }, i.hand === ItemHand.TwoHanded ? needs.level : null);
+    return value * (1 + WEAPON_STAT_SWING);
+}
+
+type WeaponActions = Pick<BotActions, 'equipItem' | 'buyItem' | 'closeMerchant' | 'walkTo' | 'delveItem' | 'delveMerchantItem' | 'openMerchant'>;
+/** A group member or party member (see GearMember) that can also shop and read its specs. */
+export type WeaponMember = { sdk: Pick<BotSDK, 'getEquipment' | 'getInventory' | 'getPlayer' | 'getSkills' | 'getMerchant'> } & ({ actions: WeaponActions } | { bot: WeaponActions });
+
+const weaponActions = (m: WeaponMember) => ('actions' in m ? m.actions : m.bot);
+
+function scoreOf(m: WeaponMember, needs: WeaponNeeds, slot: number, w: WeaponDelve, bonuses: readonly ItemBonus[]): number {
+    const p = m.sdk.getPlayer()!;
+    const c = getClass(p.className, p.realm);
+    return weaponScore(weaponValue(w, slot === TwoHand ? needs.level : null), c ? statScore(bonuses, c, p.level) : null);
+}
+
+/**
+ * What's worn in these hands is worth, by its delve. Off the line it's 0: it swings at spec 1 with no
+ * styles, so anything on the line replaces it. A shield is not a weapon here. A worn weapon that
+ * won't delve is Infinity: nothing replaces what can't be compared.
+ */
+async function wornScore(m: WeaponMember, needs: WeaponNeeds, slot: number, out: string[]): Promise<number> {
+    let best = 0;
+    for (const w of m.sdk.getEquipment().filter(e => handsOf(slot).includes(e.slot))) {
+        if (WEAPON_LINES[w.objectType] !== needs.line) continue;
+        const r = await weaponActions(m).delveItem(w);
+        const facts = r.success ? parseWeaponDelve(r.lines) : null;
+        if (!facts) {
+            out.push(`delve ${w.name}: ${r.reason ?? 'no weapon lines'}; keeping it`);
+            return Infinity;
+        }
+        best = Math.max(best, scoreOf(m, needs, w.slot, facts, r.bonuses));
+    }
+    return best;
+}
+
+const round = (n: number) => String(Number(n.toFixed(2)));
+
+/**
+ * Wear the weapons in the backpack that beat what's worn, on the character's trained line. What the
+ * server refuses stays there and isn't tried again in this call, and the next best gets its turn.
+ */
+export async function wearWeapons(m: WeaponMember, opts: WeaponOptions = {}): Promise<string[]> {
+    const p = m.sdk.getPlayer();
+    const needs = weaponNeeds(m.sdk.getSkills().specializations);
+    if (!p || p.isDead || !needs) return [];
+    const out: string[] = [];
+    const act = weaponActions(m);
+    const settled = new Set<number>();
+    for (const hand of handsFor(needs)) {
+        for (let tries = 0; tries < MAX_WEAPON_TRIES; tries++) {
+            const rows: WeaponRow<InventoryItem>[] = [];
+            for (const item of m.sdk.getInventory().filter(i => i.slot >= 40 && i.slot <= 79 && !settled.has(i.slot))) {
+                const to = weaponSlots(item, needs).find(s => handsOf(hand).includes(s));
+                if (to === undefined) continue;
+                const r = await act.delveItem(item);
+                const facts = r.success ? parseWeaponDelve(r.lines) : null;
+                if (facts && levelAllows(r.levelRequirement, p.level, opts)) rows.push({ item, slot: to, score: scoreOf(m, needs, to, facts, r.bonuses), price: 0 });
+            }
+            const current = await wornScore(m, needs, hand, out);
+            const pick = bestWeapon(rows, current, WEAPON_SWAP);
+            if (!pick) break;
+            const r = await act.equipItem(pick.item, { slot: pick.slot });
+            settled.add(pick.item.slot);
+            if (r.success) {
+                out.push(`wield ${pick.item.name}, score ${round(pick.score)} over ${round(current)}`);
+                break;
+            }
+            out.push(`can't wield ${pick.item.name}: ${r.message}`);
+        }
+    }
+    return out;
+}
+
+export interface WeaponSeller {
+    spawn: NpcSpawnMatch;
+    /** What it sells that fits, from static data: this says where to walk. What to buy comes from the window there. */
+    weapons: MerchantEntry[];
+}
+
+/** The nearest seller of each list with something for these needs, nearest first. Our realm's or none, and only GameMerchant, as nearestCloakSeller. */
+export function weaponSellers(p: Pick<PlayerState, 'regionId' | 'x' | 'y' | 'realm' | 'level'>, needs: WeaponNeeds, radius = WEAPON_RADIUS, opts: WeaponOptions = {}): WeaponSeller[] {
+    const realm = realmId(p.realm);
+    const lists = new Set<string>();
+    const out: WeaponSeller[] = [];
+    for (const spawn of findNpcSpawns({ regionId: p.regionId, near: p, radius, classType: /^GameMerchant$/ })) {
+        const list = spawn.itemsListTemplateId;
+        if (!list || lists.has(list) || (spawn.realm !== 0 && spawn.realm !== realm)) continue;
+        lists.add(list);
+        const weapons = getMerchantItems(list).filter(e => {
+            const t = getItemTemplate(e.itemTemplateId);
+            return !!t && weaponSlots(t, needs).length > 0 && levelAllows(t.levelRequirement, p.level, opts) && !foreignTo(realm, list, e);
+        });
+        if (weapons.length) out.push({ spawn, weapons });
+    }
+    return out;
+}
+
+/**
+ * Whether a shop's item is another realm's, which the server won't let on ("You cannot equip an item
+ * from another realm!"): 449 of 5,852 weapons on realm merchants, among them Midgard's great axes and
+ * war axes, whose templates are Albion's. The window calls them usable and doesn't say the realm, so
+ * only the item template can.
+ */
+function foreignTo(realm: number, list: string, item: Pick<MerchantItem, 'page' | 'slot'>): boolean {
+    const entry = getMerchantItems(list).find(e => e.page === item.page && e.slot === item.slot);
+    const t = entry && getItemTemplate(entry.itemTemplateId);
+    return !!t && t.realm !== 0 && t.realm !== realm;
+}
+
+/** Sellers one call walks to. */
+const MAX_WEAPON_SELLERS = 3;
+
+/**
+ * Buy what beats what's worn by WEAPON_STEP, and wield it. The trained line picks the goods
+ * (weaponNeeds), the window says what's usable and what it costs, and each delve what it's worth at
+ * this level, so a weapon above the level clamp costs more for nothing and loses to the cheaper one.
+ * Game failures come back as log strings; no line, no seller or no step is no purchase. As buyCloak,
+ * a caller whose teleport can fail passes `town`: outside CLOAK_TOWN_RANGE it buys nothing.
+ */
+export async function buyWeapons(m: WeaponMember, opts: WeaponOptions & { town?: { x: number; y: number }; radius?: number; reserve?: number } = {}): Promise<string[]> {
+    const p = m.sdk.getPlayer();
+    const needs = weaponNeeds(m.sdk.getSkills().specializations);
+    if (!p || p.isDead || !needs) return [];
+    const sellers = weaponSellers(p, needs, opts.radius, opts).slice(0, MAX_WEAPON_SELLERS);
+    if (!sellers.length) return [];
+    if (opts.town && Math.hypot(p.x - opts.town.x, p.y - opts.town.y) > CLOAK_TOWN_RANGE) return ['no weapon: not in town'];
+    const act = weaponActions(m);
+    const out: string[] = [];
+    for (const hand of handsFor(needs)) {
+        const current = await wornScore(m, needs, hand, out);
+        const rows: WeaponRow<{ seller: string; item: MerchantItem }>[] = [];
+        let cap = Infinity;
+        for (const { spawn: s } of sellers) {
+            const here = m.sdk.getPlayer()!;
+            if (Math.hypot(here.x - s.x, here.y - s.y) > 300) {
+                const w = await act.walkTo(s.x, s.y, { z: s.z, tolerance: 150 });
+                if (!w.success) { out.push(`walk to ${s.name}: ${w.reason} ${w.message}`); continue; }
+            }
+            const shop = await act.openMerchant(s.name);
+            if (!shop.success) { out.push(`${s.name}: ${shop.reason} ${shop.message}`); continue; }
+            // Only eMerchantWindowType.Normal (0) charges copper. The static data that chose this seller can be older than the server's.
+            if (m.sdk.getMerchant()?.windowType) { out.push(`${s.name}: doesn't take copper`); continue; }
+            const budget = m.sdk.getPlayer()!.money.totalCopper - (opts.reserve ?? WEAPON_RESERVE);
+            const fits = (i: MerchantItem) => weaponSlots(i, needs).find(to => handsOf(hand).includes(to));
+            const goods = shop.items.filter(i => i.usable && i.price <= budget && fits(i) !== undefined && !foreignTo(realmId(p.realm), s.itemsListTemplateId!, i)).sort((a, b) => b.value1 - a.value1);
+            let delves = 0;
+            for (const item of goods) {
+                // Under what's already found, however good: its delve couldn't change the answer.
+                if (ceiling(item, needs, cap) * WEAPON_TIE < Math.max(current * WEAPON_STEP, ...rows.map(r => r.score))) continue;
+                if (delves++ >= MAX_DELVES) break;
+                const r = await act.delveMerchantItem(s.name, { page: item.page, slot: item.slot });
+                const facts = r.success ? parseWeaponDelve(r.lines) : null;
+                if (!facts) { out.push(`delve ${item.name}: ${r.reason ?? 'no weapon lines'}`); continue; }
+                if (!levelAllows(r.levelRequirement, p.level, opts)) continue;
+                if (facts.clampedDps < facts.baseDps) cap = Math.min(cap, facts.clampedDps);
+                const to = fits(item)!;
+                rows.push({ item: { seller: s.name, item }, slot: to, score: scoreOf(m, needs, to, facts, r.bonuses), price: item.price });
+            }
+        }
+        const pick = bestWeapon(rows, current, WEAPON_STEP);
+        if (!pick) {
+            if (rows.length) out.push(`no weapon step: best ${round(Math.max(...rows.map(r => r.score)))}, worn ${round(current)}`);
+            continue;
+        }
+        const { seller, item } = pick.item;
+        const buy = await act.buyItem(seller, { page: item.page, slot: item.slot }, 1);
+        if (!buy.success) { out.push(`buy ${item.name}: ${buy.reason} ${buy.message}`); continue; }
+        const bought = buy.itemsGained[0];
+        const r = bought ? await act.equipItem(bought, { slot: pick.slot }) : null;
+        out.push(`bought ${item.name} from ${seller} ${buy.spent}c, score ${round(pick.score)} over ${round(current)}${r?.success ? `, wielded in slot ${pick.slot}` : `; not wielded: ${r?.message ?? 'not in the backpack'}`}`);
+    }
+    await act.closeMerchant().catch(() => null);
+    return out;
+}
+
+/** Wear the best from the backpack, then buy what still beats it. */
+export async function weaponUpgrades(m: WeaponMember, opts: Parameters<typeof buyWeapons>[1] = {}): Promise<string[]> {
+    return [...await wearWeapons(m, opts), ...await buyWeapons(m, opts)];
 }
