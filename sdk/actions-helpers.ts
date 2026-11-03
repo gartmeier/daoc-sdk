@@ -74,6 +74,11 @@ export function isCrowdControlled(text: string): boolean {
  * 4-5.4 s (SPD_ABS 40-54 in itemtemplate.sql), so a shorter window drops the target between two
  * swings at the same victim. attackers() keeps an NPC on us this long after a hit too.
  */
+/** A spell's message template (Message1..4) as a pattern on what the client reads; `{0}` captures the name. */
+export function spellMessagePattern(template: string): RegExp {
+    return new RegExp(`^${template.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace('\\{0\\}', '(.+?)')}$`, 'i');
+}
+
 export const PLAYER_AIM_MS = 6000;
 
 /** Melee refusals: GamePlayer.Attack.*, Skill.Ability.*, AbstractServerRules. */

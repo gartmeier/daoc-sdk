@@ -6,6 +6,7 @@
 // (buff, rest). A material orders change interrupts an interruptible behaviour
 // (walks, fights, rests) so the member re-decides at once; casts finish.
 
+import type { CcKind } from './cc';
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import type { PlayerState } from '../types';
@@ -97,13 +98,13 @@ export class MemberContext<S = any> {
         });
     }
     note(text: string): void { this.agent.board.emit({ at: Date.now(), kind: 'note', member: this.name, text }); }
-    /** Tell the group a mob is crowd-controlled for `durationMs`. */
-    markCc(targetId: number, kind: string, durationMs: number): void {
-        this.agent.board.markCc(targetId, this.me().regionId, this.name, kind, durationMs);
+    /** Tell the group our crowd control landed on it, for at most `durationMs`; `serverName` is the name in the server's line for that (CastResult.landedOn). */
+    markCc(targetId: number, kind: CcKind, durationMs: number, serverName?: string): void {
+        this.agent.board.markCc(targetId, this.me().regionId, this.name, kind, durationMs, Date.now(), serverName);
     }
-    /** Tell the group crowd control can't land on it for `durationMs` (it answered "immune"). */
-    markCcImmune(targetId: number, durationMs: number): void {
-        this.agent.board.markCcImmune(targetId, this.me().regionId, durationMs);
+    /** Tell the group this kind can't land on it for up to `durationMs` (the server answered so). */
+    markCcImmune(targetId: number, kind: CcKind, durationMs: number): void {
+        this.agent.board.markCcImmune(targetId, this.me().regionId, kind, durationMs);
     }
 }
 

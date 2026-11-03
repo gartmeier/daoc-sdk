@@ -5,6 +5,7 @@
 // decide() runs every coordinator tick on the shared picture. It only writes
 // orders; members carry them out with their behaviour lists.
 
+import { canControl } from './cc';
 import { conLevel } from '../actions-helpers';
 import { planBase, planRejects, segDist, type BasePlan } from './baseplan';
 import { defaultBehaviors, type TacticsSettings } from './behaviors';
@@ -215,17 +216,23 @@ export function pickFocus(threats: Contact[], tank: MemberReport | undefined): C
 }
 
 /** One mezzer per add, keeping assignments that still hold; supports first, then nukers, then healers. */
-export function assignCc(adds: Contact[], members: MemberReport[], current: { targetId: number; by: string }[]): { targetId: number; by: string }[] {
+export function assignCc(adds: Contact[], members: MemberReport[], current: { targetId: number; by: string }[], now = Date.now()): { targetId: number; by: string }[] {
     const order = ['support', 'nuker', 'healer', 'melee', 'tank'];
-    const free = members.filter(m => !m.isDead && m.capabilities.cc).sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role)).map(m => m.name);
+    const free = members.filter(m => !m.isDead && m.capabilities.cc).sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
+    // Nobody is sent at a target immune to everything it casts: a root still holds what is immune to a mezz.
+    const able = (m: MemberReport, t: Contact) => canControl(t, m.capabilities.ccKinds, now);
     const out: { targetId: number; by: string }[] = [];
     for (const a of current) {
-        if (adds.some(t => t.objectId === a.targetId) && free.includes(a.by)) { out.push(a); free.splice(free.indexOf(a.by), 1); }
+        const t = adds.find(x => x.objectId === a.targetId);
+        const i = free.findIndex(m => m.name === a.by);
+        if (t && i >= 0 && able(free[i]!, t)) { out.push(a); free.splice(i, 1); }
     }
     for (const t of adds) {
-        if (!free.length) break;
         if (out.some(a => a.targetId === t.objectId)) continue;
-        out.push({ targetId: t.objectId, by: free.shift()! });
+        const i = free.findIndex(m => able(m, t));
+        if (i < 0) continue;
+        out.push({ targetId: t.objectId, by: free[i]!.name });
+        free.splice(i, 1);
     }
     return out;
 }
@@ -279,7 +286,7 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
             return { phase: 'retreat', focus: null, cc: [], puller: null, retreatTo: to, reason: `retreat: ${lost}` };
         }
         if (lost && o.phase === 'retreat') return { phase: 'retreat', reason: o.reason };
-        const cc = assignCc(threats.filter(t => t.objectId !== focus.objectId && !t.cc && (t.ccImmuneUntil ?? 0) <= now), alive, o.cc);
+        const cc = assignCc(threats.filter(t => t.objectId !== focus.objectId && !t.cc), alive, o.cc, now);
         const why = kept ? `fighting ${focus.name} (${focus.hp}%)` : `${focus.name} L${focus.level} attacks ${focus.target ?? 'the group'}`;
         return { phase: 'engage', focus: focus.objectId, puller: null, cc, retreatTo: null, reason: threats.length > 1 ? `${why}, ${threats.length - 1} more attacking` : why };
     }

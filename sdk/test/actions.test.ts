@@ -9,6 +9,7 @@ import { ChatHistory } from '../chat-history';
 import { setDefaultPathProvider, StraightLinePathProvider, type PathProvider } from '../pathfinding';
 import { executionContext, throwIfExecutionAborted } from '../execution-context';
 import type { Build } from '../../data/builds/types';
+import { getSpells } from '../../data/index';
 import { specKey } from '../../data/spec-names';
 import type { ActionResult, BotAction, BotWorldState, GameMessage, InventoryItem, NearbyNpc, NearbyPlayer, PlayerState, Spell } from '../types';
 import { makeMessage, makeNpc, makeObject, makePlayer, makePlayerObj, makeState } from './fixtures';
@@ -1251,6 +1252,31 @@ describe('attack / castSpell / attackers against players', () => {
             expect(await bot.castSpell(drain, 301)).toMatchObject({ success: false, reason: 'crowd_controlled', retryAfterMs: 2000, message: text });
             expect(Date.now() - started).toBeLessThan(1500);
         }
+    });
+
+    test('castSpell: a spell with its own line says whether it landed, and on whom: an enemy player by its real name', async () => {
+        const row = getSpells().find(x => x.name === 'Diversion')!;
+        const mezz = { name: 'Diversion', level: 10, internalId: row.id, lineName: 'Pacification', lineIndex: 2, spellIndex: 0, cooldownRemaining: 0 };
+        const { w, bot } = world({ skills: { ...skills, spells: [mezz] }, nearbyPlayers: [enemy()] });
+        const answer = (...lines: [string, GameMessage['type']][]) => {
+            w.handlers.castSpell = (_a, world) => {
+                setTimeout(() => world.combat({ kind: 'spellCast', attackerObjectId: world.player.objectId, targetObjectId: null, castTimeMs: 50 }), 10);
+                setTimeout(() => {
+                    world.message('You cast a Diversion spell!', { type: 'spell' });
+                    for (const [text, type] of lines) world.message(text, { type });
+                }, 70);
+            };
+        };
+        expect(row.effectStarts).toBe('{0} is entranced!');
+        answer(['Oisin is entranced!', 'spell']);
+        expect(await bot.castSpell(mezz, 301)).toMatchObject({ success: true, effectLanded: true, landedOn: 'Oisin', effectImmune: false, alreadyOn: false });
+        answer(['Oisin already has that effect. Wait until it expires. Spell failed.', 'spell']);
+        const again = await bot.castSpell(mezz, 301);
+        expect(again).toMatchObject({ success: true, alreadyOn: true, effectLanded: false });
+        expect(again.message).toBe('Cast Diversion on Norseman (already has it)');
+        // Nothing about it from the server: the cast went off, and no more than that.
+        answer();
+        expect(await bot.castSpell(mezz, 301)).toMatchObject({ success: true, effectLanded: false });
     });
 
     test('castSpell: "Your target is immune to this effect!" after "You cast" is a cast with effectImmune, not resisted', async () => {

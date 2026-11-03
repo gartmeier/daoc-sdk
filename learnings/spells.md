@@ -65,6 +65,46 @@ const c = await bot.castSpell(nuke, mob);       // target: NPC, player, name, ob
 - **A nuke off your spec line lands anywhere from 20.8 % of its base.** The minimum follows the spec of the spell's own line (`SpellHandler.CalculateLowerVarianceBound`): an Enchanter's level 24 Light baseline nuke at Light 1 hits for 26-127, mean 75, while Light 22's nuke of the same level range hits for 140. `/combatstats on` prints the base, the roll and its bounds for each hit.
 - **Damage-add procs and other spells' DoT ticks during a cast** ("You hit X for N extra damage!") are no longer taken as completion or counted as damage (unit-tested, not re-run live).
 
+## Crowd control: what repeats do
+
+**A repeat doesn't shorten anything on a player. It does on a monster, for a mezz or a stun, and never for a root.** Verified live on 2026-11-03 with `sdk/test/live/cc-live.ts` (throwaway stack, level 12 Healers and a Shaman).
+
+| | Player | Monster |
+|---|---|---|
+| **Mezz** | Full length. While it's on and for 60 s after it ends: "Your target is immune to this effect!" | Each repeat within 60 s of the first is shorter: full, then 1/2, 1/4, 1/6, ... |
+| **Stun** | The same, on its own timer | The same as a mezz, on its own timer. Live, a 7 s stun: 7, 3.5, 1.75, 1.2, then immune |
+| **Root or snare** | Full length, then 60 s of immunity. While it's on, a second cast answers "{name} already has that effect" | No limit, no shortening, no immunity |
+
+- **Immunity is one per kind, on the target, whoever cast it** (`EffectHelper.cs:275-292`): a mezz, stun and root can all follow one another at once, as seen live. Roots and snares share one; a style's stun shares the spell stun's. A pet's stun gives none (`ECSGameSpellEffect.cs:73`).
+- **It is a full refusal, not a reduction, and it starts when the effect ends** (`EffectListComponent.cs:936`, `ECSGameSpellEffect.cs:66-80`): ended by time or broken, the same. Live: a mezz's end at t = 0, still immune at 57.2 s, landed at 61.3 s. Power is spent all the same (`ImmunityEffectSpellHandler.cs:16`).
+- **The 60 s for a mezz and a stun is a server property,** `immunity_timer_flat_length`, with `immunity_timer_use_adaptive` off (`CrowdControlECSEffect.cs:14-21`); a root's is fixed (`ECSGameEffect.cs:54`). A client can't read either.
+- **The monster rule:** the first mezz or stun opens a 60 s window, not extended by more (`CrowdControlECSEffect.cs:79, 115`). A repeat lasts `duration / (2 * count)`, and under 1 s it answers immune (`ECSImmunityEffect.cs:38-56`). So a 28 s mezz takes 14 repeats. **A repeat onto one still on replaces it, without a word to anyone:** live, a mezz cast 6 s into a 28 s one ended 14 s after its own landing, so a second mezz cut about 8 s off. A mezz on a monster below 75 % health answers "Your target is enraged and resists the spell!" (`CCSpellHandler.cs:174`).
+- **A root holds for half its length, then wears off** to full speed at its end (`ECSGameSpellEffect.cs:32`, `EffectService.cs:227-244`). Live, a 30 s root: 2 units/s for 15.3 s, full speed at 30.1 s. A rooted player can still swing and cast.
+
+**What breaks what** (`GameLiving.cs:1676-1731`):
+
+| | Melee hit | Melee that misses, or is parried, blocked or evaded | A spell's damage | A stun, root, or resist debuff spell |
+|---|---|---|---|---|
+| Mezz | breaks | breaks | breaks | breaks, **even a member's own root** |
+| Root or snare | breaks (not an `UnbreakableSpeedDecrease`) | holds | breaks | holds |
+| Stun | holds | holds | holds | holds |
+
+**How long it really lasts varies:** a target's resist to the spell's damage type shortens it, and the caster's hit chance moves it (`ImmunityEffectSpellHandler.cs:36`, `CCSpellHandler.cs:76-90`). Up to 4 times the spell's duration. Don't take the spell's number as the end.
+
+**What the server tells a client:**
+
+| Line | Who gets it | `castSpell` |
+|---|---|---|
+| Landed, the spell's `Message2` ("{0} is entranced!", `SpellInfo.effectStarts`) | the caster at any range, others within 512 | `effectLanded: true`, `landedOn` |
+| "Your target is immune to this effect!" | the caster | `effectImmune` |
+| "{0} already has that effect. Wait until it expires. Spell failed." (`EffectListComponent.cs:595`) | the caster | `alreadyOn` |
+| A resist | the caster | `resisted` (a root rolls this before its immunity: `SpeedDecreaseSpellHandler` checks in `ApplyEffectOnTarget`, so a resist says nothing about it) |
+| Nothing: a monster's repeat onto one still on | | `effectLanded: false` |
+| Ended, the spell's `Message4` ("{0} is no longer entranced.", `effectEnds`; empty for most roots) | **only those within 512 of the target** (`WorldMgr.INFO_DISTANCE`); the caster gets no copy of its own | |
+
+- **All of these still count as `success: true`,** since the cast went off. To know it landed, read the fields above.
+- **The name is its real one,** which an enemy's entry in the world state never shows: that goes by race. `landedOn` is how to learn it.
+
 ## Verified live
 
 - Elementalist: a self buff, and a direct-damage nuke for 1–4 damage.

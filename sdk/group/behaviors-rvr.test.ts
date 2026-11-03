@@ -1,6 +1,7 @@
 // Behaviours against enemy players, run on a stub MemberContext: a fixed picture and orders,
 // our own client's view (getNearbyPlayer / getNearbyNpc), and bot actions that answer with
 // canned results. Region 9999 has no spawns, so safeSpot and safePath see no danger.
+import type { CcKind } from './cc';
 import { describe, expect, test } from 'bun:test';
 import type { CastResult, KillPlayerOptions, KillPlayerResult } from '../actions';
 import { executionContext } from '../execution-context';
@@ -37,7 +38,7 @@ interface StubOptions {
 function stub(o: StubOptions) {
     const calls = { killPlayer: [] as { id: number; opts: KillPlayerOptions }[], castSpell: [] as number[], walkTo: [] as Point[], attack: [] as number[] };
     const results: { kind: string; success: boolean; reason?: string; targetId: number | null }[] = [];
-    const marks: { targetId: number; kind: string; ms: number }[] = [];
+    const marks: { targetId: number; kind: string; ms: number; serverName?: string }[] = [];
     const skips: string[] = [];
     const meReport = report(o.name, { role: o.role, regionId: R, x: o.at.x, y: o.at.y, level: 20, objectId: 1 });
     const pic = picture([meReport, ...(o.members ?? [])], o.contacts ?? [], { phase: 'engage', anchor: ANCHOR, facing: { x: ANCHOR.x + 1000, y: ANCHOR.y }, ...o.orders });
@@ -75,7 +76,7 @@ function stub(o: StubOptions) {
     };
     const ctx = {
         name: o.name, role: o.role, settings: o.settings ?? LEASHED, memory: new Map<string, any>(), sdk, bot,
-        spells: { cc: () => ({ spell: { name: 'Mesmerize' }, kind: 'mezz', duration: 30 }), heal: () => null, nuke: () => null },
+        spells: { cc: (opts: { except?: string[] } = {}) => (opts.except?.includes('mezz') ? null : { spell: { name: 'Mesmerize' }, kind: 'mezz', duration: 30 }), capabilities: () => ({ ccKinds: ['mezz'] }), heal: () => null, nuke: () => null },
         me, picture: () => pic, orders: () => pic.orders, members: () => pic.members,
         member: (n: string) => pic.members.find(m => m.name === n),
         tank: () => pic.members.find(m => m.role === 'tank' && !m.isDead),
@@ -87,8 +88,8 @@ function stub(o: StubOptions) {
         skip: (reason: string) => { skips.push(reason); return false as const; },
         result: (kind: string, r: { success: boolean; reason?: string }, targetId: number | null = null) => { results.push({ kind, success: r.success, reason: r.reason, targetId }); },
         note: () => {},
-        markCc: (targetId: number, kind: string, ms: number) => { marks.push({ targetId, kind, ms }); },
-        markCcImmune: (targetId: number, ms: number) => { const c = pic.contacts.find(x => x.objectId === targetId); if (c) c.ccImmuneUntil = Date.now() + ms; },
+        markCc: (targetId: number, kind: string, ms: number, serverName?: string) => { marks.push({ targetId, kind, ms, ...(serverName ? { serverName } : {}) }); },
+        markCcImmune: (targetId: number, kind: CcKind, ms: number) => { const c = pic.contacts.find(x => x.objectId === targetId); if (c) (c.ccImmune ??= {})[kind] = Date.now() + ms; },
     } as unknown as MemberContext<TacticsSettings>;
     return { ctx, calls, results, marks, skips, pic };
 }
@@ -291,16 +292,16 @@ describe('crowdControl: immunity and refusals', () => {
         }));
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
         expect(s.marks).toEqual([]);
-        expect((s.ctx.memory.get('ccImmune') as Map<string, number>).has(ckey(s.pic.contacts[1]!))).toBe(true);
-        // ... and the board knows, so the coordinator assigns it to nobody else.
-        expect(s.pic.contacts[1]!.ccImmuneUntil).toBeGreaterThan(Date.now() + 50_000);
+        // The board knows, so the coordinator assigns it to nobody else, and the report calls it what it was.
+        expect(s.pic.contacts[1]!.ccImmune!.mezz).toBeGreaterThan(Date.now() + 50_000);
+        expect(s.results[0]).toMatchObject({ kind: 'cc', success: false, reason: 'immune' });
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(false);
         expect(s.calls.castSpell).toEqual([52]);
     });
 
     test('a target another member found immune (the board\'s mark) is left alone too', async () => {
         const s = cc(async () => ({ success: true, messages: [] as CastResult['messages'] }));
-        s.pic.contacts[1]!.ccImmuneUntil = Date.now() + 30_000;
+        s.pic.contacts[1]!.ccImmune = { mezz: Date.now() + 30_000 };
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(false);
         expect(s.calls.castSpell).toEqual([]);
     });
@@ -311,7 +312,7 @@ describe('crowdControl: immunity and refusals', () => {
         const t0 = Date.now();
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
         expect(Date.now() - t0).toBeGreaterThanOrEqual(290);
-        expect([...(s.ctx.memory.get('ccImmune') as Map<string, number>).keys()]).toEqual([]);
+        expect(s.pic.contacts[1]!.ccImmune).toBeUndefined();
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
         expect(s.calls.castSpell).toEqual([52, 52]);
     });
@@ -324,7 +325,61 @@ describe('crowdControl: immunity and refusals', () => {
         expect(waited).toBeGreaterThanOrEqual(290);
         expect(waited).toBeLessThan(1000);
         expect(s.marks).toEqual([]);
-        expect([...(s.ctx.memory.get('ccImmune') as Map<string, number>).keys()]).toEqual([]);
+        expect(s.pic.contacts[1]!.ccImmune).toBeUndefined();
+    });
+
+    test('the server named what it landed on: on the board, for the whole spell', async () => {
+        const s = cc(async () => ({ success: true, effectLanded: true, landedOn: 'Oisin' }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks).toEqual([{ targetId: 52, kind: 'mezz', ms: 30_000, serverName: 'Oisin' }]);
+        expect(s.results[0]).toMatchObject({ success: true });
+    });
+
+    test('"already has that effect": held for up to the spell and the immunity after it, no mezz of ours on the board', async () => {
+        const s = cc(async () => ({ success: true, alreadyOn: true, effectLanded: false }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks).toEqual([]);
+        expect(s.pic.contacts[1]!.ccImmune!.mezz).toBeGreaterThan(Date.now() + 85_000);
+        expect(s.results[0]).toMatchObject({ success: false, reason: 'already_on' });
+    });
+
+    test('resisted: nothing on the board, and it may be tried again at once', async () => {
+        const s = cc(async () => ({ success: true, resisted: true, effectLanded: false }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks).toEqual([]);
+        expect(s.pic.contacts[1]!.ccImmune).toBeUndefined();
+        expect(s.results[0]).toMatchObject({ success: false, reason: 'resisted' });
+    });
+
+    test('a player with no line from the server: not marked as held', async () => {
+        const s = cc(async () => ({ success: true, effectLanded: false }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks).toEqual([]);
+        expect(s.results[0]).toMatchObject({ success: false, reason: 'no_effect' });
+    });
+
+    test('a monster with no line: the repeat replaced the old effect without a word, so it holds', async () => {
+        const s = cc(async () => ({ success: true, effectLanded: false }));
+        s.pic.contacts[1]!.kind = 'npc';
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks.map(m => m.kind)).toEqual(['mezz']);
+    });
+
+    test('a target held or being cast at by another member is left alone, and an immune one is skipped for a free one', async () => {
+        const claimed = cc(undefined);
+        claimed.pic.members.push(report('Bard', { role: 'support', activity: { kind: 'cc', targetId: 52, detail: '', since: Date.now() } }));
+        expect(await crowdControl({ assignedOnly: true }).run(claimed.ctx)).toBe(false);
+        expect(claimed.calls.castSpell).toEqual([]);
+
+        const held = cc(undefined);
+        held.pic.contacts[1]!.cc = { by: 'Bard', kind: 'mezz', until: Date.now() + 10_000 };
+        expect(await crowdControl({ assignedOnly: true }).run(held.ctx)).toBe(false);
+        expect(held.calls.castSpell).toEqual([]);
+
+        const next = cc(undefined, { contacts: [foe(51, 10_300, 10_000), foe(52, 11_000, 10_500), foe(54, 10_800, 10_800)], orders: { focus: 51, cc: [{ targetId: 52, by: 'Healer' }, { targetId: 54, by: 'Healer' }] } });
+        next.pic.contacts[1]!.ccImmune = { mezz: Date.now() + 10_000 };
+        expect(await crowdControl({ assignedOnly: true }).run(next.ctx)).toBe(true);
+        expect(next.calls.castSpell).toEqual([54]);
     });
 
     test('an assignment our client can\'t see gives way to the next one it can', async () => {

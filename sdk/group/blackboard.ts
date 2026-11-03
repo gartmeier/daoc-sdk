@@ -28,6 +28,7 @@
 
 import type { BotWorldState, PlayerState, Realm } from '../types';
 import { isKillable, PLAYER_AIM_MS } from '../actions-helpers';
+import { CC_IMMUNE_MS, npcCcLanded, readCcEnds, serverNameKey, type CcEnd, type CcImmunity, type CcKind, type NpcCcRun } from './cc';
 import type { Activity, Capabilities, MemberCombat, Contact, GroupEvent, GroupPicture, MemberReport, Orders, OrdersUpdate, Role, Sighting } from './types';
 
 export interface BlackboardOptions {
@@ -80,9 +81,15 @@ export interface Observation {
     hits?: number[];
     /** While the member is dead: who killed it; null when it is alive or the killer is unknown. */
     killer?: Killer | null;
+    /** Crowd control the server told this member has ended, from the last CC_END_MS of messages. */
+    ccEnds?: CcEnd[];
 }
 
 const SWING_WINDOW_MS = 2000;
+/** A message about crowd control ending is reported this long: the board goes by its time, so repeats change nothing. */
+const CC_END_MS = 3000;
+/** A rooted player creeps at 1 % speed, about 2 units/s: this far from where the root landed means it broke. */
+const ROOT_BROKEN_MOVE = 120;
 /** An enemy player's target: its latest swing or hostile spell this recent (longer than a slow weapon's swing). */
 const PLAYER_TARGET_MS = PLAYER_AIM_MS;
 /** A monster the server names no target for: its latest hostile spell effect this recent. */
@@ -192,7 +199,8 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         effects: state.effects.map(e => e.name), capabilities: self.capabilities, activity: self.activity, combat: self.combat,
         at: state.timestamp,
     };
-    return { report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null };
+    const ccEnds = readCcEnds(state.gameMessages ?? [], state.timestamp - CC_END_MS);
+    return { report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, ...(ccEnds.length ? { ccEnds } : {}) };
 }
 
 /**
@@ -257,13 +265,15 @@ const DEATH_ECHO_MS = 6000;
  * the server shares a player kill among all who damaged it (PlayerKillRewardProcessor.cs).
  * `deathEchoUntil`: it inherited a dead mob's id; deaths reported for that id until then are the old mob's.
  */
-type InternalContact = Contact & { engaged: boolean; hit: boolean; ccSince: number; lastHostile: number; deathEchoUntil: number };
+type InternalContact = Contact & { engaged: boolean; hit: boolean; ccSince: number; ccAt?: { x: number; y: number }; ccRuns?: Partial<Record<CcKind, NpcCcRun>>; lastHostile: number; deathEchoUntil: number };
 
 export class Blackboard {
     private readonly reports = new Map<string, MemberReport>();
     private readonly contacts = new Map<string, InternalContact>();
     /** Recently died, by key, with where and as what: ignore its own late sightings (ids are reused at once). */
     private readonly killed = new Map<string, { at: number; name: string; x: number; y: number; hp: number; player: boolean }>();
+    /** What we knew about crowd control on a contact gone from view: it outlasts forgetAfterMs, so it comes back with it. Not after a death. */
+    private readonly ccMemory = new Map<string, Pick<InternalContact, 'ccImmune' | 'serverName' | 'ccRuns'>>();
     private orders: Orders = emptyOrders();
     private readonly eventLog: GroupEvent[] = [];
     private readonly eventListeners = new Set<(e: GroupEvent) => void>();
@@ -327,6 +337,8 @@ export class Blackboard {
             if (!c) {
                 c = { ...s, targetBySpell: bySpell, regionId: r.regionId, target, targetSince: now, engagedAt: 0, movedAt: 0, seenBy: [], firstSeen: now, lastSeen: r.at, stale: false, threat: false, hostileSince: 0, cc: null, engaged: false, hit: false, ccSince: 0, lastHostile: 0, deathEchoUntil };
                 if (s.kind === 'player') Object.assign(c, { healer: false, caster: false });
+                Object.assign(c, this.ccMemory.get(key));
+                this.ccMemory.delete(key);
                 this.contacts.set(key, c);
             } else if (r.at >= c.lastSeen) {
                 // A mob in combat with no target: the server sends none (65535) while it runs or its
@@ -360,13 +372,16 @@ export class Blackboard {
                 if (now - c.lastHostile > this.hostileMs) c.hostileSince = now;
                 c.lastHostile = now;
             }
-            // A mezzed mob neither swings nor casts: either after the cc landed means it broke. A rooted one can
-            // still cast, and then it isn't controlled either: the group must be free to kill it.
-            if (c.cc && s.swinging && now - c.ccSince > SWING_WINDOW_MS) {
-                this.emit({ at: now, kind: 'note', member: c.cc.by, targetId: c.objectId, text: `${c.cc.kind} on ${c.name} broke` });
-                c.cc = null;
-            }
+            // A mezzed or stunned mob neither swings nor casts: either after the cc landed means it broke. A rooted one
+            // can still do both: it isn't controlled then, and the group must be free to kill it, but the root is still
+            // on it. Only walking off says a root broke: any hit that lands ends it (GameLiving.HandleCrowdControlOnAttacked).
+            const rootBroke = c.cc?.kind === 'root' && c.ccAt && Math.hypot(c.x - c.ccAt.x, c.y - c.ccAt.y) > ROOT_BROKEN_MOVE;
+            if (rootBroke || (c.cc && c.cc.kind !== 'root' && s.swinging && now - c.ccSince > SWING_WINDOW_MS)) {
+                this.emit({ at: now, kind: 'note', member: c.cc!.by, targetId: c.objectId, text: `${c.cc!.kind} on ${c.name} broke` });
+                this.ccEnded(c, c.cc!.kind as CcKind, now);
+            } else if (c.cc?.kind === 'root' && s.swinging && now - c.ccSince > SWING_WINDOW_MS) c.cc = null;
         }
+        for (const e of obs.ccEnds ?? []) this.ccEndedNamed(r.regionId, e);
         for (const id of obs.hits ?? []) {
             const c = this.contacts.get(`${r.regionId}:${id}`);
             if (c) c.hit = c.engaged = true;
@@ -378,7 +393,7 @@ export class Blackboard {
             if (seen.has(key) || c.regionId !== r.regionId) continue;
             const i = c.seenBy.indexOf(r.name);
             if (i >= 0) c.seenBy.splice(i, 1);
-            if (!r.isDead && Math.hypot(c.x - r.x, c.y - r.y) < this.viewRadius && r.at - c.lastSeen > 1500) this.contacts.delete(key);
+            if (!r.isDead && Math.hypot(c.x - r.x, c.y - r.y) < this.viewRadius && r.at - c.lastSeen > 1500) this.forget(key, c);
         }
     }
 
@@ -388,6 +403,7 @@ export class Blackboard {
         // A mob that just inherited the id: the death members still report is its predecessor's.
         if (!c || now < c.deathEchoUntil) return;
         this.contacts.delete(key);
+        this.ccMemory.delete(key);
         for (const [k, d] of this.killed) if (now - d.at >= KILLED_MS) this.killed.delete(k);
         this.killed.set(key, { at: now, name: c.name, x: c.x, y: c.y, hp: c.hp, player: c.kind === 'player' });
         if (!c.engaged) return;
@@ -395,32 +411,67 @@ export class Blackboard {
         else this.emit({ at: now, kind: 'kill', member: by, targetId: c.objectId, text: `${c.name} (L${c.level}) died`, data: { name: c.name, level: c.level, kind: c.kind, realm: c.realm } });
     }
 
-    /** Record crowd control a member landed, so nobody hits or re-mezzes it. */
-    markCc(targetId: number, regionId: number, by: string, kind: string, durationMs: number, now = Date.now()): void {
+    /**
+     * Record crowd control a member landed, so nobody hits it or casts that kind at it. `durationMs` is the spell's
+     * full length: the server's own line ends it sooner (ccEnded). A root holds for half of that, then wears off
+     * (ECSGameSpellEffect.cs, EffectService.cs), and a monster's repeats are shorter (npcCcLanded).
+     */
+    markCc(targetId: number, regionId: number, by: string, kind: string, durationMs: number, now = Date.now(), serverName?: string): void {
         const c = this.contacts.get(`${regionId}:${targetId}`);
         if (!c) return;
-        c.cc = { by, kind, until: now + durationMs };
+        const k = kind as CcKind;
+        let lastsMs = durationMs;
+        if (c.kind === 'player') (c.ccImmune ??= {})[k] = now + durationMs + CC_IMMUNE_MS;
+        // A monster has no limit on roots (TryApplyImmunity is for players, and NpcImmunityEffect for mezz and stun).
+        else if (k !== 'root') {
+            const landed = npcCcLanded(c.ccRuns?.[k], durationMs, now);
+            lastsMs = landed.durationMs;
+            (c.ccRuns ??= {})[k] = landed.run;
+            if (landed.immuneUntil) (c.ccImmune ??= {})[k] = landed.immuneUntil;
+        }
+        c.cc = { by, kind, until: now + (k === 'root' ? lastsMs / 2 : lastsMs) };
         c.ccSince = now;
+        c.ccAt = { x: c.x, y: c.y };
+        if (serverName) c.serverName = serverName;
     }
 
-    /** Record that crowd control can't land on it for `durationMs` (it answered "immune"), so nobody is assigned it. */
-    markCcImmune(targetId: number, regionId: number, durationMs: number, now = Date.now()): void {
+    /** Record that this kind can't land on it for up to `durationMs` (the server answered so), unless we already know until when. */
+    markCcImmune(targetId: number, regionId: number, kind: CcKind, durationMs: number, now = Date.now()): void {
         const c = this.contacts.get(`${regionId}:${targetId}`);
-        if (c) c.ccImmuneUntil = now + durationMs;
+        if (c && (c.ccImmune?.[kind] ?? 0) <= now) (c.ccImmune ??= {})[kind] = now + durationMs;
+    }
+
+    /** It ended at `at`: on a player the immunity runs from then (EffectListComponent.cs TryApplyImmunity). */
+    private ccEnded(c: InternalContact, kind: CcKind, at: number): void {
+        if (at < c.ccSince) return; // Its predecessor's.
+        if (c.cc?.kind === kind) c.cc = null;
+        if (c.kind === 'player') (c.ccImmune ??= {})[kind] = at + CC_IMMUNE_MS;
+    }
+
+    /** The server said so by name. A monster's isn't unique: only the one contact of that name under this kind. */
+    private ccEndedNamed(regionId: number, e: CcEnd): void {
+        const key = serverNameKey(e.name);
+        const named = [...this.contacts.values()].filter(c => c.regionId === regionId && (c.kind === 'player' ? c.serverName && serverNameKey(c.serverName) === key : c.cc?.kind === e.kind && serverNameKey(c.name) === key));
+        if (named.length === 1) this.ccEnded(named[0]!, e.kind, e.at);
+    }
+
+    private forget(key: string, c: InternalContact): void {
+        this.contacts.delete(key);
+        if (c.ccImmune || c.serverName || c.ccRuns) this.ccMemory.set(key, { ccImmune: c.ccImmune, serverName: c.serverName, ccRuns: c.ccRuns });
     }
 
     /** The current shared picture (copies; safe to keep). */
     picture(now = Date.now()): GroupPicture {
         const contacts: Contact[] = [];
         for (const [key, c] of this.contacts) {
-            if (now - c.lastSeen > this.forgetAfterMs) { this.contacts.delete(key); continue; }
+            if (now - c.lastSeen > this.forgetAfterMs) { this.forget(key, c); continue; }
             if (c.cc && c.cc.until <= now) c.cc = null;
-            if (c.ccImmuneUntil !== undefined && c.ccImmuneUntil <= now) delete c.ccImmuneUntil;
-            const { engaged: _e, hit: _h, ccSince: _s, deathEchoUntil: _d, lastHostile, ...pub } = c;
+            for (const k of Object.keys(c.ccImmune ?? {}) as CcKind[]) if (c.ccImmune![k]! <= now) delete c.ccImmune![k];
+            const { engaged: _e, hit: _h, ccSince: _s, ccAt: _a, ccRuns: _r, deathEchoUntil: _d, lastHostile, ...pub } = c;
             const stale = now - c.lastSeen > this.staleAfterMs;
             // A player contact at 0 % is alive (a dead one is no contact): it still fights.
             const threat = !stale && (c.kind === 'player' || c.hp > 0) && now - lastHostile < this.hostileMs;
-            contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null });
+            contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null, ...(c.ccImmune ? { ccImmune: { ...c.ccImmune } } : {}) });
         }
         return { at: now, members: [...this.reports.values()].map(m => ({ ...m })), contacts, orders: this.getOrders() };
     }

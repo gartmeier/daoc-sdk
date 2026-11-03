@@ -13,6 +13,7 @@ import { resurrectCost } from '../actions-helpers';
 import { ANYTIME_STYLE, fighterStyle, tankStyles } from './styles';
 import { abortable, executionContext } from '../execution-context';
 import { isAlive } from './blackboard';
+import { CC_IMMUNE_MS, canControl, immuneKinds } from './cc';
 import { clearOf, keepDangers, type KeepSettings } from './keeps';
 import { type BuffTask, nextBuff, planBuffs, surplusConcentration } from './buffs';
 import { combatSpot, dangerStops, effectiveLimits, focusSettled, safeSpot, trackFocus } from './positioning';
@@ -112,8 +113,6 @@ const LEASH_REJOIN_LEG = 1000;
 const FAR_FROM_FIGHT = 5000;
 /** An enemy player this close to a member can be hitting it in melee (melee range plus position lag). */
 const MELEE_REACH = 400;
-/** A target that answered "Your target is immune to this effect!" stays so this long (IMMUNITY_TIMER_FLAT_LENGTH, NpcImmunityEffect). */
-const CC_IMMUNE_MS = 60_000;
 
 /**
  * Whether `t` is on member `m` the way an add is: it targets `m` and isn't crowd-controlled, and an
@@ -544,6 +543,11 @@ export const heal = (opts: { emergencyOnly?: boolean; limits?: Partial<TacticsSe
     },
 });
 
+/** A member casting crowd control at a target holds it this long (a cast is 2.5-3 s). */
+const CC_CLAIM_MS = 4000;
+/** A crowd-control spell without a length still counts this long. */
+const CC_MIN_MS = 3000;
+
 /**
  * Mezz (or, without a mezz, root) our crowd-control assignment; without `assignedOnly`,
  * also any add (not the focus) attacking the group that nobody controls or is mezzing yet.
@@ -554,37 +558,35 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
     async run(ctx) {
         const o = ctx.orders();
         if (o.phase !== 'engage' && o.phase !== 'pull' && o.phase !== 'retreat') return false;
-        // Targets that answered "Your target is immune to this effect!", by ckey: left alone for CC_IMMUNE_MS.
-        const immune: Map<string, number> = ctx.memory.get('ccImmune') ?? new Map();
-        ctx.memory.set('ccImmune', immune);
-        for (const [k, until] of immune) if (until <= Date.now()) immune.delete(k);
-        // Also what another member found immune (the board's mark).
-        const immuneNow = (c: Contact) => immune.has(ckey(c)) || (c.ccImmuneUntil ?? 0) > Date.now();
-        const live = (id: number) => { const c = ctx.contact(id); return c && !c.stale && alive(c) && !c.cc && !immuneNow(c) ? c : undefined; };
+        // The board knows what's on each target and what it is immune to, whoever found out.
+        const kinds = ctx.spells.capabilities().ccKinds;
+        const open = (c: Contact) => !c.cc && canControl(c, kinds) && !claimedBy(ctx, 'cc', c.objectId, CC_CLAIM_MS).length;
+        const live = (id: number) => { const c = ctx.contact(id); return c && !c.stale && alive(c) && open(c) ? c : undefined; };
         const assigned = o.cc.filter(a => a.by === ctx.name).map(a => live(a.targetId)).filter(c => !!c);
         const extra = opts.assignedOnly ? [] : ctx.threats()
-            .filter(t => t.objectId !== o.focus && !t.cc && !immuneNow(t) && !o.cc.some(a => a.targetId === t.objectId) && !claimedBy(ctx, 'cc', t.objectId, 4000).length);
+            .filter(t => t.objectId !== o.focus && open(t) && !o.cc.some(a => a.targetId === t.objectId));
         // Others see some, we don't (an assignment while we walk back from a release): the first we can cast on.
         const visible = (c: Contact) => !!foeInView(ctx, c.objectId);
         const target = assigned.find(visible) ?? extra.find(visible);
         if (!target) return assigned.length || extra.length ? ctx.skip('cc: target not in view') : false;
-        const sp = ctx.spells.cc({ aoe: ctx.settings.aoe });
+        const sp = ctx.spells.cc({ aoe: ctx.settings.aoe, except: immuneKinds(target) });
         if (!sp) return ctx.skip('cc: no mezz or root ready');
         await stopSwinging(ctx);
         ctx.doing('cc', target.objectId, sp.spell.name);
         const c = await ctx.bot.castSpell(sp.spell, target.objectId);
-        ctx.result('cc', c, target.objectId);
-        // The cast went off, but the target is already mezzed or still immune from the last one (a player for 60 s
-        // after a mezz ends, a mob after repeated ones: CCSpellHandler.CheckSpellResist): not controlled, and
-        // recasting on it would only repeat that.
-        if (c.effectImmune) {
-            immune.set(ckey(target), Date.now() + CC_IMMUNE_MS);
-            // The coordinator would otherwise hand it to the next mezzer every few seconds. Only a mezz's: the
-            // server keeps mezz and snare immunity apart (EffectHelper.GetImmunityEffectFromSpell), so a root's
-            // "immune" says nothing about the mezzers' chances, and it stays in our own memory.
-            if (sp.kind === 'mezz') ctx.markCcImmune(target.objectId, CC_IMMUNE_MS);
-        }
-        else if (c.success && !c.resisted) ctx.markCc(target.objectId, sp.kind, Math.max(3000, sp.duration * 900));
+        const fullMs = Math.max(CC_MIN_MS, sp.duration * 1000);
+        // A cast that went off isn't one that landed, and the reports count it as what the server answered.
+        const refused = !c.success ? null : c.effectImmune ? 'immune' : c.alreadyOn ? 'already_on' : c.resisted ? 'resisted' : c.effectLanded === false && target.kind === 'player' ? 'no_effect' : null;
+        ctx.result('cc', refused ? { ...c, success: false, reason: refused } : c, target.objectId);
+        // Answers that say how long it is out of reach, for every member: the coordinator would otherwise hand it to
+        // the next one every few seconds. Only this kind: the others have their own immunity (cc.ts).
+        if (refused === 'immune') ctx.markCcImmune(target.objectId, sp.kind, CC_IMMUNE_MS);
+        // The same spell still on it: at most its whole length, then the immunity.
+        else if (refused === 'already_on') ctx.markCcImmune(target.objectId, sp.kind, fullMs + CC_IMMUNE_MS);
+        else if (refused === 'resisted') return true;
+        else if (refused === 'no_effect') await Bun.sleep(1500);
+        // A monster's repeat replaces the old effect without a word (CastResult.effectLanded), so it landed too.
+        else if (c.success) ctx.markCc(target.objectId, sp.kind, fullMs, c.landedOn);
         else if (await waitOutSelfCc(c)) return true;
         // PvP immunity (reason 'immune': up to 10 s after a port, login or release) and "You must wait": try again shortly.
         else if (c.retryAfterMs) await Bun.sleep(Math.min(c.retryAfterMs, 3000));

@@ -1329,6 +1329,12 @@ interface CastResult extends ActionResult {
   resisted: boolean;
   /** The cast went off (success, power spent) but its effect did not land: "Your target is immune to this effect!" (CCSpellHandler.cs:173/288, SpellHandler.cs:571). A player already mezzed or stunned, or within the 60 s immunity that follows one (CrowdControlECSEffect.cs), an NPC's mezz immunity, a snare immunity. `resisted` stays false: the target did not resist, nothing could have landed. */
   effectImmune?: boolean;
+  /** The cast went off but the server refused the effect: "{0} already has that effect. Wait until it expires. Spell failed." The same spell is still on a player (EffectListComponent.cs:689), as for a second root while one holds. */
+  alreadyOn?: boolean;
+  /** Whether the server said its effect landed: the spell's own line for that ("{0} is entranced!", Message2), sent to the caster. false when the spell has one and it never came, undefined when it has none. A monster's repeat replaces the old effect without a word (ECSGameEffect.cs OnEffectStartsMsg). */
+  effectLanded?: boolean;
+  /** The name in that line: an enemy player's real name, which its race-named entry in the world state never shows. */
+  landedOn?: string;
   /** Damage from "You hit X for N damage!" / "Your <this spell> hits X for N damage!" lines that arrived once the cast time was up. Other spells' DoT ticks and "extra damage" lines are left out; a damage shield's "You hit X for N damage!" in the same moment cannot be told apart. */
   damage: number;
   messages: GameMessage[];

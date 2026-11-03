@@ -5,6 +5,7 @@ import type { SpellInfo } from '../../data/index';
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import type { Spell } from '../types';
+import type { CcKind } from './cc';
 import { songKind, type SongKind } from './songs';
 import type { BuffSlot, Capabilities } from './types';
 
@@ -172,10 +173,11 @@ export class Spellbook {
         return best(ok.filter(s => s.radius === 0)) ?? (opts.aoe ? best(ok) : null);
     }
 
-    /** Crowd control for an add: a mezz when one is ready (area ones only with `aoe`), else a root. */
-    cc(opts: { aoe?: boolean } = {}): (SpellPick & { kind: 'mezz' | 'root' }) | null {
-        const m = this.mezz(opts);
+    /** Crowd control for an add: a mezz when one is ready (area ones only with `aoe`), else a root. Not of the kinds in `except` (it is immune to those). */
+    cc(opts: { aoe?: boolean; except?: readonly CcKind[] } = {}): (SpellPick & { kind: 'mezz' | 'root' }) | null {
+        const m = opts.except?.includes('mezz') ? null : this.mezz(opts);
         if (m) return { ...m, kind: 'mezz' };
+        if (opts.except?.includes('root')) return null;
         const r = best(this.all().filter(s => isRoot(s) && s.target === 'Enemy' && this.ready(s)));
         return r ? { ...r, kind: 'root' } : null;
     }
@@ -225,6 +227,10 @@ export class Spellbook {
             heal: all.some(s => HEAL_TYPES.test(s.type) && s.target !== 'Enemy'),
             // What cc() casts at an add without aoe (crowd control is assigned by this): a single-target mezz or a root.
             cc: all.some(s => s.target === 'Enemy' && s.range > 0 && ((isMezz(s) && s.radius === 0) || isRoot(s))),
+            ccKinds: [
+                ...(all.some(s => s.target === 'Enemy' && s.range > 0 && isMezz(s) && s.radius === 0) ? ['mezz' as const] : []),
+                ...(all.some(s => s.target === 'Enemy' && s.range > 0 && isRoot(s)) ? ['root' as const] : []),
+            ],
             nuke: all.some(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type)),
             rez: all.some(isRez),
             buffs: buffs.map(s => s.spell.name),

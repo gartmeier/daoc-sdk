@@ -88,7 +88,7 @@ A battleground has no merchants, and the recall stone doesn't work there. The wa
 - **Hostile:** an enemy player is a threat to the group only when its inferred target is a member, a member attacked or hit it, or it swings or casts within `hostileRadius` (2500) of a member. An enemy fighting the third realm 5000 away is not.
 - **Who counts as "against us":** the largest single realm's free players (not mezzed, not busy with the third realm), plus any player of the other realm attacking us. Two other realms fighting each other are two groups, not one: before this, a 5 v 5 between the others made the third group retreat from "10 enemies".
 - **Focus:** kept while it lives (no target thrash), unless another enemy drops below `switchBelow` (25 %) while the focus is above 45 %. A new focus by score: healer +60, caster +30, on one of our healers or casters +20, missing health, near our centre.
-- **Crowd control:** `assignCc` over the other enemy players in reach of the main body, mezzers first. A mezzer casts on the first target its own client sees. "Your target is immune to this effect!" (a player stays immune for a while after a mezz) after a mezz marks the contact `ccImmuneUntil` for 60 s on the board, so no mezzer is assigned it (a root's "immune" is the server's separate snare immunity: it stays with the rooter); an assignment whose target is still free after 8 s goes to the next mezzer.
+- **Crowd control:** `assignCc` over the other enemy players in reach of the main body, mezzers first. A member casts on the first target its own client sees, of a kind it isn't immune to; an assignment whose target is still free after 8 s goes to the next one. What repeats do on the server, and what breaks what: [spells.md](spells.md#crowd-control-what-repeats-do). What the board remembers: [group-coordination.md](group-coordination.md) "Crowd control on the board".
 - **Behaviours** (`rvrBehaviors`): the PvE lists without the town `healer` visit. Against a player: no hold wait (players have no aggro table), the tank uses its damage style (taunts move nothing), `killPlayer` instead of `killNpc`.
 - **`chaseLeash` (2000):** the tank and melee don't chase an enemy player farther than this from the fight's anchor: a chase stops the moment the foe leaves it, and with the focus beyond it they fight the nearest enemy inside it instead. The coordinator keeps foci inside the leash: it prefers foci in reach, and moves the anchor toward a focus beyond it, not more than 1500 from the centre. Round 2: the Hero followed fleeing players and logged 192 "ran beyond 3000 units".
 - **Which mezz:** `Spellbook.cc()` takes a single-target mezz first, an area mezz only with `aoe` (it mezzes the focus next to the add too), and never a point-blank one (range 0: the Spiritmaster's Dark Wave line, the Cleric's Heavenly Visions). Before, the highest level won, and Hrafna cast Dark Wave at enemies 1500 away ("No cast observed", 22 times in round 3) instead of her Hold Spirit.
@@ -134,6 +134,18 @@ All three groups out at once, each `rvr.ts` in its own process. Kills count ever
 - **Group HP and healers:** the other two spent about two thirds of their focus time on Midgard and dropped 66 % of those foci. Base HP is 2971 against 2526 and 2649, with two healers and one cloth member.
 - **The focus score favours sturdy healers:** healer +60 sends a group at a Troll Shaman or Dwarf Healer rather than a 459 HP caster.
 - **Not the cause:** geography (keeps 21.3-21.9k from the middle, fights at about (34100, 33600)), crowd control (Midgard's was the weakest) and staying together (about equal).
+
+## Crowd control: wasted casts
+
+Two groups of five in Thidranki, starter gear, 5 minutes each, counted by each bot's client from the server's answers (`sdk/test/live/cc-group-live.ts`). Stuns aren't in it: no behaviour casts one.
+
+| | Crowd-control casts | Landed | Immune | Already on | Resisted | Wasted |
+|---|---|---|---|---|---|---|
+| Before | 36 | 22 | 9 | 1 | 4 | **10 (28 %)** |
+| After | 30 | 25 | 0 | 0 | 5 | **0** |
+
+- **The real rounds can't show this:** before this change a cast answered "immune" counted as a success, so round 9's reports (20261103-2038xx) have 116 `cc: ok` and no way to tell how many were wasted. Reports now keep them apart: `actions.cc` is what landed, and `failures` has `cc:immune`, `cc:already_on`, `cc:resisted` and `cc:no_effect`.
+- **33 "broke" lines in round 9, 25 of them about roots,** most of them false: a rooted player swings and casts as before. Each freed its target for another root, which then got "already has that effect". Only walking off counts as a root breaking now.
 
 ## Unverified / next
 
