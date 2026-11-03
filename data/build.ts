@@ -7,7 +7,7 @@
 // Each builder is pure (returns JSON-able data); writeGenerated() persists it.
 // data/index.ts calls these lazily when a generated file is missing.
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DB_DIR, loadTable, type SqlRow } from './sql';
 import { buildRegions, buildZones } from './zones';
@@ -760,23 +760,57 @@ export function isStale(g: GeneratedFile): boolean {
     return sources.some(s => mtimeOf(s) > out);
 }
 
+// On Windows a rename over a file fails with EPERM while any process has it open, even a
+// reader sharing it for delete. A read or another process's rename clears within ~100 ms.
+// Keep the total short: a load blocks the event loop while it waits.
+const RENAME_BUSY_CODES = ['EPERM', 'EBUSY'];
+const RENAME_RETRY_MS = [20, 40, 80, 160];
+
+function renameRetrying(from: string, to: string): void {
+    for (const ms of RENAME_RETRY_MS) {
+        try {
+            renameSync(from, to);
+            return;
+        } catch (e) {
+            if (!RENAME_BUSY_CODES.includes((e as NodeJS.ErrnoException).code ?? '')) throw e;
+            Bun.sleepSync(ms);
+        }
+    }
+    renameSync(from, to);
+}
+
+/** Write a generated file and return its size. Throws if it can't be put in place. */
 export function writeGenerated(file: string, data: unknown): number {
     mkdirSync(GENERATED_DIR, { recursive: true });
     const json = JSON.stringify(data);
     // Write-then-rename so concurrent bot processes never read a partial file.
     const tmp = join(GENERATED_DIR, `.${file}.${process.pid}.tmp`);
-    writeFileSync(tmp, json);
-    renameSync(tmp, join(GENERATED_DIR, file));
+    try {
+        writeFileSync(tmp, json);
+        renameRetrying(tmp, join(GENERATED_DIR, file));
+    } catch (e) {
+        try {
+            rmSync(tmp, { force: true });
+        } catch {
+            // Held open as well: leave it, and report why the write failed.
+        }
+        throw e;
+    }
     return json.length;
 }
 
-/** Build one generated file by name, write it, and return its data. */
+/** Build one generated file by name, try to write it, and return its data. */
 export function buildGenerated(file: string): unknown {
     const g = GENERATED_FILES.find(x => x.file === file);
     if (!g) throw new Error(`build-data: unknown generated file ${file}`);
     try {
         const data = g.build();
-        writeGenerated(g.file, data);
+        try {
+            writeGenerated(g.file, data);
+        } catch (e) {
+            // The load only needs the data. The file stays stale, so the next process rebuilds it.
+            console.warn(`warning: ${g.file} not written (${e instanceof Error ? e.message : e}); using the data just built`);
+        }
         return data;
     } finally {
         clearTableCache();
