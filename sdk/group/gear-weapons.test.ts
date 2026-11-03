@@ -2,10 +2,11 @@
 // GameInventoryItem.cs:1156-1197 does, level clamp included; the shop lines come from Gymir and Saga in
 // Jordheim, and the static merchant data is real.
 import { describe, expect, test } from 'bun:test';
-import { ALL_FOCUS, parseWeaponDelve } from '../delve';
+import { getClasses, specDisplayName } from '../../data/index';
+import { ALL_FOCUS, parseDelve, parseWeaponDelve } from '../delve';
 import { ItemHand, ObjectType, type InventoryItem, type MerchantItem, type PlayerState } from '../types';
 import { bestWeapon, buyWeapons, wearWeapons, weaponNeeds, weaponSellers, weaponSlots, weaponUpgrades, type WeaponMember, type WeaponRow } from './gear';
-import { focusCover, weaponScore, weaponValue } from './gear-score';
+import { focusCover, isFocusCaster, weaponScore, weaponValue } from './gear-score';
 
 const WARRIOR = [['Axe', 20], ['Hammer', 1], ['Sword', 1], ['Shield', 1], ['Parry', 20], ['Thrown Weapons', 1]] as const;
 const SKALD = [['Axe', 15], ['Hammer', 1], ['Sword', 1], ['Parry', 7], ['Battlesongs', 17]] as const;
@@ -208,6 +209,7 @@ const SHIELD = { ...worn(11, 'small training shield', ObjectType.Shield, 1.2, 4)
 interface Opts {
     specs?: readonly (readonly [string, number])[];
     className?: string;
+    realm?: string;
     equipment?: InventoryItem[];
     inventory?: InventoryItem[];
     copper?: number;
@@ -290,7 +292,7 @@ function world(o: Opts = {}) {
         },
     };
     const player = {
-        name: 'Thorgrim', level, realm: 'midgard', className: o.className ?? 'Warrior', isDead: false, regionId: 101,
+        name: 'Thorgrim', level, realm: o.realm ?? 'midgard', className: o.className ?? 'Warrior', isDead: false, regionId: 101,
         x: o.at?.x ?? 29823, y: o.at?.y ?? 34799, money: { get totalCopper() { return f.copper; } },
     } as unknown as PlayerState;
     const sdk = {
@@ -596,6 +598,23 @@ describe('wearWeapons, a focus caster', () => {
         expect(inHand(f, 12)).toBe('trimmed branch');
     });
 
+    test('an Eldritch wears a looted Focus Staff, though each line it trains has a display name of its own', async () => {
+        const f = world({ specs: [['Light Magic', 10], ['Mana Magic', 10], ['Void Magic', 20]], className: 'Eldritch', realm: 'hibernia', equipment: [BRANCH], inventory: [staff(45, 'Arcane Focus Staff')], focus: { 'Arcane Focus Staff': 20 } });
+        expect(await wearWeapons(f.member)).toEqual(['wield Arcane Focus Staff, score 1 over 0']);
+        expect(inHand(f, 12)).toBe('Arcane Focus Staff');
+    });
+
+    test('a Mentalist takes a lower focus on all lines over a higher one on Mentalism alone', async () => {
+        const f = world({
+            specs: [['Light Magic', 10], ['Mana Magic', 10], ['Mentalism', 20]], className: 'Mentalist', realm: 'hibernia', equipment: [BRANCH],
+            inventory: [staff(45, 'Mind Focus Staff'), staff(46, 'Arcane Focus Staff')],
+            focus: { 'Mind Focus Staff': { line: 'Mentalism', value: 20 }, 'Arcane Focus Staff': 12 },
+        });
+        expect(await wearWeapons(f.member)).toEqual(['wield Arcane Focus Staff, score 0.8 over 0']);
+        expect(inHand(f, 12)).toBe('Arcane Focus Staff');
+        expect(await wearWeapons(f.member)).toEqual([]);
+    });
+
     test('a Healer and a Shaman get nothing from a focus and leave the bag alone', async () => {
         for (const [className, specList] of [['Healer', [['Mending', 17], ['Augmentation', 8]]], ['Shaman', [['Mending', 12], ['Augmentation', 17]]]] as const) {
             const f = world({ specs: specList, className, inventory: [staff(45, 'Arcane Focus Staff')], focus: { 'Arcane Focus Staff': 20 } });
@@ -622,4 +641,22 @@ describe('focusCover', () => {
     test("one line's focus covers that line", () => expect(focusCover([line('Darkness', 17)], SPECS)).toBeCloseTo(17 / 33));
     test("a line's focus and all lines don't add up: the higher counts", () => expect(focusCover([all(6), line('Darkness', 10)], SPECS)).toBeCloseTo((10 + 6 + 6) / 33));
     test('no spell lines, no reach', () => expect(focusCover([all(20)], specs([['Axe', 20]]))).toBe(0));
+
+    // As the game words them: the skill list says Light Magic where a bonus's spec is Light (data/spec-names.ts), and a delve says Enchantment Focus for the line the skill list calls Enchantments.
+    const focusOn = (...lines: string[]) => parseDelve(['Focus Bonuses:', ...lines.map(l => `- ${l} lvls`), ' ']).bonuses;
+    const MENTALIST = specs([['Light Magic', 10], ['Mana Magic', 10], ['Mentalism', 20]]);
+    const ENCHANTER = specs([['Light Magic', 10], ['Mana Magic', 10], ['Enchantments', 20]]);
+    const ELDRITCH = specs([['Light Magic', 10], ['Mana Magic', 10], ['Void Magic', 20]]);
+
+    test('lines with a display name of their own count: all lines, up to each spec', () => expect(focusCover(focusOn('ALL Spell Lines: 12'), MENTALIST)).toBeCloseTo((10 + 10 + 12) / 40));
+    test("such a line takes its own focus, and no other line's", () => expect(focusCover(focusOn('Light Magic Focus: 20'), MENTALIST)).toBeCloseTo(10 / 40));
+    test("one line's focus covers that line's share, not all of it: a Mentalist", () => expect(focusCover(focusOn('Mentalism Focus: 20'), MENTALIST)).toBeCloseTo(20 / 40));
+    test("one line's focus covers that line's share, not all of it: an Enchanter", () => expect(focusCover(focusOn('Enchantment Focus: 20'), ENCHANTER)).toBeCloseTo(20 / 40));
+    test('an Eldritch, with no line under its key, is covered like anyone', () => expect(focusCover(focusOn('ALL Spell Lines: 20'), ELDRITCH)).toBe(1));
+
+    test("every focus caster's every line counts, under the name the skill list gives it", () => {
+        const lines = getClasses().filter(isFocusCaster).flatMap(c => c.specializations.filter(s => !s.spec.endsWith('Career')).map(s => [c.name, specDisplayName(s.spec)] as const));
+        expect(lines.length).toBeGreaterThan(50);
+        expect(lines.filter(([, name]) => focusCover([all(1)], specs([[name, 1]])) !== 1)).toEqual([]);
+    });
 });

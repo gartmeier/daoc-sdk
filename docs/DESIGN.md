@@ -61,7 +61,7 @@ sdk/group/            group coordination on top of BotSDK/BotActions (one contro
 mcp/                  server.ts, execute-code.ts, console-capture.ts, api/ (BotManager, which spawns client/runner.ts when no client is attached)
 bots/                 create-bot.ts, _template/, examples/ (+ script-args.ts); each bots/<name>/ is gitignored
 groups/               create-group.ts, _template/; each groups/<name>/ (group.json, strategy.ts, runs/) is gitignored
-scripts/              build-data.ts, setup-server.ts, check-submodules.ts
+scripts/              build-data.ts, setup-server.ts, check-submodules.ts, setup-worktree.ts
 server/docker/        docker-compose.yml and Dockerfile that build OpenDAoC from the server/core submodule
 learnings/            per-topic markdown notes for agents writing bots
 ```

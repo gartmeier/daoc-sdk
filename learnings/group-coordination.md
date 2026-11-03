@@ -215,7 +215,7 @@ What this loop did live (3–4 minutes per run, same camp, water beetles L6–8)
 ## Pitfalls seen live
 
 - **Overloaded members can't move:** loot piles up. An Enchanter at 59/40 encumbrance had max speed 0 ("walk: stuck ... max speed 0"); the group's `gather` waited for him forever. `shedLoad` now drops the heaviest backpack item not matching `keepItems` at 95 % load; selling needs a town visit, which the PvE policy doesn't plan yet.
-- **`rest()` refuses while any NPC in view targets us,** even one leashing home 3000+ away that the picture ignores. The `rest` behaviour checks `bot.getAttackers()` first and skips.
+- **`rest()` refuses while any NPC in view targets us or hit us in the last 6 s,** even one leashing home 3000+ away that the picture ignores. The `rest` behaviour checks `bot.getAttackers()` first and skips.
 - **The first invite to each member went unanswered** right after the previous member joined; `formGroup` waits 1.5 s before each invite.
 - **Formation depth counts in travel:** legs must chain from the last leg point, not from the group's centre, which trails the anchor by the formation's depth.
 - **Ending mid-pull:** a mob already hit follows the tank after the run and killed it between runs. A run now finishes a pull under way.

@@ -37,7 +37,7 @@
 | `async useStyle(name: NamePattern): Promise<SkillUseResult>` | Queue a combat style for the next swing; observed by "You prepare to perform a ...". |
 | `findKillableNpc(options: FindKillableOptions = {}): NearbyNpc \| null` | Best monster to fight nearby: killable, not engaged with someone else, within the con (or level-difference) window, nearest first. |
 | `findKillableNpcs(options: FindKillableOptions = {}): NearbyNpc[]` | All candidates findKillableNpc considers, best first. |
-| `getAttackers(): NearbyNpc[]` | NPCs currently targeting us, nearest first. |
+| `getAttackers(): NearbyNpc[]` | NPCs fighting us, nearest first: their reported target is us, or their swing or spell landed on us within the last 6 s. The server reports a target only for a mob standing within its attack range and in attack state, so the hits are what shows a caster at range or a mob running at us. |
 | `getPlayerAttackers(windowMs: number = PLAYER_AIM_MS): NearbyPlayer[]` | Enemy-realm players whose melee swing or spell effect landed on us within `windowMs` (default 6 s, longer than a two-handed weapon's or a bow's swing), nearest first. The server never sends a player's target, so these combat events are the evidence. |
 
 ### Other
@@ -46,7 +46,7 @@
 |---|---|
 | `async interactWith(target: ObjectTarget, options: InteractOptions = {}): Promise<InteractResult>` | Walk within ~150 of an NPC/object and interact (right-click). Success needs a response: merchant/trainer window, NPC dialog, dialog box, text window or a message from the NPC. |
 | `async useAbility(name: NamePattern): Promise<SkillUseResult>` | Use an ability (e.g. Sprint); success when the server answers without a refusal or an effect appears. |
-| `isInCombat(): boolean` | In combat: attack mode on, recently hit, an NPC targets us or an enemy player hit us (getPlayerAttackers). |
+| `isInCombat(): boolean` | In combat: attack mode on, recently hit, an NPC is fighting us (getAttackers) or an enemy player hit us (getPlayerAttackers). |
 | `getSpellInfo(spell: NamePattern \| Spell): SpellInfo \| null` | Static data for a known spell (type, target, range, cast time, power), from the DB dump; null when unknown. |
 | `isDead(): boolean` | Our character is dead. |
 | `freeBackpackSlots(): number` | Free backpack slots (of 40). |

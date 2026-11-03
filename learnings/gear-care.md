@@ -88,7 +88,8 @@ import { keepForLater, needsRepair, repairGear, stashInVault, takeFromVault } fr
 
 r.push(...await takeFromVault(m));      // what it has grown into: before the gear pass judges it
 r.push(...await equipUpgrades(m));      // the group's own gear pass
-r.push(...await stashInVault(m));       // what's too high: after the pass, which may take something off
+r.push(...await weaponUpgrades(m));     // weapons (sdk/group/gear.ts): wears the best in the bag, buys what beats it
+r.push(...await stashInVault(m));       // what's too high: after the passes, which may take something off
 r.push(await sell(m));                  // with keepForLater(item, player) in its keep test
 r.push(...await repairGear(m));         // what's worn below 93 %, worst first: last, with what the sale brought
 ```
@@ -102,7 +103,10 @@ All of them take a group member (`m.actions`) or a party member (`m.bot`), retur
 - **Repair at 93:** `REPAIR_BELOW`. Below 91 wear doubles, so repairing before that gets twice the fighting out of the same Durability.
 - **What counts as worn in a comparison:** `armorValue` treats a piece a smith can restore as whole, so a worn one doesn't lose to a weaker one, or to a shop copy, over a few silver. With durability 0 it counts what's left, as the server does.
 - **Starting a trip for it:** `careDue(m)` says a visit is due, and `vaultDue(m)` that it has to reach a keeper. The table above says where. A client knows the vault only once it has opened it, so gear that has come to fit starts no trip after a restart: it comes out at the next visit to a keeper, whatever brought the bot there.
-- **What comes out needs a pass to judge it:** a town visit's armour pass skips a weapon its class has no entry for, so unless the visit also runs `weaponUpgrades`, out of the vault it would only meet the next sale. `{ judged }` on `takeFromVault`, `vaultDue` and `careDue` leaves the rest in the vault, and it starts no trip.
+- **What comes out needs a pass to judge it:** a town visit's armour pass skips a weapon its class has no entry for, so unless the visit also runs `weaponUpgrades`, out of the vault it would only meet the next sale. `{ judged }` on `takeFromVault`, `vaultDue` and `careDue` leaves the rest in the vault, and it starts no trip. A visit that runs the pass also says yes to what the pass judges: a weapon `weaponSlots` finds a slot for under `weaponNeeds`, or a focus caster's staff. A weapon off the trained line stays in, and so does a shield unless the armour pass takes shields.
+- **What the weapon pass declines** stays in the backpack, and the next sale takes it unless `keepForLater` still applies. A stop with no sale, like Svasud Faste or Druim Ligen in the group visits, leaves it there until the next one.
+- **Two judges of one weapon:** a class the armour pass has a weapon entry for gets both passes. The armour pass goes by DPS and quality, the weapon pass by its score, in which anything off the trained line counts 0. The weapon pass runs later and wins the visit, but where no sale follows, the loser stays in the bag and the next `equipUpgrades` can put it back on.
+- **Where the weapon pass can buy:** nobody within `WEAPON_RADIUS` of Svasud Faste or Druim Ligen sells a weapon of a line the groups train (they have poison, siege gear and arrows, and Svasud Faste throwing weapons), so there it only wears. Fort Atla has every Midgard line within 2,100 of the landing. In Camelot pass `{ radius: CAPITAL_RADIUS }`, not `{ town }`: Lord Prydwen stands 5,152 from the landing, beyond `CLOAK_TOWN_RANGE`, and from him the default radius reaches only Tait Nerian and Fenris Blakely, not Landry Woden's fine alloy.
 - **Selling:** `sellItems` sells what its filter says. A filter that sells by name needs `!keepForLater(item, player)` in it, because a keeper isn't always in reach and a restart can undo a move.
 - **Only what the class could use:** `keepForLater` asks `classCouldUse` first, from the class's abilities at any level, with a base class's advanced classes. Chain on a Spiritmaster isn't kept: it sells.
 - **Kept gear is weight until it reaches a keeper:** a hunt's `shedLoad` at 95 % load drops everything else first, and kept gear only when nothing else is left outside the group's `keepItems`, because an overloaded character can't move at all.
@@ -127,5 +131,11 @@ Wear was set by SQL while it was logged out.
   - Camelot: a level 45 sword stayed off and went in the vault, while a level 20 sword came out and went on. The sale took a robe, and the worn vest was repaired.
 - A teleport home that couldn't happen, 63,469 from a teleporter: "not at Ardagh: not binding", with the bind point unchanged in the DB.
 - A group's `gear-care.ts`, a one-member group at Svasud Faste with the visit's `judged`: level 20 sleeves came out and went on, a level 20 axe stayed in the vault, and a jerkin was repaired for 22c.
+- The weapon pass in each realm's visit, on a disposable stack with its own DB, levels raised by SQL while logged out. Each time a level 26 weapon in the bag at level 22 went in the vault, came out at level 26 and went on:
+  - Midgard, a Warrior at Axe 22, through Svasud Faste: "score 8.15 over 6.52". A level 35 axe stayed in, and so did a level 20 sword, off the line. A level 5 axe came out and lost, and the sale at Fort Atla took it for 225c. With the starter axe in hand, Yop sold a level 16 axe for 18,960c, "score 5.16 over 1.1".
+  - Hibernia, a Hero at Blunt 22, through Druim Ligen: 7.97 over 7.46, after a level 20 mace at 7.28 over 0. The sale at Howth took what had lost, and at level 22 had left the level 26 and 35 maces alone. Gaenor there sold it, at Piercing 22, a curved dagger for 425c.
+  - Camelot, a Paladin at Slash 18: the armour pass wore the sword before the weapon pass saw it, the sale took the one it replaced, and a war hammer, off the line, stayed in. At level 22 the shops answered "no weapon step: best 6.51, worn 7.62".
+  - A Mentalist and a Cabalist at level 22: a focus staff came out and went on (1.09 and 1.06 over 0), a level 30 and a level 28 staff went in, and a sword stayed in the vault.
+  - A one-member group's `gear-care.ts` with these `judges` and `wearWeapons`, at Svasud Faste: a level 28 axe came out and went on, 9.94 over 8.15.
 
 **Not tried live:** a full vault. The wear numbers come from the code and the DB, not from watching an item fall.

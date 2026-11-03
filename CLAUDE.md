@@ -18,6 +18,8 @@ Before writing logic for a topic (walking, combat, spells, merchants, looting, g
 
 MCP `execute_code` does steps 3–4 itself. Scripts and the CLIs never start a client.
 
+**Disposable server:** for a live check that must leave the shared stack alone, `bun run server:throwaway up` exits 0 once logins work and prints the port for `SERVER=` in bot.env; `down` removes it (docs/SERVER.md "Throwaway stacks").
+
 ## Session loop
 
 1. **Look** before acting: `bun sdk/cli.ts <name>`. If the character is dead, the first action is `bot.releaseAndRespawn()`.
@@ -30,7 +32,7 @@ MCP `execute_code` does steps 3–4 itself. Scripts and the CLIs never start a c
    export default main;
    if (import.meta.main) await runScript(main, { args: { seconds: Number(scriptArgs()[0] ?? 60) }, timeout: 120_000 });
    ```
-   `scriptArgs()` (from `../examples/script-args`) drops the bot name only when it came from argv, so a copy takes `bun bots/<name>/grinder.ts 60` while the original takes `bun bots/examples/grinder.ts <name> 60`.
+   `scriptArgs()` (from `../examples/script-args`) drops the bot name only when it came from argv, so a copy takes `bun bots/<name>/grinder.ts 60` while the original takes `bun bots/examples/grinder.ts <name> 60`. It also drops anything starting with `-`, so a script with flags reads them from `process.argv`.
 3. **Run** it: `bun bots/<name>/<script>.ts`. Use a short `timeout` first:
 
    | Duration | When |
@@ -124,6 +126,7 @@ From `sdk.*`, the common calls are `getState`, `getPlayer`, `getInventory`, `fin
 
 ## Troubleshooting
 
+- **Tests fail on missing `server/` or `data/generated` files, or `bun run test` stops at `missing git submodule(s)`:** the checkout isn't set up. A new git worktree has no submodules, `node_modules` or `data/generated`. In a desktop app session, a SessionStart hook (`.claude/settings.json` in the main checkout) fills them in and prints what it did, whatever commit the worktree is on. A session that moved into a worktree later, or a headless `claude -p` on a commit without the hook, runs `bun run setup:worktree` itself (about 20 s); on a commit without that script, it runs the main checkout's `scripts/setup-worktree.ts` from the worktree. Build the data there rather than copying it from another checkout: a copy can predate this commit's `server/db` pin, and nothing notices while `server/db` is empty.
 - **"No game client is attached"** means nothing is publishing state for the bot. Start `bun client/runner.ts <name>` and wait for `in game`. Its log is in your shell, or in `bots/<name>/client.log` when MCP started it.
 - **Login refused with 0x2C code 0x11 / `AccountIsInLogoutProcedure`:** the character is still in the world, link-dead. This happens when a client dropped without quitting. Wait 60 s and retry; the runner backs off on its own.
   - To stop a client cleanly, use a quit action: `await sdk.sendQuit()`, MCP `disconnect_bot`, or `bun client/dev/swarm-check.ts <bot> [<bot> ...] --seconds=0 --quit` (the runner logs out, then exits 0). Ctrl+C is clean only when typed in the client's own console. Never kill it outright.
