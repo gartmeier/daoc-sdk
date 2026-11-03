@@ -199,6 +199,60 @@ describe('BotSDK state reads', () => {
         expect(sdk.getTrade()).toBeNull();
     });
 
+    describe('findSpecialization', () => {
+        const knowing = (...names: string[]) => {
+            const { sdk } = stubSdk(5000);
+            const specializations = names.map((name, internalId) => ({ name, level: 1, internalId, bonus: 0 }));
+            feed(sdk, makeState({ skills: { specializations, abilities: [], styles: [], spells: [] } }));
+            return sdk;
+        };
+        const armsman = () => knowing('Crush', 'Slash', 'Thrust', 'Polearm', 'Shield', 'Parry', 'Two Handed', 'Crossbows');
+        const mentalist = () => knowing('Light Magic', 'Mentalism', 'Mana Magic');
+
+        test.each(['Shield', 'shield', 'Shields', 'shields'])('%s finds Shield, the name in the list', name => {
+            expect(armsman().findSpecialization(name)?.name).toBe('Shield');
+        });
+
+        test('a regex matches the name in the list, then the key', () => {
+            expect(armsman().findSpecialization(/^Shield$/)?.name).toBe('Shield');
+            expect(armsman().findSpecialization(/^Shields$/)?.name).toBe('Shield');
+            expect(mentalist().findSpecialization(/^Light$/)?.name).toBe('Light Magic');
+            expect(armsman().findSpecialization(/^Light$/)).toBeNull();
+        });
+
+        test.each([['Light', 'Light Magic'], ['Light Magic', 'Light Magic'], ['Mana', 'Mana Magic'], ['mana magic', 'Mana Magic']])('%s finds %s', (name, line) => {
+            expect(mentalist().findSpecialization(name)?.name).toBe(line);
+        });
+
+        test('an item bonus name finds its line', () => {
+            expect(knowing('Mending', 'Subterranean', 'Augmentation').findSpecialization('Cave Magic')?.name).toBe('Subterranean');
+            expect(knowing('Rejuvenation', 'Enhancement', 'Smite').findSpecialization('Smiting')?.name).toBe('Smite');
+            expect(knowing('Shield', 'Thrown Weapons').findSpecialization('Throwing')?.name).toBe('Thrown Weapons');
+        });
+
+        test('a name the class has no line for stays null', () => {
+            expect(mentalist().findSpecialization('Shields')).toBeNull();
+            expect(armsman().findSpecialization('Cave Magic')).toBeNull();
+            expect(knowing('Darkness', 'Suppression', 'Runecarving').findSpecialization('Runes of Darkness')).toBeNull();
+            expect(armsman().findSpecialization('constructor')).toBeNull();
+            expect(armsman().findSpecialization('__proto__')).toBeNull();
+        });
+
+        test('an empty name finds nothing: it would otherwise match every line', () => {
+            expect(armsman().findSpecialization('')).toBeNull();
+        });
+
+        test('a part of a name still matches, and the shortest wins', () => {
+            expect(armsman().findSpecialization('two')?.name).toBe('Two Handed');
+            expect(knowing('Left Axe', 'Axe').findSpecialization('Axe')?.name).toBe('Axe');
+            expect(armsman().findSpecialization(/^P/)?.name).toBe('Parry');
+        });
+
+        test('a part of a name means the listed name, not the key', () => {
+            expect(armsman().findSpecialization('ields')).toBeNull();
+        });
+    });
+
     test('getTrade returns the open window; a client without the field reads as closed', () => {
         const { sdk } = stubSdk(5000);
         const trade = { id: 1, revision: 2, partnerName: 'Aine', mySlots: [40], myMoney: 5, partnerItems: [], partnerMoney: 0 };

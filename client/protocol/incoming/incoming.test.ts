@@ -331,8 +331,8 @@ describe('window packets', () => {
     });
 
     test('0x7B TrainerWindow spec list (PacketLib1105.cs:29)', () => {
-        const p = W().u8(2).u8(7).u8(0).u8(0).u8(0).u8(1).u8(2).pascal('Slash').u8(1).u8(3).u8(4).pascal('Shields').toBytes();
-        expect(decodeTrainerWindow(p)).toEqual({ code: 0, specPoints: 7, specs: [{ index: 0, level: 1, nextLevel: 2, name: 'Slash' }, { index: 1, level: 3, nextLevel: 4, name: 'Shields' }] });
+        const p = W().u8(2).u8(7).u8(0).u8(0).u8(0).u8(1).u8(2).pascal('Slash').u8(1).u8(3).u8(4).pascal('Shield').toBytes();
+        expect(decodeTrainerWindow(p)).toEqual({ code: 0, specPoints: 7, specs: [{ index: 0, level: 1, nextLevel: 2, name: 'Slash' }, { index: 1, level: 3, nextLevel: 4, name: 'Shield' }] });
         expect(decodeTrainerWindow(Uint8Array.of(0, 7, 1, 0))).toEqual({ code: 1, specPoints: 7 });
     });
 

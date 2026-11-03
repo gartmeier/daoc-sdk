@@ -308,6 +308,16 @@ describe('WorldModel fixes', () => {
         expect(m.skills().styles.map(s => s.specName)).toEqual(['Slash', 'Two Handed', null]);
     });
 
+    test('0x16/01 lists a line under its display name while its style says the key', () => {
+        const m = new WorldModel();
+        const p = W().u8(1).u8(2).u8(3).u8(0)
+            .u8(3).u16(74).u8(0).u16(0).u8(0).u16(1).pascal('Shield')
+            .u8(3).u16(13).u8(2).u16(0).u8(0x2B).u16(8).pascal('Numb').toBytes();
+        m.handle(ServerOp.VariousUpdate, p);
+        expect(m.skills().specializations.map(s => s.name)).toEqual(['Shield']);
+        expect(m.skills().styles.map(s => s.specName)).toEqual(['Shields']);
+    });
+
     describe('trainer window lifetime', () => {
         const trainerPacket = W().u8(1).u8(3).u8(0).u8(0).u8(0).u8(2).u8(3).pascal('Slash').toBytes();
         const trainerAt = (m: WorldModel, x: number) => m.handle(ServerOp.NPCCreate, npcCreate(210, 'Master Graent', x, ME.y, { guild: 'Fighter Trainer' }));

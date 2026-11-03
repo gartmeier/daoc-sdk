@@ -82,7 +82,8 @@ export function coinDrops(copper: number): Array<[slot: number, amount: number]>
 /**
  * Reverse of GlobalConstants.GetSpecToInternalIndex (GlobalConstants.cs:801-891), which the server
  * writes as the bonus byte of a 0x16/01 style entry (PacketLib1112.cs:150). Values are the Specs
- * constants (SkillConstants.cs:467-842), i.e. the specialization names in the same skill list.
+ * constants (SkillConstants.cs:467-842), i.e. the DB keys: the same skill list shows four lines
+ * under another name ('Shields' as 'Shield', data/spec-names.ts).
  */
 export const SPEC_BY_INTERNAL_INDEX: Readonly<Record<number, string>> = {
     0x01: 'Slash', 0x02: 'Thrust', 0x08: 'Parry', 0x0E: 'Sword', 0x10: 'Hammer', 0x11: 'Axe', 0x12: 'Left Axe',

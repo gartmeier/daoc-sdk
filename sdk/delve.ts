@@ -11,6 +11,7 @@
 // Names are the English ones of SkillBase.RegisterPropertyNames (language/EN/SkillHandler.txt). A
 // name or unit not listed here goes to `unknown`, never into a nearby category.
 
+import { specKey } from '../data/spec-names';
 import type { ItemBonus, ParsedDelve, SkillGroup } from './types';
 
 const STATS: Record<string, NonNullable<ItemBonus['stat']>> = {
@@ -40,16 +41,10 @@ export const SKILLS: Record<SkillGroup, readonly string[]> = {
 };
 const SKILL_GROUP = new Map<string, SkillGroup>(Object.entries(SKILLS).flatMap(([group, names]) => names.map(n => [n, group as SkillGroup] as const)));
 
-/** The bonus's name where classes.json calls the specialization something else (SkillBase m_specToSkill, m_specToFocus). */
-const SPEC_NAMES: Record<string, string> = {
-    Crossbow: 'Crossbows', Longbow: 'Longbows', 'Recurved Bow': 'Recurve Bow', Throwing: 'Thrown Weapons', Smiting: 'Smite',
-    Enchantment: 'Enchantments', 'Light Magic': 'Light', 'Void Magic': 'Void', 'Mana Magic': 'Mana', 'Cave Magic': 'Subterranean',
-    Arboreal: 'Arboreal Path', Verdant: 'Verdant Path',
-};
 /** Named skills no class in classes.json trains. */
 const NO_SPEC = new Set(['Archery', 'Short Bow', 'Spectral Force']);
 /** The specialization a skill or focus name belongs to. */
-export const specOf = (name: string): string | null => NO_SPEC.has(name) ? null : SPEC_NAMES[name] ?? name;
+export const specOf = (name: string): string | null => NO_SPEC.has(name) ? null : specKey(name);
 
 const SKILL_GROUPS: Record<string, SkillGroup | null> = {
     'ALL Magic Skills': 'magic', 'ALL Melee Weapon Skills': 'melee', 'ALL Dual Wielding Skills': 'dual', 'ALL Archery Skills': 'archery', 'All Skills': null,

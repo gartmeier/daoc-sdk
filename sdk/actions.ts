@@ -50,7 +50,7 @@ import {
 } from './actions-helpers';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
 import { isDelveOf, parseDelve } from './delve';
-import { findNpcSpawns, getSpell, getSpells, getZonePoint, realmId, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
+import { findNpcSpawns, getSpell, getSpells, getZonePoint, realmId, specKey, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
 import type {
     ActionResult,
     BotWorldState,
@@ -403,6 +403,7 @@ export interface SellItemsResult extends ActionResult {
 }
 
 export interface TrainResult extends ActionResult {
+    /** The line as the skill list names it, whichever of its names was asked for. */
     spec: string | null;
     fromLevel: number;
     toLevel: number;
@@ -1951,13 +1952,14 @@ export class BotActions {
     /**
      * Train a specialization at a trainer of our class: target it, open the
      * trainer window (falling back to '/train'), and observe the spec level rise.
+     * `specName` is any name of the line (sdk.findSpecialization); a name no line answers to gives 'spec_not_found'.
      */
     async trainSpec(trainer: NpcTarget, specName: NamePattern, levels: number = 1): Promise<TrainResult> {
         const empty = { spec: null, fromLevel: 0, toLevel: 0, specPointsLeft: this.helpers.player()?.specPoints ?? 0 };
         let n = this.helpers.resolveNpc(trainer);
         if (!n) return fail(`Trainer not found: ${describeTarget(trainer)}`, 'not_found', empty);
         const spec0 = this.sdk.findSpecialization(specName);
-        if (!spec0) return fail(`No specialization matching ${describeTarget(specName)}`, 'spec_not_found', empty);
+        if (!spec0) return fail(`No specialization matching ${describeTarget(specName)} (known: ${this.sdk.getSkills().specializations.map(s => s.name).join(', ') || 'none'})`, 'spec_not_found', empty);
         const target = spec0.level + Math.max(1, Math.floor(levels));
         if (n.distance > INTERACT_APPROACH) {
             const walk = await this.walkToObject(n, { range: INTERACT_APPROACH });
@@ -1972,7 +1974,8 @@ export class BotActions {
             const win = await this.helpers.waitFor(s => s.trainer.isOpen && s.trainer.specs.length ? s.trainer : null, 3000);
             const ts = win ? bestNameMatch(win.specs, spec0.name) : null;
             if (ts) await this.sdk.sendTrainSpec(ts.index, target - ts.level);
-            else await this.sdk.sendCommand(`/train ${spec0.name} ${target}`);
+            // /train takes a key prefix (train.cs:57-66): 'Light Magic' isn't one, 'Light' is.
+            else await this.sdk.sendCommand(`/train ${specKey(spec0.name)} ${target}`);
             const got = await this.helpers.waitFor(s => {
                 if (watch.find(TRAIN_REFUSALS)) return 'refused';
                 const now = s.skills.specializations.find(x => x.name === spec0.name);
