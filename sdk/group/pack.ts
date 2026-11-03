@@ -43,8 +43,10 @@ export interface PackOptions {
     minPack: number;
     /** Fewer than this together: the pack is broken and goes home. */
     minTogether: number;
-    /** Don't start a raid with a member below this; rest (settings.ready) only when no enemy is in sight. */
+    /** Below this a member makes the pack rest, up to settings.ready ... */
     raidReady: { hp: number; mana: number };
+    /** ... where it stands, with enemies no nearer than this; nearer, it moves off first. */
+    restClear: number;
     /** Refuse more free enemies than this round their nearest. */
     maxFoes: number;
     /** ... counting those within this of it. */
@@ -89,7 +91,7 @@ export interface PackSettings extends RvrSettings {
 export const PACK_OPTIONS: PackOptions = {
     standoff: 1500, reach: 1500, openAt: 1450, idleMs: 3000, waitMs: 0, minPack: 3, minTogether: 3,
     // User, live: fights may be joined head on, the first version avoided all of them. Only a real crowd is refused.
-    maxFoes: 8, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 },
+    maxFoes: 8, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
     raidMs: 8000, finishMs: 4000, finishHp: 25, closeCount: 3, closeIn: 700,
     pullBack: 1500, pullMs: 6000, maxChasers: 2, chaseGap: 800, maxLegs: 0, killMs: 12_000, preyHp: 40,
     leave: 2000, cooldownMs: 0,
@@ -106,7 +108,7 @@ export const PACK_SETTINGS: PackSettings = {
     // Everyone has to reach the same enemy from where they stand: rvr-roam's 700 behind the anchor leaves a nuker out of range.
     // The Bard leads: his mezz reaches 1500 like everyone's, and he has to be first in reach of the far ones.
     formation: { tank: { back: 0, angle: 0 }, healer: { back: 200, angle: 0.6 }, support: { back: -200, angle: 0 }, nuker: { back: 250, angle: 0.3 }, melee: { back: 120, angle: 0.8 } },
-    ready: { hp: 70, mana: 60 },
+    ready: { hp: 70, mana: 50 },
     // Only between raids, from a corpse close by: a corpse the pack has left releases and is picked up.
     rez: { holdMs: 20_000, radius: 2000, sit: false, reserve: 25, inFight: false },
     pack: PACK_OPTIONS,
@@ -336,6 +338,21 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const crowd = seen.filter(c => dist(c, lead) <= k.crowdRadius).length;
     const short = main.filter(m => m.hp < k.raidReady.hp || (usesMana(m) && m.mana < k.raidReady.mana));
     const cooling = now - (mem.raidEnd ?? -Infinity) < k.cooldownMs;
+    // Low on power or hurt: rest until settings.ready, and stick to it. Live (s5) the pack flipped every second between hunting
+    // two stragglers and walking off from a third that came into sight, so it neither rested nor fought. Rest where we stand
+    // unless enemies are near (walking regenerates nothing): the Bard's power song and sitting come with 'recover'.
+    if (short.length) mem.resting = true;
+    if (mem.resting && !main.some(m => m.hp < s.ready.hp || (usesMana(m) && m.mana < s.ready.mana))) mem.resting = false;
+    if (mem.resting) {
+        const who = main.filter(m => m.hp < s.ready.hp || (usesMana(m) && m.mana < s.ready.mana));
+        if (onUsNow || d <= k.reach) return startLeave(`${who.map(m => m.name).join(', ')} resting, and they are on us`);
+        if (d <= k.restClear) {
+            const goal = spotAlong(trip, centre, runWay(centre, seen, homeSpot), s.huntRadius);
+            stepLeg(trip, 'avoid', goal, { from: centre, movers: main, replan: 2000 });
+            return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'keep away while resting', reason: `resting: ${who.map(m => m.name).join(', ')}, moving off (nearest ${Math.round(d)} away)` });
+        }
+        return say({ ...none, phase: 'recover', anchor: stay, objective: 'rest', waiting: who.map(m => ({ name: m.name, why: 'power' })), reason: `resting: ${who.map(m => m.name).join(', ')} (nearest enemy ${Math.round(d)} away)` });
+    }
     // Prey: all that is in sight is a couple of stragglers and we clearly outnumber them. No cooldown, no stand-off and no
     // raid clock for those: turn round and kill them, the Hero too. Live, 5 v 2 at the end of a round was refused as "still cooling down".
     const inSight = foes.filter(c => dist(c, centre) <= s.huntRadius);
@@ -353,7 +370,6 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     }
     const refuse = main.length < k.minPack ? `only ${main.length} together`
         : crowd > k.maxFoes ? `${crowd} enemies together`
-        : short.length ? `${short.map(m => m.name).join(', ')} not ready`
         : cooling && d > k.openAt && !onUsNow ? 'still cooling down'
         : ctx.windingDown ? 'time is up'
         : null;

@@ -64,14 +64,33 @@ describe('decidePack: stalking', () => {
     test('refuses only a real crowd or a pack that is hurt or out of power; cooling down does not count', () => {
         const crowd = [...fiveAt(13_000), foe(201, 13_000, 10_300), foe(202, 13_100, 10_300), foe(203, 13_200, 10_300), foe(204, 13_300, 10_300)];
         expect(decidePack(ctx(picture(team(), crowd))).reason).toContain('enemies together');
-        expect(decidePack(ctx(picture(team({ Menta: { mana: 10 } }), fiveAt(13_000)))).reason).toContain('not ready');
-        expect(decidePack(ctx(picture(team(), fiveAt(13_000)), { memory: { raidEnd: 5000 }, now: 6000 })).reason).toContain('stalk');
+                expect(decidePack(ctx(picture(team(), fiveAt(13_000)), { memory: { raidEnd: 5000 }, now: 6000 })).reason).toContain('stalk');
     });
 
     test('hurt and attacked: walks off to rest', () => {
         const m: any = {};
         const u = decidePack(ctx(picture(team({ Menta: { mana: 10 } }), [foe(101, 11_000, 10_000, { target: 'Tank' }), foe(102, 11_100), foe(103, 11_200)]), { memory: m }));
         expect(u.phase).toBe('travel');
+        expect(m.pack).toBe('leave');
+    });
+});
+
+describe('decidePack: resting', () => {
+    test('low on power it rests where it stands, and stays resting until ready, whatever comes into sight', () => {
+        const m: any = {};
+        expect(decidePack(ctx(picture(team({ Menta: { mana: 10 } }), [foe(101, 14_000)]), { memory: m })).phase).toBe('recover');
+        expect(m.resting).toBe(true);
+        // Above the low mark but not ready: still resting, with two stragglers in sight that would otherwise be prey.
+        expect(decidePack(ctx(picture(team({ Menta: { mana: 40 } }), [foe(101, 14_000), foe(102, 14_200)]), { memory: m })).phase).toBe('recover');
+        // Ready again: back to the hunt.
+        expect(decidePack(ctx(picture(team({ Menta: { mana: 90 } }), [foe(101, 14_000)]), { memory: m })).reason).toContain('hunt');
+        expect(m.resting).toBe(false);
+    });
+
+    test('enemies near: it moves off first; on us: it leaves', () => {
+        expect(decidePack(ctx(picture(team({ Menta: { mana: 10 } }), [foe(101, 12_000)]))).reason).toContain('moving off');
+        const m: any = {};
+        decidePack(ctx(picture(team({ Menta: { mana: 10 } }), [foe(101, 11_000)]), { memory: m }));
         expect(m.pack).toBe('leave');
     });
 });
@@ -91,7 +110,8 @@ describe('decidePack: prey', () => {
 
     test('not with a member badly hurt, and not three: that stays a raid or a refusal', () => {
         const hurt = decidePack(ctx(picture(team({ Menta: { hp: 30 } }), [foe(101, 13_000)])));
-        expect(hurt.reason).toContain('not ready');
+        expect(hurt.reason).toContain('resting');
+        expect(hurt.phase).toBe('recover');
         const three = decidePack(ctx(picture(team(), [foe(101, 13_000), foe(102, 13_200), foe(103, 13_400)])));
         expect(three.reason).toContain('stalk');
     });
