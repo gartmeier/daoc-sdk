@@ -9,7 +9,7 @@ const r = await bot.rest({ healthPercent: 90 });                 // casters: add
 
 - **Sitting:** `rest` sits, and waits for the server's "You sit down." (a refused sit fails). It stands up again when the thresholds are reached, on failure, and on cancel.
 - **Live:** health went from 89 % to 100 % in 18 s at level 1. (DAoC regenerates faster sitting; standing rates were not measured.) A level-5 Blademaster from 16-34 % took about 96-160 s including its walks, and about 80 s at level 6. `rest` stops at 120 s by default, so size a script's timeout for that.
-- **Attacked while sitting:** a mob attacking you while you sit ends the rest with `attacked`. Fight it (`bot.getAttackers()[0]`), then rest again. `rest` refuses to start while something targets you (`in_combat`).
+- **Attacked while sitting:** a mob attacking you while you sit ends the rest with `attacked`. Fight it (`bot.getAttackers()[0]`), then rest again. `rest` refuses to start while an NPC in view targets you or hit you in the last 6 s (`in_combat`).
 - **No sitting:** `bot.waitForHealth(percent)` waits without sitting.
 - **Healers** (Brother Maynard <Healer>, near the Albion start) answer interact. In DAoC they remove constitution loss after deaths; untested here.
 
