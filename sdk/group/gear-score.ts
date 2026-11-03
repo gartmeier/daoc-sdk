@@ -8,7 +8,7 @@
 // (GeneratedUniqueItem.cs:4665-4705), a class's main stat beats a resist of the same roll: at level
 // 20 the top rolls are +7 = 7, 3 % = 6 and 20 hits = 5.
 
-import { getClass, type ClassInfo, type StatName } from '../../data/index';
+import { getClass, specKey, type ClassInfo, type StatName } from '../../data/index';
 import { conLevel } from '../actions-helpers';
 import { ALL_FOCUS, SKILLS, specOf } from '../delve';
 import { ObjectType, type InventoryItem, type ItemBonus, type SkillGroup, type Specialization, type WeaponDelve } from '../types';
@@ -136,11 +136,12 @@ const MAGIC_SPECS = new Set(SKILLS.magic.map(specOf));
  * How much of a focus caster's training a staff's focus reaches, 0 to 1: line by line, up to the
  * line's spec, which is as high as its spells go. A spell costs 120 % of base with no focus and 80 %
  * at a focus as high as its level (SpellHandler.cs:1204-1222). A line's own focus and ALL Spell
- * Lines don't add up: the higher counts (FocusLevelCalculator.cs:30-31).
+ * Lines don't add up: the higher counts (FocusLevelCalculator.cs:30-31). `specs` is the skill list,
+ * which calls a line by its display name where a bonus uses the key: specKey joins them.
  */
 export function focusCover(bonuses: readonly ItemBonus[], specs: readonly Pick<Specialization, 'name' | 'level'>[]): number {
-    const focus = (line: string) => Math.max(0, ...bonuses.filter(b => b.category === 'focus' && (b.name === ALL_FOCUS || b.spec === line)).map(b => b.value));
-    const lines = specs.filter(s => MAGIC_SPECS.has(s.name));
+    const focus = (line: string) => Math.max(0, ...bonuses.filter(b => b.category === 'focus' && (b.name === ALL_FOCUS || b.spec === specKey(line))).map(b => b.value));
+    const lines = specs.filter(s => MAGIC_SPECS.has(specKey(s.name)));
     const total = lines.reduce((sum, s) => sum + s.level, 0);
     return total ? lines.reduce((sum, s) => sum + Math.min(focus(s.name), s.level), 0) / total : 0;
 }
