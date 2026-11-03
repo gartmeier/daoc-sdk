@@ -17,7 +17,7 @@ import { findItemTemplates, findNpcSpawns, getClass, getMerchantItems, realmId, 
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import { EquipmentSlot, isArmor, ObjectType, type InventoryItem, type PlayerState } from '../types';
-import { armorGain, armorSwing, armorValue, statScore } from './gear-score';
+import { armorGain, armorSwing, armorValue, statScore, tooHighLevel } from './gear-score';
 
 const { Jewelry, Cloak, Neck, Waist, LeftBracer, RightBracer, LeftRing, RightRing } = EquipmentSlot;
 const BRACERS = [LeftBracer, RightBracer] as const;
@@ -208,10 +208,12 @@ export async function armorUpgradeGain(delves: GearDelves, item: InventoryItem, 
 /**
  * Each candidate's gain over what its slot holds. Armour counts its bonuses (armorUpgradeGain);
  * weapons and shields stay on the caller's `score`, by DPS or block alone: their bonuses aren't weighed yet.
+ * A candidate too high for this level (tooHighLevel, `maxCon`) isn't one, however good: it wears too fast.
  */
-export async function upgradeGains<T extends { item: InventoryItem; cur?: InventoryItem }>(delves: GearDelves, rows: T[], level: number, score: (i: InventoryItem, level: number) => number): Promise<(T & { gain: number })[]> {
+export async function upgradeGains<T extends { item: InventoryItem; cur?: InventoryItem }>(delves: GearDelves, rows: T[], level: number, score: (i: InventoryItem, level: number) => number, opts: { maxCon?: number } = {}): Promise<(T & { gain: number })[]> {
     const out: (T & { gain: number })[] = [];
     for (const row of rows) {
+        if (tooHighLevel(row.item, level, opts.maxCon)) continue;
         const gain = isArmor(row.item.objectType)
             ? await armorUpgradeGain(delves, row.item, row.cur, level)
             : score(row.item, level) - (row.cur ? score(row.cur, level) : 0);
