@@ -1751,6 +1751,64 @@ describe('trainSpec', () => {
         expect(w.sentOf('setTarget')[0]!.objectId).toBe(210);
         expect((await bot.trainSpec('Graent', 'Polearm')).reason).toBe('spec_not_found');
     });
+
+    const spec = (name: string, internalId: number) => ({ name, level: 1, internalId, bonus: 0 });
+    const raise = (world: FakeWorld, name: string, level: number) => {
+        world.state.skills = { ...world.state.skills, specializations: world.state.skills.specializations.map(s => (s.name === name ? { ...s, level } : s)) };
+    };
+    /** A trainer in reach and these lines; `window` is what the trainer window lists (the server sends display names). */
+    const atTrainer = (lines: string[], window = lines) => {
+        const trainer = makeNpc({ objectId: 210, name: 'Master Graent', role: 'trainer', realm: 'albion', x: 560080, y: 511000 });
+        const { w, bot } = world({ nearbyNpcs: [trainer], skills: { ...makeState().skills, specializations: lines.map(spec) } });
+        w.handlers.openTrainer = (_a, world) => {
+            world.state.trainer = { isOpen: true, specPoints: 90, specs: window.map((name, index) => ({ index, name, level: 1, nextLevelCost: 2 })) };
+        };
+        return { w, bot };
+    };
+
+    test.each([
+        ['Shield', 'Shield', 2], ['Shields', 'Shield', 2], ['shields', 'Shield', 2],
+        ['Light', 'Light Magic', 0], ['Light Magic', 'Light Magic', 0], ['Mana', 'Mana Magic', 2],
+        ['Cave Magic', 'Subterranean', 1], ['Subterranean', 'Subterranean', 1],
+    ])('%s trains %s by its window index', async (asked, shown, index) => {
+        const lines = shown === 'Shield' ? ['Slash', 'Thrust', 'Shield', 'Parry'] : shown === 'Subterranean' ? ['Mending', 'Subterranean', 'Augmentation'] : ['Light Magic', 'Mentalism', 'Mana Magic'];
+        const { w, bot } = atTrainer(lines);
+        w.handlers.trainSpec = (a, world) => { if (a.type === 'trainSpec') setTimeout(() => raise(world, lines[a.specIndex]!, 2), 10); };
+        const r = await bot.trainSpec('Graent', asked);
+        expect(r).toMatchObject({ success: true, spec: shown, fromLevel: 1, toLevel: 2 });
+        expect(w.sentOf('trainSpec')).toEqual([expect.objectContaining({ specIndex: index, levels: 1 })]);
+        expect(w.sentOf('command')).toEqual([]);
+    });
+
+    // train.cs:57-66: the first KeyName with this prefix, else "could not be found". So 'Light Magic' finds nothing.
+    const KEYS = ['Light', 'LightTankCareer', 'Mana', 'Mentalism', 'Shields', 'Void'];
+    test.each([
+        ['Light Magic', '/train Light 2'], ['Light', '/train Light 2'],
+        ['Mana Magic', '/train Mana 2'], ['Void Magic', '/train Void 2'],
+        ['Shield', '/train Shields 2'], ['Shields', '/train Shields 2'],
+    ])('with the line missing from the window, %s goes to /train under its key', async (asked, command) => {
+        const line = asked.startsWith('Shield') ? 'Shield' : asked.startsWith('Light') ? 'Light Magic' : asked.startsWith('Mana') ? 'Mana Magic' : 'Void Magic';
+        const { w, bot } = atTrainer([line], ['Slash']);
+        w.handlers.command = (a, world) => {
+            if (a.type !== 'command') return;
+            const [, name, level] = /^\/train (.+) (\d+)$/.exec(a.command)!;
+            const key = KEYS.find(k => k.toLowerCase().startsWith(name!.toLowerCase()));
+            setTimeout(() => (key ? raise(world, line, Number(level)) : world.message('The provided skill could not be found.')), 10);
+        };
+        const r = await bot.trainSpec('Graent', asked);
+        expect(w.sentOf('command').map(a => a.command)).toEqual([command]);
+        expect(r).toMatchObject({ success: true, spec: line, toLevel: 2 });
+    });
+
+    test('a name no line answers to says which lines there are, and sends nothing', async () => {
+        const { w, bot } = atTrainer(['Darkness', 'Suppression', 'Runecarving']);
+        const r = await bot.trainSpec('Graent', 'Runes of Darkness');
+        expect(r.reason).toBe('spec_not_found');
+        expect(r.message).toContain('Darkness, Suppression, Runecarving');
+        expect(w.sentOf('openTrainer')).toEqual([]);
+        expect(w.sentOf('command')).toEqual([]);
+        expect((await bot.trainSpec('Graent', 'constructor')).reason).toBe('spec_not_found');
+    });
 });
 
 // ── Social / group / grind ──────────────────────────────────────────────────

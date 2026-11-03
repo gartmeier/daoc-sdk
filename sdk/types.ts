@@ -321,6 +321,7 @@ export const ItemHand = { MainHand: 0, TwoHanded: 1, FitsLeft: 2 } as const;
 // ── Skills / spells ─────────────────────────────────────────────────────────
 
 export interface Specialization {
+    /** The server's display name, not always the key elsewhere: 'Shield' (key Shields), 'Light Magic' (key Light). sdk.findSpecialization takes either. */
     name: string;
     level: number;
     internalId: number;
@@ -389,6 +390,7 @@ export interface Style {
     name: string;
     internalId: number;
     specLevel: number;
+    /** The line's DB key, so 'Shields' where the skill list says 'Shield': find its level with sdk.findSpecialization(specName). */
     specName: string | null;
     /** Index to pass to the useSkill action. */
     skillIndex: number;
@@ -505,7 +507,7 @@ export interface ItemBonus {
     unit: 'pts' | '%' | 'lvls' | null;
     /** category 'stat'. */
     stat?: 'STR' | 'DEX' | 'CON' | 'QUI' | 'INT' | 'PIE' | 'EMP' | 'CHR' | 'ACU';
-    /** category 'skill' and 'focus': the specialization's name in classes.json, null when no class has one. */
+    /** category 'skill' and 'focus': the specialization's DB key, as in classes.json (sdk.findSpecialization takes it), null when no class has one. */
     spec?: string | null;
     /** category 'skill': its ePropertyType group; 'skillGroup': the group it raises, null for "All Skills". */
     group?: SkillGroup | null;
@@ -573,6 +575,7 @@ export interface MerchantState {
 
 export interface TrainerSpec {
     index: number;
+    /** The server's display name, as in Specialization.name. */
     name: string;
     level: number;
     /** Cost in spec points to train the next level. */

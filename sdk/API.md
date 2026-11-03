@@ -117,7 +117,7 @@
 
 | Signature | Description |
 |---|---|
-| `async trainSpec(trainer: NpcTarget, specName: NamePattern, levels: number = 1): Promise<TrainResult>` | Train a specialization at a trainer of our class: target it, open the trainer window (falling back to '/train'), and observe the spec level rise. |
+| `async trainSpec(trainer: NpcTarget, specName: NamePattern, levels: number = 1): Promise<TrainResult>` | Train a specialization at a trainer of our class: target it, open the trainer window (falling back to '/train'), and observe the spec level rise. `specName` is any name of the line (sdk.findSpecialization); a name no line answers to gives 'spec_not_found'. |
 
 ### Group
 
@@ -198,7 +198,7 @@
 | `getObject(objectId: number): NearbyNpc \| NearbyPlayer \| NearbyObject \| null` | Any nearby NPC, player or object by object id. |
 | `getTarget(): NearbyNpc \| NearbyPlayer \| NearbyObject \| null` | Our current target (player.targetObjectId) when it is nearby. |
 | `getSkills(): SkillsState` | Specializations, abilities, styles and spells. |
-| `findSpecialization(pattern: NamePattern): Specialization \| null` | Specialization by name (shortest name wins). |
+| `findSpecialization(pattern: NamePattern): Specialization \| null` | Specialization by any name of its line: as listed ('Shield'), its DB key ('Shields', from classes.json, Style.specName or ItemBonus.spec) or an item's bonus name ('Cave Magic'). Failing those, by part of the listed name (shortest wins). Look lines up here rather than with === on the list, which only knows the listed name. |
 | `findSpell(pattern: NamePattern): Spell \| null` | Spell by name; pass its lineIndex/spellIndex to sendCastSpell. Highest level wins among equal names. |
 | `findStyle(pattern: NamePattern): Style \| null` | Combat style by name; pass its skillIndex to sendUseSkill. |
 | `findAbility(pattern: NamePattern): Ability \| null` | Ability by name; pass its skillIndex to sendUseSkill. |
@@ -490,6 +490,7 @@ interface InventoryItem {
 
 ```typescript
 interface Specialization {
+  /** The server's display name, not always the key elsewhere: 'Shield' (key Shields), 'Light Magic' (key Light). sdk.findSpecialization takes either. */
   name: string;
   level: number;
   internalId: number;
@@ -576,6 +577,7 @@ interface Style {
   name: string;
   internalId: number;
   specLevel: number;
+  /** The line's DB key, so 'Shields' where the skill list says 'Shield': find its level with sdk.findSpecialization(specName). */
   specName: string | null;
   /** Index to pass to the useSkill action. */
   skillIndex: number;
@@ -706,7 +708,7 @@ interface ItemBonus {
   unit: 'pts' | '%' | 'lvls' | null;
   /** category 'stat'. */
   stat?: 'STR' | 'DEX' | 'CON' | 'QUI' | 'INT' | 'PIE' | 'EMP' | 'CHR' | 'ACU';
-  /** category 'skill' and 'focus': the specialization's name in classes.json, null when no class has one. */
+  /** category 'skill' and 'focus': the specialization's DB key, as in classes.json (sdk.findSpecialization takes it), null when no class has one. */
   spec?: string | null;
   /** category 'skill': its ePropertyType group; 'skillGroup': the group it raises, null for "All Skills". */
   group?: SkillGroup | null;
@@ -798,6 +800,7 @@ interface MerchantState {
 ```typescript
 interface TrainerSpec {
   index: number;
+  /** The server's display name, as in Specialization.name. */
   name: string;
   level: number;
   /** Cost in spec points to train the next level. */
@@ -1451,6 +1454,7 @@ interface SellItemsResult extends ActionResult {
 
 ```typescript
 interface TrainResult extends ActionResult {
+  /** The line as the skill list names it, whichever of its names was asked for. */
   spec: string | null;
   fromLevel: number;
   toLevel: number;

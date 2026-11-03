@@ -41,6 +41,18 @@ const n = await bot.navigateDialog('Master Visur', ['towns', /prydwen/i]);   // 
   const r = await bot.trainSpec('Master Graent', 'Crush', 1);   // r.fromLevel, r.toLevel, r.specPointsLeft
   ```
   It opens the trainer window, falling back to `/train <spec> <level>`, and observes the spec level rise. Verified live: Crush 1 → 2.
+- **A line's names:** `trainSpec`, `sdk.findSpecialization`, `getStylesFor` and `getSpecialization` take any of them. Verified live on an Armsman, Mentalist, Eldritch, Runemaster and Shaman, on both training paths.
+  | Key: `classes.json`, `getStylesFor`, `style.specName`, `bonus.spec` | Display: `getSkills()`, the trainer window, `r.spec`, chat | On items |
+  |---|---|---|
+  | Shields | Shield | Shields |
+  | Light | Light Magic | Light Magic |
+  | Mana | Mana Magic | Mana Magic |
+  | Void | Void Magic | Void Magic |
+  | Subterranean | Subterranean | Cave Magic |
+
+  Other lines have one name, and items spell a few differently (Smiting, Throwing, Recurved Bow). Spell lines are something else again: the Runemaster's Darkness casts from Runes of Darkness, which `trainSpec` answers with `spec_not_found` and the list of real lines. `specKey(name)` and `specDisplayName(name)` in `data/index` convert.
+  - **A training plan reads levels through `sdk.findSpecialization(name)`:** `specs.find(s => s.name === name)` only knows the display name. A plan that filters on that drops any other name with no message, and its points go to the other lines: a Warrior's Shield and a Shaman's Subterranean both stayed at 1 that way. It returns null for a line not learned yet too (a Paladin's Parry before 15), so compare `specKey(name)` with `getClass(cls).specializations` to tell a typo from that.
+  - **What the server wants:** the window trains by index, so no name reaches it. `/train` takes a key prefix: `/train Light Magic 5` gets "The provided skill could not be found" and `/train Light 5` trains, while `/train Shield 5` and `/train Shields 5` both work. `trainSpec` sends the key there.
 - **Spec points** come with levels (`player.specPoints`). The cost of each next level is in `sdk.getTrainer()?.specs` once the window is open.
   - **What comes:** levels 2-5 give their own number, and from 6 on each level gives the class's multiplier * level / 10, rounded down (`GamePlayer.cs:4705`). From level 40 half-levels add multiplier * level / 20. A multiplier of 15 gave 9 at level 6.
   - **What it costs:** each spec level costs its own number, so from 1 to N costs the sum of 2..N. Checked on a Blademaster's real points: 14 + 2 * (6..24) = 584 by level 24, against 573 for Blades 24, Celtic Dual 21 and Parry 9.
