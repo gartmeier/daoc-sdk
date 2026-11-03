@@ -88,8 +88,9 @@ export const RVR_SETTINGS: RvrSettings = {
     assistAfterMs: 6000,
     // Players hit harder and in bursts: heal earlier than in PvE.
     heal: { tank: 75, other: 70, emergency: 40, outOfCombat: 90 },
-    // An RvR death costs no XP or constitution: a rez saves the walk back, about 100 s, and no more than that is worth waiting.
-    rez: { holdMs: 60_000 },
+    // An RvR death costs no XP or constitution, and a release gives full health and power: a rez saves only the walk
+    // back, about 100 s. So the rezzer pays only from what it has, keeping a reserve, and may do it mid-fight when the group can spare it.
+    rez: { holdMs: 60_000, sit: false, reserve: 25, inFight: true },
     rest: { hp: 90, mana: 80 },
     combatRange: { healer: [500, 1600], support: [500, 1600], nuker: [700, 1400] },
     slotSlack: 350,

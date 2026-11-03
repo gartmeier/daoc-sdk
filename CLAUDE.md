@@ -47,7 +47,7 @@ MCP `execute_code` does steps 3–4 itself. Scripts and the CLIs never start a c
 
 ## Groups
 
-Several bots play as one group through `sdk/group` (read [learnings/group-coordination.md](learnings/group-coordination.md) first): members share what they see on a blackboard, a coordinator runs the strategy's `decide()` (pull, focus, crowd control, retreat), each member runs its role's behaviour list with its own routine from `bots/<bot>/character.ts` in it, and an observer scores every run. Between fights, members who know a rez bring back the dead, and a corpse with such a member near waits for it (`rez.holdMs`) before it releases.
+Several bots play as one group through `sdk/group` (read [learnings/group-coordination.md](learnings/group-coordination.md) first): members share what they see on a blackboard, a coordinator runs the strategy's `decide()` (pull, focus, crowd control, retreat), each member runs its role's behaviour list with its own routine from `bots/<bot>/character.ts` in it, and an observer scores every run. Between fights, members who know a rez bring back the dead (in RvR also mid-fight, if they have the power and the group isn't under pressure), and a corpse with such a member near waits for it (`rez.holdMs`) before it releases.
 
 ```bash
 bun groups/create-group.ts <group> <bot> <bot> ...    # groups/<group>/: group.json, strategy.ts, hunt.ts, lab_log.md

@@ -213,9 +213,15 @@ export interface RezSettings {
     holdMs: number;
     /** A corpse waits only for a rezzer this near, and a rezzer goes this far for one. */
     radius: number;
+    /** A rezzer short of power sits for it while the group waits. Without this it passes, and a corpse doesn't wait for it. */
+    sit: boolean;
+    /** Without `sit`: the power a rezzer must have left after paying, in % of its pool. */
+    reserve: number;
+    /** Cast during a fight too, while the group is not under pressure (rezPressure). */
+    inFight: boolean;
 }
 
-export const REZ_SETTINGS: RezSettings = { holdMs: 120_000, radius: 4000 };
+export const REZ_SETTINGS: RezSettings = { holdMs: 120_000, radius: 4000, sit: true, reserve: 0, inFight: false };
 /** A rez being cast on us holds the release this long past holdMs: the cast, then its 15 s question (ResurrectSpellHandler.cs:47). */
 const REZ_CLAIM_MS = 20_000;
 /** Sitting for the power or walking into range keeps a corpse ours this long: as long as a rest may take, and a little. */
@@ -229,18 +235,42 @@ const REZ_RANGE_MARGIN = 150;
 
 const rezSettings = (settings: Pick<TacticsSettings, 'rez'>): RezSettings => ({ ...REZ_SETTINGS, ...settings.rez });
 
-/** The level gap can price a rez out of a caster's whole pool: at a level 12 caster, anything from level 19. */
-const canAffordRez = (casterLevel: number, corpseLevel: number) => resurrectCost(100, casterLevel, corpseLevel) <= 100;
+/**
+ * Whether a rezzer with this much power (%) would pay for this corpse. The level gap can price a rez out of a
+ * whole pool: at a level 12 caster, anything from level 19. Without `sit` it has to be there now, reserve and all.
+ */
+function willPayRez(manaPercent: number, casterLevel: number, corpseLevel: number, s: RezSettings): boolean {
+    const cost = resurrectCost(100, casterLevel, corpseLevel);
+    return cost <= 100 && (s.sit || manaPercent - cost >= s.reserve);
+}
 
-/** A living member near the corpse who would rez it: its list casts a rez, and the level gap leaves it within its pool. */
-export function rezzerNear(members: MemberReport[], corpse: Pick<MemberReport, 'name' | 'regionId' | 'x' | 'y' | 'level'>, radius: number): MemberReport | undefined {
-    return members.find(m => m.name !== corpse.name && !m.isDead && m.capabilities.rez && m.regionId === corpse.regionId && dist(m, corpse) <= radius && canAffordRez(m.level, corpse.level));
+/** A living member near the corpse who would rez it: its list casts a rez, and it would pay. */
+export function rezzerNear(members: MemberReport[], corpse: Pick<MemberReport, 'name' | 'regionId' | 'x' | 'y' | 'level'>, s: RezSettings): MemberReport | undefined {
+    return members.find(m => m.name !== corpse.name && !m.isDead && m.capabilities.rez && m.regionId === corpse.regionId && dist(m, corpse) <= s.radius && willPayRez(m.mana, m.level, corpse.level, s));
+}
+
+/**
+ * Why a rezzer can't spare the 4 s of a rez in this fight, or null. What the board can tell of pressure: someone
+ * within heal reach is below the healing limit, more free enemies than living members, an enemy on a caster or
+ * healer, or one on or next to the rezzer, whose cast it would interrupt. A fight of even numbers on the tank is
+ * none of these; and the member comes back beside the rezzer, so a safe rezzer means a safe landing.
+ */
+export function rezPressure(me: Point & { name: string; regionId: number }, members: MemberReport[], threats: Contact[], heal: TacticsSettings['heal']): string | null {
+    const here = members.filter(m => !m.isDead && m.regionId === me.regionId);
+    const hurt = here.find(m => dist(me, m) < 2000 && m.hp < (m.role === 'tank' ? heal.tank : heal.other));
+    if (hurt) return `${hurt.name} is hurt`;
+    const free = threats.filter(t => !t.cc);
+    if (free.length > here.length) return `${free.length} enemies on ${here.length}`;
+    const soft = here.find(m => m.role !== 'tank' && m.role !== 'melee' && free.some(t => onMember(t, m)));
+    if (soft) return `${soft.name} is under attack`;
+    const onUs = free.find(t => t.target === me.name || dist(t, me) <= MELEE_REACH);
+    return onUs ? `${onUs.name} is on us` : null;
 }
 
 /** A corpse is waiting for a rezzer near it: a run that is ending lets that finish. */
 export function awaitingRez(members: MemberReport[], settings: Pick<TacticsSettings, 'rez'>): boolean {
     const s = rezSettings(settings);
-    return s.holdMs > 0 && members.some(m => m.isDead && !!rezzerNear(members, m, s.radius));
+    return s.holdMs > 0 && members.some(m => m.isDead && !!rezzerNear(members, m, s));
 }
 
 /**
@@ -264,7 +294,7 @@ export const release = (): Behavior => ({
         const s = rezSettings(ctx.settings);
         const waited = Date.now() - (me.lastDeathAt ?? 0);
         const coming = claimedBy(ctx, 'rez', me.objectId, REZ_CLAIM_MS).length > 0;
-        const rezzer = s.holdMs > 0 && waited < s.holdMs ? rezzerNear(ctx.members(), { name: ctx.name, regionId: me.regionId, x: me.x, y: me.y, level: me.level }, s.radius) : undefined;
+        const rezzer = s.holdMs > 0 && waited < s.holdMs ? rezzerNear(ctx.members(), { name: ctx.name, regionId: me.regionId, x: me.x, y: me.y, level: me.level }, s) : undefined;
         if (coming || rezzer) {
             ctx.doing('await_rez', null, rezzer?.name ?? '');
             return true;
@@ -287,33 +317,45 @@ const REZ_FOE_CLEARANCE = 1500;
 const REZ_ORDER: Role[] = ['healer', 'tank', 'support', 'nuker', 'melee'];
 
 /**
- * Between fights, bring back a dead member near us: sit for the power if we are short (a rez costs half of it
- * at equal level), walk into range round known danger, cast. The rezzed member appears at our feet, so we need
- * not stand at the corpse, and never do. Not while anything fights the group: 4 s of casting, then a member
- * back with a tenth of its health. Gated on knowing a rez, not on the role: Bards and Wardens know one too.
+ * Bring back a dead member near us: sit for the power if we are short and `rez.sit` allows it (a rez costs half of
+ * it at equal level), walk into range round known danger, cast. The rezzed member appears at our feet, so we need
+ * not stand at the corpse, and never do. In PvE only between fights: 4 s of casting, then a member back with a
+ * tenth of its health. With `rez.inFight` (RvR) also during one, from where we stand, while the group is not under
+ * pressure. Gated on knowing a rez, not on the role: Bards and Wardens know one too.
  */
 export const rez = (): Behavior<TacticsSettings> => ({
     name: 'rez',
     async run(ctx) {
         const spell = ctx.spells.rez();
-        if (!spell || !REZ_PHASES.has(ctx.orders().phase) || ctx.threats().length || ctx.bot.isDead()) return false;
+        const s = rezSettings(ctx.settings);
+        const { radius, holdMs } = s;
+        const phase = ctx.orders().phase;
+        const threats = ctx.threats();
+        const fight = phase === 'engage' || threats.length > 0;
+        if (!spell || ctx.bot.isDead() || (fight ? !s.inFight : !REZ_PHASES.has(phase))) return false;
+        // A fight that is a retreat or a pull is no moment for it either.
+        if (fight && phase !== 'engage' && !REZ_PHASES.has(phase)) return false;
         const me = ctx.me();
         const now = Date.now();
-        const { radius, holdMs } = rezSettings(ctx.settings);
         // Holding off: the corpses are all busy releasing, and a release doesn't look at offers.
         if (holdMs <= 0) return false;
         const corpse = ctx.members()
             .filter(m => m.isDead && m.regionId === me.regionId && dist(me, m) <= radius && m.activity.kind !== 'release')
             .filter(m => now >= (ctx.memory.get(`rezRetry:${m.objectId}`) ?? 0))
             .filter(m => !claimedBy(ctx, 'rez', m.objectId, REZ_CLAIM_MS).length && !claimedBy(ctx, 'rez_prep', m.objectId, REZ_PREP_MS).length)
-            .filter(m => canAffordRez(me.level, m.level))
+            .filter(m => willPayRez(me.manaPercent, me.level, m.level, s))
             .sort((a, b) => Number(!!b.capabilities.rez) - Number(!!a.capabilities.rez) || REZ_ORDER.indexOf(a.role) - REZ_ORDER.indexOf(b.role) || dist(me, a) - dist(me, b))[0];
         if (!corpse) return false;
         const on = ctx.bot.getAttackers()[0] ?? ctx.bot.getPlayerAttackers()[0];
         if (on) return ctx.skip(`rez: ${on.name} is on us`);
+        if (fight) {
+            const why = rezPressure(me, ctx.members(), threats, ctx.settings.heal) ?? (ctx.orders().cc.some(a => a.by === ctx.name) ? 'crowd control comes first' : null);
+            if (why) return ctx.skip(`rez: ${why}`);
+        }
         // Every branch claims the corpse before its first await, and the runner shares one board: no two rezzers on one.
         const cost = resurrectCost(me.maxMana, me.level, corpse.level);
         if (me.mana < cost) {
+            if (fight || !s.sit) return ctx.skip('rez: short of power');
             ctx.doing('rez_prep', corpse.objectId, `sitting for ${corpse.name}`);
             const res = await ctx.bot.rest({ healthPercent: 1, manaPercent: Math.min(100, Math.ceil(cost / me.maxMana * 100) + 1), timeout: 120_000 });
             if (!res.success) { ctx.result('rest', res); return ctx.skip(`rez: ${res.reason}`); }
@@ -322,6 +364,7 @@ export const rez = (): Behavior<TacticsSettings> => ({
         const reach = spell.range - REZ_RANGE_MARGIN;
         const away = dist(me, corpse);
         if (away > reach || !ctx.sdk.getObject(corpse.objectId)) {
+            if (fight) return ctx.skip(`rez: ${corpse.name} out of reach`);
             const f = Math.max(0, (away - reach + 50) / Math.max(1, away));
             const spot = { x: me.x + (corpse.x - me.x) * f, y: me.y + (corpse.y - me.y) * f };
             const foes = ctx.picture().contacts.filter(c => c.kind === 'player' && !c.stale && dist(c, spot) < REZ_FOE_CLEARANCE);
@@ -340,6 +383,7 @@ export const rez = (): Behavior<TacticsSettings> => ({
         const seen = ctx.sdk.getObject(corpse.objectId);
         if (seen?.kind === 'player' && !seen.isDead) return ctx.skip(`rez: ${corpse.name} not dead in our view yet`);
         ctx.doing('rez', corpse.objectId, `${spell.spell.name} on ${corpse.name}`);
+        ctx.finishTurn();
         await stopSwinging(ctx);
         const r = await ctx.bot.resurrect(corpse.objectId, { spell: spell.spell, answerMs: REZ_ANSWER_MS, approach: false });
         ctx.result('rez', r, corpse.objectId);

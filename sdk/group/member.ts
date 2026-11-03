@@ -84,6 +84,8 @@ export class MemberContext<S = any> {
 
     /** Announce what we are doing (and on what): others see it as our claim. */
     doing(kind: string, targetId: number | null = null, detail = ''): void { this.agent.setActivity(kind, targetId, detail); }
+    /** The rest of this turn is a cast, which finishes: an orders change no longer aborts it. */
+    finishTurn(): void { this.agent.finishTurn(); }
     /** Why a behaviour did not act; shown as the idle reason when nothing acts. */
     skip(reason: string): false { this.agent.lastSkip = reason; return false; }
     /** Record an action's outcome for the observer (casts, pulls, kills). */
@@ -169,6 +171,10 @@ export class MemberAgent<S = any> {
         const mine = (o: Orders) => o.cc.filter(c => c.by === this.ctx.name).map(c => c.targetId).join(',');
         const moved = (a: Orders['anchor'], b: Orders['anchor']) => !a !== !b || (!!a && !!b && Math.hypot(a.x - b.x, a.y - b.y) > 300);
         return mine(next) !== mine(prev) || moved(next.retreatTo, prev.retreatTo) || (next.phase !== 'engage' && moved(next.anchor, prev.anchor));
+    }
+
+    finishTurn(): void {
+        if (this.current) this.current.interruptible = false;
     }
 
     /** Abort the running behaviour if it may be interrupted. */

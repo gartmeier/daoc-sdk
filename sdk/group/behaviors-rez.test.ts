@@ -1,13 +1,14 @@
 // Corpses waiting for a rez and the members who bring them back, on a stub MemberContext.
 // Region 9999 has no spawns, so safeSpot and safePath see no danger.
 import { describe, expect, test } from 'bun:test';
-import { awaitingRez, healer, release, rez, rezzerNear, REZ_SETTINGS, type TacticsSettings } from './behaviors';
+import { awaitingRez, healer, release, rez, rezPressure, rezzerNear, REZ_SETTINGS, type TacticsSettings } from './behaviors';
 import { Blackboard } from './blackboard';
 import { contact, enemy, picture, report } from './fixtures';
 import { MemberAgent, type MemberContext } from './member';
+import { executionContext } from '../execution-context';
 import { PVE_SETTINGS } from './pve';
 import { RVR_SETTINGS } from './rvr';
-import type { MemberReport, Orders, Point } from './types';
+import type { Contact, MemberReport, Orders, Point } from './types';
 
 const R = 9999;
 const rezCaps = { heal: true, cc: false, nuke: false, rez: true, buffs: [], buffSpells: [] };
@@ -33,6 +34,8 @@ interface StubOptions {
     spell?: boolean;
     /** Enemy players on the board, not fighting us yet. */
     foes?: Point[];
+    /** Anything else on the board. */
+    contacts?: Contact[];
 }
 
 function stub(o: StubOptions = {}) {
@@ -45,7 +48,7 @@ function stub(o: StubOptions = {}) {
     const doing: { kind: string; targetId: number | null }[] = [];
     const foes = o.foes ?? [];
     const me = { name, objectId: 1, regionId: R, x: at.x, y: at.y, z: 0, level: 20, mana: o.mana ?? 1000, maxMana: 1000, manaPercent: (o.mana ?? 1000) / 10, healthPercent: 100, attacking: false, lastDeathAt: o.dead ? Date.now() - (o.diedAgoMs ?? 1000) : null, constitutionLost: 0, isDead: !!o.dead };
-    const contacts = [...(o.threats ? [contact(900, { threat: true, regionId: R })] : []), ...foes.map((f, i) => enemy(800 + i, 'midgard', { regionId: R, x: f.x, y: f.y }))];
+    const contacts = [...(o.threats ? [contact(900, { threat: true, regionId: R })] : []), ...foes.map((f, i) => enemy(800 + i, 'midgard', { regionId: R, x: f.x, y: f.y })), ...(o.contacts ?? [])];
     const pic = picture(o.members ?? [], contacts, { phase: 'recover', ...o.orders });
     const ctx = {
         name, role: 'healer', settings: o.settings ?? PVE_SETTINGS, memory: new Map<string, any>(),
@@ -71,12 +74,87 @@ function stub(o: StubOptions = {}) {
         members: () => pic.members,
         threats: () => pic.contacts.filter(c => c.threat),
         doing: (kind: string, targetId: number | null = null) => { doing.push({ kind, targetId }); },
+        finishTurn: () => {},
         skip: (reason: string) => { skips.push(reason); return false as const; },
         result: (kind: string, r: { success: boolean; reason?: string }) => { results.push({ kind, success: r.success, reason: r.reason }); },
         note: (t: string) => { notes.push(t); },
     } as unknown as MemberContext<TacticsSettings>;
     return { ctx, calls, results, notes, skips, doing };
 }
+
+describe('finishTurn', () => {
+    test('an orders change no longer aborts the rest of the turn; before it, it does', async () => {
+        const run = async (finish: boolean) => {
+            let aborted: boolean | undefined;
+            let reached!: () => void;
+            const inTurn = new Promise<void>(r => { reached = r; });
+            const agent = new MemberAgent({
+                bot: 'x', role: 'healer',
+                sdk: { getGameMessages: () => [], onStateUpdate: () => () => {}, getState: () => null, getSkills: () => ({ spells: [] }), getPlayer: () => null, isConnected: () => true },
+                actions: {},
+            } as never, new Blackboard(), [{
+                name: 'cast',
+                run: async c => {
+                    if (aborted !== undefined) return false;
+                    if (finish) c.finishTurn();
+                    reached();
+                    await Bun.sleep(30);
+                    aborted = executionContext.getStore()?.signal?.aborted ?? false;
+                    return true;
+                },
+            }], PVE_SETTINGS, { idleMs: 5 });
+            const stop = new AbortController();
+            const loop = agent.run(stop.signal).catch(() => {});
+            await inTurn;
+            agent.interrupt('orders');
+            await Bun.sleep(60);
+            stop.abort(new Error('done'));
+            await loop;
+            agent.dispose();
+            return aborted;
+        };
+        expect(await run(true)).toBe(false);
+        expect(await run(false)).toBe(true);
+    });
+});
+
+describe('rezPressure', () => {
+    const heal = RVR_SETTINGS.heal;
+    const me = { name: 'Cleric', regionId: R, x: 0, y: 0 };
+    const team = () => [cleric(), report('Tank', { role: 'tank', regionId: R, x: 900, y: 0 }), report('Mage', { role: 'nuker', regionId: R, x: 500, y: 500 })];
+    const foe = (id: number, over: Partial<Contact> = {}) => enemy(id, 'midgard', { regionId: R, x: 900, y: 0, threat: true, ...over });
+
+    test('an even fight on the tank is none', () => {
+        expect(rezPressure(me, team(), [foe(1, { target: 'Tank', x: 950 })], heal)).toBeNull();
+    });
+
+    test('someone within heal reach below the limit, by role', () => {
+        const members = team();
+        members[1]!.hp = heal.tank - 1;
+        expect(rezPressure(me, members, [], heal)).toBe('Tank is hurt');
+        members[1]!.hp = heal.tank;
+        members[2]!.hp = heal.other - 1;
+        expect(rezPressure(me, members, [], heal)).toBe('Mage is hurt');
+        members[2]!.x = 5000;
+        expect(rezPressure(me, members, [], heal)).toBeNull();
+    });
+
+    test('more free enemies than living members; a mezzed one does not count', () => {
+        const three = [foe(1), foe(2), foe(3)];
+        expect(rezPressure(me, team(), three, heal)).toBeNull();
+        expect(rezPressure(me, team(), [...three, foe(4)], heal)).toBe('4 enemies on 3');
+        expect(rezPressure(me, team(), [...three, foe(4, { cc: { kind: 'mezz', by: 'Mage', until: Date.now() + 9000 } as never })], heal)).toBeNull();
+    });
+
+    test('an enemy on a caster or healer', () => {
+        expect(rezPressure(me, team(), [foe(1, { target: 'Mage', x: 550, y: 500 })], heal)).toBe('Mage is under attack');
+    });
+
+    test('an enemy on us, from range too, or next to us', () => {
+        expect(rezPressure({ ...me, name: 'Warden' }, [report('Warden', { role: 'melee', regionId: R, x: 0, y: 0 })], [foe(1, { target: 'Warden', x: 1400 })], heal)).toBe('Norseman is on us');
+        expect(rezPressure(me, team(), [foe(1, { target: 'Tank', x: 100 })], heal)).toBe('Norseman is on us');
+    });
+});
 
 describe('capabilities.rez', () => {
     const agent = (behaviors: { name: string; run: () => boolean }[], type: string) => new MemberAgent({
@@ -98,21 +176,21 @@ describe('rezzerNear and awaitingRez', () => {
     const corpse = body('Tank');
 
     test('a living member who knows a rez, in the region and within the radius', () => {
-        expect(rezzerNear([cleric(), corpse], corpse, 4000)?.name).toBe('Cleric');
-        expect(rezzerNear([cleric({ isDead: true }), corpse], corpse, 4000)).toBeUndefined();
-        expect(rezzerNear([cleric({ regionId: 1 }), corpse], corpse, 4000)).toBeUndefined();
-        expect(rezzerNear([cleric({ x: 5000 }), corpse], corpse, 4000)).toBeUndefined();
-        expect(rezzerNear([report('Mage', { regionId: R }), corpse], corpse, 4000)).toBeUndefined();
+        expect(rezzerNear([cleric(), corpse], corpse, REZ_SETTINGS)?.name).toBe('Cleric');
+        expect(rezzerNear([cleric({ isDead: true }), corpse], corpse, REZ_SETTINGS)).toBeUndefined();
+        expect(rezzerNear([cleric({ regionId: 1 }), corpse], corpse, REZ_SETTINGS)).toBeUndefined();
+        expect(rezzerNear([cleric({ x: 5000 }), corpse], corpse, REZ_SETTINGS)).toBeUndefined();
+        expect(rezzerNear([report('Mage', { regionId: R }), corpse], corpse, REZ_SETTINGS)).toBeUndefined();
     });
 
     test('not one whose whole pool the level gap outprices (ResurrectSpellHandler.cs:68)', () => {
-        expect(rezzerNear([cleric({ level: 12 }), body('Tank', { level: 18 })], body('Tank', { level: 18 }), 4000)?.name).toBe('Cleric');
-        expect(rezzerNear([cleric({ level: 12 }), body('Tank', { level: 19 })], body('Tank', { level: 19 }), 4000)).toBeUndefined();
+        expect(rezzerNear([cleric({ level: 12 }), body('Tank', { level: 18 })], body('Tank', { level: 18 }), REZ_SETTINGS)?.name).toBe('Cleric');
+        expect(rezzerNear([cleric({ level: 12 }), body('Tank', { level: 19 })], body('Tank', { level: 19 }), REZ_SETTINGS)).toBeUndefined();
     });
 
     test('a dead rezzer does not wait for itself', () => {
         const dead = cleric({ isDead: true });
-        expect(rezzerNear([dead], dead, 4000)).toBeUndefined();
+        expect(rezzerNear([dead], dead, REZ_SETTINGS)).toBeUndefined();
     });
 
     test('a corpse with a rezzer near keeps an ending run waiting, unless holding is off', () => {
@@ -173,6 +251,15 @@ describe('release', () => {
 
     test('RvR waits less: no XP is at stake, only the walk back', () => {
         expect(RVR_SETTINGS.rez?.holdMs).toBeLessThan(REZ_SETTINGS.holdMs);
+    });
+
+    test('RvR: a corpse does not wait for a rezzer who can\'t pay now and keep its reserve', async () => {
+        const low = stub({ dead: true, members: [cleric({ mana: 74 })], settings: RVR_SETTINGS });
+        await release().run(low.ctx);
+        expect(low.calls.release).toBe(1);
+        const enough = stub({ dead: true, members: [cleric({ mana: 75 })], settings: RVR_SETTINGS });
+        await release().run(enough.ctx);
+        expect(enough.calls.release).toBe(0);
     });
 });
 
@@ -308,6 +395,62 @@ describe('rez', () => {
         expect(await rez().run(ctx)).toBe(false);
         expect(calls.resurrect).toEqual([]);
         expect(results).toEqual([]);
+    });
+
+    describe('in RvR', () => {
+        const fightOnTank = () => [enemy(801, 'midgard', { regionId: R, x: 900, y: 0, threat: true, target: 'Tank' })];
+        const self = report('Self', { role: 'healer', regionId: R, x: 0, y: 0, level: 20, objectId: 1 });
+        const stubbed = (over: StubOptions = {}) => stub({ members: [tank, self], settings: RVR_SETTINGS, contacts: fightOnTank(), orders: { phase: 'engage' }, ...over });
+
+        test('rezzes mid-fight while the group is not under pressure', async () => {
+            const { ctx, calls } = stubbed();
+            expect(await rez().run(ctx)).toBe(true);
+            expect(calls.resurrect).toEqual([tank.objectId]);
+        });
+
+        test('not under pressure only: an enemy on a caster stops it', async () => {
+            const { ctx, calls, skips } = stubbed({ members: [tank, self, report('Mage', { role: 'nuker', regionId: R, x: 900, y: 0 })], contacts: [enemy(801, 'midgard', { regionId: R, x: 920, y: 0, threat: true, target: 'Mage' })] });
+            expect(await rez().run(ctx)).toBe(false);
+            expect(calls.resurrect).toEqual([]);
+            expect(skips).toEqual(['rez: Mage is under attack']);
+        });
+
+        test('crowd control ordered on us comes first', async () => {
+            const { ctx, calls } = stubbed({ orders: { phase: 'engage', cc: [{ targetId: 801, by: 'Self' }] as never } });
+            expect(await rez().run(ctx)).toBe(false);
+            expect(calls.resurrect).toEqual([]);
+        });
+
+        test('in a fight it casts only from where it stands', async () => {
+            const { ctx, calls } = stubbed({ members: [body('Far', { x: 3000 }), self] });
+            expect(await rez().run(ctx)).toBe(false);
+            expect(calls.walkTo).toEqual([]);
+        });
+
+        test('never sits for it: short of its reserve it passes, and the rest of the list goes on', async () => {
+            const { ctx, calls } = stub({ members: [tank], settings: RVR_SETTINGS, mana: 740 });
+            expect(await rez().run(ctx)).toBe(false);
+            expect(calls.rest).toEqual([]);
+            expect(calls.resurrect).toEqual([]);
+        });
+
+        test('a 10 % rez is good enough, and between fights it walks as in PvE', async () => {
+            const { ctx, calls } = stub({ members: [body('Far', { x: 3000 })], settings: RVR_SETTINGS });
+            expect(await rez().run(ctx)).toBe(true);
+            expect(calls.walkTo).toHaveLength(1);
+        });
+
+        test.each(['retreat', 'pull', 'travel'] as const)('not during %s', async phase => {
+            const { ctx, calls } = stubbed({ orders: { phase } });
+            expect(await rez().run(ctx)).toBe(false);
+            expect(calls.resurrect).toEqual([]);
+        });
+    });
+
+    test('in PvE a fight still stops it, whatever the pressure', async () => {
+        const { ctx, calls } = stub({ members: [tank], orders: { phase: 'engage' } });
+        expect(await rez().run(ctx)).toBe(false);
+        expect(calls.resurrect).toEqual([]);
     });
 
     test('no answer: leaves the corpse alone until its question has expired', async () => {

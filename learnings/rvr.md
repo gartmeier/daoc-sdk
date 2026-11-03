@@ -97,6 +97,16 @@ A battleground has no merchants, and the recall stone doesn't work there. The wa
 - **Retreat routes:** the retreat point is picked so the whole way there is clear of aggro zones and keep circles, and members run there round them (`safePath`). The perturbed bwca camp (~27500, 25600) lies between the meeting point and the Hibernia portal keep: in round 7 straight retreats toward home crossed it, and the bwca killed six Hibernians.
 - **Far members rejoin a fight:** `holdFormation` walks a member more than 3000 from the fight's anchor back to it (after a release); tank and melee from beyond `chaseLeash`. Before, released healers stood idle at the portal keep through the whole fight.
 
+## Resurrection
+
+A rez in RvR saves only the walk back, about 100 s: an RvR death costs no XP or constitution, and a release gives full health, power and endurance (`GamePlayer.cs:1668-1670`). It costs the rezzer half its pool at equal level, whatever the rank, so the strongest rank is always the one to cast. The member comes back with the spell's health and power, buffless, with 60 s of illness at -50 %. A released member loses its buffs as well, but its illness has mostly run out by the time it is back. So `RVR_SETTINGS.rez` is `{ holdMs: 60_000, sit: false, reserve: 25, inFight: true }`:
+
+- **It pays only from what it has:** the rezzer never sits for it and must keep 25 % of its pool, so at equal level it needs 75 %. Without that a corpse doesn't wait for it, and releases.
+- **Any rank will do:** a 10 % rez counts.
+- **Also mid-fight, from where it stands,** when the group isn't under pressure (`rezPressure`): nobody within heal reach below the healing limit, no more free enemies than living members, no enemy on a caster or healer, and none on or next to the rezzer. Crowd control ordered on the rezzer comes first. Not in a retreat, or in travel, which can be a fall back.
+- **Live (2026-11-03, throwaway stack, 3 Albion at level 20 against 1 Viking, a GM doing the killing):** with the enemy on a healthy tank, the Acolyte's Revive had the victim up 4 s after the death. With the tank hurt to 28 %, it healed instead and never cast; its power fell from 100 to 72 %, under the reserve, and the corpse released 11 s after the death.
+- **Not seen live:** an enemy really hitting the rezzer, which fled instead (`flee` sits above `rez`), being outnumbered, and what a rezzed member lives through against real groups. Whether the reserve of 25 is right is a guess: at equal level a healer who has healed twice no longer rezzes.
+
 ## Live results
 
 All three groups out at once, each `rvr.ts` in its own process. Kills count every enemy player the group hit before it died, so with three realms one death can count for two groups.
@@ -114,7 +124,7 @@ All three groups out at once, each `rvr.ts` in its own process. Kills count ever
 
 ## Unverified / next
 
-- **Resurrection:** the `rez` behaviour brings corpses back between fights (learnings/group-coordination.md); not yet played in a round. A corpse waits 60 s for it (`rez.holdMs`), then walks 17–23k back.
+- **Resurrection:** only a short run with one enemy so far (below), not yet a round against the other groups.
 - **Class detection:** only behaviour marks healers and casters (they must cast first). The client's model id for a player isn't kept (the decoder reads it).
 - **Pets** (Theurgist, Spiritmaster, Enchanter, Druid): no SDK pet commands; a pet's owner shares its realm, so enemy pets aren't board contacts.
 - **Stealth:** none of the 15 bots stealths; a stealthed enemy appears only within detection range.
