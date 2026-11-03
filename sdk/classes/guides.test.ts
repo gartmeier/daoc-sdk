@@ -5,7 +5,12 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { buildPath, earnedSpecPoints, getBuild, specCost } from '../../data/builds';
 import { getClass, getSpell } from '../../data/index';
+import { defaultBehaviors } from '../group/behaviors';
+import { withCharacter } from '../group/character';
+import { roleForClass } from '../group/strategy';
 import { reach, reachOfBuild } from './reach';
+import { shaman } from './shaman';
+import { skald } from './skald';
 
 const guide = (name: string) => readFileSync(join(import.meta.dir, `../../learnings/classes/${name}.md`), 'utf-8').replaceAll('\r\n', '\n');
 const names = (list: { spell: { name: string } }[]) => list.map(s => s.spell.name);
@@ -110,5 +115,102 @@ describe('hero guide', () => {
 
     test('Shields 18 has every rank of Guard', () => {
         expect(tank().abilities).toContain('Guard III');
+    });
+});
+
+describe('warrior guide', () => {
+    test('its table is what the rule gives', () => tableHolds('Warrior', ['Hammer, Shields 42, high Parry', 'Hammer, Shields 50, less Parry', 'Sword two-hander, Shields 42']));
+
+    test('on Axe, Plague taunts and Hoarfrost detaunts', () => {
+        const r = reach('Warrior', 24, { Axe: 24, Shields: 18, Parry: 16 });
+        const proc = (name: string) => getSpell(r.styles.find(s => s.name === name)!.procs![0]!.spellId)!;
+        expect(proc('Plague').value).toBeGreaterThan(0);
+        expect(proc('Hoarfrost').value).toBeLessThan(0);
+    });
+});
+
+describe('healer guide', () => {
+    const first = () => reachOfBuild(getBuild('Healer', 'Mending first')!, 24);
+
+    test('its table is what the rule gives', () => tableHolds('Healer', ['Mending first', 'Augmentation healer', 'Pacification tri-spec', 'Full Augmentation solo']));
+
+    test('Mending first heals up to Greater Reparation, then the instant; the mezz is baseline', () => {
+        expect(names(first().heals).slice(-2)).toEqual(['Greater Reparation', 'Boon from Eir']);
+        expect(first().cc?.spell.name).toBe('Sedate');
+        expect(reach('Healer', 24, {}).cc?.spell.name).toBe('Sedate');
+    });
+
+    test('its rez is the 30 % one, the stun and mezz cure go unused, and no area mezz at Pacification 4', () => {
+        expect(first().rez?.spell.name).toBe('Reception from Valhalla');
+        const unused = first().unused.map(k => k.name);
+        expect(unused).toContain('Halt Attack');
+        expect(unused).toContain('Cleanse Mind');
+        expect(first().known.some(k => k.name === 'Allay Area')).toBe(false);
+    });
+});
+
+describe('shaman guide', () => {
+    const buffer = () => reachOfBuild(getBuild('Shaman', 'Buffer healer')!, 24);
+
+    test('its table is what the rule gives', () => tableHolds('Shaman', ['Buffer healer', 'Augmentation buffer', 'Cave nuker']));
+
+    test('the kit is a healer that also fights, and assist goes in above position', () => {
+        const kit = shaman();
+        expect(kit.role).toBe('healer');
+        const list = withCharacter(defaultBehaviors().healer, kit).map(b => b.name);
+        expect(list.indexOf('assist')).toBe(list.indexOf('position') - 1);
+        expect(list.indexOf('heal')).toBeLessThan(list.indexOf('assist'));
+    });
+
+    test('what it casts: the DoT, then a small bolt; a root; the 10 % rez', () => {
+        expect(names(buffer().nukes)).toEqual(['Fungal Erosion', 'Fungal Pin']);
+        expect(buffer().cc?.kind).toBe('root');
+        expect(buffer().rez?.spell.name).toBe('Arrival from Valhalla');
+    });
+
+    test('Mending 15 needs 15 points and it has 1 spare', () => {
+        const spent = specCost(1, 19) + specCost(1, 14) + specCost(1, 3);
+        expect(earnedSpecPoints(10, 24) - spent).toBe(1);
+        expect(specCost(1, 15) - specCost(1, 14)).toBe(15);
+        expect(reach('Shaman', 24, { Mending: 15 }).rez?.spell.name).toBe('Reception from Valhalla');
+    });
+});
+
+describe('skald guide', () => {
+    const even = () => reachOfBuild(getBuild('Skald', 'Even songs and Hammer')!, 24);
+
+    test('its table is what the rule gives', () => tableHolds('Skald', ['Even songs and Hammer', 'Battlesongs first', 'Hammer first']));
+
+    test('the kit makes it melee, whose list sings and swings; a plain Skald is support', () => {
+        expect(skald()).toEqual({ role: 'melee' });
+        expect(roleForClass('Skald')).toBe('support');
+        const list = defaultBehaviors().melee.map(b => b.name);
+        expect(list).toContain('song');
+        expect(list).toContain('assistMelee');
+        expect(list).not.toContain('crowdControl');
+    });
+
+    test('no endurance song; Chant of the Battle at Battlesongs 22, the weaker Chant of the Charge at 16', () => {
+        const damage = (r: ReturnType<typeof even>) => r.songs.find(s => s.kind === 'damage')?.spell.name;
+        expect(even().songs.map(s => s.kind)).not.toContain('endurance');
+        expect(damage(even())).toBe('Chant of the Battle');
+        expect(damage(reachOfBuild(getBuild('Skald', 'Hammer first')!, 24))).toBe('Chant of the Charge');
+    });
+
+    test('its shout is a mezz the coordinator can assign, which the melee list never casts', () => {
+        expect(even().cc?.kind).toBe('mezz');
+        expect(even().cc?.spell.name).toBe('Crippling Shout');
+    });
+});
+
+describe('spiritmaster guide', () => {
+    const darkness = () => reachOfBuild(getBuild('Spiritmaster', 'Darkness caster')!, 24);
+
+    test('its table is what the rule gives', () => tableHolds('Spiritmaster', ['Darkness caster', 'Suppression bomber', 'Summoning pet']));
+
+    test('it nukes Silence Lifeforce, Cold, and mezzes with Hold Spirit', () => {
+        expect(names(darkness().nukes)).toEqual(['Silence Lifeforce']);
+        expect(darkness().nukes[0]!.damageType).toBe(11);
+        expect(darkness().cc?.spell.name).toBe('Hold Spirit');
     });
 });
