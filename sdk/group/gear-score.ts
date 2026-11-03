@@ -10,7 +10,7 @@
 
 import { getClass, type ClassInfo, type StatName } from '../../data/index';
 import { ALL_FOCUS, SKILLS, specOf } from '../delve';
-import { ObjectType, type InventoryItem, type ItemBonus, type SkillGroup } from '../types';
+import { ObjectType, type InventoryItem, type ItemBonus, type SkillGroup, type WeaponDelve } from '../types';
 
 /** Per stat point, by the class's data (classes.json): the higher applies when one stat holds two roles. */
 export const STAT_WEIGHTS = { primary: 1, secondary: 0.6, tertiary: 0.3, mana: 0.8 };
@@ -161,4 +161,31 @@ export function armorGain(candidate: number, current: number, candidateStat: num
     if (candidateStat === null || currentStat === null) return base;
     const swing = armorSwing(candidate, current);
     return base + Math.max(-swing, Math.min(swing, (candidateStat - currentStat) * ARMOR_STAT_RATE));
+}
+
+// ── Weapons ─────────────────────────────────────────────────────────────────
+
+/**
+ * A weapon's unstyled damage per second: the delve's clamped DPS, quality and condition, with the
+ * slow weapon bonus (AttackComponent.cs:2133-2137, 0.3 % per 0.1 s over 2.0 s). A swing's damage is
+ * DPS x speed and swings come at that speed, so speed adds nothing else. A two-hander also gets
+ * 1.1 + 0.5 % per spec level (:2139-2142): pass that line's level as `twoHandedSpec`.
+ *
+ * A style's growth doesn't scale with DPS (StyleProcessor.cs:360-364: unstyled damage over its cap,
+ * and the cap is that damage before quality), so this ranks weapons rather than predicting a fight.
+ */
+export function weaponValue(w: Pick<WeaponDelve, 'clampedDps' | 'speed' | 'quality' | 'condition'>, twoHandedSpec: number | null = null): number {
+    const slow = 1 + (w.speed * 10 - 20) * 0.003;
+    const twoHanded = twoHandedSpec === null ? 1 : 1.1 + twoHandedSpec * 0.005;
+    return w.clampedDps * slow * twoHanded * (w.quality / 100) * (w.condition / 100);
+}
+
+/** One stat score point moves a weapon's score this much: a point of weapon stat is 0.5 % of weapon skill (GamePlayer.cs:5476). */
+export const WEAPON_STAT_RATE = 0.005;
+/** However good the bonuses, they move a weapon's score by at most this share, as ARMOR_STAT_SWING does. */
+export const WEAPON_STAT_SWING = 0.1;
+
+/** A weapon's value with its delved bonuses. A stat score of null (no delve) leaves the value alone. */
+export function weaponScore(value: number, stat: number | null): number {
+    return value * (1 + Math.max(-WEAPON_STAT_SWING, Math.min(WEAPON_STAT_SWING, (stat ?? 0) * WEAPON_STAT_RATE)));
 }

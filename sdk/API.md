@@ -471,6 +471,8 @@ interface InventoryItem {
   /** Raw value fields from ItemData (DPS/AF, SPD/ABS etc. depending on type). */
   value1: number;
   value2: number;
+  /** See ItemHand. Only a weapon's means anything. */
+  hand: number;
 }
 ```
 
@@ -700,6 +702,22 @@ interface ItemBonus {
   group?: SkillGroup | null;
   /** The line as the server sent it. */
   text: string;
+}
+```
+
+### WeaponDelve
+
+A weapon's "Damage Modifiers" lines.
+
+```typescript
+interface WeaponDelve {
+  baseDps: number;
+  /** DPS at this character's level (GamePlayer.GetWeaponDpsCap). */
+  clampedDps: number;
+  /** Seconds per swing. */
+  speed: number;
+  quality: number;
+  condition: number;
 }
 ```
 
