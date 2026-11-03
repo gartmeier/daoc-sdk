@@ -468,7 +468,8 @@ const round = (n: number) => String(Number(n.toFixed(2)));
 
 /**
  * Put on the best of the backpack if it beats what's worn. What the server refuses stays there and
- * isn't tried again in this call (`settled`), and the next best gets its turn.
+ * isn't tried again in this call (`settled`), and the next best gets its turn. What a swap took off
+ * lands in the slot of what went on, free for the other hand to judge.
  */
 async function wearBest(m: WeaponMember, settled: Set<number>, out: string[], rowOf: (item: InventoryItem) => Promise<WeaponRow<InventoryItem> | null>, wornNow: () => Promise<number>, step = WEAPON_SWAP): Promise<void> {
     const act = weaponActions(m);
@@ -482,11 +483,11 @@ async function wearBest(m: WeaponMember, settled: Set<number>, out: string[], ro
         const pick = bestWeapon(rows, current, step);
         if (!pick) return;
         const r = await act.equipItem(pick.item, { slot: pick.slot });
-        settled.add(pick.item.slot);
         if (r.success) {
             out.push(`wield ${pick.item.name}, score ${round(pick.score)} over ${round(current)}`);
             return;
         }
+        settled.add(pick.item.slot);
         out.push(`can't wield ${pick.item.name}: ${r.message}`);
     }
 }
