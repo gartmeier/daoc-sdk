@@ -14,12 +14,13 @@ bun bots/create-bot.ts mymage --class=Mage                       # realm inferre
 - **`start_as_base_class` is on,** so advanced classes start as their base class:
   - In Albion: Armsman, Paladin, Mercenary and Reaver → Fighter; Wizard and Theurgist → Elementalist; Sorcerer and Cabalist → Mage; Cleric and Friar → Acolyte; Scout, Minstrel and Infiltrator → Rogue; Necromancer → Disciple.
   - `getClass(name, realm).baseClassName` gives the base class for any realm.
-  - Pick the base class directly unless you want the advanced class's start point and stats.
+  - An advanced class gets its base class's start point and gear. Only its starting stats (`defaultStats`) are its own, so pick the base class directly unless you want those.
   - Promotion at level 5 is verified for Fighter → Armsman: see [npc-dialog.md](npc-dialog.md#promotion). Base classes have no styles until then ([combat.md](combat.md)).
 - **Not creatable on this server:**
   - Classes: Valkyrie and Bainshee (no eligible races), and Heretic, Warlock, Vampiir and the Maulers (not starting classes).
   - Races: Half Ogre, Frostalf, Shar and the Minotaurs.
-  - Inconnu Acolyte and Saracen Disciple pass the server's checks but have no start location (they would spawn at 0,0,0). create-bot refuses them, and `--list` leaves them out (`getPlayableRacesForClass`).
+  - Inconnu Acolyte, Saracen Disciple and Saracen Necromancer (which starts as a Disciple) pass the server's checks but have no start location. create-bot refuses them, and `--list` leaves them out (`getPlayableRacesForClass`).
+  - Verified live on all three: the server logs "startup location not found", the row stays at 0,0,0 in region 0, and the client times out entering the world (loading the character throws in `GuildMgr`). A second login of the Necromancer failed the same way. With `start_as_base_class` off a Saracen Necromancer starts normally (Isle of Glass), and a Saracen Disciple still doesn't.
 - **Names:**
   - The character name defaults to the account name with digits mapped to letters (`ux1` → `Uxb`, `bot12` → `Botbc`).
   - Names must be letters only, at least 3, start with a capital, and be unique on the server. Override with `--char=Name` or `CHAR_NAME=`.
@@ -53,9 +54,9 @@ From `getStartupLocation` and `findNpcSpawns` (levels 0–1, realm 0, not peacef
 | Midgard Mystic (Kobold) | 100 Gotar, 749110, 814677 | vein spiderling ~4300 |
 | Hibernia Guardian *(live)* | 200 Shannon Estuary, 296516, 641415 | badger cub, large frog ~2400 |
 | Hibernia Naturalist *(live)* | 200 Shannon Estuary, 294768, 641635 | large frog (L1) ~2700, badger cub (L0) ~3100 |
-| Hibernia Magician (Elf) | 200 Lough Derg, 346073, 490855 | annoying lucradan ~2100 |
+| Hibernia Magician (Elf) *(live)* | 200 Lough Derg, 346073, 490855 | annoying lucradan ~2100 |
 
-- **Start points depend on the class sent at creation,** and also on the race.
+- **Start points depend on the class the server looks up,** and also on the race. With `start_as_base_class` on, the class is already reverted by then, because the server's handler chain runs the newest handler first and `StartAsBaseClass` registers after `StartupLocations`. So a Briton Sorcerer starts on the Briton Mage row. `getStartupLocation` takes the class you create and follows this; pass `startAsBaseClass: false` for a server with the property off.
 - **The template script walks for you:** when no monster is in view, `bots/_template/script.ts` and `bots/examples/caster.ts` walk to the nearest easy spawn point from the data.
 
 ## Class notes

@@ -179,21 +179,31 @@ export function getTeleportsForRealm(realm: Realm | number): Teleport[] {
 }
 
 /**
+ * The class a new character has once the server has created it. With start_as_base_class on, the
+ * server's default, an advanced class is reverted to its base class (StartAsBaseClass.cs:84).
+ */
+export function classAfterCreation(classId: number, startAsBaseClass = true): number {
+    return startAsBaseClass ? getClass(classId)?.baseClassId ?? classId : classId;
+}
+
+/**
  * Where a freshly created character spawns, mirroring
  * StartupLocations.GetAllStartupLocationForCharacter (scripts/gameevents/StartupLocations.cs:142).
- * classId is the class sent at creation: StartupLocations registers its CharacterCreated handler on
- * ScriptLoadedEvent (StartupLocations.cs:30), before StartAsBaseClass does on GameServerStartedEvent
- * (StartAsBaseClass.cs:46), so it sees the class before start_as_base_class reverts it. Every DB row
- * has ClassID and RaceID set, so the class matters.
+ * classId is the class sent at creation, but the server looks up classAfterCreation: its handler chain
+ * runs the newest handler first (DOLEventHandlerChain.cs), and StartAsBaseClass registers its
+ * CharacterCreated handler on GameServerStartedEvent (StartAsBaseClass.cs:46), after StartupLocations
+ * does on ScriptLoadedEvent (StartupLocations.cs:30). Every DB row has ClassID and RaceID set, so the
+ * class matters. Pass startAsBaseClass: false for a server with that property off.
  */
 export function getStartupLocation(opts: {
-    realm: Realm | number; raceId: number; classId: number; clientVersion?: number; clientRegionId?: number;
+    realm: Realm | number; raceId: number; classId: number; clientVersion?: number; clientRegionId?: number; startAsBaseClass?: boolean;
 }): StartupLocation | undefined {
     const realm = realmId(opts.realm);
     const ver = opts.clientVersion ?? 1127;
     const region = opts.clientRegionId ?? 0;
+    const classId = classAfterCreation(opts.classId, opts.startAsBaseClass);
     const list = getStartupLocations().filter(s => s.minVersion <= ver
-        && (s.classId === 0 || s.classId === opts.classId)
+        && (s.classId === 0 || s.classId === classId)
         && (s.raceId === 0 || s.raceId === opts.raceId)
         && (s.realm === 0 || s.realm === realm)
         && (s.clientRegionId === 0 || s.clientRegionId === region));
@@ -359,13 +369,13 @@ export function getRacesForClass(cls: number | string, realm?: Realm | number): 
 
 /**
  * Races a character of this class can be created as AND start with: the
- * server-valid races minus the pairs without a startuplocation row
- * (Inconnu Acolyte, Saracen Disciple; StartupLocations.cs:87 leaves them at 0,0,0).
+ * server-valid races minus the pairs without a startuplocation row (Inconnu Acolyte,
+ * Saracen Disciple, and Saracen Necromancer, which starts as a Disciple; see validateCharacter).
  */
-export function getPlayableRacesForClass(cls: number | string, realm?: Realm | number): RaceInfo[] {
+export function getPlayableRacesForClass(cls: number | string, realm?: Realm | number, startAsBaseClass?: boolean): RaceInfo[] {
     const c = getClass(cls, realm);
     if (!c) return [];
-    return getRacesForClass(c.id, c.realm).filter(r => validateCharacter({ realm: c.realm, class: c.id, race: r.id }).warnings.length === 0);
+    return getRacesForClass(c.id, c.realm).filter(r => validateCharacter({ realm: c.realm, class: c.id, race: r.id, startAsBaseClass }).warnings.length === 0);
 }
 
 /** Creatable races of a realm. */
@@ -381,12 +391,14 @@ export interface CharacterChoice {
     gender?: 'male' | 'female';
     /** When given, also checks the 30-point budget (CharacterStatValidator.cs). */
     stats?: Partial<Record<StatName, number>>;
+    /** The server's start_as_base_class property (default on); decides which start row the class gets. */
+    startAsBaseClass?: boolean;
 }
 
 export interface CharacterValidation {
     valid: boolean;
     errors: string[];
-    /** Server-valid but unplayable choices (e.g. no startup location: Inconnu Acolyte, Saracen Disciple). */
+    /** Server-valid but unplayable choices (e.g. no startup location: Inconnu Acolyte, Saracen Disciple, Saracen Necromancer). */
     warnings: string[];
     realmId: number;
     /** Gender to send (choice.gender, else what the race/class requires, else male). */
@@ -419,10 +431,14 @@ export function validateCharacter(choice: CharacterChoice): CharacterValidation 
         if (cost === null) errors.push('a stat is below the race minimum or missing');
         else if (cost !== classesFile().statPointBudget) errors.push(`stat points used ${cost}, must be exactly ${classesFile().statPointBudget}`);
     }
-    // The server accepts these, but StartupLocations.cs:87 then leaves the character at 0,0,0.
+    // The server accepts these, but StartupLocations.cs:88 then leaves the character at 0,0,0 in region 0,
+    // and loading it throws (GuildMgr.cs:37), so the client never gets a position.
     const warnings: string[] = [];
-    if (errors.length === 0 && c && race && !getStartupLocation({ realm: r, raceId: race.id, classId: c.id }))
-        warnings.push(`no startuplocation row for ${race.name} ${c.name}: the character would spawn at 0,0,0`);
+    if (errors.length === 0 && c && race && !getStartupLocation({ realm: r, raceId: race.id, classId: c.id, startAsBaseClass: choice.startAsBaseClass })) {
+        const startAs = getClass(classAfterCreation(c.id, choice.startAsBaseClass)) ?? c;
+        const looked = startAs.id === c.id ? '' : ` (a ${c.name} starts as one)`;
+        warnings.push(`no startuplocation row for ${race.name} ${startAs.name}${looked}: the character stays at 0,0,0 in region 0 and can't enter the world`);
+    }
     return { valid: errors.length === 0, errors, warnings, realmId: r, gender: g, classInfo: c, raceInfo: race };
 }
 
