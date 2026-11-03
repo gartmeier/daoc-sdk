@@ -422,7 +422,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const ccKey = (a: { targetId: number; by: string }) => `${a.targetId}:${a.by}`;
         for (const a of o.cc) if (now - (since[ccKey(a)] ?? now) > CC_STALL_MS) bench[a.by] = now + CC_BENCH_MS;
         const mezzers = main.filter(m => !((bench[m.name] ?? 0) > now));
-        const cc = assignCc(players.filter(c => c.objectId !== focus.objectId && !c.cc && (c.ccImmuneUntil ?? 0) <= now), mezzers, o.cc);
+        const cc = assignCc(players.filter(c => c.objectId !== focus.objectId && !c.cc), mezzers, o.cc, now);
         mem.ccSince = Object.fromEntries(cc.map(a => [ccKey(a), since[ccKey(a)] ?? now]));
         mem.ccBench = Object.fromEntries(Object.entries(bench).filter(([, until]) => until > now));
         return {

@@ -521,6 +521,8 @@ export function findingsFor(r: RunReport): Finding[] {
         const stuck = Object.entries(m.failures).filter(([k]) => k.endsWith(':stuck')).reduce((a, [, v]) => a + v, 0);
         if (stuck >= 3) out.push({ severity: 'medium', topic: 'movement', member: name, issue: `${name}'s walks got stuck ${stuck}×`, evidence: r.timeline.filter(l => l.includes(`${name}: walk`)).slice(-2).join(' | '), suggestion: '"max speed 0" means rooted or overloaded (check encumbrance; shedLoadAt/keepItems, or sell loot); otherwise terrain: build navmeshes or move the base.' });
         const dups = Object.entries(m.failures).filter(([k]) => k.endsWith(':duplicate')).reduce((a, [, v]) => a + v, 0);
+        const wasted = Object.entries(m.failures).filter(([k]) => k === 'cc:immune' || k === 'cc:already_on').reduce((n, [, v]) => n + v, 0);
+        if (wasted >= 3) out.push({ severity: 'low', topic: 'crowd control', member: name, issue: `${name} cast crowd control at ${wasted} targets that couldn't take it`, evidence: top(m.failures, 3), suggestion: 'The board keeps immunity by kind (Contact.ccImmune): check that this member reads it (canControl), and whether something other than this group mezzes that target.' });
         if (dups >= 3) out.push({ severity: 'low', topic: 'duplicates', member: name, issue: `${name} duplicated another member's heal or mezz ${dups}×`, evidence: top(m.failures, 3), suggestion: 'Check the claim windows in heal()/crowdControl(), or assign the work in decide() (orders.cc).' });
     }
     if (!rvr && t.downtime > 60 && t.fights > 0) {

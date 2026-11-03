@@ -156,7 +156,7 @@ describe('decideRvr: fights', () => {
         d = decideRvr(ctx(picture(team(), [foe(51, { healer: true }), foe(52, { cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 20_000 } })])));
         expect(d.cc).toEqual([]);
         // Immune to crowd control for now (a member's mezz got "immune to this effect"): nobody is sent at it.
-        d = decideRvr(ctx(picture(team(), [foe(51, { healer: true }), foe(52, { ccImmuneUntil: Date.now() + 30_000 })])));
+        d = decideRvr(ctx(picture(team(), [foe(51, { healer: true }), foe(52, { ccImmune: { mezz: Date.now() + 30_000, root: Date.now() + 30_000 } })])));
         expect(d.cc).toEqual([]);
     });
 
