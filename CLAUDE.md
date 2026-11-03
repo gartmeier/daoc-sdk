@@ -2,7 +2,7 @@
 
 You play Dark Age of Camelot on a local OpenDAoC server by writing bot scripts. Start small, make one step toward the goal, then learn and grow the script as you go. Characters are **persistent**: every session continues where the last one ended.
 
-Before writing logic for a topic (walking, combat, spells, merchants, looting, trading, death, classes, zones, grouping/chat, group coordination, RvR), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
+Before writing logic for a topic (walking, combat, spells, merchants, looting, gear care, trading, death, classes, zones, grouping/chat, group coordination, RvR), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
 
 ## First-time setup
 
@@ -57,6 +57,7 @@ bun sdk/group/cli.ts <group> --wind-down              # end the hunt after the c
 bun groups/<group>/battleground.ts [--via=x,y,z]      # into Thidranki (levels 20-24): portal keep, bind, medallion, port
 bun groups/<group>/rvr.ts 300                         # roam the battleground and fight the other realms (learnings/rvr.md)
 bun groups/<group>/cloak-trip.ts [--stay]              # out of the battleground, capital, a cloak each, back in; --stay stops in the capital
+bun groups/<group>/gear-care.ts                        # in a town: vault what's too high to wear, take out what fits, repair (learnings/gear-care.md); a group older than the script copies it from groups/_template/
 ```
 
 The loop is the session loop at group scale: run, read the report (findings name the setting to change), change one thing in `strategy.ts`, run again and compare, note it in the group's `lab_log.md`. A group run controls every member, so don't drive a member separately meanwhile: taking control of one member aborts the whole run. To stop a hunt early, wind it down (`--wind-down`, or the button on the group page). The browser view is `http://localhost:7780/viewer/group/<group>`: every member on one map, orders, base plan, enemies, events, deaths and recent runs.
@@ -111,6 +112,8 @@ A new call for the same bot cancels the one still running. Every result includes
 | `lootNearby()` | Pick up ground loot (autoloot usually already did) |
 | `talkTo(npc)` / `whisper(npc, keyword)` / `navigateDialog(npc, [kw])` | NPC dialog and its [keywords] |
 | `openMerchant` / `buyItem` / `sellItem` / `sellItems(m, filter)` / `delveMerchantItem(m, item)` | Shops (sell price is 50 % of value); `shop.items` carry type, hand, DPS and speed |
+| `repairItem(smith, item, {maxCost})` / `repairAll(smith, {maxCost})` | A smith repairs one item, or everything for 20 % more; reports `cost`; reason `no_need`, `not_repairable`, `too_expensive`, `insufficient_funds`, ... (learnings/gear-care.md) |
+| `openVault(keeper)` / `depositItem(keeper, item)` / `withdrawItem(keeper, item)` | The character's vault at a vault keeper; `sdk.getVault()` is empty until opened; reason `vault_full`, `inventory_full`, ... |
 | `trainSpec(trainer, spec, levels)` | Spend specialization points |
 | `equipItem` / `unequipItem` / `useItem` / `dropItem` / `destroyItem` | Items |
 | `delveItem(item \| name \| slot)` | An item's real bonuses: `lines`, `bonuses`, `unknown`; reason `empty_slot`, `not_found`, `no_response` (learnings/looting.md) |
@@ -152,7 +155,7 @@ The game server is the source of truth and is well tested. When something fails,
 
 ```
 bots/<name>/      bot.env (credentials + character), script.ts, lab_log.md, character.ts (its routine in a group), runs/history.jsonl
-bots/examples/    grinder.ts, merchant-run.ts, caster.ts, explorer.ts, duo.ts (bun bots/examples/<x>.ts <bot>); script-args.ts
+bots/examples/    grinder.ts, merchant-run.ts, gear-care.ts, caster.ts, explorer.ts, duo.ts (bun bots/examples/<x>.ts <bot>); script-args.ts
 groups/<group>/   group.json (members, roles), strategy.ts, hunt.ts, lab_log.md, runs/ (observer reports); create-group.ts, _template/
 learnings/        topic notes from live runs
 sdk/              BotSDK (index.ts), BotActions (actions.ts), runner.ts, cli.ts, chat.ts, API.md

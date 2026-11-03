@@ -1499,6 +1499,222 @@ describe('merchants', () => {
     });
 });
 
+describe('smiths', () => {
+    const smith = makeNpc({ objectId: 210, name: 'Judan Hammerfel', guildName: 'Smith', role: 'smith', realm: 'albion', isPeaceful: true, x: 560050, y: 511000 });
+    const worn: InventoryItem = { slot: 10, name: 'long sword', level: 5, count: 1, model: 3, objectType: 3, condition: 88, durability: 100, quality: 90, weight: 30, value1: 27, value2: 30 };
+    const box = (text: string) => ({ isOpen: true, code: 6, data: [5, 1, 0, 0] as [number, number, number, number], type: 1, text, receivedAt: Date.now() });
+
+    /** A smith that asks `price` for what it's given, and on a yes takes the money and restores the item. */
+    function atSmith(price: string, copper: number, overrides: Partial<BotWorldState> = {}) {
+        const r = world({ nearbyNpcs: [smith], equipment: [worn], ...overrides });
+        r.w.handlers.moveItem = (a, w) => {
+            if (a.type !== 'moveItem') return;
+            setTimeout(() => { w.state.dialog = box(`It will cost ${price} to repair the long sword. Do you accept?`); }, 10);
+        };
+        r.w.handlers.respondDialog = (a, w) => {
+            if (a.type !== 'respondDialog') return;
+            w.state.dialog = { ...w.state.dialog!, isOpen: false };
+            if (!a.accept) { w.message('You decline to have your long sword repaired.'); return; }
+            setTimeout(() => {
+                w.player.money = { ...w.player.money, totalCopper: w.player.money.totalCopper - copper };
+                w.message(`You pay Judan Hammerfel ${price}.`);
+                w.message('Judan Hammerfel says, "There, the long sword is ready for combat."', { type: 'say' });
+                w.state.equipment = [{ ...worn, condition: 100, durability: 88 }];
+            }, 10);
+        };
+        return r;
+    }
+
+    test('repairItem hands a worn item to the smith, says yes and reports the price', async () => {
+        const { w, bot } = atSmith('1 gold, 24 silver', 12_400, { player: makePlayer({ money: { copper: 0, silver: 0, gold: 2, mithril: 0, platinum: 0, totalCopper: 20_000 } }) });
+        const r = await bot.repairItem(smith, worn);
+        expect(r).toMatchObject({ success: true, cost: 12_400, item: { condition: 88 }, repaired: { condition: 100, durability: 88 } });
+        expect(w.sentOf('moveItem')).toEqual([{ type: 'moveItem', fromSlot: 10, toSlot: 1210, count: undefined, reason: 'SDK' } as any]);
+        expect(w.sentOf('respondDialog').map(a => a.accept)).toEqual([true]);
+    });
+
+    test('repairItem walks within reach of the smith first: a hand-over is 128 in 3D', async () => {
+        const far = { ...smith, x: 561000 };
+        const { w, bot } = atSmith('5 copper', 5, { nearbyNpcs: [far] });
+        expect((await bot.repairItem('Judan', 10)).success).toBeTrue();
+        expect(Math.hypot(far.x - w.player.x, far.y - w.player.y)).toBeLessThanOrEqual(128);
+    });
+
+    test('a price over maxCost or the purse is declined, and nothing is paid', async () => {
+        const { w, bot } = atSmith('48 silver', 4800);
+        expect(await bot.repairItem(smith, worn, { maxCost: 4799 })).toMatchObject({ success: false, reason: 'too_expensive', cost: 0 });
+        expect(w.sentOf('respondDialog').map(a => a.accept)).toEqual([false]);
+        w.player.money = { ...w.player.money, totalCopper: 100 };
+        w.publish();
+        expect((await bot.repairItem(smith, worn)).reason).toBe('insufficient_funds');
+        expect(w.player.money.totalCopper).toBe(100);
+    });
+
+    test('a free repair is still a yes: starter gear has no price', async () => {
+        const { w, bot } = atSmith('0 copper pieces', 0);
+        expect(await bot.repairItem(smith, worn)).toMatchObject({ success: true, cost: 0 });
+        expect(w.sentOf('respondDialog').map(a => a.accept)).toEqual([true]);
+    });
+
+    test.each([
+        ['Your long sword is already in perfect condition.', 'no_need'],
+        ['Judan Hammerfel says, "I can\'t repair that."', 'not_repairable'],
+        ['Judan Hammerfel doesn\'t want stacked items.', 'not_repairable'],
+        ['You are too far away to give anything to Judan Hammerfel.', 'out_of_range'],
+    ])('no box comes after "%s"', async (line, reason) => {
+        const { w, bot } = world({ nearbyNpcs: [smith], equipment: [worn] });
+        w.handlers.moveItem = (_a, world) => { setTimeout(() => world.message(line), 10); };
+        expect(await bot.repairItem(smith, worn)).toMatchObject({ success: false, reason, message: line });
+        expect(w.sentOf('respondDialog')).toEqual([]);
+    });
+
+    test('a box already open is not the smith\'s answer: it stays unanswered', async () => {
+        const { w, bot } = world({ nearbyNpcs: [smith], equipment: [worn], dialog: box('Otherguy has invited you to join his group.') });
+        w.handlers.moveItem = () => undefined;
+        expect((await bot.repairItem(smith, worn)).reason).toBe('no_response');
+        expect(w.sentOf('respondDialog')).toEqual([]);
+    });
+
+    test('a repair box left open by a cut-off run gets a no first: answered late, it would make the smith forget the new item', async () => {
+        const { w, bot } = atSmith('5 copper', 5);
+        w.state.dialog = box('It will cost 9 gold to repair the old axe. Do you accept?');
+        w.publish();
+        expect(await bot.repairItem(smith, worn)).toMatchObject({ success: true, cost: 5 });
+        expect(w.sentOf('respondDialog').map(a => a.accept)).toEqual([false, true]);
+    });
+
+    test('a yes the smith can no longer honour is his answer, not silence', async () => {
+        const { w, bot } = atSmith('5 copper', 5);
+        w.handlers.respondDialog = (_a, world) => {
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            setTimeout(() => world.message('Judan Hammerfel says, "I can\'t repair that."', { type: 'say' }), 10);
+        };
+        expect(await bot.repairItem(smith, worn)).toMatchObject({ success: false, reason: 'not_repairable', cost: 0 });
+    });
+
+    test('an NPC that takes nothing, or an unknown target, is a failure', async () => {
+        const { w, bot } = world({ nearbyNpcs: [smith], equipment: [worn] });
+        w.handlers.moveItem = () => undefined;
+        expect((await bot.repairItem(smith, worn)).reason).toBe('no_response');
+        expect((await bot.repairItem('nobody', worn)).reason).toBe('not_found');
+        expect((await bot.repairItem(smith, 'no such item')).reason).toBe('not_found');
+    });
+
+    test('repairAll takes the box from a whisper and says when nothing needs it', async () => {
+        const { w, bot } = world({ nearbyNpcs: [smith], equipment: [worn] });
+        w.handlers.whisper = (_a, world) => { setTimeout(() => { world.state.dialog = box('It will cost 1 silver, 44 copper to repair everything. Do you accept?'); }, 10); };
+        w.handlers.respondDialog = (_a, world) => {
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            setTimeout(() => {
+                world.player.money = { ...world.player.money, totalCopper: world.player.money.totalCopper - 144 };
+                world.message('Judan Hammerfel says, "There, the long sword is ready for combat."', { type: 'say' });
+            }, 10);
+        };
+        expect(await bot.repairAll(smith)).toMatchObject({ success: true, cost: 144 });
+        w.state.dialog = null;
+        expect(await bot.repairAll(smith, { maxCost: 10 })).toMatchObject({ success: false, reason: 'too_expensive', cost: 0 });
+        w.handlers.whisper = (_a, world) => { setTimeout(() => world.message('Judan Hammerfel says, "All items are fully repaired already."', { type: 'say' }), 10); };
+        expect(await bot.repairAll(smith)).toMatchObject({ success: true, cost: 0 });
+    }, 20_000);
+});
+
+describe('the vault', () => {
+    const keeper = makeNpc({ objectId: 211, name: 'Lord Urqhart', guildName: 'Vault Keeper', role: 'vault', realm: 'albion', isPeaceful: true, x: 560050, y: 511000 });
+    const axe: InventoryItem = { slot: 40, name: 'Dragonmight', level: 51, count: 1, model: 3, objectType: 17, condition: 100, durability: 100, quality: 100, weight: 30, value1: 165, value2: 37 };
+
+    /** A keeper that opens the window, and moves that go where the server would put them. */
+    function atKeeper(overrides: Partial<BotWorldState> = {}) {
+        const r = world({ nearbyNpcs: [keeper], inventory: [axe], vault: [], vaultOpenedAt: null, ...overrides });
+        r.w.handlers.interact = (_a, w) => { setTimeout(() => { w.state.vaultOpenedAt = Date.now(); }, 10); };
+        r.w.handlers.moveItem = (a, w) => {
+            if (a.type !== 'moveItem' || a.toSlot !== 601) return;
+            setTimeout(() => {
+                const from = [...w.state.inventory, ...w.state.vault].find(i => i.slot === a.fromSlot)!;
+                if (a.fromSlot < 110) {
+                    w.state.inventory = w.state.inventory.filter(i => i.slot !== a.fromSlot);
+                    w.state.vault = [...w.state.vault, { ...from, slot: 110 + w.state.vault.length }];
+                } else {
+                    w.state.vault = w.state.vault.filter(i => i.slot !== a.fromSlot);
+                    w.state.inventory = [...w.state.inventory, { ...from, slot: 40 + w.state.inventory.length }];
+                }
+            }, 10);
+        };
+        return r;
+    }
+
+    test('openVault succeeds on an empty vault: the window itself is the answer', async () => {
+        const { bot, sdk } = atKeeper();
+        expect(await bot.openVault(keeper)).toMatchObject({ success: true, items: [], keeper: { name: 'Lord Urqhart' } });
+        expect(sdk.getState()?.vaultOpenedAt).toBeGreaterThan(0);
+    });
+
+    test('openVault waits past a keeper that speaks first: Jarl Yuliwyf has a line before the window', async () => {
+        const jarl = { ...keeper, name: 'Jarl Yuliwyf' };
+        const { w, bot } = atKeeper({ nearbyNpcs: [jarl] });
+        w.handlers.interact = (_a, world) => {
+            setTimeout(() => {
+                world.state.npcDialog = { npcObjectId: jarl.objectId, npcName: jarl.name, text: 'As you entrust your precious belongings to me, I shall guard them with my life.', keywords: [], receivedAt: Date.now() };
+                world.message('Jarl Yuliwyf says, "As you entrust your precious belongings to me, I shall guard them with my life."', { type: 'say' });
+            }, 10);
+            setTimeout(() => { world.state.vaultOpenedAt = Date.now(); }, 80);
+        };
+        expect(await bot.openVault(jarl)).toMatchObject({ success: true, items: [] });
+    });
+
+    test('openVault fails for an NPC that doesn\'t open one, and on a client too old to say', async () => {
+        const { w, bot } = atKeeper();
+        w.handlers.interact = (_a, world) => { setTimeout(() => world.message('Lord Urqhart says, "Hail."', { type: 'say' }), 10); };
+        expect((await bot.openVault(keeper)).reason).toBe('not_a_vault_keeper');
+        expect((await bot.openVault('nobody')).reason).toBe('not_found');
+        const old = world({ nearbyNpcs: [keeper] });
+        expect((await old.bot.openVault(keeper)).reason).toBe('unknown_action');
+    });
+
+    test('depositItem puts it in through the server-chosen slot, and withdrawItem takes it back', async () => {
+        const { w, bot, sdk } = atKeeper();
+        expect((await bot.depositItem(keeper, 'Dragonmight')).success).toBeTrue();
+        expect(w.sentOf('moveItem').map(a => [a.fromSlot, a.toSlot])).toEqual([[40, 601]]);
+        expect(sdk.getInventory().map(i => i.name)).toEqual([]);
+        expect(sdk.getVault().map(i => [i.slot, i.name])).toEqual([[110, 'Dragonmight']]);
+        expect((await bot.withdrawItem(keeper, /Dragon/)).success).toBeTrue();
+        expect(w.sentOf('moveItem').map(a => [a.fromSlot, a.toSlot])[1]).toEqual([110, 601]);
+        expect(sdk.getVault()).toEqual([]);
+        expect(sdk.getInventory().map(i => i.name)).toEqual(['Dragonmight']);
+    });
+
+    test('a full vault, a full backpack and a missing item are refused without moving anything', async () => {
+        const full = Array.from({ length: 40 }, (_, i) => ({ ...axe, slot: 110 + i, name: `relic ${i}` }));
+        const a = atKeeper({ vault: full });
+        expect((await a.bot.depositItem(keeper, axe)).reason).toBe('vault_full');
+        expect((await a.bot.depositItem(keeper, 'banana')).reason).toBe('not_found');
+        expect((await a.bot.withdrawItem(keeper, 'banana')).reason).toBe('not_found');
+        const bags = Array.from({ length: 40 }, (_, i) => ({ ...axe, slot: 40 + i, name: `loot ${i}` }));
+        const b = atKeeper({ inventory: bags, vault: [{ ...axe, slot: 110 }] });
+        expect((await b.bot.withdrawItem(keeper, 110)).reason).toBe('inventory_full');
+        expect([...a.w.sentOf('moveItem'), ...b.w.sentOf('moveItem')]).toEqual([]);
+    });
+
+    test('a stack can still merge into a full vault or a full backpack', async () => {
+        const arrows = { ...axe, slot: 41, name: 'arrows', count: 10, objectType: 43 };
+        const full = Array.from({ length: 39 }, (_, i) => ({ ...axe, slot: 110 + i, name: `relic ${i}` }));
+        const a = atKeeper({ inventory: [arrows], vault: [...full, { ...arrows, slot: 149, count: 15 }] });
+        a.w.handlers.moveItem = (_m, world) => {
+            setTimeout(() => {
+                world.state.inventory = [{ ...arrows, count: 5 }];
+                world.state.vault = [...full, { ...arrows, slot: 149, count: 20 }];
+            }, 10);
+        };
+        expect((await a.bot.depositItem(keeper, arrows)).success).toBeTrue();
+        expect(a.sdk.getInventory().map(i => i.count)).toEqual([5]);
+    });
+
+    test('a silent refusal runs out the clock instead of reporting a deposit', async () => {
+        const { w, bot } = atKeeper();
+        w.handlers.moveItem = () => undefined;
+        expect((await bot.depositItem(keeper, axe)).reason).toBe('timeout');
+    }, 8000);
+});
+
 describe('trainSpec', () => {
     test('trains through the trainer window and observes the level', async () => {
         const trainer = makeNpc({ objectId: 210, name: 'Master Graent', role: 'trainer', realm: 'albion', x: 560080, y: 511000 });
