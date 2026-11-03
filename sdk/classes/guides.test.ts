@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { buildPath, earnedSpecPoints, getBuild, specCost } from '../../data/builds';
-import { getClass } from '../../data/index';
+import { getClass, getSpell } from '../../data/index';
 import { reach, reachOfBuild } from './reach';
 
 const guide = (name: string) => readFileSync(join(import.meta.dir, `../../learnings/classes/${name}.md`), 'utf-8').replaceAll('\r\n', '\n');
@@ -61,5 +61,54 @@ describe('druid guide', () => {
 
     test('a Bard at 24 has no acuity either', () => {
         expect(reachOfBuild(getBuild('Bard', 'Nurture support')!, 24).buffs.some(b => b.slot === 'acuity')).toBe(false);
+    });
+});
+
+describe('bard guide', () => {
+    const support = () => reachOfBuild(getBuild('Bard', 'Nurture support')!, 24);
+    const music = () => reachOfBuild(getBuild('Bard', 'Music crowd control')!, 24);
+    const songValue = (r: ReturnType<typeof support>, kind: string) => r.songs.find(s => s.kind === kind)?.value;
+
+    test('its table is what the rule gives', () => tableHolds('Bard', ['Nurture support', 'Music crowd control']));
+
+    test('the mezz is baseline: Music 1, 10 and 21 cast the same one, and the area ones never go off', () => {
+        expect(support().cc?.spell.name).toBe('Mesmerizing Hymn');
+        expect(music().cc?.spell.name).toBe('Mesmerizing Hymn');
+        expect(reach('Bard', 24, { Music: 1 }).cc?.spell.name).toBe('Mesmerizing Hymn');
+        expect(support().areaMezz?.spell.name).toBe('Mesmerizing Hymn');
+        expect(music().known.some(k => k.name === 'Captivate Swarms')).toBe(true);
+    });
+
+    test('Music crowd control has every song a rank lower', () => {
+        expect([songValue(support(), 'speed'), songValue(support(), 'endurance'), songValue(support(), 'power')]).toEqual([174, 3, 2]);
+        expect([songValue(music(), 'speed'), songValue(music(), 'endurance'), songValue(music(), 'power')]).toEqual([159, 2, 1]);
+    });
+
+    test('no damage song, and a mezz cure no behaviour casts', () => {
+        expect(support().songs.map(s => s.kind).sort()).toEqual(['endurance', 'health', 'power', 'speed']);
+        expect(support().unused.map(k => k.name)).toContain('Clarifying Harmonies');
+    });
+});
+
+describe('hero guide', () => {
+    const tank = () => reachOfBuild(getBuild('Hero', 'Sword and board tank')!, 24);
+    const style = (name: string) => tank().styles.find(s => s.name === name);
+
+    test('its table is what the rule gives', () => tableHolds('Hero', ['Sword and board tank', 'Large Weapons and Slam', 'Celtic Spear and Slam', 'Shield-heavy']));
+
+    test('the styles it names are in reach at 24, and Slam is not', () => {
+        for (const name of ['Horizon Blade', 'Incapacitate', 'Stun', 'Disable', 'Glowing Blade', 'Numb', 'Fire Blade', 'Taunting Blade']) expect(style(name)).toBeDefined();
+        expect(style('Slam')).toBeUndefined();
+        expect(style('Paralyze')).toBeUndefined();
+    });
+
+    test('Enervating Blade detaunts and Taunting Blade taunts, as their spells say', () => {
+        const proc = (name: string) => getSpell(style(name)!.procs![0]!.spellId)!;
+        expect(proc('Enervating Blade').value).toBeLessThan(0);
+        expect(proc('Taunting Blade').value).toBeGreaterThan(0);
+    });
+
+    test('Shields 18 has every rank of Guard', () => {
+        expect(tank().abilities).toContain('Guard III');
     });
 });
