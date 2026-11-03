@@ -30,3 +30,8 @@ export function scriptArgs(options: ScriptArgsOptions = {}): string[] {
     if (script && exists(join(dirname(resolve(script)), 'bot.env'))) return positional;
     return positional.slice(1);
 }
+
+/** The `-` prefixed arguments of a script, which scriptArgs leaves out. */
+export function scriptFlags(options: Pick<ScriptArgsOptions, 'argv'> = {}): string[] {
+    return (options.argv ?? process.argv).slice(2).filter(a => a.startsWith('-'));
+}

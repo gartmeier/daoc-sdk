@@ -202,19 +202,19 @@ export function parseArgs(argv: string[], defaultName = basename(ROOT)): Options
     return opts;
 }
 
-interface Stack {
+export interface Stack {
     project: string;
     file: string;
     ctx: Ctx;
 }
 
-function stackFor(name: string): Stack {
+export function stackFor(name: string): Stack {
     const project = projectName(name);
     const file = join(ROOT, 'server', 'docker', 'throwaway', project.slice(PROJECT_PREFIX.length), 'docker-compose.yml');
     return { project, file, ctx: { compose: file, dbPassword: 'daoc-sdk', database: 'opendaoc', verbose: false } };
 }
 
-const compose = (stack: Stack, ...args: string[]) => run(['docker', 'compose', '-f', stack.file, ...args]);
+export const compose = (stack: Stack, ...args: string[]) => run(['docker', 'compose', '-f', stack.file, ...args]);
 
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
@@ -277,7 +277,7 @@ async function startServices(stack: Stack, ports: Ports, opts: Options): Promise
 }
 
 /** Waits for this boot's listening line: the log keeps the line of the boot before a restart. */
-async function waitUntilListening(stack: Stack, port: number, timeoutMs: number): Promise<void> {
+export async function waitUntilListening(stack: Stack, port: number, timeoutMs: number): Promise<void> {
     const line = listeningLine(port);
     const dead = await waitFor(`"${line}"`, timeoutMs, async () => {
         const id = (await compose(stack, 'ps', '-a', '-q', 'gameserver')).stdout.trim();
@@ -333,9 +333,8 @@ async function saveSeed(stack: Stack, seed: string): Promise<void> {
     for (const stale of staleSeeds(volumes.stdout.split(/\r?\n/), seed)) await run(['docker', 'volume', 'rm', stale]);
 }
 
-/** Sets the account limits when they differ; the rows exist once the gameserver has booted. True when something changed. */
-async function applyAccountProperties(ctx: Ctx): Promise<boolean> {
-    const wanted = accountProperties();
+/** Sets server properties when they differ; the rows exist once the gameserver has booted. True when something changed, and a restart is due. */
+export async function applyProperties(ctx: Ctx, wanted: { key: string; value: string }[]): Promise<boolean> {
     const keys = wanted.map(p => sqlString(p.key)).join(',');
     const rows = await waitFor('the serverproperty rows', 60_000, async () => {
         const found = await sql(ctx, `SELECT \`Key\`, Value FROM serverproperty WHERE \`Key\` IN (${keys});`);
@@ -348,7 +347,7 @@ async function applyAccountProperties(ctx: Ctx): Promise<boolean> {
     return true;
 }
 
-async function up(opts: Options): Promise<void> {
+export async function up(opts: Options): Promise<void> {
     const t0 = Date.now();
     const gameImage = await preflight();
     const stack = stackFor(opts.name);
@@ -365,7 +364,7 @@ async function up(opts: Options): Promise<void> {
 
         let ports = await startServices(stack, wanted, opts);
         await timed('gameserver listening', () => waitUntilListening(stack, ports.game, opts.timeoutMs));
-        if (await timed('account limits checked', () => applyAccountProperties(stack.ctx))) {
+        if (await timed('account limits checked', () => applyProperties(stack.ctx, accountProperties()))) {
             if (seed && !(await seedSaved(seed))) {
                 await timed('seed saved', () => saveSeed(stack, seed));
                 ports = await startServices(stack, ports, opts);
@@ -393,7 +392,7 @@ async function up(opts: Options): Promise<void> {
     }
 }
 
-async function down(opts: Options): Promise<void> {
+export async function down(opts: Options): Promise<void> {
     const stack = stackFor(opts.name);
     // Without the file (a checkout cleaned since) the project name still reaches this stack and no other.
     const r = existsSync(stack.file)

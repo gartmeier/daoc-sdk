@@ -1,10 +1,15 @@
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { BotSDK } from '../index';
 import { BotActions, castFailureReason, tradeSlotWait } from '../actions';
 import { resurrectCost } from '../actions-helpers';
 import { ChatHistory } from '../chat-history';
 import { setDefaultPathProvider, StraightLinePathProvider, type PathProvider } from '../pathfinding';
 import { executionContext, throwIfExecutionAborted } from '../execution-context';
+import type { Build } from '../../data/builds/types';
+import { specKey } from '../../data/spec-names';
 import type { ActionResult, BotAction, BotWorldState, GameMessage, InventoryItem, NearbyNpc, NearbyPlayer, PlayerState, Spell } from '../types';
 import { makeMessage, makeNpc, makeObject, makePlayer, makePlayerObj, makeState } from './fixtures';
 
@@ -2040,7 +2045,7 @@ describe('trainSpec', () => {
         const trainer = makeNpc({ objectId: 210, name: 'Master Graent', role: 'trainer', realm: 'albion', x: 560080, y: 511000 });
         const { w, bot } = world({ nearbyNpcs: [trainer] });
         w.handlers.openTrainer = (_a, world) => {
-            world.state.trainer = { isOpen: true, specPoints: 3, specs: [{ index: 0, name: 'Slash', level: 2, nextLevelCost: 3 }] };
+            world.state.trainer = { isOpen: true, specPoints: 3, receivedAt: world.state.tick, specs: [{ index: 0, name: 'Slash', level: 2, nextLevelCost: 3 }] };
         };
         w.handlers.trainSpec = (a, world) => {
             if (a.type !== 'trainSpec') return;
@@ -2064,10 +2069,84 @@ describe('trainSpec', () => {
         const trainer = makeNpc({ objectId: 210, name: 'Master Graent', role: 'trainer', realm: 'albion', x: 560080, y: 511000 });
         const { w, bot } = world({ nearbyNpcs: [trainer], skills: { ...makeState().skills, specializations: lines.map(spec) } });
         w.handlers.openTrainer = (_a, world) => {
-            world.state.trainer = { isOpen: true, specPoints: 90, specs: window.map((name, index) => ({ index, name, level: 1, nextLevelCost: 2 })) };
+            world.state.trainer = { isOpen: true, specPoints: 90, receivedAt: world.state.tick, specs: window.map((name, index) => ({ index, name, level: 1, nextLevelCost: 2 })) };
         };
         return { w, bot };
     };
+
+    test('a window from before a promotion is not trained by: a new one is asked for and its index used', async () => {
+        const lines = ['Mending', 'Subterranean', 'Augmentation'];
+        const { w, bot } = atTrainer(lines);
+        // What a Seer's window showed at Korgan, still open after the whisper: a promotion sends none.
+        w.state.trainer = { isOpen: true, specPoints: 33, receivedAt: 1, trainerObjectId: 210, specs: [{ index: 0, name: 'Mending', level: 1, nextLevelCost: 2 }, { index: 1, name: 'Augmentation', level: 2, nextLevelCost: 3 }] };
+        w.handlers.openTrainer = (_a, world) => {
+            setTimeout(() => { world.state.trainer = { isOpen: true, specPoints: 33, receivedAt: 2, specs: lines.map((name, index) => ({ index, name, level: name === 'Augmentation' ? 2 : 1, nextLevelCost: 2 })) }; }, 30);
+        };
+        w.handlers.trainSpec = (a, world) => { if (a.type === 'trainSpec') setTimeout(() => raise(world, lines[a.specIndex]!, 5), 10); };
+        raise(w, 'Augmentation', 2);
+        w.publish();
+        const r = await bot.trainSpec('Graent', 'Augmentation', 3);
+        expect(w.sentOf('trainSpec')).toEqual([expect.objectContaining({ specIndex: 2, levels: 3 })]);
+        expect(r).toMatchObject({ success: true, spec: 'Augmentation', fromLevel: 2, toLevel: 5 });
+        expect(w.state.skills.specializations.find(s => s.name === 'Subterranean')!.level).toBe(1);
+    });
+
+    test('no new window: /train, by name, and never the old one\'s index', async () => {
+        const { w, bot } = atTrainer(['Mending', 'Augmentation']);
+        w.state.trainer = { isOpen: true, specPoints: 33, receivedAt: 1, specs: [{ index: 0, name: 'Augmentation', level: 1, nextLevelCost: 2 }] };
+        w.handlers.openTrainer = () => undefined;
+        w.handlers.command = (a, world) => { if (a.type === 'command') setTimeout(() => raise(world, 'Augmentation', 2), 10); };
+        const r = await bot.trainSpec('Graent', 'Augmentation');
+        expect(w.sentOf('trainSpec')).toEqual([]);
+        expect(w.sentOf('command').map(a => a.command)).toEqual(['/train Augmentation 2']);
+        expect(r).toMatchObject({ success: true, toLevel: 2 });
+    }, 8000);
+
+    describe('with no trainer', () => {
+        /** Where it stands, with no NPC about, on a server with allow_train_anywhere on (train.cs:143) or off (:150). */
+        const standing = (lines: string[], anywhere = true) => {
+            const { w, bot } = world({ skills: { ...makeState().skills, specializations: lines.map(spec) } });
+            const wanted = 'You must select a valid trainer for your class.';
+            w.handlers.openTrainer = (_a, world) => {
+                if (!anywhere) { setTimeout(() => world.message(wanted), 10); return; }
+                world.state.trainer = { isOpen: true, specPoints: 90, receivedAt: world.state.tick, specs: lines.map((name, index) => ({ index, name, level: 1, nextLevelCost: 2 })) };
+            };
+            w.handlers.trainSpec = (a, world) => { if (a.type === 'trainSpec') setTimeout(() => raise(world, lines[a.specIndex]!, 1 + (a.levels ?? 1)), 10); };
+            return { w, bot };
+        };
+
+        test('it trains where it stands, by the window, with no target and no walk', async () => {
+            const { w, bot } = standing(['Slash', 'Polearm']);
+            const r = await bot.trainSpec(null, 'Polearm', 4);
+            expect(r).toMatchObject({ success: true, spec: 'Polearm', fromLevel: 1, toLevel: 5 });
+            expect(w.sentOf('trainSpec')).toEqual([expect.objectContaining({ specIndex: 1, levels: 4 })]);
+            expect(w.sentOf('setTarget')).toEqual([]);
+            expect(w.sentOf('moveTo')).toEqual([]);
+        });
+
+        test('a server with allow_train_anywhere off: needs_trainer, at once, and no /train after it', async () => {
+            const { w, bot } = standing(['Slash', 'Polearm'], false);
+            const started = Date.now();
+            const r = await bot.trainSpec(null, 'Polearm');
+            expect(r).toMatchObject({ success: false, reason: 'needs_trainer', message: 'You must select a valid trainer for your class.', spec: 'Polearm', toLevel: 1 });
+            expect(Date.now() - started).toBeLessThan(2000);
+            expect(w.sentOf('trainSpec')).toEqual([]);
+            expect(w.sentOf('command')).toEqual([]);
+        });
+
+        test('a trainer named and not of the class, the same words, stays refused', async () => {
+            const { w, bot } = atTrainer(['Slash']);
+            w.handlers.openTrainer = (_a, world) => { setTimeout(() => world.message('You must select a valid trainer for your class.'), 10); };
+            expect(await bot.trainSpec('Graent', 'Slash')).toMatchObject({ success: false, reason: 'refused' });
+            expect(w.sentOf('command')).toEqual([]);
+        });
+
+        test('a name that is no NPC is still not_found: only null means no trainer', async () => {
+            const { w, bot } = standing(['Slash']);
+            expect(await bot.trainSpec('Nobody', 'Slash')).toMatchObject({ success: false, reason: 'not_found' });
+            expect(w.sent).toEqual([]);
+        });
+    });
 
     test.each([
         ['Shield', 'Shield', 2], ['Shields', 'Shield', 2], ['shields', 'Shield', 2],
@@ -2111,6 +2190,576 @@ describe('trainSpec', () => {
         expect(w.sentOf('openTrainer')).toEqual([]);
         expect(w.sentOf('command')).toEqual([]);
         expect((await bot.trainSpec('Graent', 'constructor')).reason).toBe('spec_not_found');
+    });
+});
+
+/** Lines at these levels, as the skill list names them. */
+const specLines = (lines: Record<string, number>) => Object.entries(lines).map(([name, level], i) => ({ name, level, internalId: i, bonus: 0 }));
+const graent = (x = 560080) => makeNpc({ objectId: 210, name: 'Master Graent', role: 'trainer', realm: 'hibernia', x, y: 511000 });
+/** What a server's 0x7B does: the window as things stand, with a stamp a fresh one can be told by. */
+let windowStamp = 0;
+const openWindow = (world: FakeWorld) => {
+    world.state.trainer = {
+        isOpen: true, specPoints: world.player.specPoints, receivedAt: ++windowStamp,
+        specs: world.state.skills.specializations.map((s, index) => ({ index, name: s.name, level: s.level, nextLevelCost: s.level + 1 })),
+    };
+};
+
+describe('trainBuild', () => {
+    const NUKER: Build = {
+        className: 'Enchanter', name: 'Test nuker',
+        targets: [{ level: 24, specs: { Mana: 16, Light: 7, Enchantments: 5 } }, { level: 50, specs: { Mana: 44, Light: 20, Enchantments: 5 } }],
+    };
+    const ENCHANTER_LINES = { 'Light Magic': 1, 'Mana Magic': 12, Enchantments: 1 };
+    const enchanter = (points: number, level = 20) => ({ className: 'Enchanter', realm: 'hibernia' as const, level, specPoints: points });
+
+    /** A trainer in reach and a server pricing as train.cs:115 does: a level costs its number, and nothing up to `free` on a line. */
+    const atTrainer = (player: Partial<PlayerState>, lines: Record<string, number>, free: Record<string, number> = {}, trainer = graent()) => {
+        const { w, bot } = world({ player: makePlayer(player), nearbyNpcs: [trainer], skills: { ...makeState().skills, specializations: specLines(lines) } });
+        w.handlers.openTrainer = (_a, world) => openWindow(world);
+        w.handlers.trainSpec = (a, world) => {
+            if (a.type !== 'trainSpec') return;
+            setTimeout(() => {
+                const spec = world.state.skills.specializations[a.specIndex]!;
+                const to = spec.level + (a.levels ?? 1);
+                let cost = 0;
+                for (let l = spec.level + 1; l <= to; l++) if (l > (free[spec.name] ?? 0)) cost += l;
+                if (cost > world.player.specPoints) return world.message(`That specialization costs ${spec.level + 1} specialization points! You don't have that many specialization points left for this level.`);
+                world.player.specPoints -= cost;
+                world.state.skills = { ...world.state.skills, specializations: world.state.skills.specializations.map(s => (s === spec ? { ...s, level: to } : s)) };
+                openWindow(world);
+                world.message('Training complete!');
+            }, 10);
+        };
+        return { w, bot };
+    };
+
+    test('raises the lines in the listed order, several levels at once, under the KeyName', async () => {
+        const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        const r = await bot.trainBuild('Graent', NUKER);
+        expect(w.sentOf('trainSpec')).toEqual([
+            expect.objectContaining({ specIndex: 1, levels: 4 }),
+            expect.objectContaining({ specIndex: 0, levels: 6 }),
+            expect.objectContaining({ specIndex: 2, levels: 4 }),
+        ]);
+        expect(r).toMatchObject({
+            success: true, build: 'Test nuker', done: true, waiting: null, over: [], specPointsLeft: 1,
+            trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 16 }, { spec: 'Light', fromLevel: 1, toLevel: 7 }, { spec: 'Enchantments', fromLevel: 1, toLevel: 5 }],
+            message: 'Mana 12 → 16, Light 1 → 7, Enchantments 1 → 5, on target for level 20',
+        });
+    });
+
+    test('out of points on a line it waits there, and a cheaper line further down stays as it is', async () => {
+        const { w, bot } = atTrainer(enchanter(45), ENCHANTER_LINES);
+        const r = await bot.trainBuild('Graent', NUKER);
+        expect(w.sentOf('trainSpec')).toEqual([expect.objectContaining({ specIndex: 1, levels: 3 })]);
+        expect(r).toMatchObject({ success: true, done: false, waiting: { spec: 'Mana', cost: 16, points: 3 }, specPointsLeft: 3, message: 'Mana 12 → 15, saving for Mana 16: 3/16 points' });
+        expect(w.state.skills.specializations.map(s => s.level)).toEqual([1, 15, 1]);
+    });
+
+    test('with nothing it can pay for, nothing is sent and no trainer is needed', async () => {
+        const { w, bot } = atTrainer(enchanter(3), ENCHANTER_LINES);
+        const r = await bot.trainBuild('Nobody', NUKER);
+        expect(r).toMatchObject({ success: true, done: false, trained: [], waiting: { spec: 'Mana', cost: 13, points: 3 }, message: 'Saving for Mana 13: 3/13 points' });
+        expect(w.sent).toEqual([]);
+    });
+
+    test('done: every line at its target, or as high as the level goes', async () => {
+        const { w, bot } = atTrainer(enchanter(40, 10), { 'Light Magic': 7, 'Mana Magic': 10, Enchantments: 5 });
+        const r = await bot.trainBuild('Nobody', NUKER);
+        expect(r).toMatchObject({ success: true, done: true, waiting: null, trained: [], specPointsLeft: 40, message: 'On target for level 10' });
+        expect(w.sent).toEqual([]);
+    });
+
+    describe('points the server has not sent yet (a promotion sends none, GameTrainer.cs:335-349)', () => {
+        const AT_TARGET = { 'Light Magic': 7, 'Mana Magic': 16, Enchantments: 5 };
+        /** Talking to the trainer sends the real number (GameTrainer.cs:134). */
+        const talkBrings = (w: FakeWorld, points: number) => {
+            w.handlers.interact = (_a, world) => { setTimeout(() => { world.player.specPoints = points; }, 10); };
+        };
+
+        test('a wait on stale points: it talks to the trainer, reads the real number and trains', async () => {
+            const { w, bot } = atTrainer(enchanter(0), ENCHANTER_LINES);
+            talkBrings(w, 45);
+            const r = await bot.trainBuild('Graent', NUKER);
+            expect(w.sentOf('interact')).toEqual([expect.objectContaining({ objectId: 210 })]);
+            expect(w.sent.findIndex(a => a.type === 'interact')).toBeLessThan(w.sent.findIndex(a => a.type === 'trainSpec'));
+            expect(r).toMatchObject({ success: true, trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 15 }], specPointsLeft: 3, message: 'Mana 12 → 15, saving for Mana 16: 3/16 points' });
+        });
+
+        test('a real wait: one interact, nothing trained, and no second one on this call', async () => {
+            const { w, bot } = atTrainer(enchanter(3), ENCHANTER_LINES);
+            const r = await bot.trainBuild('Graent', NUKER);
+            expect(w.sent.map(a => a.type)).toEqual(['interact']);
+            expect(r).toMatchObject({ success: true, done: false, trained: [], waiting: { spec: 'Mana', cost: 13, points: 3 }, message: 'Saving for Mana 13: 3/13 points' });
+        });
+
+        test('a new number that still falls short is what the wait reports, after one interact', async () => {
+            const { w, bot } = atTrainer(enchanter(0), ENCHANTER_LINES);
+            talkBrings(w, 5);
+            const r = await bot.trainBuild('Graent', NUKER);
+            expect(w.sent.map(a => a.type)).toEqual(['interact']);
+            expect(r).toMatchObject({ trained: [], waiting: { spec: 'Mana', cost: 13, points: 5 }, specPointsLeft: 5 });
+        });
+
+        test('a trainer out of reach gets nothing, and the number stands', async () => {
+            const { w, bot } = atTrainer(enchanter(3), ENCHANTER_LINES, {}, graent(561500));
+            expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ success: true, trained: [], waiting: { spec: 'Mana', cost: 13, points: 3 } });
+            expect(w.sent).toEqual([]);
+        });
+
+        test('done sends nothing, with a trainer in reach', async () => {
+            const { w, bot } = atTrainer(enchanter(3), AT_TARGET);
+            expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ success: true, done: true, trained: [] });
+            expect(w.sent).toEqual([]);
+        });
+
+        test('a wait reached after training something needs no interact: the raise brought the number', async () => {
+            const { w, bot } = atTrainer(enchanter(45), ENCHANTER_LINES);
+            expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ waiting: { spec: 'Mana', cost: 16, points: 3 }, trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 15 }] });
+            expect(w.sentOf('interact')).toEqual([]);
+        });
+    });
+
+    test('stops at a failed trainSpec with its reason, and says what it raised first', async () => {
+        const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        const honest = w.handlers.trainSpec!;
+        w.handlers.trainSpec = (a, world) => {
+            if (a.type === 'trainSpec' && a.specIndex === 0) setTimeout(() => world.message('You must select a valid trainer for your class.'), 10);
+            else return honest(a, world);
+        };
+        const r = await bot.trainBuild('Graent', NUKER);
+        expect(r).toMatchObject({
+            success: false, reason: 'refused', done: false, waiting: null, specPointsLeft: 42,
+            trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 16 }],
+            message: 'Mana 12 → 16, then: You must select a valid trainer for your class.',
+        });
+        expect(w.sentOf('trainSpec')).toHaveLength(2);
+    });
+
+    test('a line the server raised only part of the way still counts as raised', async () => {
+        const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        // train.cs:107-124 trains what the points allow, then says it can't go on.
+        w.handlers.trainSpec = (a, world) => {
+            if (a.type !== 'trainSpec') return;
+            setTimeout(() => {
+                world.state.skills = { ...world.state.skills, specializations: world.state.skills.specializations.map((l, i) => (i === a.specIndex ? { ...l, level: l.level + 2 } : l)) };
+                world.message("That specialization costs 15 specialization points! You don't have that many specialization points left for this level.");
+            }, 10);
+        };
+        expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ success: false, reason: 'refused', trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 14 }] });
+    });
+
+    describe('with no trainer, where it stands', () => {
+        test('spends as far as the points reach, with no target and no walk', async () => {
+            const { w, bot } = atTrainer(enchanter(45), ENCHANTER_LINES, {}, graent(561500));
+            const r = await bot.trainBuild(null, NUKER);
+            expect(r).toMatchObject({ success: true, trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 15 }], specPointsLeft: 3, waiting: { spec: 'Mana', cost: 16, points: 3 } });
+            expect(w.sentOf('setTarget')).toEqual([]);
+            expect(w.sentOf('moveTo')).toEqual([]);
+        });
+
+        test('a wait sends nothing: there is nobody to talk to', async () => {
+            const { w, bot } = atTrainer(enchanter(3), ENCHANTER_LINES);
+            expect(await bot.trainBuild(null, NUKER)).toMatchObject({ success: true, trained: [], waiting: { spec: 'Mana', cost: 13, points: 3 } });
+            expect(w.sent).toEqual([]);
+        });
+
+        test('a server that wants a trainer: needs_trainer, for trainAtClassTrainer to walk on', async () => {
+            const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+            w.handlers.openTrainer = (_a, world) => { setTimeout(() => world.message('You must select a valid trainer for your class.'), 10); };
+            expect(await bot.trainBuild(null, NUKER)).toMatchObject({ success: false, reason: 'needs_trainer', trained: [] });
+            expect(w.sentOf('trainSpec')).toEqual([]);
+        });
+    });
+
+    test('a trainer that is not there fails only when there is something to train', async () => {
+        const { bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        expect(await bot.trainBuild('Nobody', NUKER)).toMatchObject({ success: false, reason: 'not_found', trained: [], build: 'Test nuker' });
+    });
+
+    test('no_build: no build passed and none in the bot folder', async () => {
+        const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        expect(await bot.trainBuild('Graent')).toMatchObject({ success: false, reason: 'no_build', build: null, trained: [], done: false, specPointsLeft: 100 });
+        expect(w.sent).toEqual([]);
+    });
+
+    describe('the bot\'s own file', () => {
+        let root = '';
+        let cwd: { mockRestore(): void } | null = null;
+        const ownBuild = (source: string) => {
+            root = mkdtempSync(join(tmpdir(), 'daoc-trainbuild-'));
+            mkdirSync(join(root, 'bots', 'tester'), { recursive: true });
+            writeFileSync(join(root, 'bots', 'tester', 'bot.env'), '');
+            writeFileSync(join(root, 'bots', 'tester', 'build.ts'), source);
+            cwd = spyOn(process, 'cwd').mockReturnValue(root);
+        };
+        afterEach(() => {
+            cwd?.mockRestore();
+            cwd = null;
+            rmSync(root, { recursive: true, force: true });
+        });
+
+        test('without a build it trains the one in bots/<bot>/build.ts', async () => {
+            ownBuild(`export default { className: 'Enchanter', name: 'Own', targets: [{ level: 24, specs: { Light: 3 } }] };`);
+            const { bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+            const r = await bot.trainBuild('Graent');
+            expect(r).toMatchObject({ success: true, build: 'Own', done: true, trained: [{ spec: 'Light', fromLevel: 1, toLevel: 3 }] });
+            expect(r.over).toEqual([{ spec: 'Mana', level: 12, target: 1 }]);
+        });
+
+        test('a broken file throws, naming it and the problem', async () => {
+            ownBuild(`export default { className: 'Armsman', name: 'Typo', targets: [{ level: 24, specs: { Shield: 3 } }] };`);
+            const { bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+            const failure = await bot.trainBuild('Graent').catch(e => e as Error);
+            expect(failure).toBeInstanceOf(Error);
+            expect((failure as Error).message).toContain('build.ts');
+            expect((failure as Error).message).toContain('Shield: use the KeyName Shields');
+        });
+    });
+
+    test('invalid_build: a build passed in is checked as a file would be', async () => {
+        const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        const typo: Build = { className: 'Armsman', name: 'Typo', targets: [{ level: 24, specs: { Shield: 3 } }] };
+        const r = await bot.trainBuild('Graent', typo);
+        expect(r).toMatchObject({ success: false, reason: 'invalid_build', build: 'Typo' });
+        expect(r.message).toContain('Shield: use the KeyName Shields');
+        expect((await bot.trainBuild('Graent', { className: 'Armsman', name: 'Empty', targets: [] })).reason).toBe('invalid_build');
+        expect(w.sent).toEqual([]);
+    });
+
+    test.each([
+        ['another class', { className: 'Armsman', realm: 'albion' as const }, NUKER],
+        ['the base class of another', { className: 'Fighter', realm: 'albion' as const }, NUKER],
+        ['a name two realms share', { className: 'Rogue', realm: 'midgard' as const }, { className: 'Infiltrator', name: 'Sneak', targets: [{ level: 24, specs: { Stealth: 10 } }] }],
+    ])('wrong_class: %s', async (_what, player, build) => {
+        const { w, bot } = atTrainer(player, ENCHANTER_LINES);
+        const r = await bot.trainBuild('Graent', build);
+        expect(r).toMatchObject({ success: false, reason: 'wrong_class', build: build.name, trained: [] });
+        expect(r.message).toContain(player.className);
+        expect(w.sent).toEqual([]);
+    });
+
+    test('a base class trains the lines it has of its advanced class\'s build', async () => {
+        const { bot } = atTrainer({ className: 'Magician', realm: 'hibernia', level: 3, specPoints: 12 }, { 'Light Magic': 1, 'Mana Magic': 1 });
+        expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({
+            success: true, done: true, specPointsLeft: 2,
+            trained: [{ spec: 'Mana', fromLevel: 1, toLevel: 3 }, { spec: 'Light', fromLevel: 1, toLevel: 3 }],
+        });
+    });
+
+    describe('a build named by a class two realms share', () => {
+        const SWORD: Build = { className: 'Rogue', name: 'K2', targets: [{ level: 4, specs: { Sword: 4 } }] };
+        const STEALTH: Build = { className: 'MidgardRogue', name: 'K3', targets: [{ level: 4, specs: { Stealth: 2 } }] };
+        const rogue = (realm: 'albion' | 'midgard') => atTrainer({ className: 'Rogue', realm, level: 4, specPoints: 9 }, { Sword: 1, Stealth: 1 });
+
+        test('a Midgard Rogue\'s own build, named Rogue, goes by Midgard\'s Rogue', async () => {
+            expect(await rogue('midgard').bot.trainBuild('Graent', SWORD)).toMatchObject({ success: true, done: true, trained: [{ spec: 'Sword', fromLevel: 1, toLevel: 4 }] });
+        });
+
+        test('its key says the same', async () => {
+            expect(await rogue('midgard').bot.trainBuild('Graent', STEALTH)).toMatchObject({ success: true, done: true, trained: [{ spec: 'Stealth', fromLevel: 1, toLevel: 2 }] });
+        });
+
+        test('an Albion Rogue has no Sword, and no use for Midgard\'s key', async () => {
+            expect(await rogue('albion').bot.trainBuild('Graent', SWORD)).toMatchObject({ success: false, reason: 'invalid_build' });
+            expect(await rogue('albion').bot.trainBuild('Graent', STEALTH)).toMatchObject({ success: false, reason: 'wrong_class' });
+        });
+    });
+
+    test('a base class of a realm that shares its name', async () => {
+        const { bot } = atTrainer({ className: 'Rogue', realm: 'albion', level: 3, specPoints: 5 }, { Stealth: 1 });
+        const build: Build = { className: 'Infiltrator', name: 'Sneak', targets: [{ level: 24, specs: { Stealth: 10 } }] };
+        expect(await bot.trainBuild('Graent', build)).toMatchObject({ success: true, done: true, trained: [{ spec: 'Stealth', fromLevel: 1, toLevel: 3 }] });
+    });
+
+    test('a female class name is the same class', async () => {
+        const { bot } = atTrainer({ ...enchanter(100), className: 'Enchantress' }, ENCHANTER_LINES);
+        expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ success: true, done: true, specPointsLeft: 1 });
+    });
+
+    describe('autotrain', () => {
+        const SLASHER: Build = { className: 'Armsman', name: 'Slasher', targets: [{ level: 24, specs: { Slash: 6 } }] };
+
+        test.each(['Armsman', 'Armswoman'])('an %s pays only above its free levels', async className => {
+            const { bot } = atTrainer({ className, realm: 'albion', level: 20, specPoints: 6 }, { Slash: 1 }, { Slash: 5 });
+            expect(await bot.trainBuild('Graent', SLASHER)).toMatchObject({ success: true, done: true, specPointsLeft: 0, trained: [{ spec: 'Slash', fromLevel: 1, toLevel: 6 }] });
+        });
+
+        test('its base class has none yet and pays for every level', async () => {
+            const { bot } = atTrainer({ className: 'Fighter', realm: 'albion', level: 20, specPoints: 6 }, { Slash: 1 });
+            expect(await bot.trainBuild('Graent', SLASHER)).toMatchObject({
+                success: true, done: false, specPointsLeft: 1, waiting: { spec: 'Slash', cost: 4, points: 1 }, trained: [{ spec: 'Slash', fromLevel: 1, toLevel: 3 }],
+            });
+        });
+    });
+
+    test('over: what is spent beyond the target, and a line left out has target 1', async () => {
+        const build: Build = { className: 'Enchanter', name: 'Mana only', targets: [{ level: 24, specs: { Mana: 16, Light: 7 } }] };
+        const { bot } = atTrainer(enchanter(0), { 'Light Magic': 12, 'Mana Magic': 16, Enchantments: 3 });
+        const r = await bot.trainBuild('Graent', build);
+        expect(r.over).toEqual([{ spec: 'Light', level: 12, target: 7 }, { spec: 'Enchantments', level: 3, target: 1 }]);
+        expect(r).toMatchObject({ success: true, done: true });
+        expect(r.message).toBe('On target for level 20. Over target: Light 12 (target 7), Enchantments 3 (target 1)');
+    });
+
+    test('over leaves free levels alone', async () => {
+        const build: Build = { className: 'Armsman', name: 'Polearms', targets: [{ level: 24, specs: { Polearm: 2 } }] };
+        const { bot } = atTrainer({ className: 'Armsman', realm: 'albion', level: 20, specPoints: 0 }, { Slash: 5, Polearm: 2 });
+        expect((await bot.trainBuild('Graent', build)).over).toEqual([]);
+    });
+
+    test('a trainSpec that claims success and raises nothing cannot loop forever', async () => {
+        const { bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        const train = spyOn(bot, 'trainSpec').mockResolvedValue({ success: true, message: 'ok', spec: 'Mana Magic', fromLevel: 12, toLevel: 12, specPointsLeft: 100 });
+        const r = await bot.trainBuild('Graent', NUKER);
+        expect(r).toMatchObject({ success: false, reason: 'too_many_steps', trained: [] });
+        expect(train.mock.calls.length).toBe(32);
+    });
+
+    test('not in game', async () => {
+        const { bot } = world({ player: null });
+        expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ success: false, reason: 'not_in_game', build: 'Test nuker' });
+    });
+});
+
+describe('respec', () => {
+    const OFFER = 'CAUTION: All respec changes are final with no second chance. Proceed carefully!';
+    const ENCHANTER_LINES = { 'Light Magic': 7, 'Mana Magic': 12, Enchantments: 5 };
+    const box = (over: Partial<NonNullable<BotWorldState['dialog']>> = {}) => ({ isOpen: true, code: 7, data: [0, 0, 0, 0] as [number, number, number, number], type: 1, text: OFFER, receivedAt: Date.now(), ...over });
+    const lineOf = (world: FakeWorld, name: string) => world.state.skills.specializations.find(s => s.name === name)!;
+
+    /**
+     * A trainer and a server answering as respec.cs does. /respec <line> takes the KeyName alone (GamePlayer.cs:3102).
+     * On a yes the lines fall to `floor` (else 1) and their points come back, and the skills, the points and the window go out in that order.
+     */
+    const atTrainer = (player: Partial<PlayerState>, lines: Record<string, number>, floor: Record<string, number> = {}, trainer = graent()) => {
+        const { w, bot } = world({ player: makePlayer(player), nearbyNpcs: [trainer], skills: { ...makeState().skills, specializations: specLines(lines) } });
+        let line: string | null = null;
+        w.handlers.command = (a, world) => {
+            if (a.type !== 'command') return;
+            const asked = /^\/respec (.+)$/.exec(a.command)![1]!;
+            line = asked === 'all' ? null : asked;
+            if (line && !world.state.skills.specializations.some(s => specKey(s.name).toLowerCase() === line!.toLowerCase())) {
+                setTimeout(() => world.message(`No line with name '${line}' found.`), 10);
+                return;
+            }
+            setTimeout(() => { world.state.dialog = box(); }, 10);
+        };
+        w.handlers.respondDialog = (a, world) => {
+            if (a.type !== 'respondDialog') return;
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            if (!a.accept) return;
+            setTimeout(() => {
+                let regained = 0;
+                const specializations = world.state.skills.specializations.map(s => {
+                    if (line && specKey(s.name).toLowerCase() !== line.toLowerCase()) return s;
+                    const to = floor[s.name] ?? 1;
+                    for (let l = to + 1; l <= s.level; l++) regained += l;
+                    return { ...s, level: to };
+                });
+                world.message(`You regain ${regained} specialization points!`);
+                world.state.skills = { ...world.state.skills, specializations };
+                world.player.specPoints += regained;
+                openWindow(world);
+                world.message('Your character has been saved.');
+            }, 10);
+        };
+        return { w, bot };
+    };
+    const enchanter = { className: 'Enchanter', realm: 'hibernia' as const, level: 22, specPoints: 0 };
+
+    test('all: targets the trainer, says yes and reports what came back', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        const r = await bot.respec('Graent');
+        expect(w.sentOf('command').map(a => a.command)).toEqual(['/respec all']);
+        expect(w.sentOf('setTarget')[0]!.objectId).toBe(210);
+        expect(w.sent.findIndex(a => a.type === 'setTarget')).toBeLessThan(w.sent.findIndex(a => a.type === 'command'));
+        expect(w.sentOf('respondDialog')).toEqual([expect.objectContaining({ accept: true })]);
+        expect(r).toEqual({
+            success: true, message: 'Regained 118 points: Light Magic 7 → 1, Mana Magic 12 → 1, Enchantments 5 → 1',
+            regained: 118, specPointsLeft: 118,
+            specs: [{ name: 'Light Magic', level: 1 }, { name: 'Mana Magic', level: 1 }, { name: 'Enchantments', level: 1 }],
+        });
+    });
+
+    test.each([
+        ['Mana', 'Mana Magic', '/respec Mana'], ['Mana Magic', 'Mana Magic', '/respec Mana'], ['mana magic', 'Mana Magic', '/respec Mana'], [/^mana/i, 'Mana Magic', '/respec Mana'],
+        ['Light', 'Light Magic', '/respec Light'], ['Light Magic', 'Light Magic', '/respec Light'], ['Void Magic', 'Void Magic', '/respec Void'],
+        ['Shield', 'Shield', '/respec Shields'], ['Shields', 'Shield', '/respec Shields'],
+        ['Cave Magic', 'Subterranean', '/respec Subterranean'], ['Enchantment', 'Enchantments', '/respec Enchantments'],
+    ])('one line by %s goes out under its KeyName', async (asked, shown, command) => {
+        const { w, bot } = atTrainer(enchanter, { Other: 3, [shown]: 6 });
+        const r = await bot.respec('Graent', asked);
+        expect(w.sentOf('command').map(a => a.command)).toEqual([command]);
+        expect(r).toMatchObject({ success: true, regained: 20, specPointsLeft: 20, specs: [{ name: 'Other', level: 3 }, { name: shown, level: 1 }] });
+        expect(r.message).toBe(`Regained 20 points: ${shown} 6 → 1`);
+    });
+
+    test('regained is what the points rose by, whatever the server says', async () => {
+        const { w, bot } = atTrainer({ ...enchanter, specPoints: 40 }, ENCHANTER_LINES);
+        w.handlers.respondDialog = (_a, world) => {
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            world.message('You regain 999 specialization points!');
+            setTimeout(() => {
+                world.player.specPoints += 5;
+                openWindow(world);
+            }, 10);
+        };
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained: 5, specPointsLeft: 45 });
+    });
+
+    test.each([
+        ['nothing trained', enchanter, { 'Light Magic': 1, 'Mana Magic': 1 }, undefined],
+        ['that line untrained', enchanter, { 'Light Magic': 1, 'Mana Magic': 9 }, 'Light Magic'],
+        // RespecSingleLine puts an autotrain line at Level / 4 (GamePlayer.cs:3052-3056): nothing comes back from there.
+        ['an autotrain line at its free levels', { className: 'Armsman', realm: 'albion' as const, level: 20 }, { Slash: 5, Thrust: 4, Crush: 1 }, undefined],
+        ['that autotrain line at its free levels', { className: 'Armsman', realm: 'albion' as const, level: 20 }, { Slash: 5, Crush: 6 }, 'Slash'],
+    ])('no_need: %s, and nothing is sent', async (_what, player, lines, line) => {
+        const { w, bot } = atTrainer(player, lines);
+        const r = await bot.respec('Graent', line);
+        expect(r).toMatchObject({ success: false, reason: 'no_need', regained: 0 });
+        expect(w.sent).toEqual([]);
+    });
+
+    test.each([
+        ['an autotrain line above its free levels', { className: 'Armsman', realm: 'albion' as const, level: 20, specPoints: 0 }, { Slash: 6 }, { Slash: 5 }, 6],
+        ['a line of a class with no autotrain', { ...enchanter, level: 20 }, { 'Light Magic': 2 }, {}, 2],
+        // Level >= 8 at GamePlayer.cs:3052; a Fighter is no Armsman yet.
+        ['an autotrain line below level 8', { className: 'Armsman', realm: 'albion' as const, level: 7, specPoints: 0 }, { Slash: 2 }, {}, 2],
+        ['a base class line at any level', { className: 'Fighter', realm: 'albion' as const, level: 20, specPoints: 0 }, { Slash: 2 }, {}, 2],
+    ])('not no_need: %s', async (_what, player, lines, floor, regained) => {
+        const { bot } = atTrainer(player, lines, floor);
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained });
+    });
+
+    test.each([
+        'You must be speaking with your trainer to respec.',
+        "You don't seem to have any full skill respecs available.",
+        "You don't seem to have any single-line respecs available.",
+        "No line with name 'Mana' found.",
+        'Level of Mana Magic line is less than 2. ',
+    ])('refused: %s', async text => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.handlers.command = (_a, world) => { setTimeout(() => world.message(text), 10); };
+        expect(await bot.respec('Graent')).toMatchObject({ success: false, reason: 'refused', message: text, regained: 0, specPointsLeft: 0 });
+        expect(w.sentOf('respondDialog')).toEqual([]);
+    });
+
+    test.each([
+        ['no box at all', undefined],
+        ['the last box, closed', box({ isOpen: false, receivedAt: 1 })],
+        ['a box about something else', box({ text: 'Bob has invited you to join\nhis group. Do you wish to join?', receivedAt: 1 })],
+    ])('timeout: %s gets no answer', async (_what, dialog) => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        if (dialog) w.state.dialog = dialog;
+        w.handlers.command = () => {};
+        const r = await bot.respec('Graent');
+        expect(r).toMatchObject({ success: false, reason: 'timeout', regained: 0 });
+        expect(w.sentOf('respondDialog')).toEqual([]);
+    }, 8000);
+
+    test.each([
+        ['about something else', { text: 'Bob has invited you to join\nhis group. Do you wish to join?' }],
+        ['closed already', { isOpen: false }],
+    ])('timeout: a new box %s gets no answer', async (_what, over) => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.handlers.command = (_a, world) => { setTimeout(() => { world.state.dialog = box(over); }, 10); };
+        expect(await bot.respec('Graent')).toMatchObject({ success: false, reason: 'timeout', regained: 0 });
+        expect(w.sentOf('respondDialog')).toEqual([]);
+    }, 8000);
+
+    test('a box that opens while another stays open is the one answered', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.state.dialog = box({ text: 'Bob has invited you to join\nhis group. Do you wish to join?', receivedAt: 1 });
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained: 118 });
+        expect(w.sentOf('respondDialog')).toHaveLength(1);
+    });
+
+    test('a respec box left open by a cut-off run gets a no, then ours a yes', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.state.dialog = box({ receivedAt: 1 });
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained: 118 });
+        expect(w.sent.flatMap<string | boolean>(a => (a.type === 'respondDialog' ? [a.accept] : a.type === 'command' ? [a.command] : []))).toEqual([false, '/respec all', true]);
+    });
+
+    test('the old box still reads open for a moment after its no: the yes waits for the new one', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.state.dialog = box({ receivedAt: 1 });
+        const honest = w.handlers.respondDialog!;
+        const answered: number[] = [];
+        w.handlers.respondDialog = (a, world) => {
+            answered.push(world.state.dialog!.receivedAt);
+            if (a.type === 'respondDialog' && !a.accept) setTimeout(() => { world.state.dialog = { ...world.state.dialog!, isOpen: false }; }, 60);
+            else return honest(a, world);
+        };
+        const open = w.handlers.command!;
+        w.handlers.command = (a, world) => { setTimeout(() => open(a, world), 120); };
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained: 118 });
+        expect(answered).toHaveLength(2);
+        expect(answered[0]).toBe(1);
+        expect(answered[1]).toBeGreaterThan(1);
+    });
+
+    test('timeout: the yes went out and no points came back', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.handlers.respondDialog = (_a, world) => { world.state.dialog = { ...world.state.dialog!, isOpen: false }; };
+        const r = await bot.respec('Graent');
+        expect(r).toMatchObject({ success: false, reason: 'timeout', regained: 0, specPointsLeft: 0 });
+        expect(r.message).toContain('no points came back');
+    }, 8000);
+
+    test('waits for the window that follows the points: trainSpec counts levels from it', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        openWindow(w);
+        w.handlers.respondDialog = (_a, world) => {
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            setTimeout(() => {
+                world.state.skills = { ...world.state.skills, specializations: world.state.skills.specializations.map(l => ({ ...l, level: 1 })) };
+                world.player.specPoints += 118;
+            }, 10);
+            setTimeout(() => openWindow(world), 200);
+        };
+        await bot.respec('Graent');
+        expect(w.sdk.getTrainer()!.specs.map(l => l.level)).toEqual([1, 1, 1]);
+    });
+
+    test('walks to a trainer out of reach first', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES, {}, graent(561500));
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained: 118 });
+        expect(w.sent.findIndex(a => a.type === 'moveTo')).toBeLessThan(w.sent.findIndex(a => a.type === 'setTarget'));
+    });
+
+    test('not_found and spec_not_found send nothing', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        expect(await bot.respec('Nobody')).toMatchObject({ success: false, reason: 'not_found', regained: 0 });
+        const r = await bot.respec('Graent', 'Runes of Darkness');
+        expect(r).toMatchObject({ success: false, reason: 'spec_not_found', regained: 0 });
+        expect(r.message).toContain('Light Magic, Mana Magic, Enchantments');
+        expect(w.sent).toEqual([]);
+    });
+
+    test('not in game', async () => {
+        const { bot } = world({ player: null });
+        expect(await bot.respec('Graent')).toMatchObject({ success: false, reason: 'not_in_game' });
+    });
+
+    test('a respec then a trainBuild: the build goes up again from the floor', async () => {
+        const { w, bot } = atTrainer({ ...enchanter, level: 20 }, { 'Light Magic': 12, 'Mana Magic': 3 });
+        await bot.respec('Graent');
+        expect(lineOf(w, 'Light Magic').level).toBe(1);
+        w.handlers.openTrainer = (_a, world) => openWindow(world);
+        w.handlers.trainSpec = (a, world) => {
+            if (a.type !== 'trainSpec') return;
+            setTimeout(() => {
+                const spec = world.state.skills.specializations[a.specIndex]!;
+                world.state.skills = { ...world.state.skills, specializations: world.state.skills.specializations.map(s => (s === spec ? { ...s, level: spec.level + a.levels! } : s)) };
+                world.player.specPoints -= 2;
+                openWindow(world);
+            }, 10);
+        };
+        const build: Build = { className: 'Enchanter', name: 'Mana', targets: [{ level: 24, specs: { Mana: 2 } }] };
+        expect(await bot.trainBuild('Graent', build)).toMatchObject({ success: true, done: true, over: [], trained: [{ spec: 'Mana', fromLevel: 1, toLevel: 2 }] });
     });
 });
 

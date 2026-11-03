@@ -34,12 +34,15 @@ import {
     REPAIR_ANSWERS,
     REPAIR_OFFER,
     REPAIR_REFUSALS,
+    RESPEC_OFFER,
+    RESPEC_REFUSALS,
     resurrectCost,
     RETRYABLE_ATTACK_REFUSALS,
     SELL_REFUSALS,
     SIT_REFUSALS,
     STYLE_REFUSALS,
     TRAIN_REFUSALS,
+    TRAINER_WANTED,
     TRADE_COMMIT_FAILURES,
     TRADE_COMPLETED,
     TRADE_REFUSALS,
@@ -57,7 +60,10 @@ import {
 } from './actions-helpers';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
 import { isDelveOf, parseDelve } from './delve';
-import { findNpcSpawns, getSpell, getSpells, getZonePoint, realmId, specKey, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
+import { botFolder, loadBuild } from './build';
+import { findNpcSpawns, getClass, getSpell, getSpells, getZonePoint, realmId, specKey, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
+import { buildProblems, freeLevels, linesOverTarget, nextBuildStep, type BuildState } from '../data/builds/rule';
+import type { Build } from '../data/builds/types';
 import type {
     ActionResult,
     BotWorldState,
@@ -106,6 +112,8 @@ const SAY_SPACING_MS = 600;
 const DEFAULT_SPELL_RANGE = 1500;
 /** A 0xDD to an object has toSlot = 1000 + objectId (PlayerMoveItemRequestHandler.cs:20-23). */
 const GIVE_TO_OBJECT = 1000;
+/** No target has this many lines: a trainBuild past it isn't getting anywhere. */
+const TRAIN_BUILD_MAX_STEPS = 32;
 /** eInventorySlot.GeneralVault: the server picks an empty slot on the other side, or a partial stack (PlayerMoveItemRequestHandler.cs:306-337). A full side fails without a word. */
 const GENERAL_VAULT_SLOT = 601;
 /** Personal vault slots 110-149. */
@@ -461,6 +469,28 @@ export interface TrainResult extends ActionResult {
     fromLevel: number;
     toLevel: number;
     specPointsLeft: number;
+}
+
+export interface TrainBuildResult extends ActionResult {
+    /** The build's name; null when there is none. */
+    build: string | null;
+    /** Every line this call raised, by KeyName, also when a later one failed. */
+    trained: { spec: string; fromLevel: number; toLevel: number }[];
+    /** The line the points are banked for, when that is what stopped the training. */
+    waiting: { spec: string; cost: number; points: number } | null;
+    /** Nothing left to raise at this level. */
+    done: boolean;
+    /** Lines with points spent beyond the current target, by KeyName. Only a respec gets those back. */
+    over: { spec: string; level: number; target: number }[];
+    specPointsLeft: number;
+}
+
+export interface RespecResult extends ActionResult {
+    /** What player.specPoints rose by. */
+    regained: number;
+    specPointsLeft: number;
+    /** Every line as it stands now, as the skill list names it. */
+    specs: { name: string; level: number }[];
 }
 
 export interface TravelResult extends WalkResult {
@@ -2237,32 +2267,36 @@ export class BotActions {
     }
 
     /**
-     * Train a specialization at a trainer of our class: target it, open the
-     * trainer window (falling back to '/train'), and observe the spec level rise.
-     * `specName` is any name of the line (sdk.findSpecialization); a name no line answers to gives 'spec_not_found'.
+     * Train a specialization: open the trainer window (falling back to '/train') and observe the spec level rise.
+     * With a trainer of our class, it walks into reach and targets it first. With `null` it stays where it stands: the
+     * server trains anywhere while allow_train_anywhere is on, as by default and here (train.cs:143), and with it off the
+     * answer is `needs_trainer`. `specName` is any name of the line (sdk.findSpecialization); a name no line answers to
+     * gives 'spec_not_found'.
      */
-    async trainSpec(trainer: NpcTarget, specName: NamePattern, levels: number = 1): Promise<TrainResult> {
+    async trainSpec(trainer: NpcTarget | null, specName: NamePattern, levels: number = 1): Promise<TrainResult> {
         const empty = { spec: null, fromLevel: 0, toLevel: 0, specPointsLeft: this.helpers.player()?.specPoints ?? 0 };
-        let n = this.helpers.resolveNpc(trainer);
-        if (!n) return fail(`Trainer not found: ${describeTarget(trainer)}`, 'not_found', empty);
+        const n = trainer === null ? null : this.helpers.resolveNpc(trainer);
+        if (trainer !== null && !n) return fail(`Trainer not found: ${describeTarget(trainer)}`, 'not_found', empty);
         const spec0 = this.sdk.findSpecialization(specName);
         if (!spec0) return fail(`No specialization matching ${describeTarget(specName)} (known: ${this.sdk.getSkills().specializations.map(s => s.name).join(', ') || 'none'})`, 'spec_not_found', empty);
         const target = spec0.level + Math.max(1, Math.floor(levels));
-        if (n.distance > INTERACT_APPROACH) {
-            const walk = await this.walkToObject(n, { range: INTERACT_APPROACH });
-            if (!walk.success) return fail(walk.message, walk.reason ?? 'out_of_reach', { ...empty, spec: spec0.name, fromLevel: spec0.level, toLevel: spec0.level });
-            n = this.helpers.resolveNpc(n.objectId) ?? n;
-        }
-        await this.sdk.sendSetTarget(n.objectId);
-        await this.helpers.waitFor(s => s.player?.targetObjectId === n.objectId, 1500);
+        const walk = n && await this.targetTrainer(n);
+        if (walk) return fail(walk.message, walk.reason ?? 'out_of_reach', { ...empty, spec: spec0.name, fromLevel: spec0.level, toLevel: spec0.level });
         const watch = this.helpers.watch();
         try {
+            const window0 = this.helpers.state()?.trainer.receivedAt;
             await this.sdk.sendOpenTrainer();
-            const win = await this.helpers.waitFor(s => s.trainer.isOpen && s.trainer.specs.length ? s.trainer : null, 3000);
-            const ts = win ? bestNameMatch(win.specs, spec0.name) : null;
-            if (ts) await this.sdk.sendTrainSpec(ts.index, target - ts.level);
-            // /train takes a key prefix (train.cs:57-66): 'Light Magic' isn't one, 'Light' is.
-            else await this.sdk.sendCommand(`/train ${specKey(spec0.name)} ${target}`);
+            // A new window, not one already open: a promotion sends none and moves the lines (GameTrainer.cs:333-365), so an old index raises another line.
+            const win = await this.helpers.waitFor(s => {
+                if (watch.find([TRAINER_WANTED])) return 'refused' as const;
+                return s.trainer.isOpen && s.trainer.specs.length && s.trainer.receivedAt !== window0 ? s.trainer : null;
+            }, 3000);
+            if (win !== 'refused') {
+                const ts = win ? bestNameMatch(win.specs, spec0.name) : null;
+                if (ts) await this.sdk.sendTrainSpec(ts.index, target - ts.level);
+                // /train takes a key prefix (train.cs:57-66): 'Light Magic' isn't one, 'Light' is.
+                else await this.sdk.sendCommand(`/train ${specKey(spec0.name)} ${target}`);
+            }
             const got = await this.helpers.waitFor(s => {
                 if (watch.find(TRAIN_REFUSALS)) return 'refused';
                 const now = s.skills.specializations.find(x => x.name === spec0.name);
@@ -2271,7 +2305,167 @@ export class BotActions {
             const now = this.sdk.getSkills().specializations.find(x => x.name === spec0.name);
             const extra = { spec: spec0.name, fromLevel: spec0.level, toLevel: now?.level ?? spec0.level, specPointsLeft: this.helpers.player()?.specPoints ?? 0 };
             if (got === 'trained') return { success: true, message: `Trained ${spec0.name} ${spec0.level} → ${extra.toLevel}`, ...extra };
-            return fail(got === 'refused' ? watch.findText(TRAIN_REFUSALS)! : `No training observed for ${spec0.name}`, got === 'refused' ? 'refused' : 'timeout', extra);
+            if (got !== 'refused') return fail(`No training observed for ${spec0.name}`, 'timeout', extra);
+            const refusal = watch.findText(TRAIN_REFUSALS)!;
+            return fail(refusal, !n && refusal.toLowerCase().includes(TRAINER_WANTED) ? 'needs_trainer' : 'refused', extra);
+        } finally {
+            watch.dispose();
+        }
+    }
+
+    /**
+     * Walk into reach of a trainer and target it. A respec goes by the target (respec.cs:62-67), and training too on a
+     * server with allow_train_anywhere off (train.cs:143-150). Returns the walk when it failed.
+     */
+    private async targetTrainer(n: NearbyNpc): Promise<WalkToObjectResult | null> {
+        if (n.distance > INTERACT_APPROACH) {
+            const walk = await this.walkToObject(n, { range: INTERACT_APPROACH });
+            if (!walk.success) return walk;
+        }
+        await this.sdk.sendSetTarget(n.objectId);
+        await this.helpers.waitFor(s => s.player?.targetObjectId === n.objectId, 1500);
+        return null;
+    }
+
+    /**
+     * Talk to a trainer in reach, and give the points about a second to change. A promotion sends none (GameTrainer.cs:335-349)
+     * and talking does (:134, GamePlayer.cs:4430), while the window that trainSpec asks for doesn't (PlayerTrainWindowHandler).
+     */
+    private async refreshSpecPoints(trainer: NpcTarget | null): Promise<void> {
+        const n = trainer === null ? null : this.helpers.resolveNpc(trainer);
+        if (!n || n.distance > INTERACT_APPROACH) return;
+        const points0 = this.helpers.player()?.specPoints;
+        const r = await this.sdk.sendInteract(n.objectId);
+        if (r.success) await this.helpers.waitFor(s => s.player?.specPoints !== points0, 1000);
+    }
+
+    /** What the build rule reads. Autotrain is the current class's: a base class has none. */
+    private buildState(): BuildState | null {
+        const p = this.helpers.player();
+        return p && { level: p.level, specs: this.sdk.getSkills().specializations, points: p.specPoints, autotrain: getClass(p.className, p.realm)?.autotrainSpecs };
+    }
+
+    /**
+     * Spend the points on a build, as far as they reach: the rule in data/builds/rule.ts names each line and trainSpec
+     * raises it, at a trainer of the class or, with `null`, where the character stands (trainSpec). Without `build` it is
+     * the bot's own `bots/<bot>/build.ts` (loadBuild in sdk/build.ts), and a broken file throws. Success means it stopped
+     * for a good reason: `done` (nothing to raise at this level) or `waiting` (the next line costs more than there is, and
+     * the points stay banked for it). `done` sends nothing. Before `waiting` with nothing raised it talks once to a trainer
+     * in reach, because a promotion sends no points and player.specPoints can still be the base class's number. A trainer
+     * out of reach or not found gets nothing, and the number stands. A base class trains the lines it has of its advanced
+     * class's build. Reasons: `no_build`, `invalid_build` (buildProblems of a build passed in), `wrong_class`,
+     * `not_in_game`, `too_many_steps`, and those of trainSpec.
+     */
+    async trainBuild(trainer: NpcTarget | null, build?: Build): Promise<TrainBuildResult> {
+        const nothing = { build: null, trained: [], waiting: null, done: false, over: [], specPointsLeft: this.helpers.player()?.specPoints ?? 0 };
+        const bot = this.sdk.config.botUsername;
+        const chosen = build ?? await loadBuild(bot);
+        if (!chosen) {
+            const folder = botFolder(bot);
+            return fail(`${bot} has no bots/${folder}/build.ts: bun bots/choose-build.ts ${folder} lists the builds of its class`, 'no_build', nothing);
+        }
+        const named = { ...nothing, build: chosen.name };
+        const player = this.helpers.player();
+        const problems = buildProblems(chosen, player?.realm);
+        if (problems.length) return fail(`${chosen.name}: ${problems.join(' ')}`, 'invalid_build', named);
+        if (!player) return fail('Not in game', 'not_in_game', named);
+        // By id: a female character's className can be a name of its own, and two realms share "Rogue".
+        const wanted = getClass(chosen.className, player.realm) ?? getClass(chosen.className)!;
+        const mine = getClass(player.className, player.realm);
+        if (mine?.id !== wanted.id && mine?.id !== wanted.baseClassId) return fail(`${chosen.name} is a build for ${wanted.name}, this character is a ${player.className}`, 'wrong_class', named);
+
+        const trained: TrainBuildResult['trained'] = [];
+        const raised = () => trained.map(t => `${t.spec} ${t.fromLevel} → ${t.toLevel}`).join(', ');
+        const failed = (message: string, reason: string, state: BuildState | null) => fail(trained.length ? `${raised()}, then: ${message}` : message, reason, {
+            ...named, trained, over: state ? linesOverTarget(chosen, state) : [], specPointsLeft: state?.points ?? 0,
+        });
+        let refreshed = false;
+        for (let i = 0; i < TRAIN_BUILD_MAX_STEPS; i++) {
+            const state = this.buildState();
+            if (!state) return failed('Not in game', 'not_in_game', null);
+            const step = nextBuildStep(chosen, state);
+            if (step.kind === 'wait' && !trained.length && !refreshed) {
+                refreshed = true;
+                await this.refreshSpecPoints(trainer);
+                continue;
+            }
+            if (step.kind !== 'train') {
+                const over = linesOverTarget(chosen, state);
+                const stopped = step.kind === 'wait' ? `saving for ${step.spec} ${step.from + 1}: ${step.points}/${step.cost} points` : `on target for level ${state.level}`;
+                const said = trained.length ? `${raised()}, ${stopped}` : stopped[0]!.toUpperCase() + stopped.slice(1);
+                return {
+                    success: true,
+                    message: over.length ? `${said}. Over target: ${over.map(o => `${o.spec} ${o.level} (target ${o.target})`).join(', ')}` : said,
+                    ...named, trained, over, specPointsLeft: state.points,
+                    waiting: step.kind === 'wait' ? { spec: step.spec, cost: step.cost, points: step.points } : null,
+                    done: step.kind === 'done',
+                };
+            }
+            const r = await this.trainSpec(trainer, step.spec, step.to - step.from);
+            if (r.toLevel > r.fromLevel) trained.push({ spec: step.spec, fromLevel: r.fromLevel, toLevel: r.toLevel });
+            if (!r.success) return failed(r.message, r.reason ?? 'refused', this.buildState());
+        }
+        return failed(`Still training after ${TRAIN_BUILD_MAX_STEPS} steps`, 'too_many_steps', this.buildState());
+    }
+
+    /**
+     * Take the points back out of every line, or with `line` (any of its names) out of that one, at a trainer of the
+     * class: sends /respec, says yes to the server's box and watches the points come back. It is free, at any level and
+     * any number of times, because the stone check can never hold (respec.cs:96, 153 test TimeSpan.Hours > 24). A line
+     * falls to 1, an autotrain line to its free levels. A respec ends the character's own buffs and kills its pet
+     * (respec.cs:247). Reasons: `not_found` (trainer), `spec_not_found`, `no_need` (nothing trained above that floor;
+     * nothing is sent), `refused` (the server's words in `message`), `timeout`, `not_in_game`, and those of the walk there.
+     */
+    async respec(trainer: NpcTarget, line?: NamePattern): Promise<RespecResult> {
+        const report = (regained = 0) => ({
+            regained,
+            specPointsLeft: this.helpers.player()?.specPoints ?? 0,
+            specs: this.sdk.getSkills().specializations.map(s => ({ name: s.name, level: s.level })),
+        });
+        const state0 = this.buildState();
+        if (!state0) return fail('Not in game', 'not_in_game', report());
+        const n = this.helpers.resolveNpc(trainer);
+        if (!n) return fail(`Trainer not found: ${describeTarget(trainer)}`, 'not_found', report());
+        const spec = line === undefined ? null : this.sdk.findSpecialization(line);
+        if (line !== undefined && !spec) return fail(`No specialization matching ${describeTarget(line)} (known: ${report().specs.map(s => s.name).join(', ') || 'none'})`, 'spec_not_found', report());
+        // RespecSingleLine's floor (GamePlayer.cs:3052-3056); points only come back from above it.
+        const floor = (name: string) => state0.autotrain?.includes(specKey(name)) ? freeLevels(state0.level) : 1;
+        const lines0 = this.sdk.getSkills().specializations;
+        if (!(spec ? [spec] : lines0).some(s => s.level > floor(s.name))) return fail(spec ? `${spec.name} has nothing trained to give back` : 'No line has anything trained to give back', 'no_need', report());
+        const walk = await this.targetTrainer(n);
+        if (walk) return fail(walk.message, walk.reason ?? 'out_of_reach', report());
+
+        const before = this.helpers.state();
+        const points0 = before?.player?.specPoints ?? 0;
+        const box0 = before?.dialog?.receivedAt;
+        const window0 = before?.trainer.receivedAt;
+        const watch = this.helpers.watch();
+        try {
+            // Left open by a run that was cut off: a no, so that our yes goes to our own box. A no doesn't clear what that box
+            // was for (respec.cs:188): if it was /respec all, our yes runs that too, seen live. `message` and `specs` show what fell.
+            if (before?.dialog?.isOpen && RESPEC_OFFER.test(before.dialog.text)) await this.sdk.sendRespondDialog(false);
+            // By KeyName: GetSpecializationByName takes no other name (GamePlayer.cs:3102).
+            const sent = await this.sdk.sendCommand(spec ? `/respec ${specKey(spec.name)}` : '/respec all');
+            if (!sent.success) return fail(sent.message, sent.reason ?? 'dispatch_failed', report());
+            const box = await this.helpers.waitFor(s => {
+                if (watch.find(RESPEC_REFUSALS)) return 'refused' as const;
+                // The last box stays in the state, closed, and another may be open: only a new one that names a respec.
+                return s.dialog?.isOpen && s.dialog.receivedAt !== box0 && RESPEC_OFFER.test(s.dialog.text) ? s.dialog : null;
+            }, 3000);
+            if (box === 'refused') return fail(watch.findText(RESPEC_REFUSALS)!, 'refused', report());
+            if (!box) return fail(`${n.name} offered no respec`, 'timeout', report());
+            const yes = await this.sdk.sendRespondDialog(true);
+            if (!yes.success) return fail(yes.message, yes.reason ?? 'dispatch_failed', report());
+            const back = await this.helpers.waitFor(s => (s.player?.specPoints ?? 0) > points0, 4000);
+            if (!back) return fail(`Said yes to ${n.name}, but no points came back`, 'timeout', report());
+            // The window comes after the points (respec.cs:239-241), and trainSpec counts levels from it.
+            await this.helpers.waitFor(s => s.trainer.receivedAt !== window0, 1000);
+            const result = report((this.helpers.player()?.specPoints ?? 0) - points0);
+            const lowered = lines0.flatMap(s => {
+                const now = result.specs.find(x => x.name === s.name);
+                return now && now.level !== s.level ? [`${s.name} ${s.level} → ${now.level}`] : [];
+            });
+            return { success: true, message: `Regained ${result.regained} points${lowered.length ? `: ${lowered.join(', ')}` : ''}`, ...result };
         } finally {
             watch.dispose();
         }

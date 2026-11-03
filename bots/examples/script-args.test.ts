@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'fs';
 import { join, resolve } from 'path';
-import { scriptArgs } from './script-args';
+import { scriptArgs, scriptFlags } from './script-args';
 
 const botEnvIn = (dir: string) => (p: string) => p === join(resolve(dir), 'bot.env');
 
@@ -24,6 +24,13 @@ describe('scriptArgs', () => {
     test('flags are not positionals', () => {
         const argv = ['bun', 'bots/examples/caster.ts', '--trace', 'mybot', 'skeleton'];
         expect(scriptArgs({ argv, env: {}, exists: () => false })).toEqual(['skeleton']);
+    });
+});
+
+describe('scriptFlags', () => {
+    test('the flags anywhere after the script, as given, and no words', () => {
+        expect(scriptFlags({ argv: ['bun', 'x.ts', 'mybot', '--respec', '60', '--radius=5'] })).toEqual(['--respec', '--radius=5']);
+        expect(scriptFlags({ argv: ['bun', 'x.ts', 'respec'] })).toEqual([]);
     });
 });
 

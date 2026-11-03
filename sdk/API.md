@@ -120,7 +120,9 @@
 
 | Signature | Description |
 |---|---|
-| `async trainSpec(trainer: NpcTarget, specName: NamePattern, levels: number = 1): Promise<TrainResult>` | Train a specialization at a trainer of our class: target it, open the trainer window (falling back to '/train'), and observe the spec level rise. `specName` is any name of the line (sdk.findSpecialization); a name no line answers to gives 'spec_not_found'. |
+| `async trainSpec(trainer: NpcTarget \| null, specName: NamePattern, levels: number = 1): Promise<TrainResult>` | Train a specialization: open the trainer window (falling back to '/train') and observe the spec level rise. With a trainer of our class, it walks into reach and targets it first. With `null` it stays where it stands: the server trains anywhere while allow_train_anywhere is on, as by default and here (train.cs:143), and with it off the answer is `needs_trainer`. `specName` is any name of the line (sdk.findSpecialization); a name no line answers to gives 'spec_not_found'. |
+| `async trainBuild(trainer: NpcTarget \| null, build?: Build): Promise<TrainBuildResult>` | Spend the points on a build, as far as they reach: the rule in data/builds/rule.ts names each line and trainSpec raises it, at a trainer of the class or, with `null`, where the character stands (trainSpec). Without `build` it is the bot's own `bots/<bot>/build.ts` (loadBuild in sdk/build.ts), and a broken file throws. Success means it stopped for a good reason: `done` (nothing to raise at this level) or `waiting` (the next line costs more than there is, and the points stay banked for it). `done` sends nothing. Before `waiting` with nothing raised it talks once to a trainer in reach, because a promotion sends no points and player.specPoints can still be the base class's number. A trainer out of reach or not found gets nothing, and the number stands. A base class trains the lines it has of its advanced class's build. Reasons: `no_build`, `invalid_build` (buildProblems of a build passed in), `wrong_class`, `not_in_game`, `too_many_steps`, and those of trainSpec. |
+| `async respec(trainer: NpcTarget, line?: NamePattern): Promise<RespecResult>` | Take the points back out of every line, or with `line` (any of its names) out of that one, at a trainer of the class: sends /respec, says yes to the server's box and watches the points come back. It is free, at any level and any number of times, because the stone check can never hold (respec.cs:96, 153 test TimeSpan.Hours > 24). A line falls to 1, an autotrain line to its free levels. A respec ends the character's own buffs and kills its pet (respec.cs:247). Reasons: `not_found` (trainer), `spec_not_found`, `no_need` (nothing trained above that floor; nothing is sent), `refused` (the server's words in `message`), `timeout`, `not_in_game`, and those of the walk there. |
 
 ### Group
 
@@ -261,7 +263,7 @@
 | `async sendDestroyItem(slot: number): Promise<ActionResult>` | Destroy an item. |
 | `async sendBuy(page: number, slot: number, count: number = 1): Promise<ActionResult>` | Buy from the open merchant by page/slot (see getMerchant). |
 | `async sendSell(slot: number): Promise<ActionResult>` | Sell a backpack item to the open merchant. |
-| `async sendOpenTrainer(): Promise<ActionResult>` | Open the trainer window (stand near a trainer first). |
+| `async sendOpenTrainer(): Promise<ActionResult>` | Open the trainer window, anywhere while allow_train_anywhere is on (train.cs:143), else with a trainer targeted. |
 | `async sendTrainSpec(specIndex: number, levels?: number): Promise<ActionResult>` | Train a specialization (index from getTrainer().specs). |
 | `async sendTradeOfferItem(partnerObjectId: number, slot: number): Promise<ActionResult>` | Add a backpack item to the trade window with a player, opening it if needed. Evidence is the slot in getState().trade.mySlots. Never from both sides at once: two adds that open a window in one server tick can hang the server (learnings/trading.md). bot.offerTrade keeps them apart. |
 | `async sendTradeOfferMoney(partnerObjectId: number, copper: number): Promise<ActionResult>` | Add copper to the trade window with a player, on top of what is there. It goes out as one drop per coin, and the server holds only that drop against the purse, never the total (PlayerMoveItemRequestHandler.cs:258): an amount above the purse can be refused in part, or shown in full and fail at the commit. bot.offerTrade checks the purse first. |
@@ -1508,6 +1510,36 @@ interface TrainResult extends ActionResult {
   fromLevel: number;
   toLevel: number;
   specPointsLeft: number;
+}
+```
+
+### TrainBuildResult
+
+```typescript
+interface TrainBuildResult extends ActionResult {
+  /** The build's name; null when there is none. */
+  build: string | null;
+  /** Every line this call raised, by KeyName, also when a later one failed. */
+  trained: { spec: string; fromLevel: number; toLevel: number }[];
+  /** The line the points are banked for, when that is what stopped the training. */
+  waiting: { spec: string; cost: number; points: number } | null;
+  /** Nothing left to raise at this level. */
+  done: boolean;
+  /** Lines with points spent beyond the current target, by KeyName. Only a respec gets those back. */
+  over: { spec: string; level: number; target: number }[];
+  specPointsLeft: number;
+}
+```
+
+### RespecResult
+
+```typescript
+interface RespecResult extends ActionResult {
+  /** What player.specPoints rose by. */
+  regained: number;
+  specPointsLeft: number;
+  /** Every line as it stands now, as the skill list names it. */
+  specs: { name: string; level: number }[];
 }
 ```
 
