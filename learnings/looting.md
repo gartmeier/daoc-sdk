@@ -50,7 +50,8 @@ sdk.countInventoryItems(/bolts/);         // total quantity across stacks
 
 - **Starting backpack:** a fresh character has only a Personal Bind Recall Stone (slot 40) in the backpack. The class's starting gear is already equipped (slots 10–28).
 - **Getting rid of items:** sell junk to a merchant (see [merchants.md](merchants.md)), or `bot.dropItem` / `bot.destroyItem`.
-- **Equipping:** `bot.equipItem(item)` lets the server pick the slot (paper-doll slot 100); `bot.equipItem(item, { slot })` names it.
+- **Equipping:** `bot.equipItem(item)` lets the server pick the slot (paper-doll slot 100); `bot.equipItem(item, { slot })` names it. What it replaces lands in the backpack slot this one left, so `sdk.getInventoryItem(item.slot)` is the piece that came off; comparing the backpack before and after by name misses a same-named piece.
+- **Same-named pieces:** loot names come from one bonus, so two pieces can share a name and differ in level, or only in bonuses the client never sees. When the readings match, `equipItem` goes by "The magic of X flows through you". A plain piece that reads the same has no such message and comes back `timeout`, with the swap made.
 
 ## Cloaks and jewellery
 
