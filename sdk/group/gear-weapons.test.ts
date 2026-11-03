@@ -86,6 +86,10 @@ describe('parseWeaponDelve', () => {
         expect(parseWeaponDelve(['- 8.7 Base DPS', '- 7.2 Clamped DPS', '- 4.2 Weapon Speed', '- 85% Quality', '- 100% Condition'])).toMatchObject({ baseDps: 8.7, clampedDps: 7.2 });
     });
 
+    test('at condition 0 the server leaves its line out', () => {
+        expect(parseWeaponDelve(['Damage Modifiers:', '- 7.2 Base DPS', '- 7.2 Clamped DPS', '- 4.2 Weapon Speed', '- 85% Quality', '- Damage Type: Slash'])).toMatchObject({ quality: 85, condition: 0 });
+    });
+
     test('a shield is no weapon, and neither is anything else', () => {
         expect(parseWeaponDelve(['Damage Modifiers (when used with shield styles):', '- 1.2 Base DPS', '- 1.2 Clamped DPS', '- 4.0 Shield Speed', ' ', '- Shield Size : Small'])).toBeNull();
         expect(parseWeaponDelve(['Armor Modifiers:', '- 40 Base Factor', '- 40 Clamped Factor', '- 27% Absorption', '- 90% Quality', '- 100% Condition'])).toBeNull();
@@ -241,7 +245,7 @@ function world(o: Opts = {}) {
     const level = 20;
     const delveLines = (name: string, dps: number, speed: number, quality: number, condition: number) => [
         ...(o.bonus?.[name]?.length ? ['Magical Bonuses:', ...o.bonus[name]!, ' '] : []),
-        'Total utility: 0.00', ' ', 'Damage Modifiers:', `- ${dps.toFixed(1)} Base DPS`, `- ${Math.min(dps, 1.2 + 0.3 * level).toFixed(1)} Clamped DPS`, `- ${speed.toFixed(1)} Weapon Speed`, `- ${quality}% Quality`, `- ${condition}% Condition`, '- Damage Type: Slash',
+        'Total utility: 0.00', ' ', 'Damage Modifiers:', `- ${dps.toFixed(1)} Base DPS`, `- ${Math.min(dps, 1.2 + 0.3 * level).toFixed(1)} Clamped DPS`, `- ${speed.toFixed(1)} Weapon Speed`, `- ${quality}% Quality`, ...(condition ? [`- ${condition}% Condition`] : []), '- Damage Type: Slash',
     ];
     const focusOf = (name: string) => {
         const fo = o.focus?.[name];
@@ -368,6 +372,30 @@ describe('buyWeapons', () => {
         const f = world({ equipment: [worn(10, 'Fine Axe', ObjectType.Axe, 7.2, 4.2, 99), SHIELD] });
         expect(await buyWeapons(f.member, jordheim)).toEqual(['no weapon step: best 6.52, worn 7.6']);
         expect(f.calls.filter(c => c.startsWith('buy'))).toEqual([]);
+    });
+
+    describe('a worn weapon against its own shop copy', () => {
+        const copy = (condition: number, durability: number) => ({ ...worn(10, 'alloy double-bladed axe', ObjectType.Axe, 7.2, 4.2, 85, condition), durability });
+
+        test('a smith can restore it, so its copy is no step: a repair costs a fraction of the price', async () => {
+            for (const condition of [90, 80, 70]) {
+                const f = world({ equipment: [copy(condition, 60), SHIELD] });
+                expect(await buyWeapons(f.member, jordheim)).toEqual(['no weapon step: best 6.52, worn 6.52']);
+                expect(f.copper).toBe(3_000_000);
+            }
+        });
+
+        test("at durability 0 a smith can't, so what's left counts and the copy wins", async () => {
+            const f = world({ equipment: [copy(80, 0), SHIELD] });
+            const lines = await buyWeapons(f.member, jordheim);
+            expect(lines).toHaveLength(1);
+            expect(lines[0]).toMatch(/^bought alloy double-bladed axe from Gymir 86400c, score 6\.52 over 5\.2\d?, wielded in slot 10$/);
+        });
+
+        test('with no condition or durability left it scores nothing, not "keeping it"', async () => {
+            const f = world({ equipment: [copy(0, 0), SHIELD] });
+            expect((await buyWeapons(f.member, jordheim))[0]).toEndWith('score 6.52 over 0, wielded in slot 10');
+        });
     });
 
     test('a weapon off the line counts as nothing: anything on it replaces that', async () => {
@@ -500,6 +528,39 @@ describe('wearWeapons', () => {
         const f = world({ inventory: [LOOT] });
         await wearWeapons(f.member);
         expect(await wearWeapons(f.member)).toEqual([]);
+    });
+
+    describe('wear, as a smith would leave it', () => {
+        const axe = (slot: number, name: string, dps: number, condition: number, durability: number) => ({ ...worn(slot, name, ObjectType.Axe, dps, 3, 90, condition), durability });
+
+        test('a whole spare is no step over the same axe worn: it stays, for the smith', async () => {
+            const f = world({ equipment: [axe(10, 'Worn Axe', 5, 75, 60), SHIELD], inventory: [axe(45, 'Spare Axe', 5, 100, 100)] });
+            expect(await wearWeapons(f.member)).toEqual([]);
+            expect(inHand(f, 10)).toBe('Worn Axe');
+        });
+
+        test('a worn spare that is better on points goes on, and a second pass changes nothing', async () => {
+            const f = world({ equipment: [axe(10, 'Whole Axe', 5, 100, 100), SHIELD], inventory: [axe(45, 'Worn Axe', 6, 75, 60)] });
+            expect((await wearWeapons(f.member))[0]).toStartWith('wield Worn Axe');
+            expect(await wearWeapons(f.member)).toEqual([]);
+        });
+
+        test("at durability 0 the one worn gives way to the same axe whole, what's left being all it has", async () => {
+            const f = world({ equipment: [axe(10, 'Spent Axe', 5, 75, 0), SHIELD], inventory: [axe(45, 'Spare Axe', 5, 100, 100)] });
+            expect((await wearWeapons(f.member))[0]).toStartWith('wield Spare Axe');
+        });
+
+        test('a spare at durability 0 counts what it has left, and stays in the bag', async () => {
+            const f = world({ equipment: [axe(10, 'Whole Axe', 5, 100, 100), SHIELD], inventory: [axe(45, 'Spent Axe', 6, 75, 0)] });
+            expect(await wearWeapons(f.member)).toEqual([]);
+        });
+
+        test('one at 0 on both is worth nothing: anything replaces it, and it replaces nothing', async () => {
+            const held = world({ equipment: [axe(10, 'Dead Axe', 5, 0, 0), SHIELD], inventory: [axe(45, 'Plain Axe', 3, 100, 100)] });
+            expect((await wearWeapons(held.member))[0]).toStartWith('wield Plain Axe');
+            const bag = world({ inventory: [axe(45, 'Dead Axe', 8, 0, 0)] });
+            expect(await wearWeapons(bag.member)).toEqual([]);
+        });
     });
 
     test('nothing to compare and a shield in the bag: no line and no equip', async () => {
