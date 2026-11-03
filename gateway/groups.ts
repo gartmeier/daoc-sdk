@@ -650,7 +650,7 @@ function memberReport(x: any): MemberReport | null {
         isDead: bool(x.isDead), isSitting: bool(x.isSitting), inCombat: bool(x.inCombat), attacking: bool(x.attacking),
         targetId: numOrNull(x.targetId), effects: strings(x.effects, 64, 64),
         // buffSpells stay with the runner (it strips them too): nothing here draws them.
-        capabilities: { heal: bool(caps.heal), cc: bool(caps.cc), nuke: bool(caps.nuke), buffs: strings(caps.buffs, 32, 64), buffSpells: [] },
+        capabilities: { heal: bool(caps.heal), cc: bool(caps.cc), nuke: bool(caps.nuke), ...present(caps, ['rez'], 'boolean'), buffs: strings(caps.buffs, 32, 64), buffSpells: [] },
         activity: { kind: str(act.kind, 32, 'unknown'), targetId: numOrNull(act.targetId), detail: str(act.detail, 200), since: num(act.since) },
         at: num(x.at),
     };
@@ -1125,7 +1125,7 @@ export function createGroupStore(opts: GroupStoreOptions): GroupStore {
             const metaRoles = new Map(run.meta.members.map(m => [lower(m.bot), m.role]));
             view.members.forEach((v, i) => {
                 const r = reports.get(lower(v.bot));
-                if (r) v.run = { name: r.name, role: r.role, activity: { ...r.activity }, effects: [...r.effects], can: { heal: r.capabilities.heal, cc: r.capabilities.cc, nuke: r.capabilities.nuke }, ...present(r, ['realmPoints'], 'number'), at: r.at };
+                if (r) v.run = { name: r.name, role: r.role, activity: { ...r.activity }, effects: [...r.effects], can: { heal: r.capabilities.heal, cc: r.capabilities.cc, nuke: r.capabilities.nuke, ...present(r.capabilities, ['rez'], 'boolean') }, ...present(r, ['realmPoints'], 'number'), at: r.at };
                 const runRole = r?.role ?? metaRoles.get(lower(v.bot));
                 if (!group.members[i]?.role && runRole) v.role = runRole;
             });

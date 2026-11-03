@@ -128,7 +128,7 @@ export class MemberAgent<S = any> {
 
     constructor(readonly member: Member, readonly board: Blackboard, readonly behaviors: Behavior<S>[], settings: S, private readonly options: MemberAgentOptions = {}) {
         this.spells = new Spellbook(member.sdk, member.actions);
-        this.capabilities = this.spells.capabilities();
+        this.capabilities = this.currentCapabilities();
         this.ctx = new MemberContext(this, settings);
         this.lastMessageId = member.sdk.getGameMessages().at(-1)?.id ?? -1;
         this.unsubscribe.push(member.sdk.onStateUpdate(() => this.publish()));
@@ -136,11 +136,17 @@ export class MemberAgent<S = any> {
         this.publish();
     }
 
+    /** From the spell list; rez only if our list also casts it, since corpses wait for whoever says it can. */
+    private currentCapabilities(): Capabilities {
+        const caps = this.spells.capabilities();
+        return { ...caps, rez: !!caps.rez && this.behaviors.some(b => b.name === 'rez') };
+    }
+
     /** Push our latest snapshot (with the current activity) to the blackboard. */
     publish(): void {
         const state = this.member.sdk.getState();
         if (!state) return;
-        if (Date.now() - this.capsAt > 30_000) { this.capabilities = this.spells.capabilities(); this.capsAt = Date.now(); }
+        if (Date.now() - this.capsAt > 30_000) { this.capabilities = this.currentCapabilities(); this.capsAt = Date.now(); }
         for (const m of state.gameMessages) if (m.id > this.lastMessageId) countCombatMessage(m.text, this.combat);
         this.lastMessageId = state.gameMessages.at(-1)?.id ?? this.lastMessageId;
         const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat }, this.options.sightRadius);

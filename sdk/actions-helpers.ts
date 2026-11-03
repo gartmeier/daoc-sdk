@@ -131,7 +131,17 @@ export const CAST_REFUSALS = [
     'you cannot cast this spell directly',
     'you must have a pet summoned',
     "you're phaseshifted",
+    'this spell only works on dead members',
+    'is already considering a resurrection',
 ] as const;
+
+/**
+ * What a rez costs: a share of the caster's full power by the level gap, half at equal level, whatever the
+ * spell's power column says (ResurrectSpellHandler.PowerCost, :63-70). Paid when the cast ends, refunded on a "no".
+ */
+export function resurrectCost(maxMana: number, casterLevel: number, targetLevel: number): number {
+    return Math.trunc(maxMana * Math.max(0.1, 0.5 + (targetLevel - casterLevel) / casterLevel));
+}
 
 /** Style refusals (StyleProcessor.TryToUseStyle.*). */
 export const STYLE_REFUSALS = [

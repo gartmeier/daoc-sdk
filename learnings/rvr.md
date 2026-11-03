@@ -114,7 +114,7 @@ All three groups out at once, each `rvr.ts` in its own process. Kills count ever
 
 ## Unverified / next
 
-- **Resurrection:** healers don't rez yet; every death walks 17–23k back.
+- **Resurrection:** the `rez` behaviour brings corpses back between fights (learnings/group-coordination.md); not yet played in a round. A corpse waits 60 s for it (`rez.holdMs`), then walks 17–23k back.
 - **Class detection:** only behaviour marks healers and casters (they must cast first). The client's model id for a player isn't kept (the decoder reads it).
 - **Pets** (Theurgist, Spiritmaster, Enchanter, Druid): no SDK pet commands; a pet's owner shares its realm, so enemy pets aren't board contacts.
 - **Stealth:** none of the 15 bots stealths; a stealthed enemy appears only within detection range.

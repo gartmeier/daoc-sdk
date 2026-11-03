@@ -33,6 +33,7 @@ import {
     REPAIR_ANSWERS,
     REPAIR_OFFER,
     REPAIR_REFUSALS,
+    resurrectCost,
     RETRYABLE_ATTACK_REFUSALS,
     SELL_REFUSALS,
     SIT_REFUSALS,
@@ -60,6 +61,7 @@ import type {
     ActionResult,
     BotWorldState,
     DialogBox,
+    ResurrectionOffer,
     GameMessage,
     GroupMember,
     InventoryItem,
@@ -280,6 +282,26 @@ export interface KillPlayerOptions extends Omit<KillOptions, 'useStyle' | 'force
  */
 export interface KillPlayerResult extends Omit<KillResult, 'npc'> {
     player: NearbyPlayer | null;
+}
+
+export interface ResurrectOptions {
+    /** The rez to cast; default our strongest (resurrectSpell). */
+    spell?: Spell;
+    /** How long to wait for the target's answer once the cast is done (default 16 s: its question expires after 15 s). */
+    answerMs?: number;
+    /** Walk into range (default true). */
+    approach?: boolean;
+}
+
+export interface ResurrectResult extends ActionResult {
+    spell: Spell | null;
+    target: NearbyPlayer | null;
+    /** The cast itself. A finished cast only asks the target. */
+    cast: CastResult | null;
+}
+
+export interface AcceptResurrectionResult extends ActionResult {
+    offer: ResurrectionOffer | null;
 }
 
 export interface CastOptions {
@@ -670,6 +692,9 @@ const ZONE_POINT_RANGE = 400;
 /** What the server says when it won't take a zone point (RegionChangeRequestHandler.cs:69, 129, 162; the jump point handlers). */
 const ZONE_POINT_REFUSALS = [/region has been disabled/i, /not supported by your client type/i, /exception in jump point/i, /do not meet the requirements/i, /proper mission/i, /another instance/i];
 
+/** A rezzed player stands this near its caster; the margin is for what either of them does right after. */
+const REZZED_NEAR = 300;
+
 const fail = <T extends object>(message: string, reason: string, extra: T): ActionResult & T =>
     ({ success: false, message, reason, ...extra });
 
@@ -684,6 +709,8 @@ export function castFailureReason(text: string, fallback: string = 'refused'): s
     if (isPvpImmunity(t)) return 'immune';
     if (isCrowdControlled(t)) return 'crowd_controlled';
     if (t.includes('you are dead')) return 'died'; // "You are dead and can't cast!" (SpellHandler.cs:881-884)
+    if (t.includes('only works on dead members')) return 'not_dead'; // SpellHandler.cs:764: alive, or another realm's
+    if (t.includes('considering a resurrection')) return 'already_considering'; // ResurrectSpellHandler.cs:246, :264
     if (t.includes('interrupt')) return 'interrupted';
     if (t.includes('you must wait')) return 'must_wait';
     if (t.includes('power')) return 'no_power';
@@ -998,6 +1025,34 @@ export class BotActions {
         if (!r.success) return { ...r, dialog: box };
         const closed = await this.helpers.waitFor(s => !s.dialog?.isOpen || s.dialog.receivedAt !== box.receivedAt, 2000);
         return closed ? { success: true, message: `Dialog ${accept ? 'accepted' : 'declined'}: ${box.text.slice(0, 80)}`, dialog: box } : fail('Dialog still open', 'timeout', { dialog: box });
+    }
+
+    /**
+     * Wait for a resurrection offer, say yes and observe the revive. We come back standing at the caster, with
+     * the spell's health and power (10 % and none for a baseline rez). That saves the release's XP loss, grave
+     * and constitution loss; resurrection illness comes all the same.
+     * Reasons: not_in_game, not_dead, timeout (no offer came), expired (the offer was gone when we answered).
+     */
+    async acceptResurrection(options: { timeout?: number } = {}): Promise<AcceptResurrectionResult> {
+        const none = { offer: null };
+        const p = this.helpers.player();
+        if (!p) return fail('Not in game', 'not_in_game', none);
+        if (!p.isDead) return fail('Not dead', 'not_dead', none);
+        const offer = await this.helpers.waitFor(s => (s.dialog?.isOpen ? s.dialog.resurrection : null) ?? null, options.timeout ?? 30_000);
+        if (!offer) return fail('No resurrection offer arrived', 'timeout', none);
+        const watch = this.helpers.watch();
+        try {
+            const r = await this.sdk.sendRespondDialog(true);
+            if (!r.success) return { ...r, offer };
+            // "No one is currently trying to resurrect you." (:95): the expiry beat our answer, or an earlier box left unanswered undid this one.
+            const end = await this.helpers.waitFor(s => (!s.player?.isDead ? 'revived' : watch.find(['no one is currently trying']) ? 'expired' : null), 5000);
+            if (end !== 'revived') return fail(end ? `${offer.caster}'s offer was gone when we answered` : `Said yes to ${offer.caster}, still dead`, end ?? 'timeout', { offer });
+            // The server moves us to the caster along with the revive (:163): a caller must not walk on from the corpse.
+            await this.helpers.waitFor(s => s.player && Math.hypot(s.player.x - p.x, s.player.y - p.y) > 50, 1000);
+            return { success: true, message: `Resurrected by ${offer.caster} at ${offer.healthPercent} % health`, offer };
+        } finally {
+            watch.dispose();
+        }
     }
 
     // ============ Combat ============
@@ -1707,6 +1762,48 @@ export class BotActions {
         } finally {
             watch.dispose();
         }
+    }
+
+    /** Our strongest resurrection spell, or null. The higher its level, the more it restores: 10 %, then 30, 50 and 100 % on a spec line. */
+    resurrectSpell(): Spell | null {
+        return this.sdk.getSkills().spells.filter(s => this.getSpellInfo(s)?.type === 'Resurrect').sort((a, b) => b.level - a.level)[0] ?? null;
+    }
+
+    /**
+     * Resurrect a dead player of our realm: walk into range, cast, and wait for its answer. Success means it
+     * is alive again: a finished cast only asks, and a corpse no script controls never answers (the power is
+     * gone then). It comes back at our feet. It must be in view. Costs half our full power at equal level
+     * (resurrectCost), paid when the cast ends.
+     * Reasons: those of castSpell, plus spell_not_found, not_found, invalid_target, not_dead (alive, or released
+     * meanwhile), no_power, already_considering (someone else's rez waits for its answer), no_answer.
+     */
+    async resurrect(target: PlayerTarget, options: ResurrectOptions = {}): Promise<ResurrectResult> {
+        const none = { spell: null, target: null, cast: null };
+        const me = this.helpers.player();
+        if (!me) return fail('Not in game', 'not_in_game', none);
+        if (me.isDead) return fail('We are dead', 'dead', none);
+        const spell = options.spell ?? this.resurrectSpell();
+        if (!spell) return fail('We know no resurrection spell', 'spell_not_found', none);
+        const t = this.helpers.resolvePlayer(target);
+        if (!t) return fail(`Target not found: ${describeTarget(target)}`, 'not_found', { ...none, spell });
+        const base = { spell, target: t, cast: null };
+        if (t.realm !== me.realm) return fail(`${t.name} is of another realm`, 'invalid_target', base);
+        if (!t.isDead) return fail(`${t.name} is not dead`, 'not_dead', base);
+        const cost = resurrectCost(me.maxMana, me.level, t.level || me.level);
+        if (me.mana < cost) return fail(`Resurrecting ${t.name} costs ${cost} power, we have ${me.mana}`, 'no_power', base);
+        const cast = await this.castSpell(spell, t.objectId, options.approach === undefined ? {} : { approach: options.approach });
+        if (!cast.success) return fail(cast.message, cast.reason ?? 'refused', { ...base, cast });
+            // 0x89 goes to the revived player alone: we see its health come back in its relayed position. Alive
+            // isn't enough, since a release shows the same when the bind point is in view: a rez puts it at our feet (:163).
+            const back = await this.helpers.waitFor(s => {
+                const seen = s.nearbyPlayers.find(n => n.objectId === t.objectId);
+                return seen && !seen.isDead && s.player && Math.hypot(seen.x - s.player.x, seen.y - s.player.y) <= REZZED_NEAR ? true : null;
+            }, options.answerMs ?? 16_000);
+            if (back) return { success: true, message: `${t.name} is back`, ...base, cast };
+            const seen = this.helpers.resolvePlayer(t.objectId);
+            return seen && !seen.isDead
+                ? fail(`${t.name} is alive elsewhere: it released`, 'not_dead', { ...base, cast })
+                : fail(`${t.name} did not answer ${spell.name}`, 'no_answer', { ...base, cast });
     }
 
     /** Static data for a known spell (type, target, range, cast time, power), from the DB dump; null when unknown. */

@@ -31,7 +31,7 @@
 
 import { estimateZ, getClass, realmName } from '../../data/index';
 import type { Realm } from '../types';
-import { assist, buff, crowdControl, flee, guard, heal, holdFormation, meleeFight, position, release, rest, retreat, shedLoad, song, sprint, tank, type TacticsSettings } from './behaviors';
+import { assist, buff, crowdControl, flee, guard, heal, holdFormation, meleeFight, position, release, rest, retreat, rez, shedLoad, song, sprint, tank, type TacticsSettings } from './behaviors';
 import type { Behavior } from './member';
 import type { Finding, RunReport } from './observer';
 import { isAlive } from './blackboard';
@@ -88,6 +88,8 @@ export const RVR_SETTINGS: RvrSettings = {
     assistAfterMs: 6000,
     // Players hit harder and in bursts: heal earlier than in PvE.
     heal: { tank: 75, other: 70, emergency: 40, outOfCombat: 90 },
+    // An RvR death costs no XP or constitution: a rez saves the walk back, about 100 s, and no more than that is worth waiting.
+    rez: { holdMs: 60_000 },
     rest: { hp: 90, mana: 80 },
     combatRange: { healer: [500, 1600], support: [500, 1600], nuker: [700, 1400] },
     slotSlack: 350,
@@ -458,8 +460,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         }
     }
 
-    // ── Regroup: wait for the dead to release, then meet those walking back from the portal keep ──
-    if (deadHere.length) return { ...calm, phase: 'recover', anchor: stay, waiting: deadHere.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadHere)} to release${gone}` };
+    // ── Regroup: wait for the dead to be rezzed or release, then meet those walking back from the portal keep ──
+    if (deadHere.length) return { ...calm, phase: 'recover', anchor: stay, waiting: deadHere.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadHere)}: a rez or a release${gone}` };
     if (far.length) {
         const them = centroid(far);
         stepLeg(trip, 'gather', them, { from: centre, movers: main, replan: Infinity, meet: true });
@@ -495,11 +497,11 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 /** Behaviour lists by role. No healer() visit: battlegrounds have no town healer, and RvR deaths cost no constitution. */
 export function rvrBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
-        tank: [release(), sprint(), retreat(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
-        healer: [release(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
-        support: [release(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
-        nuker: [release(), sprint(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
-        melee: [release(), sprint(), retreat(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
+        tank: [release(), sprint(), retreat(), rez(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
+        healer: [release(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
+        support: [release(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
+        nuker: [release(), sprint(), retreat(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
+        melee: [release(), sprint(), retreat(), rez(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
     };
 }
 

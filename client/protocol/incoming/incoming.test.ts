@@ -7,7 +7,7 @@ import { decodeCharacterOverview, decodeCryptKey, decodeDupNameCheckReply, decod
 import { decodeCharacterJump, decodeEncumbrance, decodeLosRequest, decodeMaxSpeed, decodePositionAndObjectId, decodeQuit, decodeRegionChanged, decodeTime } from './world';
 import { decodeNpcCreate, decodeObjectCreate, decodeObjectDataUpdate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate, decodePlayerHeading, decodePlayerPosition, decodeRemoveObject } from './objects';
 import { decodeInventoryUpdate, decodeMoney, decodePointsUpdate, decodeStatsUpdate, decodeStatusUpdate, decodeVariousUpdate } from './player';
-import { decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseSpeech, chatTypeName } from './chat';
+import { decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseResurrectionOffer, parseSpeech, chatTypeName } from './chat';
 import { decodeAttackMode, decodeChangeGroundTarget, decodeChangeTarget, decodeCombatAnimation, decodeConcentrationList, decodeDisableSkills, decodeInterrupt, decodePlayerDeath, decodeSpellCastAnimation, decodeSpellEffect, decodeUpdateIcons } from './combat';
 import { decodeGroupMemberUpdate, decodeMerchantWindow, decodeTradeWindow, decodeTrainerWindow } from './windows';
 import { ObjectType } from '../../../sdk/types';
@@ -281,6 +281,11 @@ describe('chat / ui packets', () => {
     test('0x81 Dialog (PacketLib168.cs:1484)', () => {
         const p = W().u8(0).u8(5).u16(8).u16(0).u16(0).u16(0).u8(1).u8(1).bytes(encodeCp1252('Join group?')).u8(0).toBytes();
         expect(decodeDialog(p)).toEqual({ code: 5, data: [8, 0, 0, 0], type: 1, autoWrap: true, text: 'Join group?' });
+    });
+
+    test('a rez spell\'s question names the caster and the health (ResurrectSpellHandler.cs:54)', () => {
+        expect(parseResurrectionOffer('Do you allow Nimue to resurrected you\n with 30 percent hits/power?')).toEqual({ caster: 'Nimue', healthPercent: 30 });
+        expect(parseResurrectionOffer('It will cost 188 copper to have your lost constitution restored. Do you accept?')).toBeNull();
     });
 
     test('0xC4 text window joins split lines', () => {

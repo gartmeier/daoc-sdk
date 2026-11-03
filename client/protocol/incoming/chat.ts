@@ -99,6 +99,12 @@ export interface DialogPacket {
     text: string;
 }
 
+/** The question a rez spell asks its target (ResurrectSpellHandler.cs:54, the server's typo included). */
+export function parseResurrectionOffer(text: string): { caster: string; healthPercent: number } | null {
+    const m = /^Do you allow (.+?) to resurrected you\s+with (\d+) percent hits\/power\?/.exec(text);
+    return m ? { caster: m[1]!, healthPercent: Number(m[2]) } : null;
+}
+
 export function decodeDialog(p: Uint8Array): DialogPacket {
     const r = new PacketReader(p);
     r.u8();

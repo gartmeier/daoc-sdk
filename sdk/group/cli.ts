@@ -78,7 +78,7 @@ if (watch > 0) {
         const grouped = conns.find(c => c.sdk.getPlayer()?.name === m.name)?.sdk.getGroup().map(g => g.name) ?? [];
         console.log(`  ${m.name.padEnd(12)} ${m.className.padEnd(10)} L${String(m.level).padEnd(3)} ${m.role.padEnd(7)} hp ${String(m.hp).padStart(3)}% mana ${String(m.mana).padStart(3)}% load ${String(m.load).padStart(3)}%`
             + `${m.isDead ? ' DEAD' : ''}${m.isSitting ? ' sitting' : ''}${m.inCombat ? ' in combat' : ''}  region ${m.regionId} (${m.x}, ${m.y}) ${d ? `${d} from ${leader!.name}` : ''}`
-            + `  group: ${grouped.length ? grouped.join(',') : 'none'}  can: ${['heal', 'cc', 'nuke'].filter(k => (m.capabilities as any)[k]).join('/') || '-'}`);
+            + `  group: ${grouped.length ? grouped.join(',') : 'none'}  can: ${['heal', 'cc', 'nuke', 'rez'].filter(k => (m.capabilities as any)[k]).join('/') || '-'}`);
     }
     console.log(`Enemies the group knows (${p.contacts.length}):`);
     for (const c of p.contacts.sort((a, b) => (b.target ? 1 : 0) - (a.target ? 1 : 0) || a.level - b.level).slice(0, 25)) {

@@ -9,6 +9,7 @@
 
 import { findNpcSpawns } from '../../data/index';
 import { styleQueue, type StyleChoice, type StyleChooser } from '../actions';
+import { resurrectCost } from '../actions-helpers';
 import { ANYTIME_STYLE, fighterStyle, tankStyles } from './styles';
 import { abortable, executionContext } from '../execution-context';
 import { isAlive } from './blackboard';
@@ -21,12 +22,14 @@ import { chooseSong, SONG_SETTINGS, type SongSettings } from './songs';
 import type { Behavior, MemberContext } from './member';
 import { safePath } from './terrain';
 import type { BotWorldState, InventoryItem, NearbyNpc, NearbyPlayer, PlayerState, Style } from '../types';
-import type { BuffSlot, Contact, Point, Role } from './types';
+import type { BuffSlot, Contact, MemberReport, Point, Role } from './types';
 
 /** Settings the behaviours read; strategies extend this. */
 export interface TacticsSettings {
     /** How far a member walks to a healer for lost constitution or sickness (default 4000). */
     healerRadius?: number;
+    /** How a corpse waits for a rez and how far rezzers go for one (default REZ_SETTINGS). */
+    rez?: Partial<RezSettings>;
     /** The tank must hold the focus this long before damage dealers open (ms). */
     holdMs: number;
     /** ... unless the focus has been fighting this long without the tank holding it: then open anyway (ms). */
@@ -201,14 +204,148 @@ export function formationOffset(formation: TacticsSettings['formation'], role: R
     return { x: Math.cos(away + angle) * f.back, y: Math.sin(away + angle) * f.back };
 }
 
-/** Dead: release and respawn at the bind point (holdFormation walks back). */
+export interface RezSettings {
+    /**
+     * A corpse with a rezzer near waits this long before it releases (ms); 0: everyone releases at once. A rez
+     * saves the release's XP loss, grave and constitution loss, and in RvR the walk back. A rezzer short of
+     * power has to sit first: a rez costs half its full power at equal level.
+     */
+    holdMs: number;
+    /** A corpse waits only for a rezzer this near, and a rezzer goes this far for one. */
+    radius: number;
+}
+
+export const REZ_SETTINGS: RezSettings = { holdMs: 120_000, radius: 4000 };
+/** A rez being cast on us holds the release this long past holdMs: the cast, then its 15 s question (ResurrectSpellHandler.cs:47). */
+const REZ_CLAIM_MS = 20_000;
+/** Sitting for the power or walking into range keeps a corpse ours this long: as long as a rest may take, and a little. */
+const REZ_PREP_MS = 130_000;
+/** After a rez, the illness is left to run out rather than walking away from the group to a town healer (60 s, GamePlayer.OnRevive). */
+const REZ_ILLNESS_MS = 70_000;
+/** How long to wait for a member's answer: it says yes on its next turn. */
+const REZ_ANSWER_MS = 4000;
+/** A rez stands this far inside its range, so a corpse lying at the limit doesn't refuse it. */
+const REZ_RANGE_MARGIN = 150;
+
+const rezSettings = (settings: Pick<TacticsSettings, 'rez'>): RezSettings => ({ ...REZ_SETTINGS, ...settings.rez });
+
+/** The level gap can price a rez out of a caster's whole pool: at a level 12 caster, anything from level 19. */
+const canAffordRez = (casterLevel: number, corpseLevel: number) => resurrectCost(100, casterLevel, corpseLevel) <= 100;
+
+/** A living member near the corpse who would rez it: its list casts a rez, and the level gap leaves it within its pool. */
+export function rezzerNear(members: MemberReport[], corpse: Pick<MemberReport, 'name' | 'regionId' | 'x' | 'y' | 'level'>, radius: number): MemberReport | undefined {
+    return members.find(m => m.name !== corpse.name && !m.isDead && m.capabilities.rez && m.regionId === corpse.regionId && dist(m, corpse) <= radius && canAffordRez(m.level, corpse.level));
+}
+
+/** A corpse is waiting for a rezzer near it: a run that is ending lets that finish. */
+export function awaitingRez(members: MemberReport[], settings: Pick<TacticsSettings, 'rez'>): boolean {
+    const s = rezSettings(settings);
+    return s.holdMs > 0 && members.some(m => m.isDead && !!rezzerNear(members, m, s.radius));
+}
+
+/**
+ * Dead: say yes to a rez; with a rezzer near, wait for one a while (REZ_SETTINGS); otherwise release and
+ * respawn at the bind point (holdFormation walks back). Returning true keeps a corpse out of the rest of the list.
+ */
 export const release = (): Behavior => ({
     name: 'release',
     interruptible: false,
     async run(ctx) {
         if (!ctx.bot.isDead()) return false;
+        // Always answered: a box left open would make the next rez fail (learnings/death-and-rest.md).
+        if (ctx.sdk.getResurrectionOffer()) {
+            ctx.doing('accept_rez');
+            const r = await ctx.bot.acceptResurrection({ timeout: 0 });
+            ctx.result('accept_rez', r);
+            if (r.success) ctx.memory.set('rezzedAt', Date.now());
+            return true;
+        }
+        const me = ctx.me();
+        const s = rezSettings(ctx.settings);
+        const waited = Date.now() - (me.lastDeathAt ?? 0);
+        const coming = claimedBy(ctx, 'rez', me.objectId, REZ_CLAIM_MS).length > 0;
+        const rezzer = s.holdMs > 0 && waited < s.holdMs ? rezzerNear(ctx.members(), { name: ctx.name, regionId: me.regionId, x: me.x, y: me.y, level: me.level }, s.radius) : undefined;
+        if (coming || rezzer) {
+            ctx.doing('await_rez', null, rezzer?.name ?? '');
+            return true;
+        }
+        ctx.memory.delete('rezzedAt');
         ctx.doing('release');
         ctx.result('release', await ctx.bot.releaseAndRespawn());
+        return true;
+    },
+});
+
+/**
+ * Phases a rez may interrupt: nothing is being fought, pulled or run from, and the group is staying. Not travel:
+ * in RvR that is also falling back from a force still out of reach, with nothing on the board as a threat.
+ */
+const REZ_PHASES = new Set(['recover', 'gather', 'idle']);
+/** Too near a corpse to walk up to it: an enemy player's reach, with a cast's worth of its walking. */
+const REZ_FOE_CLEARANCE = 1500;
+/** Who comes back first: another rezzer can help with the rest, then whoever the next fight needs most. */
+const REZ_ORDER: Role[] = ['healer', 'tank', 'support', 'nuker', 'melee'];
+
+/**
+ * Between fights, bring back a dead member near us: sit for the power if we are short (a rez costs half of it
+ * at equal level), walk into range round known danger, cast. The rezzed member appears at our feet, so we need
+ * not stand at the corpse, and never do. Not while anything fights the group: 4 s of casting, then a member
+ * back with a tenth of its health. Gated on knowing a rez, not on the role: Bards and Wardens know one too.
+ */
+export const rez = (): Behavior<TacticsSettings> => ({
+    name: 'rez',
+    async run(ctx) {
+        const spell = ctx.spells.rez();
+        if (!spell || !REZ_PHASES.has(ctx.orders().phase) || ctx.threats().length || ctx.bot.isDead()) return false;
+        const me = ctx.me();
+        const now = Date.now();
+        const { radius, holdMs } = rezSettings(ctx.settings);
+        // Holding off: the corpses are all busy releasing, and a release doesn't look at offers.
+        if (holdMs <= 0) return false;
+        const corpse = ctx.members()
+            .filter(m => m.isDead && m.regionId === me.regionId && dist(me, m) <= radius && m.activity.kind !== 'release')
+            .filter(m => now >= (ctx.memory.get(`rezRetry:${m.objectId}`) ?? 0))
+            .filter(m => !claimedBy(ctx, 'rez', m.objectId, REZ_CLAIM_MS).length && !claimedBy(ctx, 'rez_prep', m.objectId, REZ_PREP_MS).length)
+            .filter(m => canAffordRez(me.level, m.level))
+            .sort((a, b) => Number(!!b.capabilities.rez) - Number(!!a.capabilities.rez) || REZ_ORDER.indexOf(a.role) - REZ_ORDER.indexOf(b.role) || dist(me, a) - dist(me, b))[0];
+        if (!corpse) return false;
+        const on = ctx.bot.getAttackers()[0] ?? ctx.bot.getPlayerAttackers()[0];
+        if (on) return ctx.skip(`rez: ${on.name} is on us`);
+        // Every branch claims the corpse before its first await, and the runner shares one board: no two rezzers on one.
+        const cost = resurrectCost(me.maxMana, me.level, corpse.level);
+        if (me.mana < cost) {
+            ctx.doing('rez_prep', corpse.objectId, `sitting for ${corpse.name}`);
+            const res = await ctx.bot.rest({ healthPercent: 1, manaPercent: Math.min(100, Math.ceil(cost / me.maxMana * 100) + 1), timeout: 120_000 });
+            if (!res.success) { ctx.result('rest', res); return ctx.skip(`rez: ${res.reason}`); }
+            return true;
+        }
+        const reach = spell.range - REZ_RANGE_MARGIN;
+        const away = dist(me, corpse);
+        if (away > reach || !ctx.sdk.getObject(corpse.objectId)) {
+            const f = Math.max(0, (away - reach + 50) / Math.max(1, away));
+            const spot = { x: me.x + (corpse.x - me.x) * f, y: me.y + (corpse.y - me.y) * f };
+            const foes = ctx.picture().contacts.filter(c => c.kind === 'player' && !c.stale && dist(c, spot) < REZ_FOE_CLEARANCE);
+            if (foes.length || !safeSpot(me.regionId, me.level, ctx.settings.aggroTolerance ?? -3)(spot)) {
+                ctx.memory.set(`rezRetry:${corpse.objectId}`, now + 10_000);
+                return ctx.skip(`rez: no safe spot in reach of ${corpse.name}`);
+            }
+            ctx.doing('rez_prep', corpse.objectId, `walking to ${corpse.name}`);
+            const next = safePath(me.regionId, me.level, me, spot, keepCircles(ctx))[0] ?? spot;
+            const leg = Math.min(1, 2500 / Math.max(1, dist(me, next)));
+            const w = await ctx.bot.walkTo(me.x + (next.x - me.x) * leg, me.y + (next.y - me.y) * leg, { tolerance: 80 });
+            if (!w.success) { ctx.result('walk', w); ctx.memory.set(`rezRetry:${corpse.objectId}`, Date.now() + 5000); }
+            return true;
+        }
+        // The corpse's own report beats its death event to our client by a moment; the server would only refuse.
+        const seen = ctx.sdk.getObject(corpse.objectId);
+        if (seen?.kind === 'player' && !seen.isDead) return ctx.skip(`rez: ${corpse.name} not dead in our view yet`);
+        ctx.doing('rez', corpse.objectId, `${spell.spell.name} on ${corpse.name}`);
+        await stopSwinging(ctx);
+        const r = await ctx.bot.resurrect(corpse.objectId, { spell: spell.spell, answerMs: REZ_ANSWER_MS, approach: false });
+        ctx.result('rez', r, corpse.objectId);
+        if (r.success) ctx.note(`${ctx.name} resurrected ${corpse.name}`);
+        // No answer: its question stays open for 15 s, and a second cast would only be refused.
+        else ctx.memory.set(`rezRetry:${corpse.objectId}`, Date.now() + (r.reason === 'no_answer' ? 15_000 : 3000));
         return true;
     },
 });
@@ -228,7 +365,8 @@ export const healer = (opts: { radius?: number } = {}): Behavior<TacticsSettings
         const phase = ctx.orders().phase;
         if (phase === 'engage' || phase === 'retreat' || ctx.bot.isDead()) return false;
         const me = ctx.me();
-        const sick = (ctx.sdk.getState()?.effects ?? []).some(e => /Resurrection Illness/i.test(e.name));
+        const rezzed = Date.now() - (ctx.memory.get('rezzedAt') ?? 0) < REZ_ILLNESS_MS;
+        const sick = !rezzed && (ctx.sdk.getState()?.effects ?? []).some(e => /Resurrection Illness/i.test(e.name));
         const lost = me.constitutionLost ?? 0;
         if (!sick && lost <= 0) return false;
         if (Date.now() < (ctx.memory.get('healerRetry') ?? 0)) return false;
@@ -998,11 +1136,11 @@ export const meleeFight = () => assist({ melee: true, holdMs: 0, style: fighterS
 /** The behaviour lists the default strategies use, by role. */
 export function defaultBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
-        tank: [release(), healer(), sprint(), retreat(), pull(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
-        healer: [release(), healer(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
-        support: [release(), healer(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
-        nuker: [release(), healer(), sprint(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
-        melee: [release(), healer(), sprint(), retreat(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
+        tank: [release(), healer(), sprint(), retreat(), rez(), pull(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
+        healer: [release(), healer(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
+        support: [release(), healer(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
+        nuker: [release(), healer(), sprint(), retreat(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
+        melee: [release(), healer(), sprint(), retreat(), rez(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
     };
 }
 

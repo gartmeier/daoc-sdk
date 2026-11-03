@@ -19,6 +19,7 @@ You know you died when `bot.isDead()` / `player.isDead` is true. `player.deathCo
 
 - **Running actions fail with `died`:** `walkTo`, `killNpc` and `grind` stop.
 - **The server says** "You will now release automatically in 8 more seconds!" after a death. It may release you before you do.
+- **Waiting for a rez instead:** see Resurrection below; once you release there is no way back.
 - **Release yourself:**
   ```typescript
   if (bot.isDead()) {
@@ -42,6 +43,28 @@ You know you died when `bot.isDead()` / `player.isDead` is true. `player.deathCo
   ```
   It needs your own grave targeted, within 2000 units, standing still and not riding (`GamePlayer.Pray`), so a grave in a camp can be reached from outside it. You sit for 5 s, then the grave's XP comes back and it's gone. Live at level 15: 19,800 and 41,400 XP from 2 graves.
 - **Unverified:** the XP and constitution loss penalties at low level.
+
+## Resurrection
+
+```typescript
+// The rezzer: walks into range (1500), casts for 4 s, waits for the answer
+const r = await bot.resurrect(corpse.objectId);    // r.reason: no_power, not_dead, already_considering, no_answer, ...
+// The corpse: waits for an offer, says yes, sees the revive
+const a = await bot.acceptResurrection({ timeout: 60_000 });
+sdk.getResurrectionOffer();                        // { caster, healthPercent } while a question is open
+```
+
+- **Live (2026-11-03, level 15):** about 6 s from the cast to the target standing at the caster's feet, however far off the corpse lay. Back with the spell's health, 0 power and 1-2 % endurance for a baseline rez (hp 9-10 %). `deathCount` stays the same.
+- **It must be held for:** a release sets full health, so a rez is refused on the living ("This spell only works on dead members of your realm!"). Nothing releases by itself for 900 s, unless a `/release` under 10 s after the death armed the automatic one, and that isn't stopped by an open question (`GamePlayer.cs:1450`). So decide to wait before the first release: `bot.releaseAndRespawn()` after a death starts that.
+- **What it saves:** the release's second XP stage, the grave and the constitution loss (live: a monster's kill, control released: 0 -> 1 lost; rezzed: none). The death's first XP stage is gone at death either way (`GamePlayer.cs:5970`).
+- **What it costs the caster:** half its full power at equal level, whatever the spell's power column says: `resurrectCost(maxMana, casterLevel, targetLevel)`, at least a tenth, 75 % five levels up (`ResurrectSpellHandler.PowerCost`). Paid when the cast ends. A "no" refunds it (live: 83 -> 83); no answer doesn't (live: 83 -> 52, then it regenerated: 45 -> 83 sitting in 34 s).
+- **Who has one:** recognise it by `bot.resurrectSpell()` or `info.type === 'Resurrect'` (target `Corpse`), never by name: Restore Spirit, Minor Reconstitution and Reconstitution are heals too. Baseline at level 10: Cleric, Friar, Healer, Shaman, Druid, Bard, Warden and their base classes, 10 % and no power. Spec lines give 30/10 (Rejuvenation or Mending 15, Regrowth 16), 50/25 (24), 100/50 (40), though Friar, Shaman, Bard and Warden stop at 30/10. Paladin (Chants 30) and Spiritmaster (Summoning 23) get 10 %. Mentalists have none.
+- **Answer every question.** The server sends no close for it and it expires after 15 s ("Your resurrection spell has expired."), yet its callback stays. The next rez then fires that callback as a "no", after already naming its new caster: saying yes answers "No one is currently trying to resurrect you." (reason `expired`) and that caster's power is gone (verified live). The rez after that works. So a corpse with no script running never comes back, and costs its rezzers power: `no_answer`.
+- **After a rez:** 6 s of damage immunity (`RezDmgImmunityEffect`) and resurrection illness, 60 s, 30 s for a 100 % rez, none below level 6.
+- **A GM's `/player kill` counts as RvR:** "RvR Resurrection Illness", no constitution at stake. Test what a rez saves with a monster's kill.
+- **Unverified:** the rez clears neither of the death's pending-loss properties (`GamePlayer.cs:1647`, `:1699`), so a later release from a death without its own loss (RvR) might still apply them.
+- **`resurrect` succeeds only when the target stands at the caster:** a release with the bind point in view shows the same alive player, and the caster's "not worth realm points" names nobody, so it can belong to another corpse's late yes.
+- **Live check:** `sdk/test/live/rez-live.ts` (needs a GM account: its header says how, on a throwaway stack).
 
 ## Quitting and the 60 s lockout
 

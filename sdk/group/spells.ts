@@ -44,6 +44,7 @@ const ROOT_TYPES = /^(SpeedDecrease|UnbreakableSpeedDecrease)$/;
 const isMezz = (s: SpellPick) => MEZZ_TYPES.test(s.type);
 const isRoot = (s: SpellPick) => ROOT_TYPES.test(s.type) && s.value >= 99 && s.radius === 0;
 const HEAL_TYPES = /^(Heal|CombatHeal)$/;
+const isRez = (s: SpellPick) => s.type === 'Resurrect';
 
 /** The buff slot of a spell handler type, or null when it isn't a buff we keep up. */
 export function slotOf(type: string): BuffSlot | null {
@@ -185,6 +186,11 @@ export class Spellbook {
         return pickNuke(this.all(), { ...opts, ready: s => this.ready(s) });
     }
 
+    /** The strongest resurrection spell. What it costs depends on the target (resurrectCost), not on its power column. */
+    rez(): SpellPick | null {
+        return best(this.all().filter(isRez));
+    }
+
     /** Buffs worth keeping up: the top rank per slot and target, no pet or enemy spells. */
     buffs(): (SpellPick & { slot: BuffSlot })[] {
         const top = new Map<string, SpellPick & { slot: BuffSlot }>();
@@ -218,6 +224,7 @@ export class Spellbook {
             // What cc() casts at an add without aoe (crowd control is assigned by this): a single-target mezz or a root.
             cc: all.some(s => s.target === 'Enemy' && s.range > 0 && ((isMezz(s) && s.radius === 0) || isRoot(s))),
             nuke: all.some(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type)),
+            rez: all.some(isRez),
             buffs: buffs.map(s => s.spell.name),
             buffSpells: buffs.map(s => ({ name: s.spell.name, slot: s.slot, target: s.target, concentration: s.concentration })),
         };
