@@ -137,5 +137,11 @@ Wear was set by SQL while it was logged out.
   - Camelot, a Paladin at Slash 18: the armour pass wore the sword before the weapon pass saw it, the sale took the one it replaced, and a war hammer, off the line, stayed in. At level 22 the shops answered "no weapon step: best 6.51, worn 7.62".
   - A Mentalist and a Cabalist at level 22: a focus staff came out and went on (1.09 and 1.06 over 0), a level 30 and a level 28 staff went in, and a sword stayed in the vault.
   - A one-member group's `gear-care.ts` with these `judges` and `wearWeapons`, at Svasud Faste: a level 28 axe came out and went on, 9.94 over 8.15.
+- Both hands, on a disposable stack: Gearblade, a throwaway level 15 Blademaster at Blades 15, Celtic Dual 12, with a real Blademaster's blades copied over by SQL while logged out.
+  - From his bag, a level 14 sword went in the right hand, 5.49 over 3.35. The left kept its level 7 sword. A worse blade, a level 24 blade, a stiletto (off the line) and a shield stayed out, and a second pass did nothing.
+  - What came off the right hand went left in the same pass: 5.8 over 5.45, then 5.45 over 3.53, and the old left blade ended in the bag.
+  - A blade with `hand` 2 and Item_Type 10 got "can't go there!" in the left, and the next best went in, 4.82 over 3.53. A right-only blade that beat the left stayed out, and a shield in the left gave way to a blade.
+  - A sale that keeps the 4 highest items, with four higher in the bag: the pass ran first, so the level 14 sword went in hand instead of to the merchant.
+  - A one-member group's `gear-care.ts` with `judged` counting blades: the level 14 sword came out at Druim Ligen and went on, a level 24 one went in, and a level 30 one stayed in.
 
 **Not tried live:** a full vault. The wear numbers come from the code and the DB, not from watching an item fall.
