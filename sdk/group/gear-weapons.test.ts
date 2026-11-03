@@ -520,6 +520,14 @@ describe('wearWeapons, a focus caster', () => {
         expect(f.inventory.map(i => i.name)).toEqual(['trimmed branch']);
     });
 
+    test('above the level limit stays in the bag, whatever its focus, unless the bot asks for it', async () => {
+        const far = { ...staff(45, 'Far Focus Staff'), level: 24 };
+        const f = hrafna({ inventory: [far], focus: { 'Far Focus Staff': 20 } });
+        expect(await wearWeapons(f.member)).toEqual([]);
+        expect(f.calls).toEqual([]);
+        expect((await wearWeapons(hrafna({ inventory: [far], focus: { 'Far Focus Staff': 20 } }).member, { overLevel: true }))[0]).toStartWith('wield Far Focus Staff');
+    });
+
     test('a staff without a focus stays in the bag', async () => {
         const f = hrafna({ inventory: [staff(45, 'Mighty Staff')] });
         expect(await wearWeapons(f.member)).toEqual([]);
