@@ -6,7 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import type { CastResult, KillPlayerOptions, KillPlayerResult } from '../actions';
 import { executionContext } from '../execution-context';
 import type { NearbyNpc, NearbyPlayer } from '../types';
-import { assist, ckey, crowdControl, fightRejoin, flee, holdFormation, leashFallback, onMember, peelTarget, pull, tank, type TacticsSettings } from './behaviors';
+import { assist, ckey, crowdControl, fightRejoin, flee, holdFormation, leashFallback, onMember, peelTarget, pull, rejoinFight, tank, type TacticsSettings } from './behaviors';
 import { contact, enemy, picture, report } from './fixtures';
 import type { MemberContext } from './member';
 import { PVE_SETTINGS } from './pve';
@@ -407,6 +407,31 @@ describe('flee: only from what can follow us to the tank', () => {
         expect((await run(foe(52, 10_000, 10_900, { target: 'Nuker' }))).walks).toEqual([{ x: ANCHOR.x, y: ANCHOR.y }]);
         expect((await run(contact(60, { regionId: R, x: 10_000, y: 12_200, threat: true, target: 'Nuker' }))).walks).toEqual([{ x: ANCHOR.x, y: ANCHOR.y }]);
     });
+});
+
+describe('rejoinFight', () => {
+    const cases: [string, Role, number, Partial<Orders>, boolean][] = [
+        ['a nuker back from a release', 'nuker', 20_000, { focus: 51 }, true],
+        ['a tank back from a release', 'tank', 6000, { focus: 51 }, true],
+        ['a member at the fight', 'nuker', 2500, { focus: 51 }, false],
+        ['a member 5000 off', 'tank', 5000, { focus: 51 }, false],
+        ['a member far off outside a fight', 'nuker', 20_000, { phase: 'travel' }, false],
+        ['with no anchor', 'nuker', 20_000, { focus: 51, anchor: null }, false],
+    ];
+    for (const [what, role, d, orders, walks] of cases) {
+        test(`${what}: ${walks ? 'walks one leg back' : 'leaves it to the others'}`, async () => {
+            const at = { x: ANCHOR.x + d, y: ANCHOR.y };
+            const s = stub({ name: 'Member', role, at, contacts: [foe(51, ANCHOR.x, ANCHOR.y)], orders });
+            expect(await rejoinFight().run(s.ctx)).toBe(walks);
+            expect(s.calls.walkTo.length).toBe(walks ? 1 : 0);
+            expect(s.calls.killPlayer).toEqual([]);
+            const to = s.calls.walkTo[0];
+            if (to) {
+                expect(dist(to, ANCHOR)).toBeLessThan(d);
+                expect(dist(to, at)).toBeLessThanOrEqual(2501);
+            }
+        });
+    }
 });
 
 describe('holdFormation in a fight', () => {

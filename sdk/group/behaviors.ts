@@ -109,6 +109,8 @@ const QUIET_PHASES = new Set(['recover', 'gather', 'idle']);
 const FIGHT_REJOIN = 3000;
 /** A member walking back to a fight it stands beyond the leash of goes in legs this long, so its fight behaviours get a turn on the way. */
 const LEASH_REJOIN_LEG = 1000;
+/** Farther than this from the fight's anchor a member walks back (rejoinFight) before anything else: its fight behaviours would go straight there, or fail. */
+const FAR_FROM_FIGHT = 5000;
 /** An enemy player this close to a member can be hitting it in melee (melee range plus position lag). */
 const MELEE_REACH = 400;
 
@@ -974,6 +976,38 @@ export function fightRejoin(role: Role, chaseLeash: number | undefined): number 
     return chaseLeash !== undefined && (role === 'tank' || role === 'melee') ? Math.min(FIGHT_REJOIN, chaseLeash) : FIGHT_REJOIN;
 }
 
+/** One leg toward a slot, around known danger and the enemy keeps' guards. */
+async function walkTowardSlot(ctx: MemberContext<TacticsSettings>, slot: Point, leg: number): Promise<void> {
+    const me = ctx.me();
+    const d = dist(me, slot);
+    let to: Point = slot;
+    if (d > leg) {
+        const next = safePath(me.regionId, me.level, me, slot, keepCircles(ctx))[0] ?? slot;
+        const f = Math.min(1, leg / dist(me, next));
+        to = { x: me.x + (next.x - me.x) * f, y: me.y + (next.y - me.y) * f };
+    }
+    ctx.doing('move', null, ctx.orders().phase);
+    const w = await ctx.bot.walkTo(to.x, to.y, { tolerance: 80 });
+    if (!w.success) { ctx.result('walk', w); await Bun.sleep(500); }
+}
+
+/**
+ * In a fight, far from it (back from a release): walk back around known danger before the fight behaviours
+ * get a turn. From far off a nuker's assist walks straight at the focus, through any aggro zone on the way, and a
+ * tank's killPlayer fails out_of_reach before its first step, turn after turn. Round 10: Niamh died to the perturbed
+ * bwca four times on that line, and Thorgrim logged 100 failures walking back.
+ */
+export const rejoinFight = (): Behavior<TacticsSettings> => ({
+    name: 'rejoinFight',
+    async run(ctx) {
+        const o = ctx.orders();
+        if (o.phase !== 'engage' || !o.anchor || dist(ctx.me(), o.anchor) <= FAR_FROM_FIGHT) return false;
+        await stopSwinging(ctx);
+        await walkTowardSlot(ctx, formationSlot(ctx, o.anchor, o.facing), 2500);
+        return true;
+    },
+});
+
 /**
  * Outside fights: stand in our formation slot at the anchor. Far away (after a
  * release, or travelling), walk there around known danger.
@@ -994,18 +1028,7 @@ export const holdFormation = (): Behavior<TacticsSettings> => ({
         const safe = safeSpot(me.regionId, me.level, ctx.settings.aggroTolerance ?? -3);
         if (!needsSlot({ dSlot: d, dAnchor: fromAnchor, phase: o.phase, slack: ctx.settings.slotSlack, gatherRadius: (ctx.settings as { gatherRadius?: number }).gatherRadius, safe: safe(me) })) return false;
         await stopSwinging(ctx);
-        let to: Point = slot;
-        const leg = o.phase === 'engage' && fromAnchor < FIGHT_REJOIN ? LEASH_REJOIN_LEG : 2500;
-        if (d > leg) {
-            // Back from a release across a battleground: round the enemy keeps' guards too.
-            const path = safePath(me.regionId, me.level, me, slot, keepCircles(ctx));
-            const next = path[0] ?? slot;
-            const f = Math.min(1, leg / dist(me, next));
-            to = { x: me.x + (next.x - me.x) * f, y: me.y + (next.y - me.y) * f };
-        }
-        ctx.doing('move', null, o.phase);
-        const w = await ctx.bot.walkTo(to.x, to.y, { tolerance: 80 });
-        if (!w.success) { ctx.result('walk', w); await Bun.sleep(500); }
+        await walkTowardSlot(ctx, slot, o.phase === 'engage' && fromAnchor < FIGHT_REJOIN ? LEASH_REJOIN_LEG : 2500);
         return true;
     },
 });

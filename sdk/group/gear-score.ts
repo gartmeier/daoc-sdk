@@ -177,6 +177,13 @@ export const REPAIR_BELOW = 93;
  */
 export const wornDown = (i: Pick<InventoryItem, 'condition' | 'durability'>, below: number = REPAIR_BELOW): boolean => i.condition < below && i.durability > 0;
 
+// ── Template ────────────────────────────────────────────────────────────────
+
+/** What every piece of a gear template is called (gear-template.ts). No DB template starts with it. */
+export const TEMPLATE_PREFIX = 'Thidranki ';
+/** A piece of a gear template: chosen on purpose and at the caps, so no gear pass replaces, sells or stashes it. */
+export const isTemplatePiece = (i: Pick<InventoryItem, 'name'>): boolean => i.name.startsWith(TEMPLATE_PREFIX);
+
 // ── Armour ──────────────────────────────────────────────────────────────────
 
 /**

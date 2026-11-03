@@ -96,6 +96,7 @@ A battleground has no merchants, and the recall stone doesn't work there. The wa
 - **0 % is not dead for a player:** the server rounds health down, so a living player can read 0 %. A player dies by its death event or dead flag only (`isAlive`).
 - **Retreat routes:** the retreat point is picked so the whole way there is clear of aggro zones and keep circles, and members run there round them (`safePath`). The perturbed bwca camp (~27500, 25600) lies between the meeting point and the Hibernia portal keep: in round 7 straight retreats toward home crossed it, and the bwca killed six Hibernians.
 - **Far members rejoin a fight:** `holdFormation` walks a member more than 3000 from the fight's anchor back to it (after a release); tank and melee from beyond `chaseLeash`. Before, released healers stood idle at the portal keep through the whole fight.
+- **Far from the fight, the way back comes first** (`rejoinFight`, in every RvR list right after `retreat`): over 5000 from the anchor a member walks back by `safePath` before any fight behaviour. Before it, `assist` walked straight at the focus and `killPlayer` failed `out_of_reach` before its first step. In round 10 Niamh died to the perturbed bwca four times on that line and Thorgrim logged 100 such failures; in round 11, none of either.
 
 ## Resurrection
 
@@ -121,6 +122,18 @@ All three groups out at once, each `rvr.ts` in its own process. Kills count ever
 | 6 | 10 min | 12 / 4 | 9 / 7 | 10 / 5 | Midgard alone on `retreat.margin` 3: 4 retreats instead of 12, while Hibernia on 2 spent 42 % of the run retreating (14×). 3 is the default since |
 | 7 | 5 min | 6 / 3 | 3 / 8 | 6 / 3 | the final review's fixes (keep circles for tank, melee and routes; mezz-only immunity on the board). Six of Hibernia's deaths were to perturbed bwca: its retreats ran straight through their camp. Fixed after the round |
 | 8 | 5 min | 6 / 4 | 6 / 2 | 4 / 4 | retreats clear of aggro zones: no deaths to the bwca, every death to players or their pets |
+| 9 | 11 min | 9 / 7 | 11 / 9 | 13 / 5 | all at level 24, `/xp off`. Three of Hibernia's deaths to the bwca |
+| 10 | 11 min | 9 / 5 | 9 / 10 | 11 / 5 | the level-24 gear template. Four of Hibernia's deaths to the bwca |
+| 11 | 11 min | 11 / 6 | 10 / 7 | 13 / 4 | `rejoinFight` |
+
+**Reading the table:** the kills column is close to capped. In rounds 9-11 each group is credited with 88-100 % of all enemy player deaths, so it mostly shows how often the other two die. Compare killing blows (`killedBy` in the victims' reports), realm points and deaths. Over rounds 9-11: Midgard 26 killing blows, 336 RP, 14 deaths; Albion 17, 216, 18; Hibernia 8, 199, 26.
+
+**What separated the groups in rounds 9-11** (same settings and routines; three rounds, full analysis in `groups/midgard/lab_log.md`):
+
+- **Melee damage:** Bragi, a second melee fighter, accounts for all of Midgard's damage lead. Melee needs no power, but a group that relies on it can be denied: in one 4-minute round against the Hibernia hit-and-run group (20261103-214813) its two melee fighters dealt 0.
+- **Group HP and healers:** the other two spent about two thirds of their focus time on Midgard and dropped 66 % of those foci. Base HP is 2971 against 2526 and 2649, with two healers and one cloth member.
+- **The focus score favours sturdy healers:** healer +60 sends a group at a Troll Shaman or Dwarf Healer rather than a 459 HP caster.
+- **Not the cause:** geography (keeps 21.3-21.9k from the middle, fights at about (34100, 33600)), crowd control (Midgard's was the weakest) and staying together (about equal).
 
 ## Crowd control: wasted casts
 

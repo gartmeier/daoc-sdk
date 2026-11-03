@@ -7,6 +7,7 @@ export { Blackboard, observeState, emptyOrders, isMaterialChange, isAlive, type 
 export { MemberAgent, MemberContext, countCombatMessage, type Behavior, type Member } from './member';
 export { loadCharacter, withCharacter, type Character } from './character';
 export * from './behaviors';
+export { resistDebuff, matchingDebuff, debuffPays } from './debuff';
 export * from './styles';
 export { Coordinator, defineStrategy, roleForClass, type CoordinatorContext, type GroupStrategy } from './strategy';
 export { pveLeveling, decidePve, pickPullTarget, pickFocus, assignCc, PVE_SETTINGS, type PveSettings } from './pve';
@@ -16,6 +17,7 @@ export { repairGear, takeFromVault, stashInVault, needsRepair, keepForLater, vau
 export { cloakTrip, CAPITAL_RADIUS } from './cloak-trip';
 export { trainAtClassTrainer, trainAtTrainer, trainFlags, trainingDue, nearestClassTrainer, TRAINER_RADIUS, type TrainMember, type TrainOptions, type TrainRun, type TrainTrip } from './train';
 export { accessorySlots, nextAccessory, wearAccessories, nearestCloakSeller, holdsCloak, buyCloak, GearDelves, armorUpgradeGain, upgradeGains, UPGRADE_MARGIN, MAX_DELVES, CLOAK_RADIUS, CLOAK_RESERVE, CLOAK_TOWN_RANGE, weaponNeeds, weaponSlots, bestWeapon, wearWeapons, buyWeapons, weaponUpgrades, weaponSellers, WEAPON_STEP, WEAPON_SWAP, WEAPON_RADIUS, WEAPON_RESERVE, type AccessoryMove, type CloakSeller, type GearMember, type GearScore, type WeaponMember, type WeaponNeeds, type WeaponOptions, type WeaponRow, type WeaponSeller } from './gear';
+export { CLASS_KITS, GM_BOT, MAX_BONUSES, SKILL_PROPERTY, TEMPLATE_PACKAGE, auditRow, buildSpecs, isTemplatePiece, levelCaps, runGearTemplate, templateFor, templateGap, templateSql, templateTotals, wearOrder, type TemplateAudit, type TemplateMember, type TemplatePiece } from './gear-template';
 export { statScore, statWeight, bonusCap, armorValue, armorGain, armorSwing, weaponValue, asRepaired, weaponScore, STAT_WEIGHTS, SIDE_STAT_WEIGHT, BONUS_WEIGHTS, ARMOR_STAT_RATE, ARMOR_STAT_SWING, WEAPON_STAT_RATE, WEAPON_STAT_SWING } from './gear-score';
 export { CC_IMMUNE_MS, canControl, ccImmuneTo, immuneKinds, type CcImmunity, type CcKind } from './cc';
 export { rvrRoaming, decideRvr, rvrBehaviors, rvrFindings, pickRvrFocus, homeOf, keepDangers, defaultPatrol, realmOfGroup, BATTLEGROUND_LAYOUTS, THIDRANKI, RVR_SETTINGS, type RvrSettings, type BattlegroundLayout, type Keep, type PlayerRealm } from './rvr';
