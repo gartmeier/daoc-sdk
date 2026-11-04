@@ -3,7 +3,7 @@ import { areaMezzCatch, backupHealWanted, confuse, interrupt, rest, SAVING_POWER
 import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
 import { enemy, obs, picture, report, sighting } from './fixtures';
-import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings } from './pack';
+import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings, noticePhantom } from './pack';
 import { RVR_SETTINGS, rvrBehaviors, rvrRoaming, defaultPatrol, spokedPatrol } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { pickNuke, type SpellPick } from './spells';
@@ -555,6 +555,32 @@ describe('areaMezzCatch', () => {
     test('nothing when the focus would be caught', () => {
         expect(areaMezzCatch(t, [t, n, far], 350, 2)).toEqual([]);
         expect(areaMezzCatch(t, [t, n, far], 350, 3).length).toBe(2);
+    });
+});
+
+describe('a phantom focus', () => {
+    const k = { frozenMs: 20_000, phantomMs: 120_000 };
+    test('health standing still for frozenMs: left alone, and it comes back after phantomMs', () => {
+        const m: any = {}, f = [foe(101, 11_000, 10_000, { hp: 33 })];
+        noticePhantom(m, f, 101, 0, k);
+        noticePhantom(m, f, null, 15_000, k);
+        expect(m.phantoms[101]).toBeUndefined();
+        noticePhantom(m, f, 101, 20_000, k);
+        expect(m.phantoms[101]).toBe(140_000);
+        noticePhantom(m, f, null, 140_000, k);
+        expect(m.phantoms[101]).toBeUndefined();
+    });
+    test('health that moves is a real fight', () => {
+        const m: any = {};
+        noticePhantom(m, [foe(101, 11_000, 10_000, { hp: 90 })], 101, 0, k);
+        noticePhantom(m, [foe(101, 11_000, 10_000, { hp: 80 })], 101, 15_000, k);
+        noticePhantom(m, [foe(101, 11_000, 10_000, { hp: 80 })], 101, 30_000, k);
+        expect(m.phantoms[101]).toBeUndefined();
+    });
+    test('the pack no longer counts it', () => {
+        const u = decidePack(ctx(picture(team(), [foe(101, 11_000, 10_000, { hp: 33 })]), { memory: { pack: 'stalk', phantoms: { 101: 500_000 } }, now: 1000 }));
+        expect(u.focus ?? null).toBeNull();
+        expect(u.phase).not.toBe('engage');
     });
 });
 
