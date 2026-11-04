@@ -147,6 +147,20 @@ Two groups of five in Thidranki, starter gear, 5 minutes each, counted by each b
 - **The real rounds can't show this:** before this change a cast answered "immune" counted as a success, so round 9's reports (20261103-2038xx) have 116 `cc: ok` and no way to tell how many were wasted. Reports now keep them apart: `actions.cc` is what landed, and `failures` has `cc:immune`, `cc:already_on`, `cc:resisted` and `cc:no_effect`.
 - **33 "broke" lines in round 9, 25 of them about roots,** most of them false: a rooted player swings and casts as before. Each freed its target for another root, which then got "already has that effect". A swing or a cast of its own doesn't break a root now: walking off does, and a landed hit of ours (`root on X broke` with X standing still), or of a pet's, which says so. A hit sets its 60 s immunity too, so it costs no second root.
 
+## Three routine gaps, closed on 2026-11-04
+
+From the analysis of rounds 9-11 (`groups/midgard/lab_log.md`). Checked with `sdk/test/live/rvr-routines-live.ts` on a throwaway stack: Albion against Midgard, five each at level 24, starter gear, three runs of 4-7 minutes. It shows the code does what it says. No round against the real groups has run on it, so what it does to kills and deaths isn't known.
+
+- **A Paladin plays his chants in RvR:** `song()` is in the tank list, for anyone who knows one. Galahad's kit already had it, since after round 11, and a second `song()` sends nothing twice. New in the choice: armor in a fight, endurance while he is below 30 %. In the two 7-minute runs he had Crusader's Defense on for 307 and 131 s and Persistence for 95 and 135 s, with 7 and 4 chant casts, and landed 36 and 18 styles. How many he can run, and the swing: [classes/paladin.md](classes/paladin.md).
+- **`0 song actions` undercounts:** a chant sent raw while swinging logs no action. Read his effects instead.
+- **An idle healer nukes on spare power (`spareNuke`):** below every heal and `position` in the healer list, above 75 % power only (so a heal or the rez at 75 % stays affordable), for whoever knows a nuke. That includes a Druid, in the pack's lists too. A member with no nuke is untouched, and a Shaman's kit keeps its own `assist`.
+  - **Live:** the Cleric cast 7 and 4 Minor Judgements for 307 and 151 damage, against about 7 and 14 heals. Her power fell to 12 and 1 % from healing, so the nukes stopped long before that: "saving power" was her last skip in about 90 s of each run.
+  - **The step:** with no step at all, "focus out of reach" was her last skip in 187 of 374 s. With a step of up to 400 it was 5 of 256 s. That's one run each, and the run with the step had fewer nukes because she healed twice as much.
+  - **What it's worth:** little damage, as the analysis expected. The other four of her group dealt 404-1454 each in the same runs. Whether it costs a heal hasn't been measured: a 3 s cast can't be stopped for one, and "heal: not enough power" was her last skip for 2 s in one run.
+- **No crowd-control orders for a member who can't carry them out:** a member reports `cc` only with `crowdControl` in its list, as `rez` already did. This also leaves a Skald's power out of `ready` and the songs' `powerBelow` unless it heals or nukes.
+  - **Why it mattered:** an assignment is kept (`assignCc`) and the other mezzers stay off its target until the 8 s stall. In round 11 (20261103-211703) Bragi held a target for 191 s over 65 of 185 order lines, and for 178 s of those another of the three mezzers had no assignment. That's an upper bound, since the log doesn't show who was dead or away.
+  - **Live:** the Skald reported `cc=false` and got none of the orders in 371 order lines. The Healer, Shaman and Spiritmaster got them all.
+
 ## Unverified / next
 
 - **Resurrection:** only a short run with one enemy so far (above), not yet a round against the other groups.
@@ -216,6 +230,21 @@ Deaths are the clear result: every pack round lost fewer than the best roaming r
 | n4 | 15 | 0 | 90 | 15 | 332 | 8 | 1 |
 
 Against p1-p3 (17 kills, 1 death, 117 RP, 8 Midgard kills a round; spread 545-910): 15 kills, 0 deaths, 141 RP, 11.5 Midgard kills a round; spread 239-332, none strayed. The tighter pack and the Midgard kills are more than the rounds before varied, but three things changed at once: both fixes, and the opponents came back from their own guild trip. Oisin's idle turns fell (97 to 33 over the rounds compared by length), his mezz count didn't rise (6-8 against 6-13): cc:immune and cc:resisted now take up the gain. So it's the parking fix, 5 raids opened by it, and less idling; not more mezzes.
+
+**Raid length,** three rounds each:
+
+| Raid | Kills / deaths | RP | Midgard kills | Hero's damage | Rounds (kills) |
+|---|---|---|---|---|---|
+| 12 s | 47 / 1 | 425 | 32 | 4712 | 16, 18, 13 |
+| 8 s | 42 / 0 | 465 | 26 | 2747 | 10, 20, 12 |
+
+Alternating, 10 minutes each. The Hero's damage rose in two of three pairs (he reaches the focus before the clock is up), but kills, Midgard kills and realm points are within the noise, and the one death came on 12 s. The default stays 8 s; `--pack.raidMs=12000` to try it.
+
+**The crowd limit,** `maxFoes` 11 against 8, three rounds each: 49 kills, 3 deaths, 372 RP, 36 Midgard kills against 39, 0, 371, 26. Says nothing about the limit: neither side's log shows one refusal for a crowd in these rounds or the six before. The 8 stays. What it does show is how far identical settings vary: 10 to 20 kills a round. A difference of a few kills over three rounds is noise here.
+
+**Checked, no gain to be had:** about 30 % of Oisin's mezzes answer "immune" though the board tracks every mezz of ours, so they most likely come from Midgard's and Camelot's crowd control on each other, which no client hears. Brigid idles most of a fight, but her only damage at this spec is a weak damage over time after a respec out of Nurture; left as is.
+
+**Open:** the Hero's kill failed "ran beyond 3800 units" in bursts of about 48 tries (4 rounds of the last 16; a minute lost in one) with the group 1500-2500 from that Briton. The chase limit counts from the Hero, so his own client must place it far off while the board doesn't. Not explained yet.
 
 **Within the noise so far:** Brigid's acuity and giving up a healed focus. Before the give-up the pack went 17/0, 16/0, 21/0 and 6/5; with it 8/2, 17/0, 13/1, 19/1, 18/1. It did stop the 5 minutes on one Troll, but single deaths now show up where the rounds before it had none. The early comparison (63/0 in 45 minutes against 20/10 in 22) overstated the gain: opponents get absent or farmed, and s17 and s18 (18/0, 11/1, 0 RP) had no Midgard at all, so count those out. c3, 12/0, was also the pack and no control.
 

@@ -6,9 +6,11 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 - **Server code:** read from the server source or data, or worked out by the same `Spellbook` a member fights with.
 - **Community, unverified:** other players' advice, written for other servers and patches.
 
-## No kit
+## The kit
 
-There is no `sdk/classes/spiritmaster.ts`. `roleForClass` makes her a nuker and the list casts what she knows, so a kit would hold nothing of the class's own. Midgard's `memberBehaviors.hrafna` is the nuker's list plus `restOnPull`, and that's the group's. Everything measured below is a setting or a piece of gear.
+`sdk/classes/spiritmaster.ts` holds only the role, `nuker`, which is what `roleForClass` gives. It changes nothing against the role list. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.
+
+In PvE, Midgard's `memberBehaviors.hrafna` (the nuker's list plus `restOnPull`) overrides any character. In RvR nothing does.
 
 ## Builds
 

@@ -23,10 +23,12 @@ import { backupHeal, confuse, crowdControl, flee, interrupt, rest, rez, release,
 import { isAlive, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
-import { decideRvr, groupRegion, homeOf, keepDangers, mainBody, onWhom, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, onWhom, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
+
+export { focusHealed, pickPackFocus } from './rvr';
 
 export interface PackOptions {
     /** Stop this far from the nearest enemy of a group we mean to raid. */
@@ -130,16 +132,6 @@ const soft = (m: MemberReport) => m.role === 'healer' || m.role === 'support' ||
 const tag = (c: Contact) => `${c.name}#${c.objectId} (${c.hp}%${c.healer ? ' healer' : c.caster ? ' caster' : ''})`;
 
 /**
- * Who the damage goes on: the nearest free enemy, a known caster ahead of a fighter, nearly dead ones first. A known
- * healer only when nothing else is in reach: healers wear chain and heal themselves, and in round 9 Troll#438 stayed
- * the focus for 5 minutes while its health went back up. They get the mezz instead (packCc).
- */
-export function pickPackFocus(pool: readonly Contact[], centre: Point, reach: number): Contact | null {
-    const score = (c: Contact) => (c.healer ? -200 : 0) + (c.caster ? 30 : 0) + (100 - c.hp) * 0.3 + (c.hp < 25 ? 40 : 0) + Math.max(0, 1 - dist(c, centre) / reach) * 40;
-    return [...pool].sort((a, b) => score(b) - score(a))[0] ?? null;
-}
-
-/**
  * Who gets mezzed, by whom; nothing but a mezz may hit a mezzed enemy, and two never go on one. The Bard takes the biggest cluster an area mezz would catch without the focus, else a
  * known healer, else the farthest: the near ones are about to be fought. A nuker's mezz costs a nuke, so it goes on
  * healers only. `roots` adds members with only a root (the Druid), for chasers: a root on a raid's target breaks at
@@ -162,16 +154,6 @@ export function packCc(foes: readonly Contact[], members: readonly MemberReport[
         if (immuneKinds(c).includes('mezz')) return false;
         return role !== 'nuker' || !!c.healer;
     });
-}
-
-/**
- * Whether to give up the focus: its health climbed this much above the lowest we had it at, so a healer is out-healing
- * us. s11: Troll#437 went 36, 11, 46, 92, while five members died round it. Remembers the lowest per target in `seen`.
- */
-export function focusHealed(seen: Record<number, number>, focus: Pick<Contact, 'objectId' | 'hp'>, healedBy: number): boolean {
-    const low = Math.min(seen[focus.objectId] ?? 100, focus.hp);
-    seen[focus.objectId] = low;
-    return focus.hp - low >= healedBy;
 }
 
 export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {

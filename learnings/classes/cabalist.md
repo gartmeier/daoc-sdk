@@ -6,9 +6,9 @@ Albion's list caster for damage over time: DoTs from Matter, lifedrains from Bod
 - **Server code:** read from the server source or data, or worked out by the same `Spellbook` a member fights with.
 - **Community, unverified:** other players' advice, written for other servers and patches.
 
-## No kit
+## The kit
 
-There is no `sdk/classes/cabalist.ts`. `roleForClass` makes a Cabalist a nuker and the list casts what it knows, so a kit would hold nothing of the class's own. Morgana runs on the plain role list, and her being without `thrifty` is the group's choice: "every fight has one caster at full rate" ([sorcerer.md](sorcerer.md)).
+`sdk/classes/cabalist.ts` holds only the role, `nuker`, which is what `roleForClass` gives. It changes nothing against the role list. The list casts her DoTs first as it is, and no `assist: no power` shows in her top reasons, so she has no floor of power to carry where the Sorcerer and Theurgist do. Morgana going without is also the group's choice: "every fight has one caster at full rate" ([sorcerer.md](sorcerer.md)).
 
 ## Builds
 

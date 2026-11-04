@@ -10,10 +10,14 @@
 //    (a Skald's Battlesongs have no endurance song);
 //  - between fights: power when a caster runs low, health when someone is hurt,
 //    else endurance.
+//
+// A Paladin's chants follow the same rule (one pulse at a time, CancelIncompatiblePulseEffects), and
+// have two kinds of their own, for a fight only: armor (Crusader's Defense and its ranks) and
+// combatHeal (the Refreshments), which heals nobody out of combat (CombatHealSpellHandler.StartSpell).
 
 import type { MemberReport } from './types';
 
-export type SongKind = 'speed' | 'endurance' | 'power' | 'health' | 'damage';
+export type SongKind = 'speed' | 'endurance' | 'power' | 'health' | 'damage' | 'armor' | 'combatHeal';
 
 /** The kind of a friendly song (a pulsing Group/Self spell), or null for anything else. */
 export function songKind(s: { type: string; target: string; pulse: boolean }): SongKind | null {
@@ -24,6 +28,8 @@ export function songKind(s: { type: string; target: string; pulse: boolean }): S
         case 'PowerRegenBuff': return 'power';
         case 'HealthRegenBuff': return 'health';
         case 'DamageAdd': return 'damage';
+        case 'SpecArmorFactorBuff': return 'armor';
+        case 'CombatHeal': return 'combatHeal';
     }
     return null;
 }
@@ -35,16 +41,18 @@ export interface SongSettings {
     healthBelow: number;
     /** Keep a song we started at least this long before switching (except into a fight). */
     holdMs: number;
+    /** In a fight, endurance goes before armor when the singer is below this % (styles stop silently below 15 %). */
+    enduranceBelow: number;
 }
 
-export const SONG_SETTINGS: SongSettings = { powerBelow: 70, healthBelow: 80, holdMs: 30_000 };
+export const SONG_SETTINGS: SongSettings = { powerBelow: 70, healthBelow: 80, holdMs: 30_000, enduranceBelow: 30 };
 
 const usesPower = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc;
 
 /** Song kinds for this phase and the group's state, best first. */
-export function wantedSongs(phase: string, members: MemberReport[], s: SongSettings = SONG_SETTINGS): SongKind[] {
+export function wantedSongs(phase: string, members: MemberReport[], s: SongSettings = SONG_SETTINGS, endurance = 100): SongKind[] {
     if (phase === 'travel' || phase === 'retreat') return ['speed', 'endurance'];
-    if (phase === 'engage' || phase === 'pull') return ['endurance', 'damage'];
+    if (phase === 'engage' || phase === 'pull') return endurance < s.enduranceBelow ? ['endurance', 'armor', 'combatHeal', 'damage'] : ['armor', 'endurance', 'combatHeal', 'damage'];
     const alive = members.filter(m => !m.isDead);
     const out: SongKind[] = [];
     if (alive.some(m => usesPower(m) && m.mana < s.powerBelow)) out.push('power');
@@ -53,6 +61,38 @@ export function wantedSongs(phase: string, members: MemberReport[], s: SongSetti
 }
 
 /** The song to play: the first wanted kind we have, or null when we have none of them. */
-export function chooseSong(have: SongKind[], phase: string, members: MemberReport[], s: SongSettings = SONG_SETTINGS): SongKind | null {
-    return wantedSongs(phase, members, s).find(k => have.includes(k)) ?? null;
+export function chooseSong(have: SongKind[], phase: string, members: MemberReport[], s: SongSettings = SONG_SETTINGS, endurance = 100): SongKind | null {
+    return wantedSongs(phase, members, s, endurance).find(k => have.includes(k)) ?? null;
 }
+
+/**
+ * A twist: instant songs in turn during a fight, so several effects stay up at once. A new song ends the running
+ * pulse, but what the old one put on the group runs out by itself (learnings/classes/paladin.md for what it costs and gives).
+ */
+export interface TwistSettings {
+    /** The kinds to keep up, first in the order on a tie. Endurance joins them, first of all, while the singer is below songs.enduranceBelow. */
+    order: SongKind[];
+    /** Least time between two songs. */
+    everyMs: number;
+}
+
+/** An instant song a twist can send: what a Spellbook pick holds. */
+export interface TwistSong { kind: SongKind; castTime: number; frequency: number; spell: { name: string; cooldownRemaining: number } }
+
+/**
+ * The song to send now, or null to leave the running one. Never the running one: sending it again stops it. A song is due
+ * once its last effect is near its end (its pulse time, less `marginMs`) and its recast is over; of those, the longest unsent.
+ */
+export function nextTwist<T extends TwistSong>(have: T[], running: string | null, sentAt: ReadonlyMap<string, number>, now: number, order: SongKind[], lowEndurance = false, marginMs = 1500): T | null {
+    const kinds = lowEndurance ? ['endurance' as const, ...order.filter(k => k !== 'endurance')] : order;
+    const due = kinds.flatMap(k => have.filter(s => s.kind === k && s.castTime === 0 && s.spell.name !== running && s.spell.cooldownRemaining <= 0
+        && now - (sentAt.get(s.spell.name) ?? 0) >= s.frequency * 100 - marginMs));
+    if (lowEndurance && due[0]?.kind === 'endurance') return due[0];
+    return due.reduce<T | null>((best, s) => (!best || (sentAt.get(s.spell.name) ?? 0) < (sentAt.get(best.spell.name) ?? 0) ? s : best), null);
+}
+
+/**
+ * The Paladin's twist, as measured at Chants 24: added damage and the group heal, one after each pulse. Waiting for the pulse keeps
+ * a chant up for 12 s on one cast, and each cast costs 5 endurance (SpellHandler.CalculateEnduranceCost).
+ */
+export const CHANT_TWIST: TwistSettings = { order: ['damage', 'combatHeal'], everyMs: 6100 };

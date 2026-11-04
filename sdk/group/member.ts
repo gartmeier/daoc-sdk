@@ -227,12 +227,14 @@ export class MemberAgent<S = any> {
     }
 
     /**
-     * What the group can count on, from the spell list. Rez only if our list also casts it, since corpses wait for whoever says it can.
+     * What the group can count on, from the spell list. Rez only if our list also casts it, since corpses wait for whoever says it can, and
+     * crowd control likewise, since an assignment keeps the others off its target (a Skald's shout, on a list with no crowdControl).
      * With pets off (pet.enabled, or its character's pet: false) a summon is a spell it won't cast: nobody waits on its power or its pet, and the report has none.
      */
     private ownCapabilities(): Capabilities {
         const can = this.spells.capabilities();
-        const own = { ...can, rez: !!can.rez && this.behaviors.some(b => b.name === 'rez') };
+        const cc = can.cc && this.behaviors.some(b => b.name === 'crowdControl');
+        const own = { ...can, cc, ccKinds: cc ? can.ccKinds : [], root: cc && can.root, rez: !!can.rez && this.behaviors.some(b => b.name === 'rez') };
         return petsAllowed(this.ctx.settings) && this.member.character?.pet !== false ? own : { ...own, pet: null };
     }
 

@@ -329,6 +329,32 @@ describe('decideRvr: the chase leash', () => {
     });
 });
 
+describe('decideRvr: softFocus', () => {
+    const soft = { softFocus: { reach: 1500, healedBy: 30, droppedMs: 15_000 } };
+
+    test('off: a healer goes first; on: the nearest other enemy does', () => {
+        const foes = [foe(51, { x: 10_400, healer: true }), foe(52, { x: 10_800 })];
+        expect(decideRvr(ctx(picture(team(), foes))).focus).toBe(51);
+        expect(decideRvr(ctx(picture(team(), foes), { settings: soft })).focus).toBe(52);
+    });
+
+    test('on: the mezz goes on a known healer before a fighter', () => {
+        const foes = [foe(51, { x: 10_300 }), foe(52, { x: 10_900 }), foe(53, { x: 10_900, y: 10_300, healer: true })];
+        const one = team({ Bard: { capabilities: caps(true, false, true) }, Encha: { capabilities: caps(false, false, true) } });
+        expect(decideRvr(ctx(picture(one, foes), { settings: soft })).cc).toEqual([{ targetId: 53, by: 'Menta' }]);
+    });
+
+    test('a focus healed 30 above its lowest is given up for droppedMs, then may come back', () => {
+        const memory: Record<string, any> = { lowHp: { 51: 20 } };
+        const foes = [foe(51, { x: 10_400, hp: 60 }), foe(52, { x: 10_800, hp: 100 })];
+        const orders = { phase: 'engage', focus: 51 } as Partial<Orders>;
+        const now = picture(team(), foes).at;
+        expect(decideRvr(ctx(picture(team(), foes), { settings: soft, memory, orders, now })).focus).toBe(52);
+        expect(memory.dropped[51]).toBe(now + 15_000);
+        expect(decideRvr(ctx(picture(team(), foes), { memory: { lowHp: { 51: 20 } }, orders, now })).focus).toBe(51);
+    });
+});
+
 describe('decideRvr: a member attacked away from the main body', () => {
     // Encha 15k west, walking back from the portal keep; the other four's centre is (9725, 10075).
     const far = { Encha: { x: -5000, y: 10_000 } };
@@ -659,7 +685,7 @@ describe('safePath avoid circles', () => {
 
 describe('rvrRoaming', () => {
     test('role lists without a town healer visit; tank list as specified', () => {
-        expect(rvrRoaming.behaviors.tank.map(b => b.name)).toEqual(['release', 'hand', 'sprint', 'retreat', 'rejoinFight', 'rez', 'tank', 'guard', 'shedLoad', 'holdFormation', 'buff', 'rest']);
+        expect(rvrRoaming.behaviors.tank.map(b => b.name)).toEqual(['release', 'hand', 'sprint', 'retreat', 'rejoinFight', 'rez', 'song', 'tank', 'guard', 'shedLoad', 'holdFormation', 'buff', 'rest']);
         expect(Object.values(rvrRoaming.behaviors).flat().some(b => b.name === 'healer')).toBe(false);
         expect(rvrRoaming.board).toEqual({ staleAfterMs: 4000, forgetAfterMs: 30_000, hostileMs: 6000 });
     });

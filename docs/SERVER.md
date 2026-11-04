@@ -44,7 +44,7 @@ Accounts are created automatically on first login (`AUTO_ACCOUNT_CREATION=True` 
 |---|---|
 | Start, or rebuild after C# changes | `bun run server:up` |
 | Stop, keeping the DB | `bun run server:down` |
-| Restart only the game server | `docker compose -f server/docker/docker-compose.yml restart gameserver` (about 12 s until logins work, about 55 s with the 42 default navmeshes mounted; wait for "Server is now listening" in `docker compose -f server/docker/docker-compose.yml logs gameserver`) |
+| Restart only the game server | `docker compose -f server/docker/docker-compose.yml restart gameserver` (about 12 s until logins work, about 55 s with the 42 home-realm navmeshes mounted, measured before the default build added the capitals and Thidranki; wait for "Server is now listening" in `docker compose -f server/docker/docker-compose.yml logs gameserver`) |
 | Reset everything: accounts, characters, properties | `docker compose -f server/docker/docker-compose.yml down -v`, then `server:up` and `server:setup` |
 | Re-apply bot properties | `bun run server:setup` |
 
