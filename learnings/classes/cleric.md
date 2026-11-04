@@ -35,7 +35,7 @@ A Cleric's heals live in the skills list, the hybrid path: `castSpell` handles i
 - **Her instant is rarely picked.** Gift of the Heavens is 40 % of her health, 230 on her template's 575, and a heal on a timer waits until nothing else covers. Greater Revival covers more, and past 263 `pickHeal` falls back to whatever restores most. So it goes off only when she's too short of power for anything bigger. A Healer's and Druid's 55 % does go off ([healer.md](healer.md)).
 - **No crowd control.** Heavenly Visions, her only mezz, is point-blank, so she doesn't count as a mezzer (**verified:** rounds on 2026-11-01). The group's control is the Sorcerer's mezz and two roots.
 - **Rez:** Raise Fallen, at Rejuvenation 15.
-- **Reached, and no behaviour casts it:** Stunning Flare (stun, 2.5 s, 5 s), Heaven's Commendation and the other group heals, the cures. Minor Judgement (54, 3 s, 15 power) is in reach of `assist`, which the healer's list doesn't have.
+- **Reached, and no behaviour casts it:** Stunning Flare (stun, 2.5 s, 5 s), Heaven's Commendation and the other group heals, the cures. Minor Judgement (54, 3 s, 15 power) is cast only by `spareNuke`, in the RvR healer list.
 
 ## More buffs than she can hold
 
@@ -60,5 +60,5 @@ A Cleric's heals live in the skills list, the hybrid path: `castSpell` handles i
 ## Not supported yet
 
 - **Stunning Flare on an enemy healer:** asked for in the group's log since the first RvR rounds. Nothing picks a stun for a target.
-- **Using the idle time:** `{ fight: [assist()] }` in her character would cast Minor Judgement as a Shaman's kit does ([shaman.md](shaman.md)). At Smite 1 its minimum is low ([mentalist.md](mentalist.md)), and it costs a fifth of what her big heal does. Not tried.
+- **The idle time, outside RvR:** `spareNuke` is in the RvR list only ([rvr.md](../rvr.md)). At Smite 1 Minor Judgement's minimum is low ([mentalist.md](mentalist.md)), and about 40 a cast is what it did live.
 - **Group heals** and **cures,** as for the Healer.
