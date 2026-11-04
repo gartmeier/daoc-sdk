@@ -4,7 +4,7 @@ import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
 import { enemy, obs, picture, report, sighting } from './fixtures';
 import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings } from './pack';
-import { RVR_SETTINGS, rvrBehaviors, rvrRoaming } from './rvr';
+import { RVR_SETTINGS, rvrBehaviors, rvrRoaming, defaultPatrol, spokedPatrol } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { pickNuke, type SpellPick } from './spells';
 import type { Contact, GroupPicture, MemberReport, Orders, Point } from './types';
@@ -555,6 +555,26 @@ describe('areaMezzCatch', () => {
     test('nothing when the focus would be caught', () => {
         expect(areaMezzCatch(t, [t, n, far], 350, 2)).toEqual([]);
         expect(areaMezzCatch(t, [t, n, far], 350, 3).length).toBe(2);
+    });
+});
+
+describe('spokedPatrol', () => {
+    const T = 252, meet = { x: 34_000, y: 32_000 };
+    const ring = defaultPatrol(T, 'hibernia', 24);
+    const loop = spokedPatrol(T, 'hibernia', 24, 11_000);
+
+    test('adds one detour per enemy realm and comes back to the waypoint it left', () => {
+        expect(loop.length).toBe(ring.length + 4);
+        const far = loop.map((w, i) => ({ w, i })).filter(({ w }) => distTo(w, meet) > 7000);
+        expect(far.length).toBe(2);
+        for (const { i } of far) expect(loop[i - 1]).toEqual(loop[i + 1]!);
+    });
+
+    test('heads for the enemy homes, not its own', () => {
+        const far = loop.filter(w => distTo(w, meet) > 7000);
+        expect(far.some(w => w.y > 40_000)).toBe(true);
+        expect(far.some(w => w.x > 42_000)).toBe(true);
+        expect(far.some(w => w.x < 28_000 && w.y < 26_000)).toBe(false);
     });
 });
 

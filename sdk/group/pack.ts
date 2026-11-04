@@ -23,7 +23,7 @@ import { backupHeal, confuse, crowdControl, flee, interrupt, rest, rez, release,
 import { isAlive, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
-import { decideRvr, groupRegion, homeOf, keepDangers, mainBody, onWhom, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { decideRvr, groupRegion, homeOf, keepDangers, mainBody, onWhom, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spokedPatrol, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -49,6 +49,8 @@ export interface PackOptions {
     restClear: number;
     /** Refuse more free enemies than this round their nearest. */
     maxFoes: number;
+    /** Patrol with a detour toward each enemy home, this far from the meeting point (spokedPatrol); 0: the plain ring. */
+    spokeAt: number;
     /** ... counting those within this of it. */
     crowdRadius: number;
     /** How long the burst lasts ... */
@@ -95,7 +97,7 @@ export interface PackSettings extends RvrSettings {
 export const PACK_OPTIONS: PackOptions = {
     standoff: 1500, reach: 1500, openAt: 1450, idleMs: 3000, waitMs: 0, minPack: 3, minTogether: 3,
     // User, live: fights may be joined head on, the first version avoided all of them. Only a real crowd is refused.
-    maxFoes: 8, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
+    maxFoes: 8, spokeAt: 0, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
     raidMs: 8000, finishMs: 4000, finishHp: 25, closeCount: 3, closeIn: 700,
     pullBack: 1500, pullMs: 6000, maxChasers: 2, chaseGap: 800, maxLegs: 0, killMs: 12_000, preyHp: 40, healedBy: 30, droppedMs: 15_000,
     leave: 2000, cooldownMs: 0,
@@ -179,7 +181,16 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const k = s.pack;
     const players = (c: Contact) => c.kind === 'player';
     // rvr-roam with no enemy players on the board: patrol, rest, regroup, monsters that attack us, winding down.
-    const calm = () => decideRvr({ ...ctx, picture: { ...p, contacts: p.contacts.filter(c => !players(c)) } });
+    const calm = () => {
+        const spokes = k.spokeAt && !s.patrol ? patrolOf() : null;
+        return decideRvr({ ...ctx, ...(spokes ? { settings: { ...s, patrol: spokes } } : {}), picture: { ...p, contacts: p.contacts.filter(c => !players(c)) } });
+    };
+    const patrolOf = () => {
+        const regionId = groupRegion(p.members), realm = realmOfGroup(p.members), level = Math.max(...p.members.map(m => m.level));
+        const key = `${regionId}:${realm}:${level}`;
+        if (mem.spokesKey !== key) { mem.spokes = spokedPatrol(regionId, realm, level, k.spokeAt, s); mem.spokesKey = key; mem.wp = undefined; }
+        return mem.spokes as Point3[];
+    };
     const alive = p.members.filter(m => !m.isDead);
     if (!alive.length) { mem.pack = 'home'; return calm(); }
     const regionId = groupRegion(alive);
