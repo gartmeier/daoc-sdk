@@ -224,7 +224,7 @@ export function ccSeen(contact: WorldContact | null | undefined, casterName: str
     return [...arr(contact.seenBy), ...arr(contact.board?.seenBy)].some(n => typeof n === 'string' && n.toLowerCase() === name);
 }
 
-/** What "threats only" keeps on the map: a board threat, anything targeting a member or a member's pet, or a player of another realm. Never a member's own pet. */
+/** What "threats only" keeps on the map: a board threat, anything targeting a member or a member's pet, or a player or pet of another realm. Never a member's own pet. */
 export function isThreat(c: WorldContact): boolean {
     if (c.npc?.owner) return false;
     return !!c.board?.threat || (!c.isDead && (typeof c.target === 'string' || typeof c.targetPet === 'string')) || !!c.enemy;

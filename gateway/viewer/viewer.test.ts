@@ -600,6 +600,18 @@ describe('group page logic', () => {
         expect(isThreat(contact({ kind: 'player', enemy: true, npc: null }))).toBe(true);
     });
 
+    test('an enemy pet, as /live has it: a threat with the chip for a pet, of the enemy side for its stroke, and on the map under "threats only"', () => {
+        const realms = new Set(['albion']);
+        const pet = contact({ realm: 'midgard', enemy: true, npc: { isPeaceful: false, isTargetable: true, isPet: true, role: null } });
+        expect(isThreat(pet)).toBe(true);
+        expect(npcShown(pet, 'threats')).toBe(true);
+        expect(enemyTags(pet)).toEqual(['pet']);
+        expect(petSide(pet, realms)).toBe('enemy');
+        expect(contactListed(pet, realms)).toBe(true);
+        // Dead, the panel drops it as it does a player.
+        expect(contactListed({ ...pet, isDead: true }, realms)).toBe(false);
+    });
+
     test('npcShown: the NPCs layer hides NPCs, never players', () => {
         const wolf = contact();
         const onMember = contact({ target: 'Galahad' });

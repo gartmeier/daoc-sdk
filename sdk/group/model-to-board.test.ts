@@ -4,10 +4,12 @@ import { describe, expect, test } from 'bun:test';
 import { WorldModel } from '../../client/model/world-model';
 import { PacketWriter } from '../../client/protocol/buffer';
 import { ServerOp } from '../../client/protocol/opcodes';
+import { executionContext } from '../execution-context';
 import { makePlayer, makeState } from '../test/fixtures';
-import { flee, onMember, peelTarget, pull } from './behaviors';
+import { flee, onMember, peelTarget, pull, tank } from './behaviors';
 import { Blackboard, emptyOrders, observeState } from './blackboard';
 import { decidePve, PVE_SETTINGS } from './pve';
+import { decideRvr, RVR_SETTINGS } from './rvr';
 import type { Contact } from './types';
 
 const W = () => new PacketWriter();
@@ -17,8 +19,8 @@ const npcCreate = (oid: number, name: string, x: number, y: number, o: { level?:
     W().u16(oid).u16(0).u16(0).u16(ME.z).u32(x).u32(y).u16(0).u16(400).u8(50).u8(o.level ?? 5).u8((o.realm ?? 0) << 6).u8(0x20).u8(o.pet ? 0x80 : 0).u8(0).u16(0).pascal(name).pascal('').u8(0).toBytes();
 const playerCreate = (oid: number, session: number, name: string, realm: number) =>
     W().f32le(ME.x + 50).f32le(ME.y).f32le(ME.z).u16(session).u16(oid).u16(0).u16(32).u8(5).u8(realm << 2).fill(0, 10).pascal(name).pascal('').pascal('').pascal('').pascal('').u8(0).toBytes();
-const objectUpdate = (oid: number, targetId: number, hp = 100) =>
-    W().u16(0).u16(0).u16(ME.x + FAR - 548864).u16(0).u16(ME.y - 483328).u16(0).u16(ME.z).u16(0).u16(oid).u16(targetId).u8(hp).u8(0).u8(0).u8(0).toBytes();
+const objectUpdate = (oid: number, targetId: number, hp = 100, x = ME.x + FAR) =>
+    W().u16(0).u16(0).u16(x - 548864).u16(0).u16(ME.y - 483328).u16(0).u16(ME.z).u16(0).u16(oid).u16(targetId).u8(hp).u8(0).u8(0).u8(0).toBytes();
 const blow = (attacker: number, defender: number, result: number, hp = 90) => W().u16(attacker).u16(defender).u16(3).u16(0).u16le(0).u8(0).u8(result).u8(hp).u8(0).toBytes();
 const SWING = 10, SPELL_DAMAGE = 0x14;
 const castAnimation = (caster: number) => W().u16(caster).u16(5208).u16(30).u16(0).toBytes();
@@ -72,10 +74,16 @@ function memberOf(g: ReturnType<typeof group>, x: ReturnType<typeof group>['team
         skip: (why: string) => { calls.push(`skip ${why}`); return false; },
         doing: (k: string) => { calls.push(k); },
         result: () => {},
-        sdk: { getNearbyNpc: (id: number) => x.m.nearbyNpcs(ME).find(n => n.objectId === id), sendAttack: async () => ({ success: true }), getState: () => g.stateOf(x), waitForCondition: async () => null },
+        note: () => {},
+        sdk: {
+            getNearbyNpc: (id: number) => x.m.nearbyNpcs(ME).find(n => n.objectId === id), getNearbyPlayer: (id: number) => x.m.nearbyPlayers(ME).find(n => n.objectId === id) ?? null,
+            sendAttack: async () => ({ success: true }), getState: () => g.stateOf(x), waitForCondition: async () => null, getSkills: () => ({ styles: [] }),
+        },
         bot: {
             walkTo: async (px: number, py: number) => { calls.push(`walkTo ${Math.round(px - ME.x)},${Math.round(py - ME.y)}`); return { success: true }; },
             attack: async (id: number) => { calls.push(`attack ${id}`); return { success: true }; },
+            killPlayer: async (id: number) => { calls.push(`killPlayer ${id}`); await Bun.sleep(700); calls.push(executionContext.getStore()?.signal.aborted ? 'kill stopped' : 'kill over'); return { success: true, message: 'Killed' }; },
+            killNpc: async (id: number) => { calls.push(`killNpc ${id}`); return { success: true, message: 'Killed' }; },
         },
     };
     return { ctx: ctx as any, calls };
@@ -304,5 +312,85 @@ describe('a monster on someone else\'s pet is someone else\'s fight', () => {
         g.all(ServerOp.ObjectUpdate, objectUpdate(MOB, X));
         for (const x of g.team) g.publish(x);
         expect(g.mob()).toMatchObject({ target: 'Xenia', threat: true });
+    });
+});
+
+// r4on: Rbwar 44 on players, 619 on pets. '01:20 Rbpal: kill: timeout (Timed out after 20000ms fighting spirit warrior)', again at 01:55 and 02:33. An ordered pet never turns (ControlledMobBrain.cs:549-552). r9on with the peel off: kill:timeout 0, 0 on pets.
+describe('the tank and an enemy pet on a soft member', () => {
+    const FOE = 44, PET = 602, OTHER_PET = 603;
+    const engaged = (focus: number) => ({ phase: 'engage', focus, cc: [], anchor: null });
+    /** Xenia under an enemy pet in melee reach, an enemy player in view, as every client reads them. */
+    function petOnHealer() {
+        const g = group([X, T]);
+        g.all(ServerOp.PlayerCreate172, playerCreate(FOE, 44, 'Norseman', 2));
+        g.all(ServerOp.NPCCreate, npcCreate(PET, 'spirit warrior', ME.x + 100, ME.y, { pet: true, realm: 2, level: 20 }));
+        for (const x of g.team) g.publish(x);
+        g.advance(100);
+        g.all(ServerOp.CombatAnimation, blow(PET, X, SWING));
+        g.all(ServerOp.ObjectUpdate, objectUpdate(PET, X, 100, ME.x + 100));
+        for (const x of g.team) g.publish(x);
+        return g;
+    }
+    const decided = (g: ReturnType<typeof group>) => decideRvr({ picture: g.board.picture(g.at()), orders: emptyOrders(g.at()), memory: { realm: 'albion' }, settings: { ...RVR_SETTINGS, retreat: { ...RVR_SETTINGS.retreat, enabled: false } }, now: g.at(), windingDown: false } as any);
+
+    test('with a player as the focus it is no peel: the board has it on the healer, in reach, and the tank goes on hitting the player', async () => {
+        const g = petOnHealer();
+        const pet = g.board.picture(g.at()).contacts.find(c => c.objectId === PET)!;
+        expect(pet).toMatchObject({ isPet: true, target: 'Xenia', threat: true });
+        expect(onMember(pet, { name: 'Xenia', x: ME.x, y: ME.y })).toBe(true);
+        const m = memberOf(g, g.team[1]!, engaged(FOE), { peelAfterMs: 4000 });
+        expect(peelTarget(m.ctx)).toBeNull();
+        expect(await tank().run(m.ctx)).toBe(true);
+        expect(m.calls.filter(c => c.startsWith('kill'))).toEqual([`killPlayer ${FOE}`, 'kill over']);
+    });
+
+    test('and it doesn\'t stop that fight: the peel check runs every 500 ms of it', async () => {
+        const g = group([X, T]);
+        g.all(ServerOp.PlayerCreate172, playerCreate(FOE, 44, 'Norseman', 2));
+        g.all(ServerOp.NPCCreate, npcCreate(PET, 'spirit warrior', ME.x + 100, ME.y, { pet: true, realm: 2, level: 20 }));
+        for (const x of g.team) g.publish(x);
+        const m = memberOf(g, g.team[1]!, engaged(FOE), { peelAfterMs: 4000 });
+        const fight = tank().run(m.ctx);
+        await Bun.sleep(20);
+        g.advance(100);
+        g.all(ServerOp.CombatAnimation, blow(PET, X, SWING));
+        g.all(ServerOp.ObjectUpdate, objectUpdate(PET, X, 100, ME.x + 100));
+        for (const x of g.team) g.publish(x);
+        await fight;
+        expect(m.calls.filter(c => c.startsWith('kill'))).toEqual([`killPlayer ${FOE}`, 'kill over']);
+    });
+
+    test('with every player mezzed decideRvr has the pet as the focus, as before: the tank hits it, and a second pet on the healer peels nobody: it won\'t turn on him either', async () => {
+        const g = petOnHealer();
+        g.board.markCc(FOE, 1, 'Xenia', 'mezz', 30_000, g.at());
+        const u = decided(g);
+        expect(u.focus).toBe(PET);
+        const m = memberOf(g, g.team[1]!, engaged(PET), { peelAfterMs: 4000 });
+        expect(await tank().run(m.ctx)).toBe(true);
+        expect(m.calls.filter(c => c.startsWith('kill'))).toEqual([`killNpc ${PET}`]);
+        g.all(ServerOp.NPCCreate, npcCreate(OTHER_PET, 'spirit warrior', ME.x + 120, ME.y, { pet: true, realm: 2, level: 20 }));
+        g.all(ServerOp.CombatAnimation, blow(OTHER_PET, X, SWING));
+        g.all(ServerOp.ObjectUpdate, objectUpdate(OTHER_PET, X, 100, ME.x + 120));
+        for (const x of g.team) g.publish(x);
+        expect(peelTarget(memberOf(g, g.team[1]!, engaged(PET), { peelAfterMs: 4000 }).ctx)).toBeNull();
+    });
+
+    test('an enemy player in reach of the healer peels as ever, and so does a monster with a monster as the focus', () => {
+        const g = petOnHealer();
+        g.all(ServerOp.CombatAnimation, blow(FOE, X, SWING));
+        for (const x of g.team) g.publish(x);
+        const other = 45;
+        g.all(ServerOp.PlayerCreate172, playerCreate(other, 45, 'Troll', 2));
+        for (const x of g.team) g.publish(x);
+        expect(peelTarget(memberOf(g, g.team[1]!, engaged(other), { peelAfterMs: 4000 }).ctx)?.objectId).toBe(FOE);
+        const pve = group([X, T]);
+        pve.all(ServerOp.NPCCreate, npcCreate(601, 'other mob', ME.x + 200, ME.y));
+        for (const x of pve.team) pve.publish(x);
+        pve.advance(100);
+        pve.all(ServerOp.CombatAnimation, blow(MOB, X, SWING));
+        pve.all(ServerOp.ObjectUpdate, objectUpdate(MOB, X));
+        pve.all(ServerOp.CombatAnimation, blow(601, T, SWING));
+        for (const x of pve.team) pve.publish(x);
+        expect(peelTarget(memberOf(pve, pve.team[1]!, engaged(601), { peelAfterMs: 4000 }).ctx)?.objectId).toBe(MOB);
     });
 });

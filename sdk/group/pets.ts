@@ -208,12 +208,19 @@ export function castRunning(ctx: MemberContext): boolean {
 /**
  * Whether an attack order's select may go now: it moves the server's target (0xB0), which a cast's end check reads and a swing follows. So not while the turn runs on another target, whose cast
  * would land where the select went (castSpell selects, then sends), and not in our own cast or swing at anything else. With that target selected already there is nothing to disturb: a tank's killNpc has the focus.
+ * A swing with nothing to hit, on a corpse or at what has left the world, is nothing to disturb either: 8 s of it held an order live, with the pet following while the focus stood free (run 20261104-044005).
  */
 function selectFree(ctx: MemberContext, id: number): boolean {
     const turn = ctx.turn();
     if (turn && turn.targetId !== id && !SELECTS_NOTHING.has(turn.kind)) return false;
     const me = ctx.me();
-    return me.targetObjectId === id || (!me.attacking && !castRunning(ctx));
+    return me.targetObjectId === id || ((!me.attacking || swingOnNothing(ctx, me)) && !castRunning(ctx));
+}
+
+/** Attack mode on at nothing that can be hit: no target, or a dead or gone one. */
+function swingOnNothing(ctx: MemberContext, me: PlayerState): boolean {
+    const seen = me.targetObjectId === null ? null : foeInView(ctx, me.targetObjectId);
+    return !seen || isDown(ctx, seen);
 }
 
 /**
@@ -341,7 +348,7 @@ export function petHoldOf(settings: unknown): number | undefined {
  * and a turret (an order only stops what it does) are left alone. So is a pet on `stay` until a focus is ordered: that's the character's routine.
  * A fight petControl itself sent a parked pet into stays petControl's to end: an ordered pet keeps walk stay (ControlledMobBrain.cs:211-226).
  * A 0x8A interrupts no cast, so stance and walk orders go at once. The select in an attack order changes the server's target: that order waits for selectFree. It looks for the server's answer on the ticks after (attackAnswer),
- * and an accepted order to a pet that stands goes once more. A tank's or puller's own pet stays passive until its hold is done (heldBack), and any pet with a crowd-controlled mob on it stays passive until its order goes out, or stands: it would hit back, in ~33 ms from defensive, and with no order a focus to go for changes nothing.
+ * and an accepted order to a pet that stands goes once more. A tank's or puller's own pet stays passive until its hold is done (heldBack), and any pet with a crowd-controlled mob on it or on its owner stays passive until its order goes out, or stands: it would hit back or answer the hit, in ~33 ms from defensive, and with no order a focus to go for changes nothing. A rooted add goes on swinging at whoever is in its reach.
  * A threat under a keep's guards holds the stance as well, whatever the phase reads: its aim lapses in 6 s and the fight with it (decideRvr), and it can hit again.
  * The last stance order goes with the pet it went to: a new one comes up defensive (ControlledMobBrain.cs:56, CharacterClassBase.cs:317), and petAfterRun and leftPassive read that memory.
  */
@@ -371,7 +378,7 @@ export const petControl = (): Behavior<TacticsSettings> => ({
         const orderGoes = !!go && go.seen.distance <= PET_ORDER_RANGE && selectFree(ctx, go.mob.objectId);
         const strays = isOn(s.strayFightsOff) && o.phase !== 'engage' && o.phase !== 'pull';
         // Only an order that goes now lifts this, or one that stands: passive would break that fight off at every heal turn (ControlledMobBrain.cs:199-203).
-        const ccOnIt = ctx.picture().contacts.some(c => c.targetPet === ctx.name && !c.stale && underCc(ctx, c)) && !orderGoes && !(go && (on === go.mob.objectId || orderInForce(ctx, go.mob.objectId)));
+        const ccOnIt = ctx.picture().contacts.some(c => (c.targetPet === ctx.name || c.target === ctx.name) && !c.stale && underCc(ctx, c)) && !orderGoes && !(go && (on === go.mob.objectId || orderInForce(ctx, go.mob.objectId)));
         const holdOff = ccOnIt || strays || (!go && ((o.phase === 'engage' && [focus, fighting].some(c => !!c && beyondLeash(ctx, c))) || heldBack(ctx, s, focus) || ctx.threats().some(c => underGuards(ctx, c))));
         const stance = holdOff ? 'passive' : 'defensive';
         if (!parked && pet.aggression !== stance) await order(ctx, 'stance', stance);

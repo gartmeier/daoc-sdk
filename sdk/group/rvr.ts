@@ -268,6 +268,10 @@ const LEASH_FIT = 0.6;
 const CC_STALL_MS = 8000;
 /** ... and the member who had it gets none for this long (it may be mezzed or stunned itself, which it can't tell us). */
 const CC_BENCH_MS = 10_000;
+/** A mezzer walking to its target (crowdControl, in steps) has that time from its last step: a tick with this much to show for it. A walk used to be one turn, and landed (r8on Rbspi: +2 to +17). Held, it stands, and the time runs as ever ... */
+const CC_WALK_MOVED = 20;
+/** ... and this long after the assignment even a walker's time runs: a target it doesn't catch. */
+const CC_WALK_MS = 30_000;
 /** Hunting goes on with at most this many members not ready (dead, away, hurt or low on power). */
 const HUNT_UNREADY = 1;
 /** A hunt is re-planned from the group's centre once the enemies' centre moved this far. */
@@ -343,9 +347,19 @@ export function spotAlong(t: Trip, from: Point, way: Point, distance: number): P
     return { x: spot.x, y: spot.y, z: t.zAt(spot) };
 }
 
+/** A tank this many cluster radii from every other member is walking back from a release, as in PvE (pve.ts tankIsFar). */
+const FAR_TANK_RADII = 4;
+
+/** That tank, if he is. No base to go by here. */
+function farTank(here: readonly MemberReport[], radius: number): MemberReport | undefined {
+    const tank = here.find(m => m.role === 'tank');
+    return tank && here.length > 1 && here.every(m => m === tank || dist(m, tank) > radius * FAR_TANK_RADII) ? tank : undefined;
+}
+
 /**
  * The cluster of members where the fight is (round a member an enemy attacks), else the largest
- * one (within `radius` of its best-connected member; ties: the last lead, then the tank), and
+ * one (within `radius` of its best-connected member; ties: the last lead, then the tank, unless he is
+ * the far one: then the group's centre and its legs would stand at his release), and
  * the rest. Live run 20261101-084333: three members released to the portal keep outnumbered the
  * two still fighting 16k away, so the mezzes went to members who couldn't see the enemies. A
  * cluster under attack needs 2 members, or half of those here: one attacked on its way back from
@@ -354,7 +368,8 @@ export function spotAlong(t: Trip, from: Point, way: Point, distance: number): P
 export function mainBody(here: readonly MemberReport[], radius: number, mem: Record<string, any>, attacked: ReadonlySet<string> = new Set()): { main: MemberReport[]; far: MemberReport[] } {
     const size = (m: MemberReport) => here.filter(o => dist(m, o) <= radius).length;
     const hot = (m: MemberReport) => (size(m) >= 2 || size(m) * 2 >= here.length) && here.some(o => attacked.has(o.name) && dist(m, o) <= radius);
-    const rank = (m: MemberReport) => (hot(m) ? 100 : 0) + size(m) * 4 + (m.name === mem.gatherLead ? 2 : 0) + (m.role === 'tank' ? 1 : 0);
+    const gone = farTank(here, radius);
+    const rank = (m: MemberReport) => (hot(m) ? 100 : 0) + size(m) * 4 + (m !== gone && m.name === mem.gatherLead ? 2 : 0) + (m === gone ? -1 : m.role === 'tank' ? 1 : 0);
     const lead = [...here].sort((a, b) => rank(b) - rank(a))[0]!;
     mem.gatherLead = lead.name;
     const main = here.filter(m => dist(m, lead) <= radius);
@@ -494,13 +509,26 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         // A mezz assignment that hasn't landed in CC_STALL_MS goes to another mezzer: ours may be held itself.
         const since: Record<string, number> = mem.ccSince ?? {};
         const bench: Record<string, number> = mem.ccBench ?? {};
+        const walks: Record<string, { x: number; y: number; from: number }> = mem.ccWalks ?? {};
         const ccKey = (a: { targetId: number; by: string }) => `${a.targetId}:${a.by}`;
-        for (const a of o.cc) if (now - (since[ccKey(a)] ?? now) > CC_STALL_MS) bench[a.by] = now + CC_BENCH_MS;
-        const mezzers = main.filter(m => !((bench[m.name] ?? 0) > now));
+        const walker = (a: { targetId: number; by: string }) => here.find(m => m.name === a.by && m.activity.kind === 'move' && m.activity.targetId === a.targetId);
+        for (const a of o.cc) {
+            const k = ccKey(a), m = walker(a), was = walks[k];
+            if (m && was && dist(m, was) >= CC_WALK_MOVED && now - was.from <= CC_WALK_MS) since[k] = now;
+            if (now - (since[k] ?? now) > CC_STALL_MS) bench[a.by] = now + CC_BENCH_MS;
+        }
         // With softFocus healers aren't damaged, so they get the mezz first, then known casters.
         const ccRank = (c: Contact) => (soft ? (c.healer ? 0 : c.caster ? 1 : 2) : 0);
-        const cc = assignCc(players.filter(c => c.objectId !== focus.objectId && !c.cc).sort((x, y) => ccRank(x) - ccRank(y)), mezzers, o.cc, now);
+        const adds = players.filter(c => c.objectId !== focus.objectId && !c.cc).sort((x, y) => ccRank(x) - ccRank(y));
+        // That walk can take one past the cluster's radius, and the main body is no reason to drop it there.
+        const onTheWay = here.filter(m => !main.includes(m) && o.cc.some(a => walker(a) === m && adds.some(c => c.objectId === a.targetId)));
+        const mezzers = [...main, ...onTheWay].filter(m => !((bench[m.name] ?? 0) > now));
+        const cc = assignCc(adds, mezzers, o.cc, now);
         mem.ccSince = Object.fromEntries(cc.map(a => [ccKey(a), since[ccKey(a)] ?? now]));
+        mem.ccWalks = Object.fromEntries(cc.map(a => {
+            const m = here.find(x => x.name === a.by);
+            return [ccKey(a), { x: m?.x ?? 0, y: m?.y ?? 0, from: walks[ccKey(a)]?.from ?? now }];
+        }));
         mem.ccBench = Object.fromEntries(Object.entries(bench).filter(([, until]) => until > now));
         return {
             phase: 'engage', focus: focus.objectId, puller: null, cc, retreatTo: null, waiting: [], anchor: mem.fightAnchor, facing: { x: focus.x, y: focus.y },
@@ -542,7 +570,10 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // ── Regroup: wait for the dead to be rezzed or release, then meet those walking back from the portal keep ──
     if (deadHere.length) return { ...calm, phase: 'recover', anchor: stay, waiting: deadHere.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadHere)}: a rez or a release${gone}` };
     if (far.length) {
-        const them = centroid(far);
+        // A far tank walks back by himself: a leg toward a middle with him in it meets nobody. Only him to meet, they go to meet him: there is no base to wait at.
+        const walking = farTank(here, s.gatherRadius);
+        const meeting = far.filter(m => m !== walking);
+        const them = centroid(meeting.length ? meeting : far);
         stepLeg(trip, 'gather', them, { from: centre, movers: main, replan: Infinity, meet: true });
         return { ...calm, phase: 'gather', anchor: mem.leg, facing: them, waiting: far.map(m => ({ name: m.name, why: 'away' })), objective: `regroup with ${names(far)}${gone}`, reason: `meeting ${names(far)}, ${Math.round(dist(centre, them))} away` };
     }

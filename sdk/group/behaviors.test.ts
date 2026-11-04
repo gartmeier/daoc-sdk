@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { beyondLeash, ckey, defaultBehaviors, hand, holdState, needsSlot, openingOf, shedLoad } from './behaviors';
+import { beyondLeash, ckey, defaultBehaviors, hand, holdState, mezzedMember, needsSlot, openingOf, shedLoad } from './behaviors';
 import { ObjectType } from '../types';
-import { contact, enemy } from './fixtures';
+import { contact, enemy, report } from './fixtures';
+import type { MemberReport, Role } from './types';
 import { MemberContext } from './member';
 import { PVE_SETTINGS } from './pve';
 import { rvrBehaviors, rvrRoaming } from './rvr';
@@ -224,5 +225,27 @@ describe('shedLoad: what an overloaded member drops', () => {
 
     test('kept gear goes only when nothing else is left, because a member that can\'t move is worse', async () => {
         expect(await run([item('Dragonmight', 51, 40), item('Bind Recall Stone', 1, 1, 0)])).toEqual(['Dragonmight']);
+    });
+});
+
+describe('mezzedMember', () => {
+    const member = (name: string, role: Role, effects: string[], over: Partial<MemberReport> = {}) => report(name, { role, effects, x: 100, y: 0, regionId: 1, ...over });
+    const me = { name: 'Sorc', x: 0, y: 0, regionId: 1 };
+    const mezz = (e: string) => e === 'Sedate';
+
+    test('the healer first, then the tank, then the most hurt', () => {
+        const a = member('Nuke', 'nuker', ['Sedate'], { hp: 20 }), t = member('Tank', 'tank', ['Sedate']), h = member('Heal', 'healer', ['Sedate']);
+        expect(mezzedMember(me, [a, t, h], 1500, mezz)?.name).toBe('Heal');
+        expect(mezzedMember(me, [a, t], 1500, mezz)?.name).toBe('Tank');
+    });
+
+    test('nobody out of range, dead, in another region, not mezzed, or ourselves', () => {
+        const list = [member('Far', 'healer', ['Sedate'], { x: 2000 }), member('Dead', 'healer', ['Sedate'], { isDead: true }), member('Away', 'healer', ['Sedate'], { regionId: 2 }), member('Free', 'healer', ['Root']), member('Sorc', 'nuker', ['Sedate'])];
+        expect(mezzedMember(me, list, 1500, mezz)).toBeNull();
+    });
+
+    test('knows the real names: every Mesmerize spell in the data', () => {
+        expect(mezzedMember(me, [member('Heal', 'healer', ['Greater Mesmerization'])], 1500)?.name).toBe('Heal');
+        expect(mezzedMember(me, [member('Heal', 'healer', ['Holding Vines'])], 1500)).toBeNull();
     });
 });

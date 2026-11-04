@@ -81,6 +81,7 @@ function stub(o: StubOptions) {
             calls.killPlayer.push({ id, opts });
             return { success: true, message: 'Killed', killed: true, ...(await (o.killPlayer?.(id, opts) ?? {})) };
         },
+        castHeldLeftMs: () => 0,
         castSpell: async (_spell: unknown, targetId: number) => {
             calls.castSpell.push(targetId);
             return { success: true, message: 'Cast', resisted: false, completed: true, messages: [], ...(await (o.castSpell?.(targetId) ?? {})) };
@@ -438,6 +439,13 @@ describe('crowdControl: what an add can take, by immunity and by its health', ()
 
     test('under 75 %: the root, since a mezz only costs the power', async () => {
         const s = world(npc({ hp: 70 }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks.map(m => m.kind)).toEqual(['root']);
+    });
+
+    test('under 75 % in our own client with the board still at 80: the root. m4: read 80 at 28.40, mezz begun 28.803, 67 at 29.008, "Your target is enraged"', async () => {
+        const s = stub({ name: 'Healer', role: 'healer', at, contacts: [foe(51, 10_300, 10_000), npc({ hp: 80 })], orders: { focus: 51, cc: [{ targetId: 52, by: 'Healer' }] }, seen: { 52: { healthPercent: 67, isDead: false } } });
+        Object.assign(s.ctx.spells, { cc: () => MEZZ, root: () => ROOT, capabilities: () => ({ ccKinds: ['mezz', 'root'] }) });
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
         expect(s.marks.map(m => m.kind)).toEqual(['root']);
     });

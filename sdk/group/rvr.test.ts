@@ -380,6 +380,59 @@ describe('decideRvr: a member attacked away from the main body', () => {
     });
 });
 
+describe('decideRvr: the regroup\'s objective', () => {
+    // 'regroup with Bardundefined', 'regroup with Tank[object Object]': on the group page and the region page, every round after a release.
+    test('who, and who is missing, in plain words', () => {
+        const far = { x: 16_000, y: 10_000 };
+        expect(decideRvr(ctx(picture(team({ Encha: far })))).objective).toBe('regroup with Encha');
+        const d = decideRvr(ctx(picture(team({ Encha: far, Menta: { regionId: 1, x: 500_000 } }))));
+        expect(d.phase).toBe('gather');
+        expect(d.objective).toBe('regroup with Encha; missing Menta (region 1)');
+    });
+
+    test('with the tank the far one, by any distance', () => {
+        expect(decideRvr(ctx(picture(team({ Tank: { x: 18_000, y: 10_000 } })))).objective).toBe('regroup with Tank');
+        expect(decideRvr(ctx(picture(team({ Tank: { x: 40_000, y: 10_000 }, Menta: { regionId: 1, x: 500_000 } })))).objective).toBe('regroup with Tank; missing Menta (region 1)');
+    });
+});
+
+describe('decideRvr: a far tank', () => {
+    const at = (x: number, y = BASE.y) => ({ x, y });
+    const KEEP = at(BASE.x + 21_000);
+
+    test('no tie goes to him: the legs start from those here, and not at the keep he released to', () => {
+        const memory: Record<string, any> = { realm: 'albion', gatherLead: 'Tank' };
+        const d = decideRvr(ctx(picture(team({ Tank: KEEP, Druid: at(BASE.x), Bard: at(BASE.x, BASE.y + 3000) }).slice(0, 3)), { memory }));
+        expect(d.phase).toBe('gather');
+        expect(memory.gatherLead).not.toBe('Tank');
+        expect(Math.hypot(d.anchor!.x - BASE.x, d.anchor!.y - BASE.y)).toBeLessThanOrEqual(RVR_SETTINGS.travelLeg + 3000);
+        expect(d.waiting?.map(w => w.name)).toContain('Tank');
+    });
+
+    test('a leg to meet the others leaves him out of where it goes', () => {
+        const memory: Record<string, any> = { realm: 'albion' };
+        const d = decideRvr(ctx(picture(team({ Tank: KEEP, Druid: at(BASE.x), Bard: at(BASE.x, BASE.y + 6000) }).slice(0, 3)), { memory }));
+        expect(d.phase).toBe('gather');
+        expect(Math.abs(d.anchor!.x - BASE.x)).toBeLessThan(300);
+    });
+
+    test('with only him to meet, the others go to meet him as ever: there is no base to wait at', () => {
+        const memory: Record<string, any> = { realm: 'albion' };
+        const d = decideRvr(ctx(picture(team({ Tank: KEEP, Druid: at(BASE.x), Bard: at(BASE.x + 100), Menta: at(BASE.x + 200) }).slice(0, 4)), { memory }));
+        expect(d.phase).toBe('gather');
+        expect(d.reason).toContain('meeting Tank');
+        expect(d.anchor!.x).toBeGreaterThan(BASE.x);
+    });
+
+    test('a fight where he is goes on: attacked with a member beside him, that cluster is the main body', () => {
+        const memory: Record<string, any> = { realm: 'albion' };
+        const onHim = foe(51, { x: KEEP.x + 100, y: KEEP.y, target: 'Tank', threat: true });
+        const d = decideRvr(ctx(picture(team({ Tank: KEEP, Druid: at(KEEP.x + 200), Bard: at(BASE.x), Menta: at(BASE.x, BASE.y + 200) }), [onHim]), { memory }));
+        expect(d.phase).toBe('engage');
+        expect(d.focus).toBe(51);
+    });
+});
+
 describe('decideRvr: retreat among three realms', () => {
     const now = Date.now();
     const seven = [10, 11, 12, 13, 14, 15, 16].map(id => albion(id));
@@ -436,6 +489,59 @@ describe('decideRvr: crowd control assignments', () => {
         // A new add while the Bard is benched goes to the next mezzer; after the bench, the Bard is one again.
         expect(step(13_000, [{ targetId: 52, by: 'Menta' }], [...foes, foe(53)]).cc).toEqual([{ targetId: 52, by: 'Menta' }, { targetId: 53, by: 'Encha' }]);
         expect(step(20_000, [], [foes[0]!, foe(53)]).cc).toEqual([{ targetId: 53, by: 'Bard' }]);
+    });
+
+    describe('a mezzer on its way to the target (crowdControl walks in steps, announced as a walk)', () => {
+        // r8on, Rbspi: cc turn from +2 to +17, one uninterrupted walk then. In steps with the clock running, every walker over 8 s was benched with no cast: '+0.0s cc=[{51,Spi}]', '+8.5s cc=[{51,Cab}]', '+17.0s cc=[]'.
+        const walk = { kind: 'move', targetId: 52, detail: 'cc: into range for Hold Spirit', since: 0 };
+        const given = (memory: Record<string, any>, over: Parameters<typeof team>[0] = {}) => decideRvr(ctx(picture(team(over), foes, { phase: 'engage', focus: 51, cc: [] }, now), { memory, now })).cc;
+        const tick = (memory: Record<string, any>, ms: number, bard: Partial<MemberReport>, cc: Orders['cc'] = [{ targetId: 52, by: 'Bard' }]) =>
+            decideRvr(ctx(picture(team({ Bard: bard }), foes, { phase: 'engage', focus: 51, cc }, now + ms), { memory, now: now + ms })).cc;
+
+        test('getting somewhere it keeps the assignment past the 8 s, on a walk of any length a sighting gives', () => {
+            const memory: Record<string, any> = {};
+            expect(given(memory)).toEqual([{ targetId: 52, by: 'Bard' }]);
+            for (let ms = 500; ms <= 20_000; ms += 500) {
+                expect(tick(memory, ms, { x: 9700 + ms * 0.1, activity: walk })).toEqual([{ targetId: 52, by: 'Bard' }]);
+            }
+            // At the end of it, casting: its 8 s are from the last step, for a mezzer held there.
+            expect(tick(memory, 27_000, { x: 9700 + 2000, activity: { ...walk, kind: 'cc' } })).toEqual([{ targetId: 52, by: 'Bard' }]);
+            expect(tick(memory, 29_000, { x: 9700 + 2000, activity: { ...walk, kind: 'cc' } })).toEqual([{ targetId: 52, by: 'Menta' }]);
+        });
+
+        test('saying so and getting nowhere it is held: on to the next mezzer at 8 s, as ever', () => {
+            const memory: Record<string, any> = {};
+            expect(given(memory)).toEqual([{ targetId: 52, by: 'Bard' }]);
+            for (let ms = 500; ms <= 8000; ms += 500) expect(tick(memory, ms, { activity: walk })).toEqual([{ targetId: 52, by: 'Bard' }]);
+            expect(tick(memory, 8500, { activity: walk })).toEqual([{ targetId: 52, by: 'Menta' }]);
+        });
+
+        test('there is an end to it: a target it never reaches goes on to the next mezzer', () => {
+            const memory: Record<string, any> = {};
+            expect(given(memory)).toEqual([{ targetId: 52, by: 'Bard' }]);
+            let on: Orders['cc'] = [{ targetId: 52, by: 'Bard' }];
+            let at = 0;
+            for (let ms = 500; ms <= 45_000 && on[0]?.by === 'Bard'; ms += 500) {
+                at = ms;
+                on = tick(memory, ms, { x: 9700 + ms * 0.1, activity: walk }, on) ?? [];
+            }
+            expect(on).toEqual([{ targetId: 52, by: 'Menta' }]);
+            expect(at).toBeGreaterThan(30_000);
+            expect(at).toBeLessThanOrEqual(39_000);
+        });
+
+        test('past the cluster radius on that walk it stays the mezzer: the group\'s centre is no reason to drop it', () => {
+            const memory: Record<string, any> = {};
+            expect(given(memory)).toEqual([{ targetId: 52, by: 'Bard' }]);
+            expect(tick(memory, 500, { x: 13_000, activity: walk })).toEqual([{ targetId: 52, by: 'Bard' }]);
+            expect(tick(memory, 1000, { x: 13_100, activity: walk })).toEqual([{ targetId: 52, by: 'Bard' }]);
+        });
+
+        test('out there on another errand it isn\'t: the assignment goes to one with the group', () => {
+            const memory: Record<string, any> = {};
+            expect(given(memory)).toEqual([{ targetId: 52, by: 'Bard' }]);
+            expect(tick(memory, 500, { x: 13_000 })).toEqual([{ targetId: 52, by: 'Menta' }]);
+        });
     });
 
     test('a mezz that landed and broke starts its time over', () => {

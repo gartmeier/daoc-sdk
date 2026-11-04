@@ -168,14 +168,33 @@ const tolerated = (level: number, s: PveSettings) => {
 const FAR_GATHER_RADII = 4;
 
 /**
- * Who of `here` stands that far from the group's middle and from the tank. They don't steer the group or hold its gather, as a member in another region doesn't; holdFormation walks them back
- * all the same, and the reason names them. Never the tank, as nothing is pulled without him; and if it would leave nobody, there is no group to be far from.
+ * Whether the tank is the one gone: that far from every other member and from the base, a release to his bind as a rule. Nothing is pulled without him, and nobody goes to him: the others gather at the base (decide),
+ * and he is no part of their middle. In the middle of it a member at the base read as far off from a median at the bind, and the leg set out from there (a2: 'Petspi: walk: died (Died en route to ...)').
  */
-function farMembers(here: MemberReport[], tank: MemberReport | undefined, s: Pick<PveSettings, 'gatherRadius'>): MemberReport[] {
+function tankIsFar(here: MemberReport[], tank: MemberReport | undefined, s: Pick<PveSettings, 'gatherRadius'>, base: Point | undefined): boolean {
     const limit = s.gatherRadius * FAR_GATHER_RADII;
-    const middle = median(here);
-    const far = here.filter(m => m !== tank && dist(m, middle) > limit && (!tank || dist(m, tank) > limit));
+    const others = here.filter(m => m !== tank);
+    return !!tank && others.length > 0 && others.every(m => dist(m, tank) > limit) && (!base || dist(tank, base) > limit);
+}
+
+/**
+ * Who of `here` stands that far from the group's middle, from the tank and from the base. They don't steer the group or hold its gather, as a member in another region doesn't; holdFormation walks them back
+ * all the same, and the reason names them. Never the tank, as nothing is pulled without him, nor one at the base, whoever else is off; and if it would leave nobody, there is no group to be far from.
+ */
+function farMembers(here: MemberReport[], tank: MemberReport | undefined, s: Pick<PveSettings, 'gatherRadius'>, base: Point | undefined): MemberReport[] {
+    const limit = s.gatherRadius * FAR_GATHER_RADII;
+    const middle = median(tankIsFar(here, tank, s, base) ? here.filter(m => m !== tank) : here);
+    const far = here.filter(m => m !== tank && dist(m, middle) > limit && (!tank || dist(m, tank) > limit) && (!base || dist(m, base) > limit));
     return far.length < here.length ? far : [];
+}
+
+/**
+ * Whether legs from those `away` would lead a member off the base: they set out from beyond the limit, and travel walks everyone to the leg (needsSlot), so one standing at the base goes the most of the way out and back, the walk 'Petspi: walk: died (Died en route ...)' was.
+ * He holds there, and they gather on him. With the tank the one at the base the leg walked him out to the limit, tankIsFar's gather walked him back, and over: 50 phase changes in 700 s.
+ */
+function legLeavesBase(away: MemberReport[], near: MemberReport[], s: Pick<PveSettings, 'gatherRadius'>, base: Point): boolean {
+    const limit = s.gatherRadius * FAR_GATHER_RADII;
+    return away.length > 0 && dist(median(away), base) > limit && near.some(m => dist(m, base) <= limit);
 }
 
 const FAR_NOTE = /; [^;]* far off, not waited for$/;
@@ -277,7 +296,7 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     const alive = ctx.picture.members.filter(m => !m.isDead);
     const tank = alive.find(m => m.role === 'tank');
     const regionId = (tank ?? alive[0])?.regionId;
-    const far = farMembers(alive.filter(m => m.regionId === regionId), tank, ctx.settings);
+    const far = farMembers(alive.filter(m => m.regionId === regionId), tank, ctx.settings, ctx.memory.base);
     const reason = u.reason.replace(FAR_NOTE, '');
     return { ...u, reason: far.length ? `${reason}; ${names(far)} far off, not waited for` : reason };
 }
@@ -292,9 +311,10 @@ function decide(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     const regionId = leader.regionId;
     const level = Math.min(...alive.map(m => m.level));
     const here = alive.filter(m => m.regionId === regionId);
-    const far = farMembers(here, tank, s);
+    const far = farMembers(here, tank, s, mem.base);
     const near = here.filter(m => !far.includes(m));
-    const centre = centroid(near);
+    const tankFar = tankIsFar(here, tank, s, mem.base);
+    const centre = centroid(tankFar && near.length > 1 ? near.filter(m => m !== tank) : near);
     mem.exclude ??= new Set<number>();
     const threats = p.contacts.filter(c => c.threat && c.regionId === regionId);
 
@@ -399,9 +419,9 @@ function decide(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
 
     if (ctx.windingDown) return { ...calm, phase: 'recover', anchor: base, facing, reason: 'time is up: no more pulls' };
 
-    // ── Travel: most of the group is far from the base. Legs of travelLeg, regrouping at each (or after 30 s). ──
+    // ── Travel: most of the group is far from the base. Legs of travelLeg, regrouping at each (or after 30 s). With the tank the far one, or a member at the base to hold there, no leg: they gather at the base, and walk back to it. ──
     const away = near.filter(m => dist(m, base) > s.gatherRadius);
-    if (away.length * 2 > near.length) {
+    if (!tankFar && away.length * 2 > near.length && !legLeavesBase(away, near, s, base)) {
         const start = median(away);
         if (!mem.route) mem.route = safePath(regionId, level, start, base);
         // Arrived: everyone within the formation's depth of the leg (casters stand ~900 behind it).
