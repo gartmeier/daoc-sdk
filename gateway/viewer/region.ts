@@ -452,6 +452,16 @@ function drawBots(v: MapView<MapItem>, f: RegionFrame) {
         const active = b.status === 'active';
         const sel = selected === key, hov = v.hoverKey === key;
         const color = realmHex(b.realm);
+        // Its window pet, a small dot under it; none while its entry is out of view.
+        if (b.pet && b.pet.x !== null && b.pet.y !== null) {
+            const ps = v.toScreen(b.pet.x, b.pet.y);
+            ctx.beginPath(); ctx.arc(ps.x, ps.y, 3, 0, Math.PI * 2);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
         if (sel || hov) {
             ctx.strokeStyle = sel ? 'rgba(90,169,255,0.9)' : 'rgba(255,255,255,0.6)';
             ctx.lineWidth = sel ? 3 : 1.5;
@@ -511,6 +521,7 @@ function showTooltip(hit: MapItem | null, sx: number, sy: number) {
         rows.push(`<div>L${esc(b.level)} ${esc(b.className)} · ${esc(b.realm)}${b.group ? ` · ${esc(b.group.name)}` : ''}</div>`);
         rows.push(`<div>HP ${esc(Math.round(b.hp))}% · power ${esc(Math.round(b.mana))}% · endurance ${esc(Math.round(b.endurance))}%${b.isDead ? ' · <span class="bad">dead</span>' : ''}${b.inCombat ? ' · <span class="bad">in combat</span>' : ''}${b.isSitting ? ' · sitting' : ''}</div>`);
         if (b.targetObjectId !== null) rows.push(`<div>target ${esc(nameOf(b.targetObjectId))}</div>`);
+        if (b.pet) rows.push(`<div>pet ${esc(b.pet.name || `#${b.pet.objectId}`)}${b.pet.hp !== null ? ` · HP ${esc(Math.round(b.pet.hp))}%` : ' · out of view'}</div>`);
         rows.push(`<div class="muted">${esc(b.username)} · client ${esc(b.status)}${b.stateAge !== null ? ` · state ${esc(dur(b.stateAge))} old` : ''}${b.realmPoints ? ` · ${fmtInt(b.realmPoints)} RP` : ''}</div>`);
         rows.push(`<div class="muted">${esc(b.zoneName)} · ${Math.round(b.x)}, ${Math.round(b.y)}, ${Math.round(b.z)} · #${esc(b.objectId)} · double-click: bot page</div>`);
     } else if (hit.kind === 'enemy') {

@@ -109,7 +109,7 @@ Pre = preprocessor (N = None, L = LoggedIn, G = PlayerInGame).
 | 0x84 | LookingForGroupFlag | LookingForAGroupFlagHandler | G | u8 (1 = set LFG, 0 = clear, other = group status) |
 | 0x85 | LookingForGroup | LookingForAGroupHandler | G | u8 grouped |
 | 0x87 | InviteToGroup | InviteToGroupHandler | G | **no payload**; uses server-side TargetObject |
-| 0x8A | PetWindow | PetWindowHandler | G | u8 aggro (1 aggr, 2 def, 3 pass), u8 walk (1 follow, 2 stay, 3 goTarget, 4 here), u8 cmd (1 attack, 2 release); 0 = no-op |
+| 0x8A | PetWindow | PetWindowHandler | G | u8 aggro (1 aggr, 2 def, 3 pass), u8 walk (1 follow, 2 stay, 3 goTarget, 4 here), u8 cmd (1 attack, 2 release); 0 skips that field only. A non-zero aggro returns and walk 2-4 return, but walk 1 falls through to cmd (`00 01 01` is follow, then attack): one order per packet. No target field: attack, goTarget and release read TargetObject (0xB0) |
 | 0x90 | PlayerRegionChangeRequest | PlayerRegionChangeRequestHandler | G | |
 | 0x99 | DoorRequest | DoorRequestHandler | G | |
 | 0x9D | RegionListRequest | RegionListRequestHandler | **N** (but dereferences Account) | |

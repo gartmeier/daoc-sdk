@@ -231,6 +231,28 @@ describe('GroupPublisher', () => {
         expect(body.events.find(e => e.kind === 'death')!.data).toEqual({ killer: { name: 'Troll', kind: 'player', realm: 'midgard' } });
     });
 
+    test('pets on the wire: a member\'s pet, summons and capability, and a contact\'s isPet and targetPet; none of it for a group without', async () => {
+        const h = harness();
+        const capabilities = { heal: false, cc: false, nuke: true, buffs: [], buffSpells: [], pet: 'main' as const };
+        const pet = { objectId: 600, name: 'spirit warrior', level: 17, x: 1010, y: 990, z: 0, hp: 84, targetId: null, inCombat: false, aggression: 'defensive' as const, walk: 'follow' as const, icons: [5] };
+        h.board.publish(obs(report('Tank', { objectId: 100, capabilities, pet, summons: [601] }), [
+            sighting(301, { targetId: 600 }),
+            sighting(302, { name: 'spirit warrior', realm: 'midgard', isPet: true }),
+        ]));
+        await until(() => h.calls.length >= 1, 'a publish');
+        const p = h.calls[0]!.body.picture;
+        expect(p.members[0]).toMatchObject({ pet, summons: [601], capabilities: { pet: 'main' } });
+        expect(p.contacts.find(c => c.objectId === 301)).toMatchObject({ target: null, targetPet: 'Tank' });
+        expect(p.contacts.find(c => c.objectId === 302)!.isPet).toBe(true);
+
+        const g = harness();
+        g.board.publish(obs(report('Tank', { objectId: 100 }), [sighting(301)]));
+        await until(() => g.calls.length >= 1, 'a publish');
+        const plain = g.calls[0]!.body.picture;
+        expect('pet' in plain.members[0]! || 'summons' in plain.members[0]! || 'pet' in plain.members[0]!.capabilities).toBe(false);
+        expect('isPet' in plain.contacts[0]!).toBe(false);
+    });
+
     test('a hanging gateway: one request in flight, ticks skipped, nothing thrown, finish() within its cap', async () => {
         const h = harness(() => new Promise<Response>(() => {}));
         await until(() => h.calls.length >= 1, 'a publish');

@@ -298,6 +298,21 @@ describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
         expect(flags.at(-1)).toBe(0x04);
     });
 
+    test('with a ground target every 0xA9 says it is in view, and without one it does not (ProcessActionFlags overwrites the flag from each)', () => {
+        let hasGroundTarget = false;
+        const flags: number[] = [];
+        const mover = new Mover({ timer: false, hasGroundTarget: () => hasGroundTarget, send: (_code, p) => flags.push(p[32]!) });
+        mover.snap(CAMELOT.regionId, CAMELOT.x, CAMELOT.y, CAMELOT.z, 0, null);
+        mover.start();
+        expect(flags.at(-1)).toBe(0x30);
+        hasGroundTarget = true;
+        mover.sendUpdate();
+        expect(flags.at(-1)).toBe(0x38);
+        hasGroundTarget = false;
+        mover.sendUpdate();
+        expect(flags.at(-1)).toBe(0x30);
+    });
+
     test('a ladder hop keeps its interpolated z', () => {
         const { mover, advance } = groundHarness(() => ({ z: 2900, swimming: false }));
         mover.snap(1, CAMELOT.x, CAMELOT.y, 2900, 0, null);

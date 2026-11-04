@@ -17,6 +17,8 @@ export default theurgist();                       // or theurgist({ saveBelow: 3
 
 **Why, verified:** "the Theurgist empties his pool in every 14 s fight." At the wisps (runs 233455-001316, L10-11) the group waited 34-37 % of each hunt for Taliesin's power, even at `ready.mana` 20. With `thrifty(assist, 40)` the waiting on him ended in run 064716, at 4.66M XP/h, 0 deaths, and moved on to Merlin ([sorcerer.md](sorcerer.md)).
 
+**The floor binds his pets too:** the kit sets `pet.fnfFloor` for him alone (`Character.pet`), so `fnfPet` stops at `saveBelow` as well, or at the run's own floor if that is higher. They count as nukes, cost more of the pool, and `thrifty` wraps only `assist`. Without the kit they stop at the run's floor, 20 by default. Its effect on a long fight hasn't been measured: the wisps' 14 s fights never reach `pet.fnfLifeMs`.
+
 **The floor has a cost:** at the forest cats (run 210221) he was idle 54 % of fights. It's a choice for a group where others carry the damage. In RvR the strategy has none: `assist: no power` 121 times in 46 minutes, the most in his group. Nobody has run the floor there.
 
 ## Builds
@@ -44,9 +46,12 @@ Taliesin plays Ice and earth. **Community, unverified:** Earth and wind is the m
 - **A cheaper nuke it doesn't cast:** Ice Blast, Cold 17: 64 and a 35 % snare for 30 s, 3 s, 10 power. 6.4 damage a power against 5.9. `pickNuke` takes the highest level, so the build's own Cold spell never goes off. Against players who run, the snare might be worth more than the damage. Not measured.
 - **Crowd control:** a root, Fingers Of Ice (Lesser), 2.5 s, 38 s, baseline, since he has no mezz. He gets adds.
 - **Buffs:** Emerald Shield and Skin of Dust on himself, and on others, for power rather than concentration: Earthen Burst (damage add) and Bolstering Storm (haste 11) for the tank, Skin of Sand (a bladeturn) for the tank and healer. At 12-13 power and 20 minutes a go, those come out of his pool between fights.
-- **Reached, and no behaviour casts it:** Field of Snow (area root), Friction (attack slow), Summon Aged Ice Spirit and the other pets, Brisk Wind.
+- **Pets:** Summon Aged Ice Spirit and the others go on the focus by `fnfPet`, on a fight with 13 s left at its rate, above his power floor: each comes 64 in front of him and goes at the target, gone with it or in 20-30 s, which is how they're meant to fight (ice 25, air 20, earth 30 s; 60 s from Earth 32).
+- **Reached, and no behaviour casts it:** Field of Snow (area root), Friction (attack slow), Brisk Wind.
 
 ## What the reports show
+
+From runs with no pets: `--pet.enabled=false` is the run to compare with.
 
 **Verified,** six Camelot RvR rounds at level 24, 46 minutes, to 2026-11-03 21:48:
 
@@ -63,6 +68,5 @@ Taliesin plays Ice and earth. **Community, unverified:** Earth and wind is the m
 
 ## Not supported yet
 
-- **The pets:** summoned at the target, gone in 20-30 s, which is how they're meant to fight (ice 25, air 20, earth 30 s; 60 s from Earth 32). No behaviour casts them.
 - **Speed:** Brisk Wind, as for the Sorcerer ([sorcerer.md](sorcerer.md)).
 - **Area root:** Field of Snow. `isRoot` wants a single target.

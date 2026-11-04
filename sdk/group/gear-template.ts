@@ -304,7 +304,7 @@ async function wearPieces(m: TemplateMember, pieces: readonly TemplatePiece[]): 
 
 /**
  * A song needs the instrument out (SpellHandler.cs CheckInstrument: ActiveWeapon), wielding the club put it
- * away, and only putting it on brings it back (GamePlayerInventory.cs:547-560): the SDK has no weapon switch.
+ * away, and only putting it on brings it back (GamePlayerInventory.cs:547-560): bot.takeMeleeSlot takes melee weapons in hand, not an instrument.
  */
 async function bringOutInstrument(m: TemplateMember): Promise<string[]> {
     const held = m.sdk.getEquipment().find(e => e.slot === EquipmentSlot.TwoHand && e.objectType === ObjectType.Instrument);

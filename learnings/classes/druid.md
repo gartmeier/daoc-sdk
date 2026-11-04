@@ -45,7 +45,8 @@ Brigid plays Heal druid. No two Druid builds have been compared in a run. **Comm
 - **Rez:** Lesser Reconstitution, at Regrowth 16. Reconstitution comes at Regrowth 24.
 - **Buffs:** the plan gives her Strength of the Thicket and Breeze's Dance on everyone, her own Redwood's Stoutness, Skin of the Redwood and Dexterity of the Badger, and Hunter's Attack on the tank: 14 buffs for 78 concentration.
 - **Concentration:** `(level x 8.8 + (Empathy - 50) x 2.8) / 2` (`MaxConcentrationCalculator.cs`). Empathy 89 plus the template's 36 makes 210 at 24, so she has 132 to spare. **Verified:** 51 at level 9.
-- **Reached, and no behaviour casts it:** Cure Poison, Cure Disease, Cure Nearsight I, the group heals, the pet.
+- **Reached, and no behaviour casts it:** Cure Poison, Cure Disease, Cure Nearsight I, the group heals.
+- **The pet at Nature 1:** Call Minor Nature Spirit caps at L7 whatever her level (`GameSummonedPet.cs:34-52`). `summonPet` leaves it from level 15, when that is under half her own (`Spellbook.summon`), so at 24 she keeps no pet and spends no 25 % on one. One still up from a script is ordered as any other (`petControl`).
 
 ## The group has no acuity at 24
 
@@ -70,14 +71,15 @@ It's two levels away, for a spell the role lists don't use:
 | 5, to players | 32 | 39 | 15 | 10 | 20 % | 24 % | 38 % |
 
 - 25 of her casts were interrupted against 71 that landed, and she spends a quarter of the fight in melee range. In PvE it's another life: 0 deaths in the group over 17 hunts on the way to level 20, with the tank holding 97-100 %.
-- A root stays until the add swings, and then the blackboard drops it as broken. One PvE hunt was watched for it and no add came, so no measurement separates what her roots are worth.
+- A root stays through the add's swings at what stands in its reach. It ends when a landed hit breaks it, when the add walks off, or when it lands a spell, and then the blackboard drops it. One PvE hunt was watched for it and no add came, so no measurement separates what her roots are worth.
 - The Hibernian strategy puts the Hero's Guard on her (`guard: { guard: 'healer' }`).
 
 ## Not supported yet
 
+**The pet is played now** (`sdk/group/pets.ts`, [group-coordination.md](../group-coordination.md)): Call Nature Spirit at Nature 12 (L18 at 24) and Call Major Nature Spirit at 20 are kept up by `summonPet`, follow the focus (`petControl`) and get a heal from `petHeal`, one that covers what the pet misses, at the pet's id, never on a timer, and in a fight only with a quarter of her power left after it. So Group and Solo Nature have their pet; a character can still say no (`pet: false`). Nobody has run them with it in a round, and the table above is from runs with no pet.
+
 What the class has that no behaviour uses:
 
-- **The pet:** Call Minor Nature Spirit at Nature 1, stronger ones at 7, 12 and 20. Group and Solo Nature are built round something no bot has summoned.
 - **Nature's damage:** the DoTs are for `assist`, which isn't in the healer's list. `druid({ dotsAbove })` adds it for a Nature build.
 - **Group heals:** Healing Conflux, Renewing Conflux, and Bith's Benison at Regrowth 23 (instant, 50 %, 20 minutes). A rule would have to count who is hurt.
 - **Cures:** poison, disease and nearsight. No behaviour watches for them.

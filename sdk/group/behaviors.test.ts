@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
-import { beyondLeash, ckey, holdState, needsSlot, openingOf, shedLoad } from './behaviors';
+import { beyondLeash, ckey, defaultBehaviors, hand, holdState, needsSlot, openingOf, shedLoad } from './behaviors';
+import { ObjectType } from '../types';
 import { contact, enemy } from './fixtures';
-import type { MemberContext } from './member';
+import { MemberContext } from './member';
 import { PVE_SETTINGS } from './pve';
+import { rvrBehaviors, rvrRoaming } from './rvr';
 
 describe('holdState: when damage dealers may open', () => {
     const now = 100_000;
@@ -111,6 +113,93 @@ describe('beyondLeash: tank and melee stay with the fight', () => {
         } finally {
             regionId = 9999;
         }
+    });
+});
+
+describe('hand: a melee or tank member\'s weapon', () => {
+    const style = (name: string, weapon: string, over: object = {}) => ({ name, internalId: 1, specLevel: 5, specName: weapon, skillIndex: 1, prerequisite: 0x100, details: { weapon, stealth: false, opening: 'offensive', result: null, openingStyle: null, followUps: [], fatigue: 10, openingDamage: 40, attackMod: 0, defensiveMod: 0, position: null, procSpellId: null }, ...over });
+    const worn = [{ slot: 10, objectType: ObjectType.Sword }, { slot: 12, objectType: ObjectType.Spear }];
+    function stub(o: { tank?: boolean; styles?: object[]; messages?: { id: number; text: string }[]; dead?: boolean } = {}) {
+        const taken: object[] = [];
+        const messages = o.messages ?? [];
+        const ctx = {
+            memory: new Map<string, any>(),
+            me: () => ({ isDead: !!o.dead }),
+            isTank: () => !!o.tank,
+            note: () => {},
+            bot: { takeMeleeSlot: async (options: object) => { taken.push(options); return { success: true, message: 'in hand', slot: 12 }; } },
+            sdk: { getSkills: () => ({ styles: o.styles ?? [] }), getState: () => ({ equipment: worn }), getGameMessages: () => messages },
+        } as unknown as MemberContext<any>;
+        return { ctx, taken, messages };
+    }
+
+    test('once, as the run starts, and it takes no turn', async () => {
+        // r3 (sword in hand after login, Sword 1, Spear 10): 'You attack the lake serpent with your sword and hit for 3 (-1) damage!', hold 7 %. Spear (bots/pethun/hand.ts 12): 17-40.
+        const { ctx, taken } = stub();
+        expect(await hand().run(ctx)).toBe(false);
+        expect(await hand().run(ctx)).toBe(false);
+        expect(taken).toEqual([{ keepOnTie: true }]);
+    });
+
+    test('a tank goes by the style it will open with', async () => {
+        const { ctx, taken } = stub({ tank: true, styles: [style('Dazzling Spear', 'Spear')] });
+        await hand().run(ctx);
+        expect(taken).toEqual([{ styles: ['Dazzling Spear'], keepOnTie: true }]);
+    });
+
+    test('dead, it waits', async () => {
+        const { ctx, taken } = stub({ dead: true });
+        await hand().run(ctx);
+        expect(taken).toEqual([]);
+    });
+
+    test('on "This style requires a X weapon!" the slot holding X, once for each X; a line from before the run says nothing', async () => {
+        // r3: 'This style requires a Spear weapon!' 15×, 'opener Engage': tankStyles reads what is worn, not what is in hand.
+        const { ctx, taken, messages } = stub({ messages: [{ id: 1, text: 'This style requires a Hammer weapon!' }] });
+        await hand().run(ctx);
+        expect(taken).toEqual([{ keepOnTie: true }]);
+        messages.push({ id: 2, text: 'This style requires a Spear weapon!' }, { id: 3, text: 'This style requires a Spear weapon!' });
+        await hand().run(ctx);
+        expect(taken).toEqual([{ keepOnTie: true }, { weapon: 'Spear' }]);
+        messages.push({ id: 4, text: 'This style requires a Spear weapon!' }, { id: 5, text: 'You hit the rat.' });
+        await hand().run(ctx);
+        expect(taken).toEqual([{ keepOnTie: true }, { weapon: 'Spear' }]);
+    });
+
+    test('it stands on the lists of tank and melee, after release, and on no other', () => {
+        const lists = defaultBehaviors();
+        for (const role of ['tank', 'melee'] as const) expect(lists[role].map(b => b.name).slice(0, 2)).toEqual(['release', 'hand']);
+        for (const role of ['healer', 'support', 'nuker'] as const) expect(lists[role].map(b => b.name)).not.toContain('hand');
+    });
+
+    test('the same on the RvR lists: "A melee or tank member takes its best melee slot" has no PvE limit, and midrvr\'s Hunter set its by hand (bots/pethun/hand.ts)', () => {
+        const lists = rvrBehaviors();
+        for (const role of ['tank', 'melee'] as const) expect(lists[role].map(b => b.name).slice(0, 2)).toEqual(['release', 'hand']);
+        for (const role of ['healer', 'support', 'nuker'] as const) expect(lists[role].map(b => b.name)).not.toContain('hand');
+        expect(rvrRoaming.behaviors.melee.map(b => b.name)).toContain('hand');
+    });
+});
+
+describe('ctx.result: a cast whose target died under it is no failure', () => {
+    function context() {
+        const events: any[] = [];
+        const agent = { member: { bot: 'x', role: 'nuker', actions: {}, sdk: { getPlayer: () => ({ name: 'X' }) } }, spells: {}, board: { emit: (e: any) => events.push(e) }, stepFailed: false };
+        return { ctx: new MemberContext(agent as any, {}), agent, events };
+    }
+
+    test('nothing to count, and no pace of a failed turn', () => {
+        // r9: `You begin casting a Murk Blast spell!` at +19.6, `You just killed Petani` at +19.9, then `00:24 Petbon: nuke: timeout (Murk Blast started but no completion was observed)`: 'A failure in the report, and the turn is held meanwhile.'
+        const { ctx, agent, events } = context();
+        ctx.result('nuke', { success: false, reason: 'already_dead', message: 'Petani died before Murk Blast could land', targetDied: true });
+        expect(events).toEqual([]);
+        expect(agent.stepFailed).toBe(false);
+    });
+
+    test('an already_dead before any cast stays what it was: it can spin', () => {
+        const { ctx, agent, events } = context();
+        ctx.result('nuke', { success: false, reason: 'already_dead', message: 'Petani is dead!' });
+        expect(events).toHaveLength(1);
+        expect(agent.stepFailed).toBe(true);
     });
 });
 

@@ -13,7 +13,7 @@ nuke.details;                                   // from the server: castTimeMs, 
 
 - **The tooltip's wording is its own.** `SpellInfo.description` comes from the database and `spell.details.description` from the server's handler, and they differ: "Heals the target for 36" against "Heals the target for 38 hit points.", "increased by 123%" against "increased to 123% of normal". Test a regex on what the client really holds. A routine reading a tooltip's wording silently never fired on the database's.
 - **A negative heal value is a percent of the caster's own full health,** not the target's (`HealSpellHandler.cs:33`): "Heals the target for 33% hit points." A Healer with 600 health heals 198 with it, on a tank of any size.
-- **A negative `powerCost` or `info.power` is a percent of the pool:** Nature's Ward -8 costs 8 % of full power (`SpellHandler.cs` PowerCost). 267 spell rows, among them pets, skins and hybrid self-buffs.
+- **A negative `powerCost` or `info.power` is a percent of the pool:** Nature's Ward -8 costs 8 % of full power (`SpellHandler.cs` PowerCost). 267 spell rows, among them pets, skins and hybrid self-buffs. A focus caster pays 120 % of any cost with no focus item, down to 80 % with a good one, so `info.power` understates it ([pets.md](pets.md#summoning)).
 - `info.target` is one of `Enemy`, `Self`, `Realm`, `Group`, `Pet` or `Corpse` (resurrection: `bot.resurrect`, learnings/death-and-rest.md).
 - Common `info.type` values: `DirectDamage`, `Bolt`, `DamageOverTime`, `Lifedrain`, `Heal`, `BaseArmorFactorBuff`, `DamageAdd`, `DamageShield`, `SpeedDecrease`, `Mesmerize`.
 - **Hybrid classes** (Fighter-type classes that later gain spells, and the Cleric/Acolyte line) keep their spells in the skills list instead of a spell line: `lineIndex` is -1 and `skillIndex` is set. `castSpell` handles both forms.
@@ -22,13 +22,15 @@ nuke.details;                                   // from the server: castTimeMs, 
 
 ```typescript
 const c = await bot.castSpell(nuke, mob);       // target: NPC, player, name, object id, or omitted (current target)
-// c.completed, c.damage, c.resisted, c.castTimeMs, c.reason, c.retryAfterMs
+// c.completed, c.damage, c.resisted, c.effectImmune, c.castTimeMs, c.reason, c.retryAfterMs
 ```
 
 1. Walks into range (85 % of the spell's range from the DB, else 1500) unless `approach: false`.
 2. Selects the target every time, even when the state already shows it: the server drops our target when we die and doesn't tell the client, so the snapshot can show a stale one after a release. On "You must select a target" it selects again and retries once. Then it stops moving, stands up if sitting, and faces the target.
 3. Casts, then waits for "You begin casting a X spell!".
 4. Waits for completion. "You cast a X spell!" (SpellHandler.cs:1337) counts at once. Weaker evidence counts only once the cast time is up: a spell effect, a resist, "Your X hits" for this spell, or a bare "You hit the Y for N damage!". "Extra damage" and "additional" lines (damage adds, procs, crits) never count, and an interrupt after weak evidence still wins. `c.damage` sums only this spell's hits.
+
+**A cast that goes off and can't land** succeeds with `effectImmune`, power spent and nothing rolled: "Your target is immune to this effect!" (a player already mezzed or within its immunity, an NPC's mezz immunity), and "Your target is enraged and resists the spell!": a mezz takes no NPC under 75 % health (`CCSpellHandler.cs:174-178`), which the message reads as `(target enraged)`. A root has no such floor, and a player none. Don't cast again: it would repeat that.
 
 **Self** spells keep the current target. **Realm/Group** spells (heals, buffs) target ourselves when no target is given. Casting one on an enemy is refused with `invalid_target`; the server would give no answer at all.
 
@@ -48,7 +50,7 @@ const c = await bot.castSpell(nuke, mob);       // target: NPC, player, name, ob
 
 ## Caster tactics
 
-- **A swing at you interrupts a cast through a timer, at the halfway mark** (`SpellHandler.PerformDuringCastInterruptCheck`). Each swing that targets you starts a timer lasting until the attacker's next swing (`AttackComponent.cs:1110`), about 3.1 s on the mobs measured; if it's still running when the cast reaches halfway, the cast ends.
+- **A swing at you interrupts a cast through a timer, at the halfway mark** (`SpellHandler.PerformDuringCastInterruptCheck`). Each swing that targets you, a miss too, starts a timer lasting until the attacker's next swing (`AttackComponent.cs:1110`), about 3.1 s on the mobs measured. A resisted spell with damage or a cast time starts one of 3 s (`SpellHandler.cs:2415-2420`). If one is still running when the cast reaches halfway, the cast ends. So a hit long before the halfway mark changes nothing: a hit 5.1 s into a servant's 19.6 s cast didn't stop it, one at 9.4 s did.
   - **So in melee a cast almost never lands:** a Warden tried 7 times and all 7 were interrupted, 5.1 s each.
   - **A mob below your level sometimes skips the timer,** 5 % per level (`GameLiving.cs:707`), so about 10 % at two levels below and never at your level or above.
   - **Past the halfway mark a swing doesn't interrupt** (`hard_interrupt_on_attacked` is off). Focus spells still do, and moving and crowd control still end a cast. An `Uninterruptible` spell ignores swings, not moving.
@@ -113,5 +115,5 @@ const c = await bot.castSpell(nuke, mob);       // target: NPC, player, name, ob
 - The interrupt and must-wait messages and their `retryAfterMs`.
 - **Pulses** (258 spell rows of 27 types, not only a Bard's songs: Paladin, Skald, Warden, Minstrel, Reaver): one sent keeps going by itself. Sending it again stops it (`CastingComponent.cs:348`), and a new pulse ends the running one (`EffectListComponent.CancelIncompatiblePulseEffects`; focus damage shields, spell group 30, are exempt), so send once and leave it. Its effect can drop out between two pulses, so count it as running until a pulse is overdue. A Warden's Nature's Revenge was being switched off by its own resends; after that fix, 11 of 12 hits carried the extra damage.
 - `sdk.findEffect` matches substrings, shortest name first: with only Lesser Bark Skin on, it passes for Bark Skin and the upgrade never gets cast. To tell ranks apart, compare `sdk.getEffects()` names exactly. `bots/examples/caster.ts` has this trap.
-- Unverified: pets, ground-target spells (`sdk.sendSetGroundTarget`), concentration buffs (`state.concentrationEffects`), resists.
-- Ground targets (from source, not live): when the gameserver has the zone's navmesh loaded, it silently drops a ground target more than 16 units off the mesh (`ground_target_snap_max_distance`). Take z from `navmeshGroundZ(regionId, x, y)` (exported from `sdk/actions.ts`), not `estimateZ`.
+- Pets are in [pets.md](pets.md), in a run in [group-coordination.md](group-coordination.md) and `sdk/group/pets.ts`. Unverified: concentration buffs (`state.concentrationEffects`). Resists: the caster's line prints the rate, which grows with the mob's level: a L10 owner's ice beast 10.5 % at L7, 34.5 % at L23.
+- Ground targets (`sdk.sendSetGroundTarget`, live on an Animist's turrets): when the gameserver has the zone's navmesh loaded, it moves a ground target to the nearest mesh point and drops one more than 16 units off the mesh (`ground_target_snap_max_distance`). Its only answer is "Your ground target is not visible!", to the set itself, and the spot set before it is gone too. A cast then says "You have to set a ground target for this Spell.", or for a fire-and-forget "You can't summon a turret without a ground target !". Take z from `navmeshGroundZ(regionId, x, y)` (exported from `sdk/actions.ts`), not `estimateZ`, and check with `groundTargetSnap` (`sdk/ground.ts`): [pets.md](pets.md#turrets).

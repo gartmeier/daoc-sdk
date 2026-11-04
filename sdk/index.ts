@@ -30,6 +30,8 @@ import type {
     NearbyObject,
     NearbyPlayer,
     NpcDialog,
+    PetCommand,
+    PetState,
     PlayerState,
     Position,
     SDKConfig,
@@ -209,11 +211,15 @@ export function bestNameMatch<T extends { name: string; distance?: number }>(ite
 }
 
 /**
- * Whether we can plausibly attack this NPC: alive, targetable, not flagged
- * peaceful, not a pet, and not of our own realm (realm 'none' = monster).
+ * Whether we can plausibly attack this NPC: targetable, not flagged peaceful and not
+ * of our own realm (realm 'none' = monster). Its health says nothing: a dead one leaves
+ * the list, and one under 1 % reads 0 and fights on (GameLiving.cs:2621). A pet has its owner's
+ * realm (GameNPC.cs:303-305): an enemy realm's can be attacked, as its owner can
+ * (AbstractServerRules.cs:344-348). Ours, and one with no realm to judge by, can't.
  */
 export function isAttackable(npc: NearbyNpc, player: PlayerState | null): boolean {
-    if (npc.healthPercent <= 0 || !npc.isTargetable || npc.isPeaceful || npc.isPet) return false;
+    if (!npc.isTargetable || npc.isPeaceful) return false;
+    if (npc.isPet && (npc.realm === 'none' || !player)) return false;
     if (npc.realm === 'none') return true;
     return !player || npc.realm !== player.realm;
 }
@@ -829,6 +835,26 @@ export class BotSDK {
         return this.state?.trade ?? null;
     }
 
+    /** Our pet's window (0x88), or null without a pet. It holds while the pet is out of view. A pet the window doesn't list (a Theurgist's, a minion) never shows here. */
+    getPetState(): PetState | null {
+        return this.state?.pet ?? null;
+    }
+
+    /** Our window pet's NPC entry, or null: no pet, or it is out of view right now. */
+    getPet(): NearbyNpc | null {
+        const id = this.state?.pet?.objectId;
+        return id === undefined ? null : this.getNearbyNpc(id);
+    }
+
+    /**
+     * Our own pets with no window, the entries in view, nearest first: a Theurgist's, a fire-and-forget turret, a bomber, a
+     * Bonedancer's minion. Known from the 0x1B of their summon (BotWorldState.summons), and never in getPetState. Orders don't reach them.
+     */
+    getSummons(): NearbyNpc[] {
+        const ids = this.state?.summons;
+        return ids?.length ? this.state!.nearbyNpcs.filter(n => ids.includes(n.objectId)) : [];
+    }
+
     /** Open 0x81 dialog box (group invite, quest offer, yes/no), or null. Answer with sendRespondDialog. */
     getDialog(): DialogBox | null {
         return this.state?.dialog?.isOpen ? this.state.dialog : null;
@@ -1082,11 +1108,19 @@ export class BotSDK {
     }
 
     /**
-     * Set the ground target. In a zone where the server has a navmesh loaded it silently drops a
-     * target more than 16 units off the mesh (ground_target_snap_max_distance): take z from navmeshGroundZ.
+     * Set the ground target. Without `z` the client snaps it to its terrain, the ground the mover walks on, under a river the
+     * mesh's plane 16 below the surface (else our own height); a z passed goes out as given. In a zone where the server has a navmesh loaded it drops a target more than
+     * 16 units off the mesh (ground_target_snap_max_distance), and says only "Your ground target is not visible!", and it snaps
+     * one it takes to the nearest walkable ground, so its spot can differ from state.groundTarget: usually by a few units, by more beside a gap in the mesh (PlayerGroundTargetHandler.cs:21-33, ground.ts groundTargetSnap). An NPC's coordinates are always a valid spot.
+     * Two sets need a pause of about 300 ms: that line names no spot, so the answer to a bad one wipes a good one sent within the round trip from state.groundTarget, and the next cast reads it as not in view.
      */
-    async sendSetGroundTarget(x: number, y: number, z: number): Promise<ActionResult> {
+    async sendSetGroundTarget(x: number, y: number, z?: number): Promise<ActionResult> {
         return this.sendAction({ type: 'setGroundTarget', x, y, z, reason: 'SDK' });
+    }
+
+    /** Order our pet; with `targetObjectId`, target that first (our target stays moved). Success means dispatched: bot.* observes the answer. */
+    async sendPetCommand(command: PetCommand, targetObjectId?: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'petCommand', command, targetObjectId, reason: 'SDK' });
     }
 
     /** Use an item in a slot (potions, charged items). */

@@ -11,8 +11,8 @@
 
 import { CON_HEX, conColor } from './con-level';
 import {
-    appendBySeq, canWindDown, ccSeen, conReference, CURRENT_STATES, deathContext, enemyTags, eventVisible, gatewayRestarted, isGroupFrame, isThreat,
-    listedContacts, logLineKind, mapRegion, mergeEvents, npcShown, phaseClass, retryRuns, roleLetter, runFailed, runPill, runRegion, timeLeft,
+    appendBySeq, canWindDown, ccSeen, conReference, contactAim, CURRENT_STATES, deathContext, enemyTags, eventVisible, gatewayRestarted, isGroupFrame, isThreat,
+    listedContacts, logLineKind, mapLabel, mapRegion, memberPetRow, memberRealms, mergeEvents, npcShown, petSide, petTitle, phaseClass, retryRuns, roleLetter, runFailed, runPill, runRegion, timeLeft,
     type FeedFilters, type FeedLine,
 } from './group-logic';
 import { authHeaders, shouldLoadRegion } from './logic';
@@ -494,6 +494,8 @@ interface Scene {
     /** Lower-cased character names → member, in this region. */
     byName: Map<string, GroupMemberView>;
     byObject: Map<number, GroupMemberView>;
+    /** Every member's realm, to tell an enemy's pet from a friend's. */
+    realms: Set<string>;
     contacts: WorldContact[];
     contactById: Map<number, WorldContact>;
     conRef: number | null;
@@ -519,7 +521,7 @@ function scene(): Scene | null {
     const runHere = !!run && CURRENT_STATES.has(run.state) && runRegion(f.members) === region;
     const settings = meta?.settings && typeof meta.settings === 'object' ? meta.settings as Record<string, unknown> : {};
     return {
-        f, region, run, runHere, orders: runHere ? run!.orders ?? null : null, members, byName, byObject,
+        f, region, run, runHere, orders: runHere ? run!.orders ?? null : null, members, byName, byObject, realms: memberRealms(f.members),
         contacts, contactById: new Map(contacts.map(c => [c.objectId, c])), conRef: conReference(f.members, region),
         settings, now: gwNow(), skew: num(run?.skewMs),
     };
@@ -711,7 +713,8 @@ function drawWorld(v: MapView<MapItem>, s: Scene) {
         let r: number;
         if (!onMap(c)) continue;
         if (c.kind === 'npc') {
-            const color = s.conRef !== null ? CON_HEX[conColor(s.conRef, num(c.level))] : CON_HEX.yellow;
+            const side = petSide(c, s.realms);
+            const color = side === 'member' ? '#ffffff' : s.conRef !== null ? CON_HEX[conColor(s.conRef, num(c.level))] : CON_HEX.yellow;
             r = c.npc?.isPet ? 4 : 5.5;
             const dead = c.isDead || num(c.hp, 100) <= 0;
             ctx.globalAlpha = c.board?.stale ? 0.5 : 1;
@@ -726,6 +729,11 @@ function drawWorld(v: MapView<MapItem>, s: Scene) {
             } else {
                 ctx.fillStyle = dead ? '#444' : color;
                 ctx.fill();
+                if (side === 'enemy') {
+                    ctx.strokeStyle = REALM_HEX[c.realm] ?? REALM_HEX.none!;
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
             }
             if (dead) {
                 ctx.strokeStyle = color;
@@ -743,7 +751,7 @@ function drawWorld(v: MapView<MapItem>, s: Scene) {
                 ctx.lineWidth = 1;
                 ctx.beginPath(); ctx.moveTo(sp.x, sp.y); ctx.lineTo(sp.x + hv.x * (r + 6), sp.y + hv.y * (r + 6)); ctx.stroke();
             }
-            if (showLabels || sel || hov) v.label(`${c.name || '(unnamed)'} ${c.level ?? ''}`, sp.x, sp.y - r - 4, color, sel || hov, 3 + num(c.nearest, 1e5) / 1e6);
+            if (showLabels || sel || hov) v.label(mapLabel(c), sp.x, sp.y - r - 4, color, sel || hov, 3 + num(c.nearest, 1e5) / 1e6);
         } else {
             const color = REALM_HEX[c.realm] ?? REALM_HEX.none!;
             r = 6;
@@ -776,19 +784,32 @@ function drawLines(v: MapView<MapItem>, s: Scene) {
     ctx.strokeStyle = 'rgba(255,70,70,0.6)';
     ctx.setLineDash([3, 3]);
     for (const c of s.contacts) {
-        if (c.isDead || !c.target || !onMap(c)) continue;
-        const m = s.byName.get(c.target.toLowerCase());
-        if (m) line(v.toScreen(c.x, c.y), v.toScreen(m.player!.x, m.player!.y));
+        if (c.isDead || c.npc?.owner || !onMap(c)) continue;
+        const m = c.target ? s.byName.get(c.target.toLowerCase()) : undefined;
+        const on = m?.player ?? (c.targetPet && c.targetObjectId !== null ? s.contactById.get(c.targetObjectId) : undefined);
+        if (on) line(v.toScreen(c.x, c.y), v.toScreen(on.x, on.y));
+    }
+    // A member's pet on a thin line to its owner.
+    ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+    ctx.setLineDash([2, 4]);
+    for (const c of s.contacts) {
+        const owner = c.npc?.owner ? s.byName.get(c.npc.owner.toLowerCase())?.player : undefined;
+        if (owner && !c.isDead) line(v.toScreen(c.x, c.y), v.toScreen(owner.x, owner.y));
     }
     ctx.setLineDash([]);
     ctx.strokeStyle = 'rgba(255,225,74,0.5)';
-    for (const m of s.members) {
-        const id = m.player!.targetObjectId;
-        if (id === null || id === undefined) continue;
+    const onTheMap = (id: number | null | undefined) => {
+        if (id === null || id === undefined) return undefined;
         const c = s.contactById.get(id);
-        if (c && !onMap(c)) continue;
-        const t = c ?? s.byObject.get(id)?.player;
+        return c && !onMap(c) ? undefined : c ?? s.byObject.get(id)?.player;
+    };
+    for (const m of s.members) {
+        const t = onTheMap(m.player!.targetObjectId);
         if (t && t !== m.player) line(v.toScreen(m.player!.x, m.player!.y), v.toScreen(t.x, t.y));
+        // PetReport.targetId is the window's: the pet's entry reads 0 while it casts and 65535 while it walks.
+        const pet = m.pet;
+        const on = onTheMap(pet?.targetId);
+        if (pet && on && pet.x !== null && pet.y !== null) line(v.toScreen(pet.x, pet.y), v.toScreen(on.x, on.y));
     }
     // Focus, puller and cc assignments belong to the orders layer.
     const o = layer.orders ? s.orders : null;
@@ -971,10 +992,13 @@ function showTooltip(hit: MapItem | null, sx: number, sy: number) {
         const c = hit.c;
         const ref = conReference(arr(frame?.members), c.regionId);
         const con = c.kind === 'npc' && ref !== null ? conColor(ref, num(c.level)) : null;
+        const pet = petTitle(c, memberRealms(arr(frame?.members)));
         rows.push(`<div class="tname">${esc(c.name || '(unnamed)')}</div>`);
+        if (pet) rows.push(`<div>${esc(pet)}</div>`);
         rows.push(`<div>${c.kind === 'npc' ? 'NPC' : c.enemy ? 'Enemy player' : 'Player'} · level ${esc(c.level)}${con ? ` · <span style="color:${CON_HEX[con]}">${con}</span>` : ''} · ${esc(c.realm)}</div>`);
         rows.push(`<div>HP ${esc(Math.round(num(c.hp, 100)))}%${c.inCombat ? ' · <span class="bad">in combat</span>' : ''}${c.isDead ? ' · dead' : ''}${c.npc?.isPeaceful ? ' · peaceful' : ''}${c.npc?.role ? ` · ${esc(c.npc.role)}` : ''}</div>`);
-        if (c.target) rows.push(`<div class="bad">targeting ${esc(c.target)}</div>`);
+        const aim = contactAim(c);
+        if (aim) rows.push(`<div class="bad">targeting ${esc(aim)}</div>`);
         rows.push(`<div class="muted">seen by ${esc(arr(c.seenBy).join(', ') || 'nobody')}</div>`);
         if (c.board) {
             const cc = c.board.cc ? ` · ${esc(c.board.cc.kind)} by ${esc(c.board.cc.by)}` : '';
@@ -1185,7 +1209,7 @@ function renderRun() {
     const rr = runRegion(f.members);
     const focus = o?.focus !== null && o?.focus !== undefined ? arr(f.world).find(c => c.objectId === o.focus && (rr === null || c.regionId === rr)) : undefined;
     const focusText = o?.focus === null || o?.focus === undefined ? '<span class="muted">none</span>'
-        : focus ? `${esc(focus.name)} L${esc(focus.level)} · ${esc(Math.round(num(focus.hp, 100)))}% → ${esc(focus.target ?? 'nobody')}` : `#${esc(o.focus)} <span class="muted">(no member sees it)</span>`;
+        : focus ? `${esc(focus.name)} L${esc(focus.level)} · ${esc(Math.round(num(focus.hp, 100)))}% → ${esc(contactAim(focus) ?? 'nobody')}` : `#${esc(o.focus)} <span class="muted">(no member sees it)</span>`;
     const cc = arr(o?.cc).map(a => {
         const mob = arr(f.world).find(c => c.objectId === a.targetId && (rr === null || c.regionId === rr));
         const seen = ccSeen(mob, String(a.by));
@@ -1261,6 +1285,7 @@ function renderMembers() {
         ].filter(Boolean).join(' ') : '';
         const activity = m.run ? activityText(m.run.activity, p?.regionId ?? null) : passiveActivity(m);
         const effects = arr(m.run?.effects).join(', ');
+        const pet = memberPetRow(m, id => entityName(id, p?.regionId ?? null));
         return `<div class="member-row${selected === key ? ' sel' : ''}" data-act="select" data-key="${esc(key)}">
             <div class="line"><a href="/viewer/${encodeURIComponent(m.username)}" target="_blank" rel="noopener" title="Open ${esc(m.username)}'s page (observe)"><b>${esc(name)}</b></a>${m.leader ? '<span class="muted" title="leader">★</span>' : ''}
                 <span class="muted">${p ? `L${esc(p.level)}.${String(Math.min(99, Math.floor(num(p.levelPermill) / 10))).padStart(2, '0')} ${esc(p.className)}` : esc(m.bot)} · ${esc(role ?? '?')}</span>
@@ -1270,6 +1295,7 @@ function renderMembers() {
             ${p ? `<div class="mini-bars">${miniBar(p.hp, 'var(--hp)', `health ${Math.round(p.hp)}%`)}${miniBar(p.mana, 'var(--mana)', `power ${Math.round(p.mana)}%`)}</div>` : ''}
             <div class="line">${[groupedText, region, flags].filter(Boolean).join(' · ')}</div>
             ${activity ? `<div class="line activity" title="${esc(effects ? `effects: ${effects}` : 'no effects reported')}">${esc(activity)}</div>` : ''}
+            ${pet ? `<div class="line activity">${esc(pet.text)}</div>${pet.hp !== null ? `<div class="mini-bars">${miniBar(pet.hp, 'var(--hp)', `pet health ${Math.round(pet.hp)}%`)}</div>` : ''}` : ''}
         </div>`;
     }).join('');
     const strangers = arr(f.grouping?.strangers);
@@ -1289,10 +1315,10 @@ function renderContacts() {
         const cc = c.board?.cc ? `<span class="chip" style="color:var(--conc)">${esc(c.board.cc.kind)}</span> ` : '';
         const tags = enemyTags(c).map(t => `<span class="chip">${esc(t)}</span> `).join('');
         return `<li class="${selected === key ? 'sel' : ''}" data-act="select" data-key="${esc(key)}">
-            <span>${focus === c.objectId ? '<span style="color:#ffe14a" title="focus">★</span> ' : ''}<span class="${isThreat(c) ? 'bad' : ''}">${esc(c.name)}</span> <span class="muted">L${esc(c.level)}</span> ${esc(Math.round(num(c.hp, 100)))}%${c.target ? ` → ${esc(c.target)}` : ''}</span>
+            <span>${focus === c.objectId ? '<span style="color:#ffe14a" title="focus">★</span> ' : ''}<span class="${isThreat(c) ? 'bad' : ''}">${esc(c.name)}</span> <span class="muted">L${esc(c.level)}</span> ${esc(Math.round(num(c.hp, 100)))}%${contactAim(c) ? ` → ${esc(contactAim(c))}` : ''}</span>
             <span class="r">${tags}${cc}${c.board?.stale ? 'stale · ' : ''}<span title="${esc(arr(c.seenBy).join(', '))}">seen ${arr(c.seenBy).length}</span> · ${esc(Math.round(num(c.nearest)))}</span></li>`;
     }).join('');
-    const why = 'threats, monsters the group could fight and enemy players, of everything the members see; peaceful NPCs, pets, friendly players and the dead are on the map only';
+    const why = 'threats, monsters the group could fight, enemy players and their pets, of everything the members see; peaceful NPCs, our own pets, friendly players and the dead are on the map only';
     const count = `<span title="${esc(why)}"><b class="count">${listed.length}</b> of ${arr(f.world).length}</span>`;
     setSection('g-contacts', `<h3>Contacts ${count}</h3>${items
         ? `<ul class="list scroll" data-scroll="contacts">${items}</ul>${listed.length > 40 ? `<div class="muted">40 of ${listed.length} shown</div>` : ''}`

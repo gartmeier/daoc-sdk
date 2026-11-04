@@ -281,6 +281,16 @@ export function encodeSit(sit: boolean): Uint8Array {
     return Uint8Array.of(sit ? 1 : 0);
 }
 
+/**
+ * 0x8A PetWindow: u8 aggro (1 aggressive, 2 defensive, 3 passive), u8 walk (1 follow, 2 stay, 3 go to target,
+ * 4 here), u8 command (1 attack, 2 release), 0 = skip that field (PetWindowHandler.cs:13-15). One order per
+ * packet: aggro and walk 2-4 return at once (:22-36, :53-67), while walk 1 falls through to the command (:48-52).
+ * No target field: attack, go to target and release read the server's TargetObject, set by 0xB0.
+ */
+export function encodePetWindow(aggro: number, walk: number, command: number): Uint8Array {
+    return Uint8Array.of(aggro, walk, command);
+}
+
 /** 0xD0 CheckLos response: u16 checker, u16 target, u16 0x0100 = clear (CheckLosResponseHandler.cs:8-10). */
 export function encodeLosResponse(checkerId: number, targetId: number, clear = true): Uint8Array {
     return new PacketWriter(8).u16(checkerId).u16(targetId).u16(clear ? 0x0100 : 0).u16(0).toBytes();

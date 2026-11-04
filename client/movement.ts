@@ -66,9 +66,11 @@ export interface MoverDeps {
      * and every server snap takes z from it instead of interpolating between waypoints, and the swim
      * state flag follows it. Null means unknown there: keep the interpolated z.
      */
-    ground?: (regionId: number, x: number, y: number, zHint: number) => { z: number; swimming: boolean } | null;
+    ground?: (regionId: number, x: number, y: number, zHint: number) => { z: number; swimming: boolean; waterZ?: number } | null;
     /** The character is dead: every 0xA9 carries the DEAD state. */
     isDead?: () => boolean;
+    /** We have a ground target: every 0xA9 says it is in view (see actionFlags). */
+    hasGroundTarget?: () => boolean;
 }
 
 /** A segment that climbs more than this and twice its length is a ladder/off-mesh hop: keep its interpolated z. */
@@ -131,6 +133,15 @@ export class Mover {
     get maxSwimSpeed(): number {
         const base = Math.floor(((Math.min(100, this.waterSpeedPercent) + 100) * PLAYER_BASE_SWIM_SPEED) / 100);
         return Math.floor((base * this.maxSpeedPercent) / 100);
+    }
+
+    /**
+     * The action byte of a 0xA9. Each one overwrites the server's GroundTargetInView (PlayerPositionUpdateHandler.cs:667),
+     * which a ground-target summon checks at the start and the end of its cast (SummonAnimistPet.cs:28, :54). Like line
+     * of sight, we report it clear. PetInView stays off: the server never reads it (:664-671).
+     */
+    get actionFlags(): number {
+        return (this.targetInView ? ActionFlags.TargetInView : 0) | (this.deps.hasGroundTarget?.() ? ActionFlags.GroundTargetInView : 0);
     }
 
     /** The limit where we are now: maxSwimSpeed in deep water, maxSpeed elsewhere. */
@@ -261,6 +272,11 @@ export class Mover {
     holdPosition(ms: number): void {
         if (this.moving) this.finish('stopped', false);
         this.holdUntil = Math.max(this.holdUntil, this.now() + ms);
+    }
+
+    /** The cast it was for has ended early: walk again. */
+    releaseHold(): void {
+        this.holdUntil = 0;
     }
 
     get holding(): boolean {
@@ -401,7 +417,7 @@ export class Mover {
             stateFlags: this.deps.isDead?.() ? StateFlags.Dead : this.swimming ? StateFlags.Swimming : this.sitting ? StateFlags.Sitting : 0,
             fallingDamage: 0x8000,
             heading: this.heading,
-            actionFlags: this.targetInView ? ActionFlags.TargetInView : 0,
+            actionFlags: this.actionFlags,
             healthPercent: this.healthPercent,
         });
         this.lastSentAt = this.now();

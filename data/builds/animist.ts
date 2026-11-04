@@ -2,7 +2,7 @@ import type { ClassBuilds } from './types';
 
 export default {
     className: 'Animist',
-    notes: 'Budget 299 at 24, 1494 at 50 (ClassAnimist.cs:30, multiplier 10). No autotrain. Starts as Forester, whose only line is Arboreal Path (classes.json), so Creeping and Verdant wait for promotion at 5. A line kept at character level eats every point up to 40; the 220 half-level points from 40.5 on are what pay for a second line. All three lines have baselines that come with level. No source gave level-24 numbers. Caveat for bots: the turret and pet spells need pet handling that was not checked here.',
+    notes: 'Budget 299 at 24, 1494 at 50 (ClassAnimist.cs:30, multiplier 10). No autotrain. Starts as Forester, whose only line is Arboreal Path (classes.json), so Creeping and Verdant wait for promotion at 5. A line kept at character level eats every point up to 40; the 220 half-level points from 40.5 on are what pay for a second line. All three lines have baselines that come with level. No source gave level-24 numbers. Caveat for bots: turrets stay out of the automatic pet behaviours of a group (sdk/group/pets.ts), so a routine in a character file has to place them, through bot.summonPet.',
     builds: [
         {
             name: 'Arboreal group',

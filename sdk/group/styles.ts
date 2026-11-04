@@ -3,6 +3,7 @@
 // keeps a first style and a backup and decides between them when the swing happens (learnings/combat.md),
 // so a style with an opening goes first and a plain one behind it.
 
+import { DUAL_LINES, WEAPON_LINES } from '../actions-helpers';
 import { EquipmentSlot, ObjectType, type BotWorldState, type CombatResult, type InventoryItem, type Style } from '../types';
 import type { StylePick } from './behaviors';
 
@@ -11,17 +12,8 @@ export const ANYTIME_STYLE = 0x100;
 
 type Worn = Pick<InventoryItem, 'slot' | 'objectType'>;
 
-/** The lines whose styles need a weapon in each hand; the tooltip names the line (Style.GetRequiredWeaponName). */
-export const DUAL_LINES = new Set(['Dual Wield', 'Left Axe', 'Hand to Hand', 'Celtic Dual']);
-
-/** The spec a weapon type swings with, in the words of a style's tooltip (SkillBase.m_objectTypeToSpec); a left axe counts as an axe (StyleProcessor.CheckWeaponType). */
-export const WEAPON_LINES: Partial<Record<number, string>> = {
-    [ObjectType.CrushingWeapon]: 'Crush', [ObjectType.SlashingWeapon]: 'Slash', [ObjectType.ThrustWeapon]: 'Thrust',
-    [ObjectType.TwoHandedWeapon]: 'Two Handed', [ObjectType.PolearmWeapon]: 'Polearm', [ObjectType.Staff]: 'Staff', [ObjectType.Flexible]: 'Flexible',
-    [ObjectType.Sword]: 'Sword', [ObjectType.Hammer]: 'Hammer', [ObjectType.Axe]: 'Axe', [ObjectType.LeftAxe]: 'Axe', [ObjectType.Spear]: 'Spear',
-    [ObjectType.Blades]: 'Blades', [ObjectType.Blunt]: 'Blunt', [ObjectType.Piercing]: 'Piercing', [ObjectType.LargeWeapons]: 'Large Weapons',
-    [ObjectType.CelticSpear]: 'Celtic Spear', [ObjectType.Scythe]: 'Scythe', [ObjectType.HandToHand]: 'Hand to Hand',
-};
+/** The tables live with the SDK's own choice of melee slot (actions-helpers.ts); the gear code reads them from here. */
+export { DUAL_LINES, WEAPON_LINES };
 
 /**
  * Whether what we wear can swing this style (StyleProcessor.CheckWeaponType). A style the server hasn't described

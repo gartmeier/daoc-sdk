@@ -9,7 +9,7 @@ const r = await bot.rest({ healthPercent: 90 });                 // casters: add
 
 - **Sitting:** `rest` sits, and waits for the server's "You sit down." (a refused sit fails). It stands up again when the thresholds are reached, on failure, and on cancel.
 - **Live:** health went from 89 % to 100 % in 18 s at level 1. (DAoC regenerates faster sitting; standing rates were not measured.) A level-5 Blademaster from 16-34 % took about 96-160 s including its walks, and about 80 s at level 6. `rest` stops at 120 s by default, so size a script's timeout for that.
-- **Attacked while sitting:** a mob attacking you while you sit ends the rest with `attacked`. Fight it (`bot.getAttackers()[0]`), then rest again. `rest` refuses to start while an NPC in view targets you or hit you in the last 6 s (`in_combat`).
+- **Attacked while sitting:** a mob attacking you while you sit ends the rest with `attacked`. Fight it (`bot.getAttackers()[0]`), then rest again. `rest` refuses to start while an NPC in view targets you or hit you in the last 6 s (`in_combat`), and while a pet of yours fights or a mob is on it ([pets.md](pets.md#fighting)).
 - **No sitting:** `bot.waitForHealth(percent)` waits without sitting.
 - **Healers** (Brother Maynard <Healer>, near the Albion start) answer interact. In DAoC they remove constitution loss after deaths; untested here.
 
@@ -18,16 +18,17 @@ const r = await bot.rest({ healthPercent: 90 });                 // casters: add
 You know you died when `bot.isDead()` / `player.isDead` is true. `player.deathCount` also goes up.
 
 - **Running actions fail with `died`:** `walkTo`, `killNpc` and `grind` stop.
-- **The server says** "You will now release automatically in 8 more seconds!" after a death. It may release you before you do.
+- **A `/release` in the first 10 s after a death doesn't release.** It arms the server's automatic release ("You will now release automatically in 8 more seconds!"), a second one disarms it ("You will no longer release automatically."), and one in the last second goes at once (`GamePlayer.cs:1438-1449`). After the 10 s it goes at once.
+- **Your pet:** a window pet goes with you, a Theurgist's and a fire-and-forget turret don't ([pets.md](pets.md#death-and-loss)).
 - **Waiting for a rez instead:** see Resurrection below; once you release there is no way back.
 - **Release yourself:**
   ```typescript
   if (bot.isDead()) {
-      const rel = await bot.releaseAndRespawn();   // retries /release until allowed; waits for the bind point
+      const rel = await bot.releaseAndRespawn();   // inside the 10 s it waits for the automatic release; then for the bind point
       console.log(rel.message, rel.regionId, rel.position);
   }
   ```
-  After a release you are at your **bind point**, alive with low health. Rest before fighting again.
+  It takes about 50 ms after the 10 s, and what is left of them before. After a release you are at your **bind point** with full health, power and endurance (`GamePlayer.cs:1668-1670`). A snapshot right after the jump can still read 0.
 - **Grinding:** `grind({ respawn: true })` releases, walks back to the anchor and carries on. With `respawn: false` (the default) it stops with `stopReason: 'died'`. Deaths the server auto-released are counted too.
 - **Viewers:** a real client shows a player as dead from the state byte of its 0xA9 (0x14, SITTING|SWIMMING), and the server relays that byte as the player's client sent it. The client sends it while `player.isDead`. Without it a real client showed the corpse dying and vanishing over and over, with one 0xAE and no remove or create from the server; with it the corpse lies still (verified in a real 1.127 client). Moving, turning and jumping are refused while dead.
 - **Nobody releases an idle corpse for you:** without a running script a dead bot lies there for the server's full release timer, 900 s.
@@ -78,7 +79,7 @@ sdk.getResurrectionOffer();                        // { caster, healthPercent } 
   ```typescript
   await runScript(async ({ sdk }) => (await sdk.sendQuit()).message, { printState: false });
   ```
-- **Quit timer:** with `disable_quit_timer` quit is instant out of combat. After recent combat the server still says "You will quit after sitting for 59 seconds", so give it a minute.
+- **Quit timer:** with `disable_quit_timer` quit is instant out of combat. After recent combat the server still says "You will quit after sitting for 59 seconds", so give it a minute. With a mob on you it doesn't finish, as each blow restarts the minute (`GamePlayer.cs:730-737`): the client logs `quit: no 0xA4 after 75000 ms; closing anyway` and exits 0, and the character stays in the world link-dead about 60 s more (0x2C code 0x11 at login; a row read then is stale, and one written then is overwritten by the save). Lose the mob first.
 - **Lockout:** a socket that drops while you are in the world leaves the character **link-dead for 60 s**. Logins are refused meanwhile with 0x2C code 0x11 (`AccountIsInLogoutProcedure`). The runner waits 65 s and retries by itself. Just wait.
 - **Quitting while dead:** `/quit` is refused while dead. `sdk.sendQuit()` releases first by itself (verified live: "quit: dead, releasing first", then exit 0).
 - **Event loop:** a busy-wait loop that stalls the event loop for more than 5 s stops the heartbeat, and the server starts link-death recovery.

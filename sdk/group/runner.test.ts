@@ -8,13 +8,14 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { getSpells } from '../../data/index';
 import { createGateway, type Gateway } from '../../gateway/gateway';
 import type { GroupFrame, RunView } from '../../gateway/group-types';
 import { BotActions } from '../actions';
 import { executionContext, type ExecutionContext } from '../execution-context';
 import { BotSDK } from '../index';
 import { FakeClient } from '../test/fake-client';
-import type { PlayerState } from '../types';
+import type { PlayerState, Spell } from '../types';
 import type { Behavior } from './member';
 import { runGroup, type GroupRunOptions, type GroupRunResult } from './runner';
 import type { GroupStrategy } from './strategy';
@@ -315,5 +316,120 @@ describe('runGroup and the gateway', () => {
         // Still parked: the end came from the abort, not from the finally.
         expect(run.settled()).toBe(false);
         run.leaveParked();
+    });
+});
+
+describe('runGroup with a pet', () => {
+    const summonSpell = (name: string) => { const s = getSpells().find(x => x.name === name)!; return { name: s.name, level: 20, internalId: s.id, lineName: '', lineIndex: 0, spellIndex: 0, cooldownRemaining: 0 } as Spell; };
+    const listsOf = () => publishes().find(b => b.meta)!.meta!.members.map(m => m.behaviors);
+    const roleList = () => { const b = (name: string): Behavior<{ huntRadius: number }> => ({ name, run: () => false }); return { ...stub(), behaviors: { tank: [b('release'), b('sprint'), b('retreat'), b('tank'), b('holdFormation'), b('buff'), b('rest')], healer: [], support: [], nuker: [], melee: [] } } as GroupStrategy<{ huntRadius: number }>; };
+
+    test('a member with a summon gets the pet behaviours; one without has its list untouched', async () => {
+        const have = await connect('rguser');
+        clients.at(-1)!.state.skills = { ...clients.at(-1)!.state.skills, spells: [summonSpell('Summon Spirit Fighter')] };
+        await until(() => have.sdk.getSkills().spells.length > 0, 'the spell list');
+        const run = start('rg', { have, strategy: roleList(), seconds: 0.2 });
+        await run.done;
+        expect(listsOf()).toEqual([['release', 'sprint', 'petControl', 'retreat', 'petHeal', 'summonPet', 'tank', 'holdFormation', 'petBuff', 'buff', 'rest']]);
+    });
+
+    test('a member without one: the list as the strategy gave it', async () => {
+        const run = start('rg', { have: await connect('rguser'), strategy: roleList(), seconds: 0.2 });
+        await run.done;
+        expect(listsOf()).toEqual([['release', 'sprint', 'retreat', 'tank', 'holdFormation', 'buff', 'rest']]);
+    });
+
+    test('a run\'s end tells a pet to follow, beside the attack off and the stop; with no pet nothing goes', async () => {
+        const have = await connect('rguser');
+        const c = clients.at(-1)!;
+        c.state = { ...c.state, pet: { objectId: 900, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null } };
+        await until(() => have.sdk.getPetState(), 'the pet window');
+        await start('rg', { have, seconds: 0.2 }).done;
+        expect(c.actions.filter(a => a.type === 'petCommand')).toMatchObject([{ type: 'petCommand', command: 'follow' }]);
+    });
+
+    test('a run that ends in a retreat doesn\'t leave the pet passive: nothing else lifts that, and a solo killNpc orders no passive pet', async () => {
+        const have = await connect('rguser');
+        const c = clients.at(-1)!;
+        c.state = { ...c.state, pet: { objectId: 900, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null } };
+        await until(() => have.sdk.getPetState(), 'the pet window');
+        const retreating: GroupStrategy<{ huntRadius: number }> = { ...roleList(), decide: () => ({ phase: 'retreat', focus: null, retreatTo: { x: 0, y: 0, z: 0 }, reason: 'stub: running' }) };
+        await start('rg', { have, strategy: retreating, seconds: 0.2, graceMs: 300 }).done;
+        expect(c.actions.filter(a => a.type === 'petCommand').map(a => (a as { command?: string }).command)).toEqual(['passive', 'defensive', 'follow']);
+    });
+
+    test('a member who dies before the observer\'s first sample counts: "15:46:02 Pettan: Pettan died", and the report said deaths 0 (20261103-154557)', async () => {
+        const have = await connect('rguser');
+        const c = clients.at(-1)!;
+        // Long enough to see the death under a loaded test run; the observer's first sample comes at 1 s.
+        const run = start('rg', { have, seconds: 1.5, graceMs: 300 });
+        await runIn('rg', 'live');
+        c.state = { ...c.state, player: { ...c.state.player!, isDead: true } };
+        const result = await run.done;
+        expect(result.totals.deaths).toBe(1);
+        expect(run.text().join('\n')).toContain(`${have.sdk.getPlayer()?.name ?? 'Rguser'} died`);
+    });
+
+    describe('a hard stop by pre-emption can\'t lift a passive', () => {
+        // Pethun taken during a retreat (20261103-164643): "16:46:53.434 pethun pet now hunter's pet passive/follow tgt=null". The run's finally skips a member whose SDK is no longer connected.
+        const takeOver = async () => {
+            const other = new BotSDK({ botUsername: 'rguser', password: PASSWORD, gatewayUrl: url, connectionMode: 'control', autoLaunchClient: false, showChat: false });
+            sdks.push(other);
+            await other.connect();
+        };
+        const withPet = async () => {
+            const have = await connect('rguser');
+            const c = clients.at(-1)!;
+            c.state = { ...c.state, pet: { objectId: 900, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null } };
+            await until(() => have.sdk.getPetState(), 'the pet window');
+            return { have, c, name: have.sdk.getPlayer()!.name };
+        };
+        const retreating = (): GroupStrategy<{ huntRadius: number }> => ({ ...roleList(), decide: () => ({ phase: 'retreat', focus: null, retreatTo: { x: 0, y: 0, z: 0 }, reason: 'stub: running' }) });
+
+        test('the run\'s log says so: it can\'t be sent from the cut connection', async () => {
+            const { have, c, name } = await withPet();
+            const run = start('rg', { have, strategy: retreating(), seconds: 60 });
+            await until(() => c.actions.some(a => a.type === 'petCommand' && (a as { command?: string }).command === 'passive'), 'the passive');
+            await takeOver();
+            await expect(run.done).rejects.toThrow('pre-empted');
+            expect(run.text().join('\n')).toContain(`${name}'s pet left passive`);
+            // Nothing went after the cut: no defensive, no follow.
+            expect(c.actions.filter(a => a.type === 'petCommand').map(a => (a as { command?: string }).command)).toEqual(['passive']);
+        });
+
+        test('with no passive of ours there is nothing to say', async () => {
+            const { have, name } = await withPet();
+            const run = start('rg', { have, seconds: 60 });
+            await runIn('rg', 'live');
+            await takeOver();
+            await expect(run.done).rejects.toThrow('pre-empted');
+            expect(run.text().join('\n')).not.toContain(`${name}'s pet left`);
+        });
+
+        test('nor at a normal end: that one lifts it', async () => {
+            const { have, name } = await withPet();
+            const run = start('rg', { have, strategy: retreating(), seconds: 0.2, graceMs: 300 });
+            await run.done;
+            expect(run.text().join('\n')).not.toContain(`${name}'s pet left`);
+        });
+    });
+
+    test('pet.enabled false: the same member\'s list stays as the strategy gave it, and the end of the run leaves its pet alone', async () => {
+        const have = await connect('rguser');
+        const c = clients.at(-1)!;
+        c.state = { ...c.state, skills: { ...c.state.skills, spells: [summonSpell('Summon Spirit Fighter')] }, pet: { objectId: 900, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null } };
+        await until(() => have.sdk.getSkills().spells.length > 0 && have.sdk.getPetState(), 'the spell list and the pet window');
+        await start('rg', { have, strategy: roleList(), seconds: 0.2, settings: { 'pet.enabled': 'false' } }).done;
+        expect(listsOf()).toEqual([['release', 'sprint', 'retreat', 'tank', 'holdFormation', 'buff', 'rest']]);
+        expect(c.actions.some(a => a.type === 'stop')).toBe(true);
+        expect(c.actions.filter(a => a.type === 'petCommand')).toEqual([]);
+    });
+
+    test('no pet: no pet command at the end', async () => {
+        const have = await connect('rguser');
+        const c = clients.at(-1)!;
+        await start('rg', { have, seconds: 0.2 }).done;
+        expect(c.actions.some(a => a.type === 'stop')).toBe(true);
+        expect(c.actions.filter(a => a.type === 'petCommand')).toEqual([]);
     });
 });

@@ -4,13 +4,14 @@
 //   onStateChange(fn)    published at most every 250 ms, and promptly on significant changes
 //   execute(action)      every BotAction, sent as real packets; success = dispatched
 
-import type { ActionResult, BotAction, BotWorldState, ClientPhase, PlayerState, Vec3 } from '../sdk/types';
+import type { ActionResult, BotAction, BotWorldState, ClientPhase, PetCommand, PlayerState, Vec3 } from '../sdk/types';
 import { getZone } from '../data/zones';
 import { DaocSession, SessionError, type SessionEndReason } from './session';
 import { ClientOp } from './protocol/opcodes';
 import * as out from './protocol/outgoing';
 import { headingTo, type MoverDeps } from './movement';
 import { realmName } from './model/classes';
+import { groundTargetZ } from '../sdk/ground';
 import { coinDrops, COPPER_PER } from './model/world-model';
 
 export interface DaocClientOptions {
@@ -50,6 +51,13 @@ const STALE_POSITION_MS = 4000;
 
 /** A 0xDD to a player has toSlot = 1000 + objectId, which must fit its u16 and exceed 1000 (PlayerMoveItemRequestHandler.cs:16-21). */
 const tradeOid = (oid: number): boolean => Number.isInteger(oid) && oid > 0 && oid <= 0xFFFF - 1000;
+
+/** PetCommand as the bytes of 0x8A (PetWindowHandler.cs:13-15). */
+const PET_COMMAND_BYTES: Readonly<Record<PetCommand, readonly [aggro: number, walk: number, command: number]>> = {
+    aggressive: [1, 0, 0], defensive: [2, 0, 0], passive: [3, 0, 0],
+    follow: [0, 1, 0], stay: [0, 2, 0], goTarget: [0, 3, 0], comeHere: [0, 4, 0],
+    attack: [0, 0, 1], release: [0, 0, 2],
+};
 
 const ok = (message: string, data?: unknown): ActionResult => ({ success: true, message, phase: 'dispatch', ...(data !== undefined ? { data } : {}) });
 const fail = (reason: string, message: string, phase: ActionResult['phase'] = 'validation'): ActionResult => ({ success: false, message, reason, phase });
@@ -234,10 +242,10 @@ export class DaocClient {
             concentration: self.concentration, maxConcentration: self.maxConcentration,
             experience: self.experience, experienceForNextLevel: self.experienceForNextLevel, levelPermill: self.levelPermill,
             realmPoints: self.realmPoints, bountyPoints: self.bountyPoints, specPoints: self.specPoints,
-            realmSpecPoints: self.realmSpecPoints, money: { ...self.money }, stats: self.stats ? { ...self.stats } : null,
+            realmSpecPoints: self.realmSpecPoints, money: { ...self.money }, stats: self.stats ? { ...self.stats } : null, statsWithoutItems: self.statsWithoutItems ? { ...self.statsWithoutItems } : null,
             constitutionLost: self.constitutionLost, encumbrance: self.encumbrance ? { ...self.encumbrance } : null,
             isDead: self.isDead, isSitting: self.isSitting || mv.sitting, attacking: self.attacking, inCombat: m.inCombat(),
-            targetObjectId: self.targetObjectId, deathCount: self.deathCount, lastDeathAt: self.lastDeathAt,
+            targetObjectId: self.targetObjectId, deathCount: self.deathCount, lastDeathAt: self.lastDeathAt, isShade: m.isShade(),
         } : null;
         return {
             tick: this.tick,
@@ -267,6 +275,10 @@ export class DaocClient {
             concentrationEffects: m.concentrationEffects.map(c => ({ ...c })),
             groundTarget: m.groundTarget,
             trade: m.trade,
+            pet: m.pet,
+            lastPetLoss: m.lastPetLoss,
+            summons: [...m.summons.keys()],
+            freshSummons: m.freshSummons(),
         };
     }
 
@@ -288,6 +300,11 @@ export class DaocClient {
     private targetServer(objectId: number): void {
         this.send(ClientOp.PlayerTarget, out.encodeTarget(objectId));
         this.session!.model.setSelfTarget(objectId);
+    }
+
+    /** flagSpeedData of a prefixed packet. Each one overwrites the server's GroundTargetInView (UseSpellHandler.cs:84, UseSkillHandler.cs:41, UseSlotHandler.cs:39); see Mover.actionFlags. */
+    private useFlags(): number {
+        return this.session!.model.groundTarget ? out.FLAG_TARGET_IN_VIEW | out.FLAG_GT_IN_VIEW : out.FLAG_TARGET_IN_VIEW;
     }
 
     /** Make sure the server has a recent 0xA9 before a position-prefixed packet (see STALE_POSITION_MS). */
@@ -480,7 +497,7 @@ export class DaocClient {
                 if (t !== null) this.faceObject(t);
                 const stale = this.ensureFreshPosition();
                 if (stale) return stale;
-                this.send(ClientOp.UseSkill, out.encodeUseSkill(this.prefix(), a.skillIndex, 1));
+                this.send(ClientOp.UseSkill, out.encodeUseSkill(this.prefix(), a.skillIndex, 1, this.useFlags()));
                 const sk = m.usableSkills[a.skillIndex + specCount];
                 return ok(`used skill ${sk?.name ?? a.skillIndex}`);
             }
@@ -495,21 +512,45 @@ export class DaocClient {
                 const stale = this.ensureFreshPosition();
                 if (stale) return stale;
                 mv.holdPosition(600); // until 0x72 tells us the real cast time
-                this.send(ClientOp.UseSpell, out.encodeUseSpell(this.prefix(), sp.level, a.lineIndex));
+                this.send(ClientOp.UseSpell, out.encodeUseSpell(this.prefix(), sp.level, a.lineIndex, this.useFlags()));
                 return ok(`casting ${sp.name}`);
             }
             case 'setGroundTarget': {
-                if (![a.x, a.y, a.z].every(Number.isFinite)) return fail('bad_args', 'x/y/z must be finite numbers');
-                this.send(ClientOp.PlayerGroundTarget, out.encodeGroundTarget(a.x, a.y, a.z, true));
-                m.groundTarget = { x: a.x, y: a.y, z: a.z };
+                if (![a.x, a.y, a.z ?? 0].every(Number.isFinite)) return fail('bad_args', 'x/y/z must be finite numbers');
+                // The server drops a spot over 16 off the mesh (PlayerGroundTargetHandler.cs:63-85), and our own z misses it on any
+                // slope. Without one: the ground there, as the mover takes it but on the mesh's plane in water, else our own height to go by.
+                const ground = a.z === undefined ? this.opts.ground?.(mv.regionId, a.x, a.y, mv.z) : null;
+                const z = a.z ?? (ground ? groundTargetZ(ground) : mv.z);
+                this.send(ClientOp.PlayerGroundTarget, out.encodeGroundTarget(a.x, a.y, z, true));
+                m.groundTarget = { x: a.x, y: a.y, z };
                 return ok('ground target set');
+            }
+            case 'petCommand': {
+                if (!Object.hasOwn(PET_COMMAND_BYTES, a.command)) return fail('bad_args', `unknown pet command ${a.command}`);
+                const chosen = a.targetObjectId;
+                if (chosen !== undefined && chosen !== m.self.objectId) {
+                    const bad = requireObject(chosen);
+                    if (bad) return bad;
+                }
+                const t = chosen ?? m.self.targetObjectId;
+                const targetNpc = t !== null ? m.npcs.get(t) : undefined;
+                // Without a window every command returns without a word (GamePlayer.cs:12170-12315): don't ask. Only a
+                // release has another way in: it takes a targeted pet of ours, say a minion (CharacterClassBase.cs:332-339).
+                if (!m.pet && !(a.command === 'release' && targetNpc?.isPet && targetNpc.realm === m.self.realm)) return fail('no_pet', 'no pet');
+                if ((a.command === 'attack' || a.command === 'goTarget') && t === null) return fail('no_target', 'no target: use setTarget first or pass targetObjectId');
+                // TargetObject is set before the 0x8A is read (PlayerTargetHandler.cs:39, PacketProcessor.cs:160-192).
+                if (chosen !== undefined) this.targetServer(chosen);
+                if (a.command === 'attack') m.notePetAttack(t!);
+                const [aggro, walk, command] = PET_COMMAND_BYTES[a.command];
+                this.send(ClientOp.PetWindow, out.encodePetWindow(aggro, walk, command));
+                return ok(`pet command ${a.command}`);
             }
             case 'useItem': {
                 if (!Number.isInteger(a.slot) || a.slot < 0 || a.slot > 255) return fail('bad_args', `bad slot ${a.slot}`);
                 if (a.slot >= 40 && !m.items.has(a.slot)) return fail('empty_slot', `no item in slot ${a.slot}`);
                 const stale = this.ensureFreshPosition();
                 if (stale) return stale;
-                this.send(ClientOp.UseSlot, out.encodeUseSlot(this.prefix(), a.slot, a.useType ?? 0));
+                this.send(ClientOp.UseSlot, out.encodeUseSlot(this.prefix(), a.slot, a.useType ?? 0, this.useFlags()));
                 return ok(`used slot ${a.slot}`);
             }
             case 'moveItem': {
@@ -690,10 +731,10 @@ function roundOrNull(v: number | null): number | null {
     return v === null ? null : Math.round(v);
 }
 
-function encodeJump(mv: { x: number; y: number; z: number; heading: number; zoneId: number | null; sessionId: number; objectId: number; healthPercent: number }): Uint8Array {
+function encodeJump(mv: { x: number; y: number; z: number; heading: number; zoneId: number | null; sessionId: number; objectId: number; healthPercent: number; actionFlags: number }): Uint8Array {
     return out.encodePositionUpdate({
         x: mv.x, y: mv.y, z: mv.z, speed: 0, zSpeed: 0, sessionId: mv.sessionId, objectId: mv.objectId,
         zoneId: mv.zoneId ?? 0, stateFlags: out.StateFlags.Jumping, heading: mv.heading,
-        actionFlags: out.ActionFlags.TargetInView, healthPercent: mv.healthPercent,
+        actionFlags: mv.actionFlags, healthPercent: mv.healthPercent,
     });
 }

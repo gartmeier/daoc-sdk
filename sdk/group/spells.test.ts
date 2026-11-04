@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { getSpell, getSpellLines, getSpells } from '../../data/index';
 import type { BotActions } from '../actions';
+import { worstPowerCost } from '../actions-helpers';
 import type { BotSDK } from '../index';
-import type { Spell } from '../types';
+import { makePlayer } from '../test/fixtures';
+import type { PlayerState, Spell } from '../types';
 import { dotFamily, healAmount, pickHeal, pickNuke, Spellbook, toPick, type SpellPick } from './spells';
 
 // The spells of each line up to a level, with their real DB rows (as spellsOf builds them).
@@ -129,6 +131,16 @@ describe('Spellbook.mezz and cc: what can be cast at an add', () => {
         expect(name(book([['Dark Wave', 20], ['Lessen Movement', 4]]).cc())).toBe('Lessen Movement');
         expect(book([['Heavenly Visions', 20]]).capabilities().cc).toBe(false);
     });
+    test('root(): the root with a mezz ready too, and capabilities say who holds one (assignCc reads it: an NPC under 75 % takes no mezz)', () => {
+        const hrafna = book([['Hold Spirit', 10], ['Lessen Movement', 4]]);
+        expect(hrafna.cc()).toMatchObject({ kind: 'mezz' });
+        expect(hrafna.root()).toMatchObject({ kind: 'root', spell: { name: 'Lessen Movement' } });
+        expect(hrafna.capabilities()).toMatchObject({ cc: true, root: true });
+        const merlin = book([['Major Mesmerization', 18]]);
+        expect(merlin.root()).toBeNull();
+        expect(merlin.capabilities().cc).toBe(true);
+        expect('root' in merlin.capabilities()).toBe(false);
+    });
     test('an area mezz only with aoe, and only after the single-target ones', () => {
         const merlin = book([['Fog of Senility', 20], ['Major Mesmerization', 18]]);
         expect(name(merlin.mezz())).toBe('Major Mesmerization');
@@ -175,5 +187,206 @@ describe('pickHeal', () => {
 
     test('nothing to pick from', () => {
         expect(pickHeal([], { casterMaxHp: 100 })).toBeNull();
+    });
+});
+
+describe('Spellbook: pets (real spell rows)', () => {
+    // Every spell of the named lines up to a level, as a member of that spec knows them.
+    function book(lines: Record<string, number>, player: Partial<PlayerState> = {}, cooldowns: Record<string, number> = {}): Spellbook {
+        const spells = known(lines).map(s => ({ ...s.spell, cooldownRemaining: cooldowns[s.spell.name] ?? 0 }));
+        const sdk = { getSkills: () => ({ spells }), getPlayer: () => ({ mana: 500, maxHealth: 400, ...player }) } as unknown as BotSDK;
+        const bot = { getSpellInfo: (s: Spell) => getSpell(s.internalId) ?? null } as unknown as BotActions;
+        return new Spellbook(sdk, bot);
+    }
+
+    test('toPick carries the icon, which is how a pet buff is seen on the pet', () => {
+        const info = getSpell(2860)!;
+        expect(toPick({ name: info.name, level: 7 } as Spell, info).icon).toBe(2860);
+    });
+
+    describe('summon(): the window pets the group summons by itself', () => {
+        test('the top rank each class knows, whatever it costs or its timer says: the behaviour weighs that', () => {
+            expect(name(book({ Summoning: 20 }).summon())).toBe('Summon Spirit Warrior');
+            expect(name(book({ Summoning: 19 }).summon())).toBe('Summon Spirit Swordsman');
+            expect(name(book({ 'Spirit Animation': 20 }).summon())).toBe('Emerald Simulacrum');
+            expect(name(book({ Enchantment: 20 }).summon())).toBe('Underhill Compatriot');
+            expect(name(book({ 'Druid Nature Spec': 12 }).summon())).toBe('Call Nature Spirit');
+            expect(name(book({ Beastcraft: 13 }).summon())).toBe('Hunter\'s Ally');
+            expect(name(book({ 'Bone Army': 15 }).summon())).toBe('Summon Bone Chieftan');
+            expect(name(book({ Summoning: 20 }, { mana: 0 }, { 'Summon Spirit Warrior': 30 }).summon())).toBe('Summon Spirit Warrior');
+        });
+
+        describe('a pet capped far below us is no pet to keep up: its level is a percent of ours up to its value (GameSummonedPet.cs:34-52)', () => {
+            test('a Heal druid at Nature 1: L7 from Call Minor Nature Spirit, fine at 14, and not at 15 for 25 % of her power each time', () => {
+                expect(name(book({ 'Druid Nature Spec': 1 }, { level: 10 }).summon())).toBe('Call Minor Nature Spirit');
+                expect(name(book({ 'Druid Nature Spec': 1 }, { level: 14 }).summon())).toBe('Call Minor Nature Spirit');
+                expect(book({ 'Druid Nature Spec': 1 }, { level: 15 }).summon()).toBeNull();
+                expect(book({ 'Druid Nature Spec': 1 }, { level: 24 }).summon()).toBeNull();
+            });
+
+            test('so nothing else counts on it: no pet in its capabilities', () => {
+                expect(book({ 'Druid Nature Spec': 1 }, { level: 24 }).capabilities().pet).toBeNull();
+                expect(book({ 'Druid Nature Spec': 1 }, { level: 10 }).capabilities().pet).toBe('main');
+            });
+
+            test('the Nature Druids at 24 keep theirs, at L18', () => {
+                expect(name(book({ 'Druid Nature Spec': 12 }, { level: 24 }).summon())).toBe('Call Nature Spirit');
+                expect(name(book({ 'Druid Nature Spec': 20 }, { level: 24 }).summon())).toBe('Call Major Nature Spirit');
+            });
+
+            test('a stealth Hunter on Beastcraft 1 likewise; the classes whose pet comes with level keep it at any spec', () => {
+                expect(book({ Beastcraft: 1 }, { level: 24 }).summon()).toBeNull();
+                expect(name(book({ Summoning: 20 }, { level: 24 }).summon())).toBe('Summon Spirit Warrior');
+                expect(name(book({ 'Spirit Animation': 20 }, { level: 24 }).summon())).toBe('Emerald Simulacrum');
+                expect(name(book({ Enchantment: 20 }, { level: 24 }).summon())).toBe('Underhill Compatriot');
+                expect(name(book({ 'Bone Army': 15 }, { level: 24 }).summon())).toBe('Summon Bone Chieftan');
+            });
+        });
+
+        test('never a Necromancer\'s servant, an Animist\'s turret, a Theurgist\'s or nothing', () => {
+            expect(book({ 'Death Servant': 20 }).summon()).toBeNull();
+            expect(book({ 'Creeping Path': 20 }).summon()).toBeNull();
+            expect(book({ 'Arboreal Mastery': 21 }).summon()).toBeNull();
+            expect(book({ Abrasion: 20 }).summon()).toBeNull();
+            expect(book({ Mentalism: 20 }).summon()).toBeNull();
+        });
+    });
+
+    describe('fnf(): a Theurgist\'s', () => {
+        test('the top rank over all its lines', () => {
+            expect(name(book({ Abrasion: 20 }).fnf())).toBe('Call Potent Earth Elemental');
+            expect(name(book({ Abrasion: 12, Refrigeration: 18, Vapormancy: 12 }).fnf())).toBe('Summon Aged Ice Spirit');
+        });
+
+        test('an Animist\'s fire-and-forget turret is of that kind and stays out, as does a main pet', () => {
+            expect(book({ 'Arboreal Mastery': 21 }).fnf()).toBeNull();
+            expect(book({ 'Creeping Path': 20 }).fnf()).toBeNull();
+            expect(book({ Summoning: 20 }).fnf()).toBeNull();
+        });
+    });
+
+    test('knowsTurret: an Animist\'s main pets, and nobody else\'s', () => {
+        expect(book({ 'Arboreal Mastery': 21 }).knowsTurret()).toBe(true);
+        expect(book({ 'Creeping Path Spec': 21 }).knowsTurret()).toBe(true);
+        expect(book({ 'Spirit Animation': 20 }).knowsTurret()).toBe(false);
+        expect(book({ Abrasion: 20 }).knowsTurret()).toBe(false);
+        expect(book({ 'Death Servant': 20 }).knowsTurret()).toBe(false);
+    });
+
+    describe('capabilities', () => {
+        test('pet says which, and a pet heal is no heal', () => {
+            expect(book({ 'Spirit Animation': 20 }).capabilities()).toMatchObject({ pet: 'main', heal: false });
+            expect(book({ Summoning: 20 }).capabilities().pet).toBe('main');
+            expect(book({ Abrasion: 20 }).capabilities().pet).toBe('fnf');
+            expect(book({ Mentalism: 20 }).capabilities().pet).toBeNull();
+            expect(book({ 'Death Servant': 20 }).capabilities().pet).toBeNull();
+            expect(book({ 'Creeping Path': 20 }).capabilities().pet).toBeNull();
+        });
+
+        test('the pet is known whatever the power', () => {
+            expect(book({ Abrasion: 20 }, { mana: 0 }).capabilities().pet).toBe('fnf');
+        });
+
+        test('a heal on friends still counts', () => {
+            expect(book({ Mentalism: 20 }).capabilities().heal).toBe(true);
+            expect(book({ Regrowth: 20 }).capabilities().heal).toBe(true);
+        });
+    });
+
+    describe('petHeal', () => {
+        const cabalist = { 'Spirit Animation': 20 };
+        test('the cheapest that covers what the pet misses, else the one restoring most, among what we can pay for', () => {
+            expect(name(book(cabalist).petHeal(25))).toBe('Mend Simulacrum');
+            expect(name(book(cabalist).petHeal(40))).toBe('Patch Simulacrum');
+            expect(name(book(cabalist).petHeal())).toBe('Restore Simulacrum');
+            expect(name(book(cabalist).petHeal(9999))).toBe('Restore Simulacrum');
+            expect(name(book(cabalist, { mana: 4 }).petHeal(40))).toBe('Mend Simulacrum');
+            expect(book(cabalist, { mana: 3 }).petHeal()).toBeNull();
+        });
+
+        test('heal() none on the pet; with no Pet-target heal it takes one on friends, at the pet\'s id (petHeal in pets.ts): a Druid\'s', () => {
+            expect(book(cabalist).heal()).toBeNull();
+            expect(book({ Regrowth: 20 }).petHeal()?.target).toBe('Realm');
+        });
+
+        describe('a heal on friends with a timer stays for the friends', () => {
+            const DRUID = { maxHealth: 575, mana: 300 };
+            const HEAL_DRUID = { Regrowth: 24, 'Regrowth Druid Spec': 22 };
+
+            test('Heal druid: Greater Regrowth, not Nature\'s Blessing, 15 minutes between uses, which `heal` counts on past 263', () => {
+                expect(name(book(HEAL_DRUID, DRUID).petHeal())).toBe('Greater Regrowth');
+                expect(name(book(HEAL_DRUID, DRUID).heal(300))).toBe('Nature\'s Blessing');
+            });
+
+            test('with no power for the others, none at all: a free one is no reason', () => {
+                expect(book(HEAL_DRUID, { ...DRUID, mana: 0 }).petHeal()).toBeNull();
+            });
+
+            test('at no spec of the line', () => {
+                for (let level = 1; level <= 50; level++) expect(book({ Regrowth: 24, 'Regrowth Druid Spec': level }, DRUID).petHeal()?.recast ?? 0).toBe(0);
+            });
+
+            test('by what the pet misses: a level-7 pet\'s 41 takes Minor Regrowth at 8 power', () => {
+                const heal = book(HEAL_DRUID, DRUID).petHeal(41)!;
+                expect(name(heal)).toBe('Minor Regrowth');
+                expect(heal.power).toBe(8);
+            });
+        });
+    });
+
+    describe('petBuffs', () => {
+        const spiritmaster = { 'Spirit Enhancement': 16 };
+        const buffs = (lines: Record<string, number>) => book(lines).petBuffs().map(s => [s.slot, s.spell.name]).sort();
+
+        test('the top rank per slot, with its icon', () => {
+            expect(buffs(spiritmaster)).toEqual([['dexqui', 'Valkyrie\'s Vivacity'], ['haste', 'Spirit of Attack'], ['strcon', 'Zest of Valhalla']]);
+            expect(book(spiritmaster).petBuffs().find(s => s.slot === 'strcon')!.icon).toBe(2861);
+        });
+
+        test('never the 5-8 s pulsing damage shield, a conversion or a type with no slot', () => {
+            const lines = { 'Spirit Animation': 50, 'Spirit Enhancement': 50, Vivification: 50 };
+            const pets = known(lines).filter(s => s.target === 'Pet');
+            // They are in those lines: a Spiritmaster's damage shield is 5 s, Convert Spirit has no slot.
+            expect(pets.find(s => s.spell.name === 'Spirit\'s Revenge')).toMatchObject({ type: 'DamageShield', duration: 5, pulse: true });
+            expect(pets.map(s => s.type)).toContain('PetConversion');
+            const got = book(lines).petBuffs();
+            expect(got.length).toBeGreaterThan(0);
+            for (const s of got) expect([s.target, s.pulse, s.duration >= 60]).toEqual(['Pet', false, true]);
+            expect(got.map(s => s.type)).not.toContain('DamageShield');
+            expect(got.map(s => s.type)).not.toContain('PetConversion');
+        });
+
+        test('buffs() keeps them out of the group\'s plan', () => {
+            expect(book(spiritmaster).buffs().map(s => s.target)).not.toContain('Pet');
+        });
+
+        test('none for a member with no pet line', () => {
+            expect(book({ Mentalism: 20 }).petBuffs()).toEqual([]);
+        });
+    });
+
+    describe('powerOf: the most it can cost (worstPowerCost)', () => {
+        const stats = { strength: 0, dexterity: 0, constitution: 0, quickness: 0, intelligence: 100, piety: 0, empathy: 100, charisma: 0 };
+        const summon = () => toPick({ name: 'x', level: 1 } as Spell, getSpell(804)!);
+
+        test('a percent of the pool without items; a focus caster with no focus pays 1.2 ×', () => {
+            const p = makePlayer({ className: 'Cabalist', realm: 'albion', level: 20, statsWithoutItems: stats });
+            // 20 * (100 + 145) / 41 + 5 = 124 of it, 25 %: 31, and 1.2 × that.
+            expect(book({}, p).powerOf(summon())).toBe(37);
+            expect(book({}, p).powerOf(summon())).toBe(worstPowerCost(-25, p));
+        });
+
+        test('a flat cost as the server takes it', () => {
+            const p = makePlayer({ className: 'Cabalist', realm: 'albion', level: 20, statsWithoutItems: stats });
+            expect(book({}, p).powerOf({ power: 10 })).toBe(12);
+            expect(book({}, makePlayer({ className: 'Hunter', realm: 'midgard', level: 20 })).powerOf({ power: 10 })).toBe(10);
+        });
+
+        test('with no player yet: nothing we can say beyond the flat cost', () => {
+            const sdk = { getSkills: () => ({ spells: [] }), getPlayer: () => null } as unknown as BotSDK;
+            const empty = new Spellbook(sdk, { getSpellInfo: () => null } as unknown as BotActions);
+            expect(empty.powerOf({ power: 10 })).toBe(10);
+            expect(empty.powerOf({ power: -25 })).toBe(0);
+        });
     });
 });

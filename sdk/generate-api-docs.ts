@@ -145,6 +145,7 @@ function methodCategory(name: string, surface: 'actions' | 'sdk'): string {
     const lower = name.toLowerCase();
 
     if (surface === 'actions') {
+        if (lower.includes('pet') || lower.includes('summon')) return 'Pets';
         if (lower.includes('trade')) return 'Trading';
         if (lower.includes('dialog') || lower.includes('blocking') || lower.includes('whisper') || lower.includes('talk')) return 'NPC Dialog & UI';
         if (lower.includes('walk') || lower.includes('move') || lower.includes('follow') || lower.includes('face') || lower.includes('stop')) return 'Movement';

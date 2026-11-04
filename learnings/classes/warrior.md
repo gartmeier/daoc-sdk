@@ -75,4 +75,4 @@ In `rvrRoaming`, which is what Midgard runs, the list keeps `tank` and this repl
 
 - **Stuns on demand and Engage:** as for the Hero ([hero.md](hero.md)).
 - **Thrown Weapons:** a line of the class, and the SDK has no ranged attack.
-- **The two-hander** in the Sword build: `tank` doesn't switch weapons, and the SDK has no weapon switch.
+- **The two-hander** in the Sword build: `tank` keeps what `hand` took in hand at the run's start (`bot.takeMeleeSlot`, by spec and styles) and doesn't switch by the fight.
