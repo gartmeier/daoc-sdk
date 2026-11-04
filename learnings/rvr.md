@@ -225,6 +225,12 @@ Against p1-p3 (17 kills, 1 death, 117 RP, 8 Midgard kills a round; spread 545-91
 
 Alternating, 10 minutes each. The Hero's damage rose in two of three pairs (he reaches the focus before the clock is up), but kills, Midgard kills and realm points are within the noise, and the one death came on 12 s. The default stays 8 s; `--pack.raidMs=12000` to try it.
 
+**The crowd limit,** `maxFoes` 11 against 8, three rounds each: 49 kills, 3 deaths, 372 RP, 36 Midgard kills against 39, 0, 371, 26. Says nothing about the limit: neither side's log shows one refusal for a crowd in these rounds or the six before. The 8 stays. What it does show is how far identical settings vary: 10 to 20 kills a round. A difference of a few kills over three rounds is noise here.
+
+**Checked, no gain to be had:** about 30 % of Oisin's mezzes answer "immune" though the board tracks every mezz of ours, so they most likely come from Midgard's and Camelot's crowd control on each other, which no client hears. Brigid idles most of a fight, but her only damage at this spec is a weak damage over time after a respec out of Nurture; left as is.
+
+**Open:** the Hero's kill failed "ran beyond 3800 units" in bursts of about 48 tries (4 rounds of the last 16; a minute lost in one) with the group 1500-2500 from that Briton. The chase limit counts from the Hero, so his own client must place it far off while the board doesn't. Not explained yet.
+
 **Within the noise so far:** Brigid's acuity and giving up a healed focus. Before the give-up the pack went 17/0, 16/0, 21/0 and 6/5; with it 8/2, 17/0, 13/1, 19/1, 18/1. It did stop the 5 minutes on one Troll, but single deaths now show up where the rounds before it had none. The early comparison (63/0 in 45 minutes against 20/10 in 22) overstated the gain: opponents get absent or farmed, and s17 and s18 (18/0, 11/1, 0 RP) had no Midgard at all, so count those out. c3, 12/0, was also the pack and no control.
 
 **Not done:** Oisin's mezz cure (Clarifying Harmonies): a member's report doesn't say it's mezzed. The Hero's post-block stuns. A member rezzed in the field isn't told apart from a released one for the rebuff.
