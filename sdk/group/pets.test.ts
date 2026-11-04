@@ -93,6 +93,7 @@ function world(o: WorldOptions = {}) {
     const bot = {
         isDead: () => o.dead ?? false,
         summonPet: async (spell: unknown, opts: unknown) => { calls.summon.push({ spell, opts }); return { success: true, message: 'Cast', ...o.summonPet?.() }; },
+        castHeldLeftMs: () => 0,
         castSpell: async (...args: unknown[]) => { calls.cast.push(args); return { success: true, message: 'Cast', ...o.castSpell?.() }; },
         rest: async (opts: unknown) => { calls.rest.push(opts); return { success: true, message: 'Rested', ...o.rest?.() }; },
         walkToObject: async (...args: unknown[]) => { calls.walk.push(args); return { success: true, message: 'In range' }; },
@@ -241,7 +242,8 @@ describe('petControl: never a crowd-controlled target', () => {
         const bard = report('Bard', { role: 'support', regionId: R, objectId: 4, activity: { kind: 'cc', targetId: 52, detail: 'Mesmerize', since: Date.now() - 1000 } });
         const w = world({ contacts: [held(), mob(52, 5000, { target: 'Owner' })], members: [bard], orders: { focus: null }, pet: { targetObjectId: 52 } });
         await petControl().run(w.ctx);
-        expect(w.sent).toEqual([{ command: 'follow' }]);
+        // On its owner too: passive as well, or the next hit brings it back.
+        expect(w.sent).toEqual([{ command: 'passive' }, { command: 'follow' }]);
     });
 
     test('with a valid focus up, it goes there instead of just coming away', async () => {
@@ -1958,7 +1960,7 @@ describe('crowdControl: an NPC under 75 %', () => {
         const marks: unknown[][] = [];
         (w.ctx as unknown as { markCc: (...a: unknown[]) => void }).markCc = (...a) => { marks.push(a); };
         expect(await crowdControl().run(w.ctx)).toBe(true);
-        expect(w.calls.cast[0]).toEqual([ROOT.spell, ADD, {}]);
+        expect(w.calls.cast[0]).toEqual([ROOT.spell, ADD, { approach: false }]);
         expect(marks[0]![1]).toBe('root');
     });
 
@@ -1967,12 +1969,12 @@ describe('crowdControl: an NPC under 75 %', () => {
         (w.ctx as unknown as { spells: { root: () => unknown } }).spells.root = () => ROOT;
         (w.ctx as unknown as { markCc: () => void }).markCc = () => {};
         await crowdControl({ assignedOnly: true }).run(w.ctx);
-        expect(w.calls.cast[0]).toEqual([ROOT.spell, ADD, {}]);
+        expect(w.calls.cast[0]).toEqual([ROOT.spell, ADD, { approach: false }]);
         const whole = ccWorld(add(80), MEZZ);
         (whole.ctx as unknown as { spells: { root: () => unknown } }).spells.root = () => ROOT;
         (whole.ctx as unknown as { markCc: () => void }).markCc = () => {};
         await crowdControl().run(whole.ctx);
-        expect(whole.calls.cast[0]).toEqual([MEZZ.spell, ADD, {}]);
+        expect(whole.calls.cast[0]).toEqual([MEZZ.spell, ADD, { approach: false }]);
     });
 
     test('a root has no such floor, and a player none', async () => {
@@ -1997,6 +1999,16 @@ describe('crowdControl: an NPC under 75 %', () => {
         expect(marked).toEqual([[ADD, 'mezz', 60_000]]);
         await crowdControl().run(w.ctx);
         expect(w.calls.cast.length).toBe(1);
+    });
+});
+
+describe('buffRetryMs: a follow-up', () => {
+    test('it isn\'t a failed cast: what the server holds, not the 60 s of a failure or the 8 s of a "You must wait"', () => {
+        const waited = buffRetryMs({ success: false, reason: 'must_wait', message: 'You are already casting a spell! You prepare this spell as a follow up!', retryAfterMs: 1200, followUpMs: 3000 });
+        expect(waited).toBeGreaterThanOrEqual(4200);
+        expect(waited).toBeLessThan(8000);
+        expect(buffRetryMs({ success: false, reason: 'must_wait', message: 'You must wait 2 seconds to cast a spell!', retryAfterMs: 2000 })).toBe(8000);
+        expect(buffRetryMs({ success: false, reason: 'no_response' })).toBe(60_000);
     });
 });
 

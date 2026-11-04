@@ -257,6 +257,124 @@ describe('decidePve', () => {
         });
     });
 
+    describe('a far tank', () => {
+        const away = (dx: number, dy = 0) => ({ x: BASE.x + dx, y: BASE.y + dy });
+        const BIND = away(60_000);
+        const hunting = () => ({ camp: { ...BASE, zone: '', count: 0, names: 'test camp' }, campLevel: 6, base: BASE }) as Record<string, any>;
+
+        // a2 04:36:34 '» travel: to the base, 33628 away; Petbon far off, not waited for', then 'Petspi: walk: died (Died en route to (771322, 758349))'. m3b (2 members) 'to the base, 60318 away; Petbon far off'.
+        test('two members: the one at the base waits there, and nothing heads for the bind', () => {
+            const d = decidePve(ctx(picture(team({ Tank: BIND, Druid: away(100) }).slice(0, 2))));
+            expect(d.phase).toBe('gather');
+            expect(d.anchor).toMatchObject(BASE);
+            expect(d.waiting).toEqual([{ name: 'Tank', why: 'away' }]);
+            expect(d.reason).toBe('waiting for Tank');
+        });
+
+        test('the others split: the median leaves him out, the one at the base isn\'t far, and there is no leg', () => {
+            const memory = hunting();
+            const d = decidePve(ctx(picture(team({ Tank: BIND, Druid: away(100), Bard: away(20_000) }).slice(0, 3)), { memory }));
+            expect(d.phase).toBe('gather');
+            expect(d.anchor).toMatchObject(BASE);
+            expect(d.waiting).toEqual([{ name: 'Tank', why: 'away' }]);
+            expect(d.reason).toBe('waiting for Tank; Bard far off, not waited for');
+            expect(memory.leg).toBeFalsy();
+        });
+
+        test('all of them away from the base: a gather at the base all the same, and no leg goes off it', () => {
+            const memory = hunting();
+            const d = decidePve(ctx(picture(team({ Tank: BIND, Druid: away(9000, 9000), Bard: away(9100, 9000), Menta: away(9000, 9100) })), { memory }));
+            expect(d.phase).toBe('gather');
+            expect(d.anchor).toMatchObject(BASE);
+            expect(d.waiting?.map(w => w.name).sort()).toEqual(['Bard', 'Druid', 'Menta', 'Tank']);
+            expect(memory.leg).toBeFalsy();
+        });
+
+        test('near the base he is no far tank, whoever is off: a far member stays one, and doesn\'t hold the group', () => {
+            const mob = contact(51, { regionId: R, level: 7, x: BASE.x + 800, y: BASE.y });
+            const d = decidePve(ctx(picture(team({ Druid: away(180_000) }).slice(0, 2), [mob])));
+            expect(d.phase).toBe('pull');
+            expect(d.reason).toContain('Druid far off');
+        });
+
+        test('with someone beside him and someone at the base: that one holds there, and no leg sets out from the bind to walk it off', () => {
+            const memory = hunting();
+            const d = decidePve(ctx(picture(team({ Tank: BIND, Druid: away(60_100), Bard: away(0) }).slice(0, 3)), { memory }));
+            expect(d.phase).toBe('gather');
+            expect(d.anchor).toMatchObject(BASE);
+            expect(d.waiting?.map(w => w.name)).toEqual(['Tank', 'Druid']);
+            expect(d.reason).toBe('waiting for Tank, Druid');
+            expect(memory.leg).toBeFalsy();
+        });
+
+        test('with nobody at the base the legs go home from where the group is, as ever', () => {
+            const d = decidePve(ctx(picture(team({ Tank: BIND, Druid: away(60_100), Bard: away(59_900) }).slice(0, 3))));
+            expect(d.phase).toBe('travel');
+            expect(d.journey).toBe(60_000);
+            expect(Math.hypot(d.anchor!.x - BIND.x, d.anchor!.y - BIND.y)).toBeLessThanOrEqual(PVE_SETTINGS.travelLeg + 1);
+        });
+
+        // Tank at the base, two released to a bind: the leg from their median walked him out, at 4800 he read far, the gather walked him back, and over: 50 phase changes in 700 s, and the group not home. 'Petspi: walk: died (Died en route ...)' is that walk.
+        test('the tank at the base and the others at a bind, walked to their orders: nobody is led off it, and they all come home', () => {
+            const memory = hunting();
+            const at: Record<string, { x: number; y: number }> = { Tank: away(0), Druid: BIND, Bard: away(60_100) };
+            const phases: string[] = [];
+            let farthest = 0;
+            const t0 = Date.now();
+            for (let t = 0; t < 500; t++) {
+                const now = t0 + t * 1000;
+                const d = decidePve(ctx(picture(team({ Tank: at.Tank, Druid: at.Druid, Bard: at.Bard }).slice(0, 3), [], {}, now), { memory, now }));
+                if (phases.at(-1) !== d.phase) phases.push(d.phase!);
+                if (d.phase !== 'travel' && d.phase !== 'gather') break;
+                for (const m of Object.values(at)) {
+                    const dx = d.anchor!.x - m.x, dy = d.anchor!.y - m.y, gap = Math.hypot(dx, dy);
+                    const f = Math.min(1, 191 / Math.max(1, gap));
+                    m.x += dx * f;
+                    m.y += dy * f;
+                }
+                farthest = Math.max(farthest, Math.hypot(at.Tank!.x - BASE.x, at.Tank!.y - BASE.y));
+            }
+            expect(farthest).toBeLessThan(PVE_SETTINGS.gatherRadius * 4);
+            expect(phases.length).toBeLessThanOrEqual(4);
+            for (const m of Object.values(at)) expect(Math.hypot(m.x - BASE.x, m.y - BASE.y)).toBeLessThan(PVE_SETTINGS.gatherRadius);
+        });
+
+        test('coming back: inside the limit he is one to gather for, as ever', () => {
+            const d = decidePve(ctx(picture(team({ Tank: away(3000), Druid: away(0) }).slice(0, 2))));
+            expect(d.phase).toBe('gather');
+            expect(d.waiting).toEqual([{ name: 'Tank', why: 'away' }]);
+        });
+
+        test('a retreat with him far off runs from those near: nothing of the 60000 in where it goes', () => {
+            const now = Date.now();
+            const threat = contact(51, { regionId: R, target: 'Druid', targetId: 2, threat: true, hostileSince: now - 9000, hp: 90, x: BASE.x, y: BASE.y + 200 });
+            const settings = { retreat: { ...PVE_SETTINGS.retreat, enabled: true, deaths: 1 } };
+            const d = decidePve(ctx(picture([...team({ Tank: BIND, Druid: away(0), Bard: away(100) }), report('Gone', { isDead: true, regionId: R })], [threat], { phase: 'engage', focus: 51 }, now), { settings }));
+            expect(d.phase).toBe('retreat');
+            expect(Math.hypot(d.retreatTo!.x - BASE.x, d.retreatTo!.y - BASE.y)).toBeLessThan(PVE_SETTINGS.retreat.distance + 500);
+        });
+    });
+
+    // 20261104-045702: '01:20 [orders] travel: to the base, 27472 away; Petsor, Petcab, Petthe far off, not waited for', with Petcab and Petsor at the base, Pettan at his bind.
+    describe('a member at the base is never far', () => {
+        test('with the group off elsewhere: the reason doesn\'t name it, and it waits there: no leg walks it out to them', () => {
+            const at = (dx: number, dy = 0) => ({ x: BASE.x + dx, y: BASE.y + dy });
+            const d = decidePve(ctx(picture([
+                ...team({ Tank: at(20_000), Druid: at(20_100), Bard: at(300), Menta: at(-300) }),
+                report('Cleric', { role: 'healer', regionId: R, ...at(20_200) }),
+            ])));
+            expect(d.phase).toBe('gather');
+            expect(d.anchor).toMatchObject(BASE);
+            expect(d.reason).toBe('waiting for Tank, Druid, Cleric');
+        });
+
+        test('a member well off the base and the group both is far, as ever', () => {
+            const at = (dx: number) => ({ x: BASE.x + dx, y: BASE.y });
+            const d = decidePve(ctx(picture(team({ Menta: at(25_000) }))));
+            expect(d.reason).toContain('Menta far off');
+        });
+    });
+
     test('"pet power" where the ready gate waits on the power for a summon, and "power" otherwise', () => {
         const saving = { activity: { kind: 'rest', targetId: null, detail: 'pet: saving power', since: 0 }, mana: 10 };
         const d = decidePve(ctx(picture(team({ Druid: saving }))));

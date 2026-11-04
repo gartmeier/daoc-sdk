@@ -17,6 +17,8 @@ export type CcKind = 'mezz' | 'root' | 'stun';
  * and a stun's are the server property immunity_timer_flat_length, 60 by default, which reaches no client. An "immune"
  * answer is all a client hears of it, so a server with another length shows up as casts answered that way.
  */
+/** How a crowd-control walk announces itself: `${CC_WALK}${spell}`. For the report, which counts other walks in a fight as positioning. */
+export const CC_WALK = 'cc: into range for ';
 export const CC_IMMUNE_MS = 60_000;
 /** A monster's repeats of a mezz or stun shorten for this long after the first, however often it is hit again (NpcImmunityEffect). */
 const NPC_CC_WINDOW_MS = 60_000;
