@@ -794,6 +794,8 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         // castSpell knows without a send that this can't land (a peace flag, our realm, ourselves): the next add gets the turn.
         else if (c.reason === 'invalid_target' || c.reason === 'not_attackable' || c.reason === 'no_target') cantLand.set(ckey(target), Date.now() + CC_IMMUNE_MS);
         else if (await waitOutSelfCc(c)) return true;
+        // Our client said in range and the server didn't: not again on the next tick. A live round tried 17 times in 5 s.
+        else if (stand && c.reason === 'out_of_range') await Bun.sleep(1000);
         // PvP immunity (reason 'immune': up to 10 s after a port, login or release) and "You must wait": try again shortly.
         else if (c.retryAfterMs) await Bun.sleep(Math.min(c.retryAfterMs, 3000));
         // The spell list's power cost can trail the server's ("You don't have enough power"): don't retry every turn.
