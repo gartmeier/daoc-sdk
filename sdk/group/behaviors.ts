@@ -575,15 +575,31 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
             .filter(t => t.objectId !== o.focus && open(t) && !o.cc.some(a => a.targetId === t.objectId));
         // Others see some, we don't (an assignment while we walk back from a release): the first we can cast on.
         const visible = (c: Contact) => !!foeInView(ctx, c.objectId);
-        const target = assigned.find(visible) ?? extra.find(visible);
-        if (!target) return assigned.length || extra.length ? ctx.skip('cc: target not in view') : false;
-        const area = ctx.settings.areaMezzMin ? ctx.spells.areaMezz() : null;
-        const caught = area && !immuneKinds(target).includes('mezz') ? areaMezzCatch(target, ctx.picture().contacts, area.radius, o.focus) : [];
-        const useArea = area && caught.length >= ctx.settings.areaMezzMin! ? { ...area, kind: 'mezz' as const } : null;
-        const sp = useArea ?? ctx.spells.cc({ aoe: ctx.settings.aoe, except: immuneKinds(target) });
-        if (!sp) return ctx.skip('cc: no mezz or root ready');
         const stand = !!ctx.settings.standGround;
-        if (stand && (foeInView(ctx, target.objectId)?.distance ?? Infinity) > sp.range) return ctx.skip('cc: out of reach, holding ground');
+        const area = ctx.settings.areaMezzMin ? ctx.spells.areaMezz() : null;
+        const catches = (c: Contact) => area && !immuneKinds(c).includes('mezz') ? areaMezzCatch(c, ctx.picture().contacts, area.radius, o.focus) : [];
+        const spellFor = (c: Contact) => {
+            const useArea = area && catches(c).length >= ctx.settings.areaMezzMin! ? { ...area, kind: 'mezz' as const } : null;
+            return useArea ?? ctx.spells.cc({ aoe: ctx.settings.aoe, except: immuneKinds(c) });
+        };
+        const distanceTo = (c: Contact) => foeInView(ctx, c.objectId)?.distance ?? Infinity;
+        const seen = [...assigned, ...extra].filter(visible);
+        // Holding its ground, a member mezzes what it can reach: the farthest enemy, assigned first, can be out of it for a whole raid.
+        const inReach = (c: Contact) => { const s = spellFor(c); return !!s && distanceTo(c) <= s.range; };
+        const target = (stand ? seen.find(inReach) : undefined) ?? seen[0];
+        if (!target) return assigned.length || extra.length ? ctx.skip('cc: target not in view') : false;
+        const caught = catches(target);
+        const sp = spellFor(target);
+        if (!sp) return ctx.skip('cc: no mezz or root ready');
+        if (stand && distanceTo(target) > sp.range) {
+            // The Bard leads the pack to mezz: a short step like a caster's, the others hold.
+            const view = foeInView(ctx, target.objectId);
+            const step = ctx.role === 'support' && view ? standStepTo(ctx.me(), view, sp.range, ctx.settings.standStep ?? 0, ctx.picture().contacts) : null;
+            if (!step) return ctx.skip('cc: out of reach, holding ground');
+            ctx.doing('move', target.objectId, 'step in range');
+            await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 });
+            return true;
+        }
         // A root that lands on a mezzed enemy wakes it (GameLiving.cs:1716-1727): not while a mezz is on its way there.
         if (stand && sp.kind === 'root' && mezzComing(ctx, target)) return ctx.skip('cc: a mezz is on its way there');
         await stopSwinging(ctx);
@@ -603,7 +619,7 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         // A monster's repeat replaces the old effect without a word (CastResult.effectLanded), so it landed too.
         else if (c.success) {
             ctx.markCc(target.objectId, sp.kind, fullMs, c.landedOn);
-            if (useArea) for (const n of caught) if (n.objectId !== target.objectId) ctx.markCc(n.objectId, sp.kind, fullMs);
+            if (caught.length >= (ctx.settings.areaMezzMin ?? Infinity)) for (const n of caught) if (n.objectId !== target.objectId) ctx.markCc(n.objectId, sp.kind, fullMs);
         }
         else if (await waitOutSelfCc(c)) return true;
         // PvP immunity (reason 'immune': up to 10 s after a port, login or release) and "You must wait": try again shortly.
