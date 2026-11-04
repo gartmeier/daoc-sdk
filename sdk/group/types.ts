@@ -97,6 +97,8 @@ export interface PetReport {
     walk: PetWalk;
     /** Effect icons on it, at most 8 (PacketLib181.cs:157-166). */
     icons: number[];
+    /** The target of an attack order of ours that stands (petControl). An order leaves a pet on stay on stay (ControlledMobBrain.cs:211-226), so this is what tells its going in from its answering a blow. Absent with none. */
+    orderedOn?: number;
 }
 
 export interface MemberReport {
@@ -140,6 +142,8 @@ export interface MemberReport {
     pet?: PetReport | null;
     /** Object ids of its pets with no window (state.summons: a Theurgist's, minions), so what fights them fights us; absent without any. */
     summons?: number[];
+    /** It has no pet, and the summon it keeps one up with is on its recast: pet-down's reason. Absent otherwise. */
+    petRecast?: true;
 }
 
 /** A monster (or enemy player) as one member saw it in one snapshot. */
@@ -157,6 +161,8 @@ export interface Sighting {
     inCombat: boolean;
     /** Monsters: units/s, from its latest position update. */
     speed?: number;
+    /** Monsters on the move: when the server sent that update. x and y are reckoned on from it, to its destination at its speed (WorldModel.npcPosition), whatever has stopped the mob since. */
+    fixedAt?: number;
     /** It swung at someone or, a monster, landed a hostile spell on someone in the last ~2 s (a mezz on it is broken). */
     swinging: boolean;
     /** Monsters: whom its latest hostile spell effect landed on in the last few seconds. The server reports no target for a mob mid-cast. */

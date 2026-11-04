@@ -394,3 +394,54 @@ describe('the tank and an enemy pet on a soft member', () => {
         expect(peelTarget(memberOf(pve, pve.team[1]!, engaged(601), { peelAfterMs: 4000 }).ctx)?.objectId).toBe(MOB);
     });
 });
+
+describe('a running mob rooted: the client reckons it on until the server says otherwise', () => {
+    // 20261104-052629: '05:28:05.098 The moss sheerie's feet are frozen to the ground!', log '05:28:08 Petdru: root on moss sheerie broke', the server's own line at '05:28:13.264'.
+    const ZONE_X = 548864, ZONE_Y = 483328;
+    /** 0xA1 of a mob on its way to `destX`, as the server names no target while one runs (65535). */
+    const running = (x: number, destX: number, speed = 150) =>
+        W().u16(speed).u16(0).u16(x - ZONE_X).u16(destX - ZONE_X).u16(ME.y - ZONE_Y).u16(ME.y - ZONE_Y).u16(ME.z).u16(ME.z).u16(MOB).u16(0xFFFF).u8(100).u8(0).u8(0).u8(0).toBytes();
+    const standing = (x: number) => objectUpdate(MOB, 0xFFFF, 100, x);
+    const pass = (g: ReturnType<typeof group>, ms: number) => {
+        for (let t = 0; t < ms; t += 250) {
+            g.advance(250);
+            for (const x of g.team) g.publish(x);
+        }
+    };
+    const rooted = () => {
+        const g = group([X, Y]);
+        g.all(ServerOp.ObjectUpdate, running(ME.x + FAR, ME.x + FAR + 2000));
+        for (const x of g.team) g.publish(x);
+        g.board.markCc(MOB, 1, 'Xenia', 'root', 40_000, g.at());
+        return g;
+    };
+    const notes = (g: ReturnType<typeof group>) => g.board.events().filter(e => e.kind === 'note').map(e => e.text);
+
+    test('3 s of reckoning from before the root is 450 units on the client, and no broken root', () => {
+        const g = rooted();
+        pass(g, 3000);
+        expect(g.mob().x - (ME.x + FAR)).toBeGreaterThan(400);
+        expect(notes(g)).toEqual([]);
+        expect(g.mob().cc).toMatchObject({ kind: 'root' });
+    });
+
+    test('the server\'s stop sets it down where it was rooted, and that is where it is measured from', () => {
+        const g = rooted();
+        pass(g, 2000);
+        g.all(ServerOp.ObjectUpdate, standing(ME.x + FAR + 40));
+        pass(g, 1000);
+        expect(notes(g)).toEqual([]);
+        expect(g.mob().cc).toMatchObject({ kind: 'root' });
+    });
+
+    test('it running off from there, on an update of after the root, has broken it', () => {
+        const g = rooted();
+        pass(g, 2000);
+        g.all(ServerOp.ObjectUpdate, standing(ME.x + FAR + 40));
+        pass(g, 1000);
+        g.all(ServerOp.ObjectUpdate, running(ME.x + FAR + 40, ME.x + FAR + 2000));
+        pass(g, 1500);
+        expect(notes(g)).toEqual(['root on caster mob broke']);
+        expect(g.mob().cc).toBeNull();
+    });
+});

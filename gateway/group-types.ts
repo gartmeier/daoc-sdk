@@ -175,6 +175,8 @@ export interface WorldContact {
     npc: { isPeaceful: boolean; isTargetable: boolean; isPet: boolean; role: string | null; owner?: string } | null;
     /** A player or a pet of another realm. */
     enemy: boolean;
+    /** A Necromancer in shade: nothing lands on it (NearbyPlayer.isShade), so no focus picks it. Absent otherwise. */
+    isShade?: true;
     /** Character names of the members whose last state shows it, freshest first. */
     seenBy: string[];
     /** 2D distance to the nearest member that sees anything. */

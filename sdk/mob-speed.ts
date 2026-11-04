@@ -23,7 +23,7 @@ export function mobRunInMs(distance: number, healthPercent: number): number {
 }
 
 /**
- * How far off a mob on its way to us has to be for a cast of this many seconds to go: what it covers by the cast's half way, and its reach. A swing before that stops it (SpellHandler.cs:356-372), a miss too, and one after doesn't.
+ * How far off a mob on its way to us has to be for a cast of this many seconds to go: what it covers by the cast's half way, and its reach. A swing, a miss too, sets a timer of about 3 s, and a cast ends with one still running at its half way (SpellHandler.cs:356-372). A mob that has arrived keeps one running, so what counts is its first swing coming by then. One after the half way doesn't stop it.
  * About 900 for a 5.9 s Simulacrum. An instant cast needs none. `seenSpeed`: what the mob reads now, for one faster than that (a slower reading can come from a walk, and one standing reads 0).
  */
 export function castRoom(castTimeSeconds: number, seenSpeed = 0): number {

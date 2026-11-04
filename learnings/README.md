@@ -83,4 +83,4 @@ if (import.meta.main) await runScript(main, { args: { pattern: scriptArgs()[0] }
   - Classes: `classSheet`, `classSpecs`, `classSpellLines` from `data/class-sheet.ts`. Spec points: `earnedSpecPoints`, `specCost`, `buildPath` from `data/builds` ([builds.md](builds.md)).
   - Characters: `validateCharacter`, `getStartingClasses`, `getPlayableRacesForClass`, `getStarterArmour` (what a new character really gets).
   - The data says where things spawn; `sdk.getNearbyNpcs()` says what is actually there now.
-- `bots/examples/` holds working scripts for grinding, selling, casting, exploring and grouping, and `pet.ts`, a grind with a pet that hasn't run live yet.
+- `bots/examples/` holds working scripts for grinding, selling, casting, exploring and grouping, and `pet.ts`, a grind with a pet.

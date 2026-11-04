@@ -35,6 +35,7 @@ import {
     PET_REFUSALS,
     PET_UNDER_CONTROL,
     petSpellKind,
+    NO_INSTRUMENT,
     NOTHING_TO_REPAIR,
     parseMoneyText,
     PICKUP_REFUSALS,
@@ -91,7 +92,7 @@ import {
     type Point,
 } from './actions-helpers';
 import { castRoom, mobRunInMs } from './mob-speed';
-import { EquipmentSlot, isWeapon } from './types';
+import { EquipmentSlot, isWeapon, ObjectType } from './types';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
 import { groundTargetSnap } from './ground';
 import { isDelveOf, parseDelve } from './delve';
@@ -162,6 +163,31 @@ const FOLLOW_UP_BEGINS_MS = 500;
 const PET_ORDER_ANSWER_MS = 500;
 /** A cast's begin line can trail another line by a snapshot. */
 const BEGIN_LINE_TICK_MS = 250;
+/** How far inside a spell's range castSpell's walk stops: the smaller of this share of the range and SPELL_WALK_MARGIN. A mob that moves on from there gets the server's "too far away", and the caller goes again (SPELL_WALK_NEARER_SHARE). */
+const SPELL_WALK_SHARE = 0.1;
+const SPELL_WALK_MARGIN = 150;
+/** After that "too far away" the next walk at the same target stops short by as much again as the target leaves in a cast, by our own readings, and at most at this share of the range, for this long or until a cast at it lands: from the margin again it failed again, for as long as the target walked. */
+const SPELL_WALK_NEARER_SHARE = 0.5;
+const SPELL_TOO_FAR_MS = 30_000;
+/** What a replace wants left of a charm's range: the server measures at the end of the cast, in 3D, from its own positions (SpellHandler.cs:941-945). Live, readings of 994 and 999 of 1000 lost the pet, and 989 and 997 went. */
+const CHARM_REPLACE_MARGIN = 60;
+/** A roaming mob's speed (StandardMobState.cs:141, NpcMovementComponent.cs:18), and a little over: a replace that has to walk anyway goes where one roaming away through the whole cast stays in range. */
+const MOB_ROAM_SPEED = 70;
+const CHARM_WALK_SLACK = 20;
+/** spell_self_interrupt_duration, the wait a broken cast leaves (SpellHandler.cs:372, GameLiving.cs:740, ServerProperties.cs:2221-2222). */
+const INTERRUPT_RETRY_MS = 2200;
+/** How long a song refused for its instrument is worth leaving: only a change of hand cures it, and every try is a failed turn. */
+const NO_INSTRUMENT_RETRY_MS = 60_000;
+/** How long the next snapshot can take: they come about 250 ms apart. */
+const SNAPSHOT_GAP_MS = 300;
+/** Amnesia's line (Effects.txt:17): it ends a cast with no 0x0B and no line of the cast's own, and leaves a song alone (AmnesiaSpellHandler.cs:49-50). */
+const CAST_WIPED = /^your mind goes blank/i;
+/** A mezz's or a stun's line (spell.sql), which comes beside the 0x0B that ends a cast (CrowdControlECSEffect.cs:26): that is why it ended, and the next cast would only be refused for it. */
+const HELD_LINE = /^you are (?:mesmerized|entranced|stunned)\b/i;
+/** An item's recast (GamePlayer.UseSlot): a useItem's answer, whatever it has running. */
+const ITEM_RECAST = /to discharge this item/i;
+/** A spot in no zone of any region: the server has no plain clear, and this wipes what stands (Unset, PlayerGroundTargetHandler.cs:21-33, :72-73). */
+const NO_ZONE_SPOT = { x: 1, y: 1, z: 1 };
 /** GamePlayer.Attack.AlreadyDead, at a swing (AttackComponent.cs:1712). */
 const ALREADY_DEAD = 'is already dead';
 /** A 0xDD to an object has toSlot = 1000 + objectId (PlayerMoveItemRequestHandler.cs:20-23). */
@@ -178,6 +204,12 @@ const PET_ORDER_RANGE = 2000;
 const PET_ORDER_APPROACH = 1500;
 /** The least of that left on the plane, with the mob far above or below us. */
 const PET_ORDER_APPROACH_MIN = 300;
+/** A mob this far above or below us: PET_ORDER_APPROACH would take us most of the way to under it, up a slope too, so the walk goes by the order's real reach. */
+const PET_ORDER_HIGH = 1000;
+/** After a refused order the walk comes this much nearer than what we read then, at least: that reading was no good. */
+const PET_ORDER_RETRY_NEARER = 100;
+/** That reach, on the reading, with a margin for one on the move: GamePlayer.cs:12185 measures in 3D, and a refused first order costs a walk. */
+const PET_ORDER_HIGH_REACH = 1900;
 /**
  * Where a shade stops to order its servant, and how near a step brings it. The tether runs from us, 1500 for 10 s and 2000 at once
  * (NecromancerPetBrain.cs:300-326), and the servant fights at the mob: the order's own range would lose it.
@@ -215,7 +247,7 @@ const DEFAULT_KILL_TIMEOUT_MS = 60_000;
 /** How long a dispatched selection gets to show in the snapshots: live about 11 ms. */
 const TARGET_SETTLE_MS = 500;
 /**
- * How long a hit on us counts against a cast with a cast time. It holds none back: with hard_interrupt_on_attacked off only our own swing's timer does (ServerProperties.cs:2215, AttackerTracker.cs:154-161). Its own timer, still running at the cast's half way, interrupts it (SpellHandler.cs:356-372).
+ * How long a hit on us counts against a cast with a cast time. It holds none back: with hard_interrupt_on_attacked off only our own timer does (ServerProperties.cs:2215, AttackerTracker.cs:154-161), a swing's or a broken cast's. Its own timer, still running at the cast's half way, interrupts it, and that sets ours for 2.2 s (SpellHandler.cs:356-372).
  * That timer is the attacker's swing interval, which we can't read (AttackComponent.cs:1110), or spell_interrupt_duration for a spell: this.
  */
 const HIT_INTERRUPT_MS = 3000;
@@ -245,6 +277,14 @@ const GRIND_RETRY_MS = 1000;
 const GRIND_SUMMON_ROOM = 250;
 /** The least a melee pass lasts while grind wants a pet, whatever the summon's timer says. Stopping and starting costs no swing: the server keeps when the next one is due (AttackAction.cs:54). */
 const GRIND_MELEE_PASS_MS = 3000;
+/** A mob on us below the summon's room with no speed yet, for grind: a turn after a hit, or a caster mob that means to stand. This long before we go to it. */
+const GRIND_LET_COME_MS = 1000;
+/** How often grind looks at a mob it lets come. */
+const GRIND_LET_COME_LOOK_MS = 250;
+/** What counts as running at us: the heading within this of the way to us (0..4095 is a whole turn), so about 45 degrees. */
+const GRIND_CLOSING_ARC = 512;
+/** How long a hit of ours names a mob with no target reading as pulled by us: a run-in from 1500 at its slowest. */
+const GRIND_PULLED_MS = 10_000;
 /** A fight's mob below this percent when the overrun is up gets GRIND_FINISHING_MS more, once: under 1 % it reads 0, for seconds before it goes (GameLiving.cs:2621). */
 const GRIND_FINISHING_PERCENT = 5;
 const GRIND_FINISHING_MS = 10_000;
@@ -311,6 +351,8 @@ export interface WalkToObjectOptions {
 
 export interface WalkToObjectResult extends WalkResult {
     target: NearbyNpc | NearbyPlayer | NearbyObject | null;
+    /** With reason already_dead: the target died during this walk, or just before it with its id gone. It says nothing against the walker. */
+    targetDied?: true;
 }
 
 export interface FaceResult extends ActionResult {
@@ -503,7 +545,7 @@ export interface CastResult extends ActionResult {
      * 75 % health, "Your target is enraged and resists the spell!" (CCSpellHandler.cs:174-178), which the message reads as `(target enraged)`: the same branch, words apart.
      */
     effectImmune?: boolean;
-    /** With reason already_dead: our target died during this cast. Nothing landed and nothing was paid, and it says nothing against the caster: it is the fight's end. */
+    /** With reason already_dead: our target died during this cast, or on the walk to it, or its id was gone just after its death: those two with no cast at all. Nothing landed and nothing was paid, and it says nothing against the caster: it is the fight's end. */
     targetDied?: true;
     /** With reason must_wait: the server holds this spell as the follow-up of the cast still running ("You prepare this spell as a follow up!"), and starts it by itself after retryAfterMs, unless another replaces it or that cast fails at its end (its target gone, say), which drops it without a word. This long is its own cast time. */
     followUpMs?: number;
@@ -528,7 +570,7 @@ export interface CastResult extends ActionResult {
      */
     damage: number;
     messages: GameMessage[];
-    /** For reason 'must_wait' / 'interrupted' / 'immune' / 'crowd_controlled': ms until casting is allowed again ("You must wait N seconds"). */
+    /** For reason 'must_wait' / 'interrupted' / 'immune' / 'crowd_controlled': ms until casting is allowed again ("You must wait N seconds"). For reason 'refused', a song with no instrument in hand only: 60 s, as only a change of hand cures it. */
     retryAfterMs?: number;
 }
 
@@ -538,7 +580,7 @@ export interface SummonPetOptions extends CastOptions {
     /**
      * Set this ground target first: an Animist's turrets stand on it (SummonAnimistPet.cs:21-40). It must be in the spell's range.
      * Without z the client snaps it to its terrain, under a river the mesh's plane there (else our own height); a z passed goes out as given. The server drops a spot
-     * over 16 units off the mesh (PlayerGroundTargetHandler.cs:21-30, :63-85): reason refused. An NPC's coordinates are always valid. With `replace` a spot with no z that its height puts out of range is refused after it was set, and the ground target we had goes back; with none before, the refused spot stays.
+     * over 16 units off the mesh (PlayerGroundTargetHandler.cs:21-30, :63-85): reason refused. An NPC's coordinates are always valid. That drop wipes the ground target we had as well, and nothing puts it back. With `replace` a spot with no z that its height puts out of range is refused after it was set, and the ground target we had goes back; with none before, the refused spot is wiped too, so a later summon with no spot reads no_ground_target.
      */
     groundTarget?: Point;
     /**
@@ -610,6 +652,8 @@ export interface PetKillOptions {
     ignoreAttackers?: boolean;
     /** End the wait as soon as the target stands this near us, reason 'arrived', for a caller with something to do then: grind's melee as a mob on us gets here. The pet keeps its order. Default: no such end. */
     endWithin?: number;
+    /** As endWithin, once the target reads on us as well: a pass with the mob on the pet, for a caller who can swing when it turns. Default: no such end. */
+    endOnUsWithin?: number;
 }
 
 export interface MeleeSlotResult extends ActionResult {
@@ -666,7 +710,7 @@ export interface RestOptions {
     endurancePercent?: number;
     /**
      * Not done until our window pet's health reaches this as well, also with our own health full, as a shade's stays. Ignored with no pet, or none
-     * in view. It regains whether we sit or not. Live: nothing for about 20 s after a fight, then about 10 % per 6 s for most pets; the top Necromancer's servant about 0.2 % a second, a low one more, and a Regenerate line heals about 5 % per 3 s for 12 s.
+     * in view. It regains whether we sit or not. Live: after a fight its first real tick comes in anything up to about 37 s, the last in-combat one being 30 s off (GameLiving.cs:2448), then about 10 % per 6 s for most pets, in whole points; the top Necromancer's servant about 0.2 % a second, a low one more, and a Regenerate line heals about 6 % per 3 s for 12 s.
      */
     petHealthPercent?: number;
     timeout?: number;
@@ -866,10 +910,10 @@ export interface GrindPetOptions {
      * 'pet' (default): the pet fights and we stand off (petKill). A new pet's threat can take long to take a mob off us, so while a mob on us is within 250, and we have a melee weapon and aren't a shade, we swing as well (killNpc, which orders the pet);
      * one farther off the pet has, until it gets there. There is no health floor in either: a caller that wants one watches from outside. It is the pet's fight in both, so a passive pet is lifted to defensive first, as an order lifts one.
      * 'both': we fight too (killNpc, which orders the pet, and leaves a passive one out of it). With nothing to swing it reads as 'pet': in shade (ClassDisciple.cs:91), and with no melee weapon in slots 10 or 12 (a shield, a left-hand weapon alone and a bow are none), as the server refuses melee with a bow in hand (PlayerAttackRequestHandler.cs:12-18).
-     * A summon with a cast time goes with a mob on us only while that is farther off than it can swing from by the cast's half way (220 units/s, faster if it reads so, and 250 more, about 910 for 6 s); nearer, we go to melee, and with nothing to swing it goes anyway, as the cast is all there is: until it can, the fight waits, with no failure. With no mob on us a wait for a summon of 6 s or less, and any "You must wait N seconds", is waited out rather than spent on a pull; a long recast still pulls under 'both'.
+     * A summon with a cast time goes with a mob on us only while that is farther off than it can swing from by the cast's half way (220 units/s, faster if it reads so, and 250 more, about 910 for 6 s); nearer, we go to melee as it arrives, not walking out while it runs at us, and with nothing to swing it goes anyway, as the cast is all there is: until it can, the fight waits, with no failure. A Necromancer's goes that way too, weapon or not: melee is no answer for it. A mob our own hit pulled counts as on us for this, by a fight of ours or our hit in the last 10 s, while it closes with no target reading. With no mob on us a wait for a summon of 6 s or less, and any "You must wait N seconds", is waited out rather than spent on a pull; a long recast still pulls under 'both'.
      */
     fight?: 'pet' | 'both';
-    /** Summon again after a loss or a respawn (default true). With no main or turret spell to do it with, a lost pet ends the run at once with reason not_supported, a mob on us or not, in a melee pass of ours too; false fights on in melee. */
+    /** Summon again after a loss or a respawn (default true). With no main or turret spell to do it with, a lost pet ends the run at once with reason not_supported, a mob on us or not, in a melee pass of ours too; false fights on in melee, and with no melee weapon ends the run at once: stopReason 'error', reason no_pet, and the message says what is on us. */
     resummon?: boolean;
     /**
      * Between fights, with no mob on us or the pet, no pull while our pet is below this: rest instead, up to restToPetHealth (default 50; 0 never, and no rest waits for it). Its health
@@ -879,7 +923,7 @@ export interface GrindPetOptions {
     restBelowPetHealth?: number;
     /**
      * How far a rest takes our pet, however long it takes, once restBelowPetHealth has called for one and on any rest of ours for our own health or mana (default 90; never less than restBelowPetHealth).
-     * Most pets are there in a minute. The top Necromancer's servant regains about 0.2 % a second, a low one more, so this can take minutes; a Regenerate line heals about 5 % per 3 s for 12 s. releasePet then summonPet has a fresh one in about 20 s, at the cost of our own
+     * Most pets are there in a minute. The top Necromancer's servant regains about 0.2 % a second, a low one more, so this can take minutes; a Regenerate line heals about 6 % per 3 s for 12 s. releasePet then summonPet has a fresh one in about 20 s, at the cost of our own
      * health falling to the pet's percent (PlayerState.isShade): grind doesn't do that by itself, because it is the caller's to weigh.
      */
     restToPetHealth?: number;
@@ -945,12 +989,12 @@ export interface GrindOptions {
      */
     noTargetTimeoutMs?: number;
     /**
-     * Fight with a pet: summon it before the first fight and again after a loss, and after a respawn before the walk back (it follows), and neither pull
+     * Fight with a pet: summon it before the first fight and again after a loss, and after a respawn before the walk back (it follows; a window turret, which doesn't, goes up at the anchor), and neither pull
      * nor rest while it fights. Next comes, in this order: a mob on us; the pet's mob; a mob from a fight left
      * unfinished by a lost pet or a mob on us, while it lives within 2500 of us, with a new pet ordered onto it; and only then a fresh one. Without
      * a pet, a mob on us over 250 away gets a try at a summon first, as does one nearer by for a summon with no cast time, or when we have nothing to swing, and mobs on us are fought in melee until it is back: a melee pass lasts until the summon's timer is up, at least 3 s, and the fight goes on from there. A turret is given only what it reaches, one that stays out of that in the fight is let go after about 2 s, and a mob on us beyond that is fought in melee.
      * A mob a lost pet engaged turns on us (StandardMobBrain.cs:569), so one that is hurt, on us or was on the pet at the loss holds the run however short of time we are: it is the next target, and worth a new pet, until it dies, goes beyond 2500 or the overrun is up (durationMs). One the pet never reached has drawn nothing: with time short it holds nothing and gets no summon. If one
-     * still stands at the end the message says `; our pet died with X at 17 %, and it is coming for us` (in shade also `: we are at N % health`), when it reads as on us or had the pet as its target at the loss; else `; we lost our pet on its way to X`.
+     * still stands at the end the message says `; our pet died with X at 17 %, and it is coming for us` (in shade also `: we are at N % health`, unless it is beside us more than 3 s after the loss: our health is melee's by then), when it reads as on us or had the pet as its target at the loss; else `; we lost our pet on its way to X`. Beside us by then: `; our pet died with X at 90 %, and it is on us at 80 %`, the percent at the loss and now. A release or a tether's cut says `we lost our pet` in these.
      * Nothing is said while a new pet has it. A run ended by our own death says `; our pet died first, with X at 84 %`. GrindResult.lastPetLoss has that mob in all of these.
      * Stops with stopReason 'error' when summoning keeps failing with time left. Past the deadline a try that fails ends the run as 'duration', and so does the last one when short of time. In the overrun a recast it can't outlast isn't waited for, unless the mob had the pet as its target. A pet a window doesn't list can't be used here (reason not_supported, see GrindPetOptions.spell). A run that ends with no pet says why: while a recast holds the summon `; waiting on Hunter's Pet (10s)`,
      * short of power `; no pet: short of power for X (it can cost 26, and we have 9)`, and otherwise `; could not summon: <the last line>`. Short of power it rests to the most the summon can cost and 5 points, at most 60 %.
@@ -967,6 +1011,7 @@ export interface GrindStats {
 
 export interface GrindResult extends ActionResult {
     kills: number;
+    /** Fights that failed, and each pet lost, once however many passes hear of it, between passes too; not the owner's death, nor a pet that went with a region change. */
     failures: number;
     deaths: number;
     xpGained: number;
@@ -995,6 +1040,16 @@ export interface GrindResult extends ActionResult {
 // ── Internals ───────────────────────────────────────────────────────────────
 
 type Obj = NearbyNpc | NearbyPlayer | NearbyObject;
+
+/** What castSpell's walk asks on top of walkToObject. */
+interface WalkInOptions extends WalkToObjectOptions {
+    /** End at the first reading within `range`, looking as it goes: a walk with only the arrival radius to stop it goes on past that. */
+    firstReading?: boolean;
+    /** What's enough when the walk can get no nearer, a height it can't climb say: it was to stop inside this, and did. Default `range`. */
+    enough?: number;
+    /** Why this walk has no more point, on the target as it now reads. */
+    pointless?: (obj: Obj) => { message: string; reason: string } | null;
+}
 
 /**
  * How long to wait before an add that opens a window. Two of those in one server tick (33 ms) cross the windows, and
@@ -1076,7 +1131,7 @@ const playerFoe = (first: NearbyPlayer): Foe<NearbyPlayer> => ({
 
 /** A summon's result fields before anything is known. */
 /** What ends a cast: its refusals, and the line at a dead target, a pattern where the others are substrings for useItem too. */
-const CAST_ANSWERS: readonly (string | RegExp)[] = [...CAST_REFUSALS, TARGET_IS_DEAD];
+const CAST_ANSWERS: readonly (string | RegExp)[] = [...CAST_REFUSALS, TARGET_IS_DEAD, CAST_WIPED];
 
 const noSummon = () => ({ spell: null as Spell | null, target: null as Obj | null, castTimeMs: null as number | null, completed: false, resisted: false, damage: 0, messages: [] as GameMessage[], pet: null as NearbyNpc | null, petState: null as PetState | null });
 
@@ -1154,6 +1209,21 @@ const swingHoldMs = (s: BotWorldState): number => {
     return speed > 0 ? speed * 100 : HIT_INTERRUPT_MS;
 };
 
+/** A mob on the move with its heading on us: a mob runs straight at what it is after, and one reading gives that with no second look. */
+const closesOn = (n: NearbyNpc, p: Point): boolean => n.speed > 0 && headingDiff(n.heading, headingBetween(n, p)) <= GRIND_CLOSING_ARC;
+
+/** Whether a swing or spell of ours landed on this entry lately. */
+const hitByUs = (s: BotWorldState, n: NearbyNpc): boolean => {
+    const since = Date.now() - GRIND_PULLED_MS;
+    return s.combatEvents.some(e => (e.kind === 'melee' || e.kind === 'spellEffect') && e.attackerObjectId === s.player?.objectId && e.targetObjectId === n.objectId && e.receivedAt >= Math.max(since, n.firstSeenAt ?? 0));
+};
+
+/** A line that answers a style's send with a no, not an attack's. */
+const styleRefused = (text: string): boolean => {
+    const t = text.toLowerCase();
+    return STYLE_REFUSALS.some(r => t.includes(r)) && !t.includes('combat mode');
+};
+
 /** A kill's message, for the time it is given. */
 const killedLine = (name: string, ms: number, gained: string): string => `Killed ${name} in ${(ms / 1000).toFixed(1)}s${gained}`;
 
@@ -1208,6 +1278,11 @@ function spellRange(info: SpellInfo | null, options: CastOptions): number {
     return options.range ?? (info && info.range > 0 ? info.range : DEFAULT_SPELL_RANGE);
 }
 
+/** Where castSpell's walk stops for this range. */
+function spellWalkStop(range: number): number {
+    return range - Math.min(range * SPELL_WALK_SHARE, SPELL_WALK_MARGIN);
+}
+
 /** Whether the window shows what this command asks for. */
 function petShows(pet: PetState, command: PetCommand): boolean {
     return pet.aggression === command || pet.walk === command;
@@ -1237,6 +1312,8 @@ export function castFailureReason(text: string, fallback: string = 'refused'): s
     const t = text.toLowerCase();
     // First: these name a mob, and a mob's name can hold any word below. This charm refusal passes once the mob is out of combat (CharmSpellHandler.cs:340-344, Spells.txt:84).
     if (/^you can't charm .+ is in combat!$/.test(t)) return 'in_combat';
+    if (t.includes(NO_INSTRUMENT)) return 'refused';
+    if (CAST_WIPED.test(text) || HELD_LINE.test(text)) return 'crowd_controlled';
     // Release Clump at what is no turret of ours (Spells.txt:169, TurretSpellHandler.cs:30). The same words with a full stop are a Pet spell with no pet (Spells.txt:112, SpellHandler.cs:653).
     if (t.endsWith('on a creature you are controlling')) return 'invalid_target';
     if (TARGET_IS_DEAD.test(text)) return 'already_dead';
@@ -1270,10 +1347,17 @@ function ownCastLeftMs(s: BotWorldState, me: number): number {
 
 function retryAfter(text: string): number | undefined {
     if (isPvpImmunity(text)) return PVP_IMMUNE_RETRY_MS;
-    if (isCrowdControlled(text)) return CROWD_CONTROLLED_RETRY_MS;
+    if (isCrowdControlled(text) || CAST_WIPED.test(text) || HELD_LINE.test(text)) return CROWD_CONTROLLED_RETRY_MS;
+    if (text.toLowerCase().includes(NO_INSTRUMENT)) return NO_INSTRUMENT_RETRY_MS;
     const m = /must wait (\d+(?:\.\d+)?) seconds?/i.exec(text);
     if (m) return Math.ceil(Number(m[1]) * 1000);
-    return /interrupt/i.test(text) ? 2000 : undefined;
+    return /interrupt/i.test(text) ? INTERRUPT_RETRY_MS : undefined;
+}
+
+/** The object id a target names, if it does: a name matches whoever bears it now, and that says nothing of what became of an earlier one. */
+function namedId(target: unknown): number | null {
+    if (typeof target === 'number') return target;
+    return typeof target === 'object' && target !== null && 'objectId' in target && typeof target.objectId === 'number' ? target.objectId : null;
 }
 
 /** 2D length of the route from `from` through `points`. */
@@ -1299,6 +1383,10 @@ export class BotActions {
     /** The melee slot we last took in hand. */
     private lastMeleeSlot: number | null = null;
     private castHeld: CastHeld | null = null;
+    /** Ends the watch on our last attack's swing (endSwingAtDeath). */
+    private swingWatch: (() => void) | null = null;
+    /** Our last cast the server called too far away, until one at that target lands (SPELL_TOO_FAR_MS): the target, what it read as the cast began, and when. */
+    private tooFar: { id: number; reading: number; at: number } | null = null;
 
     constructor(public sdk: BotSDK) {
         this.helpers = new ActionHelpers(sdk);
@@ -1315,20 +1403,47 @@ export class BotActions {
         return this.route({ x, y, z: options.z }, [], options);
     }
 
-    /** Walk until within `range` (3D) of an NPC, player or object; follows a target that moves. */
+    /**
+     * Walk until within `range` (3D) of an NPC, player or object; follows a target that moves. A target that dies on the way ends the walk at once: reason already_dead, with targetDied, by its death event or a player's dead flag. So does an id gone just after its death, asked for or come to.
+     * A corpse we set out for is no such target, and one merely out of view reads not_found, where it was last seen.
+     */
     async walkToObject(target: ObjectTarget, options: WalkToObjectOptions = {}): Promise<WalkToObjectResult> {
+        return this.walkInto(target, options);
+    }
+
+    /** walkToObject's walk, with castSpell's say in how it ends. */
+    private async walkInto(target: ObjectTarget, options: WalkInOptions): Promise<WalkToObjectResult> {
         const range = options.range ?? 100;
         let obj = this.helpers.resolveAny(target);
-        if (!obj) return { ...fail(`Target not found: ${describeTarget(target)}`, 'not_found', {}), position: this.position(), distance: Infinity, reissues: 0, target: null };
+        if (!obj) {
+            const dead = this.deadAndGone(target);
+            return { ...(dead ? fail(dead, 'already_dead', { targetDied: true as const }) : fail(`Target not found: ${describeTarget(target)}`, 'not_found', {})), position: this.position(), distance: Infinity, reissues: 0, target: null };
+        }
         let last: WalkResult = { success: true, message: 'Already in range', position: this.position(), distance: obj.distance2d, reissues: 0 };
         const tolerance = Math.max(16, Math.min(range * 0.6, range - 20));
         const deadline = options.timeout === undefined ? null : Date.now() + options.timeout;
+        const id = obj.objectId;
+        const name = nameOf(obj);
+        const baseline = maxCombatEventId(this.helpers.state());
+        const dead0 = obj.kind === 'player' && obj.isDead;
+        const entryIn = (s: BotWorldState): Obj | undefined => s.nearbyNpcs.find(n => n.objectId === id) ?? s.nearbyPlayers.find(n => n.objectId === id) ?? s.nearbyObjects.find(n => n.objectId === id);
+        // What ends the walk, whatever it has left. A healer doesn't go on to where its friend fell, and a mob's death is no reason to arrive at its spot.
+        const over = (s: BotWorldState): { message: string; reason: string } | null => {
+            const now = entryIn(s);
+            const pointless = now && options.pointless?.(now);
+            if (pointless) return pointless;
+            const died = s.combatEvents.some(e => e.id > baseline && e.kind === 'death' && e.targetObjectId === id) || (!dead0 && now?.kind === 'player' && now.isDead);
+            return died ? { message: `${name} died as we came`, reason: 'already_dead' } : null;
+        };
+        const stopped = (end: { message: string; reason: string }, at: Obj): WalkToObjectResult => ({ ...last, ...fail(end.message, end.reason, end.reason === 'already_dead' ? { targetDied: true as const } : {}), target: at });
+        const reached = (s: BotWorldState) => !!options.firstReading && (entryIn(s)?.distance ?? Infinity) <= range;
         for (let attempt = 0; attempt < 4; attempt++) {
+            let noLayer = false;
             if (obj.distance <= range) {
                 return { ...last, success: true, message: `In range of ${nameOf(obj)} (${obj.distance})`, target: obj };
             }
             const left = deadline === null ? undefined : deadline - Date.now();
-            if (left !== undefined && left <= 0) return { ...last, ...fail(`Walk to ${nameOf(obj)} timed out after ${options.timeout}ms`, 'timeout', {}), target: obj };
+            if (left !== undefined && left <= 0) return { ...last, ...fail(`Walk to ${nameOf(obj)} timed out after ${Math.round(options.timeout!)}ms`, 'timeout', {}), target: obj };
             if (obj.distance2d <= tolerance) {
                 // Close on the ground but out of range in 3D: our z is off (estimateZ can miss by
                 // hundreds) or the target is on another layer (ledge, wall, balcony). route() would
@@ -1340,20 +1455,40 @@ export class BotActions {
                 const targetZ = obj.z;
                 const r = await this.sdk.sendMoveTo(obj.x, obj.y, targetZ, { tolerance: Math.min(tolerance, 24) });
                 if (!r.success) return { ...last, ...fail(`Cannot reach ${nameOf(obj)}: ${r.message}`, r.reason ?? 'dispatch_failed', {}), target: obj };
-                const adopted = await this.helpers.waitFor(s => s.player && Math.abs(s.player.z - targetZ) <= 16 ? true : null, Math.min(2000, left ?? 2000));
+                const adopted = await this.helpers.waitFor(s => (s.player && Math.abs(s.player.z - targetZ) <= 16) || over(s) || reached(s) ? true : null, Math.min(2000, left ?? 2000));
                 last = { success: true, message: 'Adopted target height', position: this.position(), distance: obj.distance2d, reissues: last.reissues };
-                if (!adopted) break; // no layer near the target's height here: retrying won't find one
+                const now = this.helpers.state();
+                const end = now && over(now);
+                if (end) {
+                    await this.helpers.cleanup(() => this.sdk.sendStop());
+                    return stopped(end, obj);
+                }
+                // No layer near the target's height here, and retrying won't find one. It would go on to the target's spot, after our answer: and a first reading in range ends a walk here as out on the plane.
+                noLayer = !adopted;
+                if (noLayer || (now && reached(now))) await this.helpers.cleanup(() => this.sdk.sendStop());
             } else {
-                last = await this.route({ x: obj.x, y: obj.y, z: obj.z }, [], { tolerance, timeout: left });
+                const here = obj;
+                const walked = await this.walkUntil(here.x, here.y, { z: here.z, tolerance, timeout: left }, s => !!over(s) || reached(s));
+                last = walked ?? { success: true, message: `In range of ${nameOf(here)}`, position: this.position(), distance: here.distance2d, reissues: last.reissues };
+                const now = this.helpers.state();
+                const end = now && over(now);
+                if (end) return stopped(end, (now && entryIn(now)) ?? here);
             }
             if (!last.success) return { ...last, message: `Cannot reach ${nameOf(obj)}: ${last.message}`, target: obj };
-            const fresh = this.helpers.resolveAny(obj.objectId);
-            if (!fresh) return { ...last, ...fail(`${nameOf(obj)} disappeared`, 'not_found', {}), target: obj };
+            const fresh = this.helpers.resolveAny(id);
+            if (!fresh) return stopped(this.helpers.diedLately(this.helpers.state(), id) ? { message: `${name} died as we came`, reason: 'already_dead' } : { message: `${name} disappeared`, reason: 'not_found' }, obj);
             obj = fresh;
+            if (noLayer) break;
         }
-        return obj.distance <= range
+        return obj.distance <= (options.enough ?? range)
             ? { ...last, success: true, message: `In range of ${nameOf(obj)} (${obj.distance})`, target: obj }
-            : { ...last, ...fail(`Could not get within ${range} of ${nameOf(obj)} (at ${obj.distance})`, 'out_of_reach', {}), target: obj };
+            : { ...last, ...fail(`Could not get within ${Math.round(range)} of ${nameOf(obj)} (at ${obj.distance})`, 'out_of_reach', {}), target: obj };
+    }
+
+    /** What to say of a target by id that isn't there, gone just after its death; null when nothing says it died. */
+    private deadAndGone(target: unknown): string | null {
+        const id = namedId(target);
+        return id !== null && this.helpers.diedLately(this.helpers.state(), id) ? `${describeTarget(target)} is already dead` : null;
     }
 
     /** Walk through waypoints in order (one continuous move). */
@@ -1616,12 +1751,22 @@ export class BotActions {
      * (with retryAfterMs) when PvP immunity, ours or the target's, refuses the swing,
      * 'crowd_controlled' (with retryAfterMs) when we are mezzed or stunned, and 'already_dead' when it died as we came, with attack mode switched off again (attack mode carried over from another target says that line of that one, so then only with this one dead or gone in our view). In shade: reason 'refused', with no walk; with no melee weapon in slots 10 or 12 too (a shield, a left-hand weapon alone and a bow are none). With a bow
      * in hand the server's line comes once in range: this takes a melee slot in hand once, as killNpc does (takeMeleeSlot), and tries again; if the line stays, reason 'refused' with it.
+     * The walk ends at the target's death, at once, and an id gone just after its death reads already_dead as well; one merely out of view reads not_found.
+     * The swing goes off by itself at the target's death, also after this has returned, as long as our selection is on it or went with it: the server's would stand there, at a player's corpse with "X is already dead!" each round, at a mob's with no line at all, as the client clears the selection at its remove (client/session.ts:496), and player.inCombat with it. A call that comes to nothing leaves a swing on another target on, and that one still goes off at that target's death. A refusal for good goes the same way, reason 'refused': a player of our realm says so only with the next round (a duel takes the id, and the client can't tell one), so at one this waits a weapon's interval before it reads success. A line we can walk or turn out of ("not in view") keeps the swing.
      */
     async attack(target: LivingTarget, options: { timeout?: number } = {}): Promise<AttackResult> {
         const t = this.helpers.resolveLiving(target);
-        if (!t) return fail(`Target not found: ${describeTarget(target)}`, 'not_found', { npc: null, target: null });
+        if (!t) {
+            const dead = this.deadAndGone(target);
+            if (!dead) return fail(`Target not found: ${describeTarget(target)}`, 'not_found', { npc: null, target: null });
+            await this.swingOffAt(namedId(target));
+            return fail(dead, 'already_dead', { npc: null, target: null });
+        }
         const targets = (o: NearbyNpc | NearbyPlayer) => ({ npc: o.kind === 'npc' ? o : null, target: o });
-        if (this.isDeadTarget(t)) return fail(`${nameOf(t)} is already dead`, 'already_dead', targets(t));
+        if (this.isDeadTarget(t)) {
+            await this.swingOffAt(t.objectId);
+            return fail(`${nameOf(t)} is already dead`, 'already_dead', targets(t));
+        }
         // A name that matched no monster falls back to players: never one of our realm (a duel takes the id).
         if (t.kind === 'player' && (typeof target === 'string' || target instanceof RegExp) && t.realm === this.helpers.player()?.realm) {
             return fail(`${t.name} is a player of our realm`, 'not_attackable', targets(t));
@@ -1645,7 +1790,19 @@ export class BotActions {
         const p0 = this.helpers.player();
         const carried = !!p0?.attacking && p0.targetObjectId !== t.objectId;
         const engaged = await this.engage(t);
-        if (!engaged.success) return { ...engaged, ...targets(t) };
+        if (!engaged.success) {
+            // The client's model has dropped it and the snapshot still holds it (client.ts:380): the one without it has its death too, if it died.
+            if (engaged.reason === 'unknown_object') await this.helpers.waitFor(() => this.helpers.resolveLiving(t.objectId) ? null : true, SNAPSHOT_GAP_MS);
+            const dead = engaged.reason === 'already_dead' || (engaged.reason === 'unknown_object' && this.helpers.diedLately(this.helpers.state(), t.objectId));
+            if (dead) {
+                // Our walk for it had the swing to itself. With no select to go with it, one on another target is that target's, as for one dead before we set out.
+                await (engaged.reason === 'already_dead' ? this.swingOff() : this.swingOffAt(t.objectId));
+                return fail(engaged.reason === 'already_dead' ? engaged.message : `${nameOf(t)} is already dead`, 'already_dead', targets(t));
+            }
+            return engaged.reason === 'unknown_object' ? fail(`${nameOf(t)} disappeared`, 'not_found', targets(t)) : { ...engaged, ...targets(t) };
+        }
+        // Only now: if this came to nothing the swing we had stays, and so does the watch on it.
+        this.swingWatch?.();
         const watch = this.helpers.watch();
         const baseline = maxCombatEventId(this.helpers.state());
         try {
@@ -1671,7 +1828,10 @@ export class BotActions {
             // retryable, so attack mode stands and fight() re-approaches.
             const fatal = () => watch.messages().find(m => heard(m) && isFatalAttackRefusal(m.text));
             if (evidence === 'attacking' && t.kind === 'player') {
-                evidence = await this.helpers.waitFor(s => fatal() ? 'refused' : swung(s) ? 'swing' : null, 1000) ?? 'attacking';
+                // Of our realm that round is the whole answer, at the weapon's interval, and a reading of attack mode says nothing: 'You can't attack a member of your realm!' came 1496 ms in, with success read at 1000. Only a duel gets a swing there (NormalServerRules.cs:50-52).
+                const state = this.helpers.state();
+                const round = state && t.realm === p0?.realm ? swingHoldMs(state) + SNAPSHOT_GAP_MS : 1000;
+                evidence = await this.helpers.waitFor(s => fatal() ? 'refused' : swung(s) ? 'swing' : null, round) ?? 'attacking';
             }
             if (evidence === 'refused') {
                 const text = watch.findText(PVP_IMMUNE_REFUSALS) ?? watch.findText(CROWD_CONTROL_REFUSALS) ?? fatal()?.text ?? watch.findText(ATTACK_REFUSALS, heard)!;
@@ -1682,13 +1842,51 @@ export class BotActions {
                     await this.sdk.sendAttack(false);
                     return fail(text, 'already_dead', targets(t));
                 }
+                // Attack mode came with the select, and the server's refusal doesn't end it: the round before the swing has already returned (WeaponAction.cs:424-433), so it says this again at each one, to whatever we select next. A line we can walk or turn out of keeps it, and with a bow in hand there was none to end.
+                if (isFatalAttackRefusal(text)) await this.swingOff();
                 return fail(text, 'refused', targets(t));
             }
             if (!evidence) return fail(`No attack observed on ${t.name}`, 'timeout', targets(t));
+            this.endSwingAtDeath(t, baseline);
             return { success: true, message: `Attacking ${t.name}`, ...targets(this.helpers.resolveLiving(t.objectId) ?? t) };
         } finally {
             watch.dispose();
         }
+    }
+
+    /** Our swing off, if the model has one on. */
+    private async swingOff(): Promise<void> {
+        if (this.helpers.player()?.attacking) await this.sdk.sendAttack(false);
+    }
+
+    /** That, if it stands on this target or on none: one on another is about that one. */
+    private async swingOffAt(id: number | null): Promise<void> {
+        const on = this.helpers.player()?.targetObjectId;
+        if (on === null || on === id) await this.swingOff();
+    }
+
+    /**
+     * attack returns with the swing on, and nothing watches it after that. The server's goes on standing at a dead target, attack mode and all (WeaponAction.cs:424-433), and player.inCombat reads true for as long: 30 s live, beside a pet's kill, with target null and no line, as the client clears the selection at a mob's remove (client/session.ts:496). At a player's corpse the line comes again each round (AttackComponent.cs:1712).
+     * So it goes off at the target's death, for as long as our selection is on it or has gone with it. A swing that has moved on to another target is that one's, and the next attack call takes over from this.
+     */
+    private endSwingAtDeath(t: NearbyNpc | NearbyPlayer, baseline: number): void {
+        let seenOn = false;
+        const end = () => {
+            unsubscribe();
+            if (this.swingWatch === end) this.swingWatch = null;
+        };
+        const unsubscribe = this.sdk.onStateUpdate(s => {
+            const p = s.player;
+            if (!p || p.isDead) return end();
+            seenOn ||= p.attacking;
+            if (seenOn && !p.attacking) return end();
+            if (p.targetObjectId !== null && p.targetObjectId !== t.objectId) return end();
+            const died = s.combatEvents.some(e => e.id > baseline && e.kind === 'death' && e.targetObjectId === t.objectId) || (t.kind === 'player' && !!s.nearbyPlayers.find(n => n.objectId === t.objectId)?.isDead);
+            if (!died || !p.attacking) return;
+            end();
+            this.sdk.sendAttack(false).catch(() => {});
+        });
+        this.swingWatch = end;
     }
 
     /**
@@ -1713,7 +1911,10 @@ export class BotActions {
         if (!s0 || !p0) return fail('Not in game', 'not_in_game', base);
         if (p0.isDead) return fail('We are dead', 'dead', base);
         const n0 = this.helpers.resolveNpc(target);
-        if (!n0) return fail(`NPC not found: ${describeTarget(target)}`, 'not_found', base);
+        if (!n0) {
+            const dead = this.deadAndGone(target);
+            return dead ? fail(dead, 'already_dead', base) : fail(`NPC not found: ${describeTarget(target)}`, 'not_found', base);
+        }
         if (this.isDeadTarget(n0)) return fail(`${nameOf(n0)} is already dead`, 'already_dead', { ...base, npc: n0 });
         // An enemy realm's pet is no monster to go looking for (isKillable), but it can be fought: it pays nothing (GameNPC.cs:2731-2732), and it may be what's killing us.
         if (!options.force && !isKillable(n0, p0) && !(n0.isPet && isAttackable(n0, p0))) return fail(`${nameOf(n0)} is not something we can kill (realm ${n0.realm}, role ${n0.role}, peaceful ${n0.isPeaceful})`, 'not_attackable', { ...base, npc: n0 });
@@ -1768,7 +1969,7 @@ export class BotActions {
     /**
      * Take a melee weapon in hand, for a fighter who may stand with the wrong one or a bow: the state can't say which is active, and the server swings what it is. The weapon the first of `styles` needs, else the higher spec of the two weapon types worn, else the one we took last, else the right hand. With `weapon`
      * (a style tooltip's word, as "This style requires a X weapon!" has it) the slot holding that. Observed by the server's "You attempt to use" (GamePlayer.cs:6564), which comes for a weapon in hand as well: that one changes nothing, and a swing going stops only at a real switch (:4995-4996). A cast going stops with it too (:5004-5008).
-     * With `keepOnTie`, two weapons that neither the style nor the spec tells apart (a sword and a two-handed sword of one line) stay as the owner left them: success, slot null, and nothing sent. Equipping a two-hander brings it out by itself, and nothing here knows its damage. A bow left in hand then goes at the first swing (attack, killNpc, killPlayer).
+     * With `keepOnTie`, two weapons that neither the style nor the spec tells apart (in Midgard a sword and a great sword, one object type and one line, and so with axes and hammers; in Albion and Hibernia a two-hander has a line of its own, so a mace and a two-hander at equal spec, and the higher spec takes the hand whatever the damage) stay as the owner left them: success, slot null, and nothing sent. Equipping a two-hander brings it out by itself, and nothing here knows its damage. A bow left in hand then goes at the first swing (attack, killNpc, killPlayer).
      * Reasons: not_in_game, dead, refused (no melee weapon worn), not_found (none of that `weapon`), no_response.
      */
     async takeMeleeSlot(options: { styles?: readonly string[]; weapon?: string; keepOnTie?: boolean } = {}): Promise<MeleeSlotResult> {
@@ -1894,6 +2095,8 @@ export class BotActions {
         const name = nameOf(foe.first);
         const watch = this.helpers.watch();
         const timeout = options.timeout ?? DEFAULT_KILL_TIMEOUT_MS;
+        // Our own melee ends its own swing, and an off from an attack before it would only cut the first of this one.
+        if (!run) this.swingWatch?.();
         let stylesUsed = 0;
         const numbers = (killed: boolean): KillNumbers => {
             const s = this.helpers.state();
@@ -1908,7 +2111,8 @@ export class BotActions {
                 itemsGained: diffInventory(s0.inventory, s?.inventory ?? []).gained,
                 durationMs: (diedAt ?? Date.now()) - started,
                 levelsGained: p ? Math.max(0, p.level - p0.level) : 0,
-                stylesUsed,
+                // A send isn't a style: "This style requires a Spear weapon!" and the like answer it, and a pet's own "You perform" can't count for ours (AttackComponent.cs:1785-1789).
+                stylesUsed: Math.max(0, stylesUsed - watch.messages().filter(m => styleRefused(m.text)).length),
             };
         };
         // What fight() dispatched, set before each send: the snapshot trails dispatches (attack
@@ -1926,7 +2130,7 @@ export class BotActions {
         try {
             const outcome = await withExecutionDeadline<FightOutcome>(timeout,
                 () => run ? run(watch, sent) : this.fight(foe, p0, watch, options, () => stylesUsed++, sent),
-                () => ({ message: `Timed out after ${timeout}ms fighting ${name}`, reason: 'timeout' }));
+                () => ({ message: `Timed out after ${Math.round(timeout)}ms fighting ${name}`, reason: 'timeout' }));
             if (outcome !== 'killed') return { success: false, ...outcome, ...numbers(false) };
             diedAt = Date.now();
             // Before the settling: a swing still going only earns "X is already dead!" meanwhile.
@@ -2097,10 +2301,13 @@ export class BotActions {
      * Reason already_dead: a player the model knows is dead, before anything is sent, or the server's answer (SpellHandler.cs:783), not for a Corpse spell, nor for a Group spell, which has no such
      * check and lands on the living with a corpse named (HealSpellHandler.cs:76-78): its message names nobody, and `target` is only what was selected. An NPC's 0 % is no such knowledge: it is truncated (GameLiving.cs:2621).
      * A Corpse spell at a player the model holds alive, with health to show for it, at any NPC or at our own id: reason invalid_target before any walk, in the server's words (SpellHandler.cs:759-766), and its answer for what the model hasn't seen has the same reason.
-     * A target that dies during the cast ends the wait at its death: reason already_dead, with targetDied, also with "You must select a target for this spell!" beside it, which is all a cast gets as it ends with its target gone. The server says nothing to a cast at the dead (SpellHandler.cs:852-1007, AbstractServerRules.cs:337) and goes on until the cast's end, so a cast sent in that time is held as a follow-up, and a walk breaks it. The next castSpell with a cast time therefore waits for that end, at most what the cast had left, unless an 0x0B ended it; an instant goes beside it (CastingComponent.cs:376-377), and nothing else is held. Not for what lands on ourselves, on the pet or on a group, nor for a Corpse spell, and not for what doesn't hang on the mob selected: an Area spell, a Cone or an Enemy spell with range 0 goes on and lands on what is there (SpellHandler.cs:908-918).
+     * A target that dies during the cast ends the wait at its death: reason already_dead, with targetDied, also with "You must select a target for this spell!" beside it, which is all a cast gets as it ends with its target gone. The server says nothing to a cast at the dead (SpellHandler.cs:852-1007, AbstractServerRules.cs:337) and goes on until the cast's end, so a cast sent in that time is held as a follow-up. A walk doesn't break it: the client's mover holds for the cast's time + 250 ms (client/session.ts:501), so an owner running after this stands up to about 2.8 s of a 2.5 s cast. A sit does, and a swing request at once, "Your spell is cancelled!" (AttackComponent.cs:661-665). The next castSpell with a cast time therefore waits for that end, at most what the cast had left, unless an 0x0B ended it; an instant goes beside it (CastingComponent.cs:376-377), and nothing else is held. Not for what lands on ourselves, on the pet or on a group, nor for a Corpse spell, and not for what doesn't hang on the mob selected: an Area spell, a Cone or an Enemy spell with range 0 goes on and lands on what is there (SpellHandler.cs:908-918).
      * A cast sent during one that is still running (a raw send's, say) reads must_wait, at once, with retryAfterMs what's left of that one: never no_response, and the running cast's own lines are no answer to it. With "You prepare this spell as a follow up!" the server holds this spell and starts it by itself, so the result has followUpMs, and the next castSpell waits that out as well; unless that cast fails at its end (its target gone, say): the server then drops what it holds without a word, and the next castSpell goes once no begin has come 500 ms past that end.
      * A pet's attack order refused just before ("You can't attack ...", PvP immunity) answers on the same stream: within 500 ms of sdk.sendPetCommand('attack'), and with this cast's begin line there or in the same tick, that line is the order's. With no begin line by then it is this cast's too.
-     * Release Clump (TurretsRelease) needs a turret of ours selected where other Pet spells go to the pet by themselves (TurretSpellHandler.cs:20-41): with no target given this selects the window pet or a summon, unless one of ours is selected; its refusal is invalid_target.
+     * Release Clump (TurretsRelease) needs a turret of ours selected where other Pet spells go to the pet by themselves (TurretSpellHandler.cs:20-41): with no target given this selects the window pet or a summon, unless one of ours is selected; its refusal is invalid_target. What was selected before comes back with the cast's end, if it is still there, else nothing is selected.
+     * The walk into range stops inside it by the smaller of 10 % of the range and 150, in 3D, by what the target reads as it goes. A target that moves on from there gets the server's "That target is too far away!" at the cast's end: reason out_of_range, and the caller goes again: for 30 s or until a cast at it lands, the next walk at it stops short by as much again as it left in a cast, by our own readings, at most at half the range. A height it can't climb leaves the first reading inside the range good enough, and the cast goes from there.
+     * A target that dies on the way ends the walk at once, with nothing cast: reason already_dead, with targetDied, a friend's too. A corpse that gets up ends it as well, reason invalid_target in the Corpse spell's own words. An id gone just after its death reads already_dead with targetDied, and one merely out of view not_found.
+     * Reason refused for a song with no instrument in hand, naming the song and the instrument we wear, with retryAfterMs of 60 s: only a change of hand cures it. Reason interrupted has retryAfterMs 2200, the server's own wait (SpellHandler.cs:372). A mezz's or a stun's line beside the 0x0B reads crowd_controlled, and so does Amnesia's, which ends a cast with no 0x0B and no line of the cast's own (AmnesiaSpellHandler.cs:50). An item's recast line ("... to discharge this item!") answers the useItem and says nothing of the cast.
      */
     async castSpell(spell: NamePattern | Spell, target?: ObjectTarget | null, options: CastOptions = {}): Promise<CastResult> {
         const base = { spell: null as Spell | null, target: null as Obj | null, castTimeMs: null as number | null, completed: false, resisted: false, damage: 0, messages: [] as GameMessage[] };
@@ -2122,6 +2329,8 @@ export class BotActions {
         // (GamePlayer.cs:5743 and :5900; GameLiving.cs:2842 is a plain property, no SendChangeTarget),
         // so after a release the model can still hold a target the server no longer has.
         let targetId: number | null = null;
+        // Release Clump's select of a turret, which goes with the turret: what to put back as the cast ends.
+        let reselect: { previous: number | null; turret: number } | null = null;
         const onPet = kind === 'pet' && noTarget;
         if (kind === 'self') {
             // Self buffs: no approach, keep the current target.
@@ -2133,7 +2342,10 @@ export class BotActions {
             // This one has to be told (TurretSpellHandler.cs:20-41). Its Radius goes from the one selected, and the window pet or any summon of ours will do.
             const turret = info?.type === 'TurretsRelease' && !oursSelected ? s?.pet?.objectId ?? s?.summons?.find(id => this.sdk.getNearbyNpc(id)) : undefined;
             if (s?.pet === null && !oursSelected && turret === undefined) return fail('No pet to cast this on', 'no_pet', { ...base, spell: sp });
-            if (turret !== undefined) targetId = turret;
+            if (turret !== undefined) {
+                targetId = turret;
+                reselect = { previous: player.targetObjectId, turret };
+            }
             obj = this.sdk.getPet() ?? (turret !== undefined ? this.sdk.getNearbyNpc(turret) : null);
         } else if (friendly && (noTarget || target === player.objectId)) {
             // Heals/buffs default to ourselves ("You must select a target for this spell!" otherwise).
@@ -2143,7 +2355,10 @@ export class BotActions {
             if (kind === 'enemy' && namesUs(target, player.objectId)) return fail(`${sp.name} needs an enemy, and that is us`, 'no_target', { ...base, spell: sp });
             if (kind === 'corpse' && namesUs(target, player.objectId)) return fail(CORPSE_ONLY, 'invalid_target', { ...base, spell: sp });
             obj = this.helpers.resolveAny(target!);
-            if (!obj) return fail(`Target not found: ${describeTarget(target)}`, 'not_found', { ...base, spell: sp });
+            if (!obj) {
+                const dead = this.deadAndGone(target);
+                return dead ? fail(dead, 'already_dead', { ...base, spell: sp, targetDied: true as const }) : fail(`Target not found: ${describeTarget(target)}`, 'not_found', { ...base, spell: sp });
+            }
             if (friendly && obj.kind !== 'object' && obj.realm !== player.realm) {
                 return fail(`${sp.name} targets ${info!.target}, not the enemy ${nameOf(obj)}`, 'invalid_target', { ...base, spell: sp, target: obj });
             }
@@ -2162,8 +2377,8 @@ export class BotActions {
             if (refused) return fail(refused.message, refused.reason, { ...base, spell: sp, target: obj });
             const range = spellRange(info, options);
             if (obj.distance > range && options.approach !== false) {
-                const walk = await this.walkIntoSpellRange(obj, range);
-                if (!walk.success) return { ...fail(walk.message, walk.reason ?? 'out_of_reach', base), spell: sp, target: obj };
+                const walk = await this.walkIntoSpellRange(obj, range, info?.castTime ?? 0, o => this.castTargetRefusal(sp, info, o, player));
+                if (!walk.success) return { ...fail(walk.message, walk.reason ?? 'out_of_reach', base), spell: sp, target: walk.target ?? obj, ...(walk.targetDied ? { targetDied: true as const } : {}) };
                 obj = walk.target ?? obj;
             }
             if (obj.objectId !== player.objectId) targetId = obj.objectId;
@@ -2176,6 +2391,16 @@ export class BotActions {
         if (this.sdk.getMovement()?.moving) await this.sdk.sendStop();
         if (obj && !onPet && obj.objectId !== p.objectId) await this.sdk.sendFaceObject(obj.objectId);
 
+        const from = { reading: obj?.distance ?? 0, at: Date.now() };
+        const cast = await this.castOnce(sp, obj, info, options, targetId, baseline, p);
+        if (targetId !== null) this.tooFar = cast.reason === 'out_of_range' ? { id: targetId, ...from } : this.tooFar?.id === targetId ? null : this.tooFar;
+        // The turret goes with the spell, and the server's selection stays on the deleted NPC where a later Pet spell would land (backToTarget).
+        if (reselect) await this.backToTarget(reselect.previous, reselect.turret);
+        return cast;
+    }
+
+    /** castSpell's cast, and its one more try on "You must select a target". */
+    private async castOnce(sp: Spell, obj: Obj | null, info: SpellInfo | null, options: CastOptions, targetId: number | null, baseline: number, p: PlayerState): Promise<CastResult> {
         const first = await this.observeCast(sp, obj, info, options);
         if (first.reason !== 'no_target' || targetId === null || options.retryNoTarget === false) return first;
         // "You must select a target" before the cast began: the server lost our target after all
@@ -2239,9 +2464,17 @@ export class BotActions {
         await this.helpers.waitFor(s => this.castHeldLeft(held, s) === 0, held.until - Date.now());
     }
 
-    /** The walk castSpell does, well within the range. */
-    private walkIntoSpellRange(obj: Obj, range: number): Promise<WalkToObjectResult> {
-        return this.walkToObject(obj, { range: Math.max(100, range * 0.85) });
+    /**
+     * The walk castSpell does: inside the range by a margin, in 3D, by what the target reads as it goes. It used to stop at half of it: 85 % of the range for a margin, and walkToObject's arrival radius, 60 % of that, meant for a melee range, with nothing to end the walk sooner.
+     * `pointless` ends it on the target as it reads then (castTargetRefusal).
+     */
+    private walkIntoSpellRange(obj: Obj, range: number, castSeconds: number, pointless?: WalkInOptions['pointless']): Promise<WalkToObjectResult> {
+        const margin = spellWalkStop(range);
+        const nearest = range * SPELL_WALK_NEARER_SHARE;
+        const far = this.tooFar?.id === obj.objectId ? this.tooFar : null;
+        const age = far ? Date.now() - far.at : Infinity;
+        const leaving = far && age < SPELL_TOO_FAR_MS ? Math.max(0, obj.distance - far.reading) / (Math.max(1, age) / 1000) : 0;
+        return this.walkInto(obj, { range: leaving > 0 ? Math.max(nearest, margin - leaving * castSeconds) : margin, firstReading: true, enough: range, pointless });
     }
 
     /** Dispatch one cast and observe it: refusal, death, start, and completion. */
@@ -2254,6 +2487,10 @@ export class BotActions {
         const baseline = maxCombatEventId(this.helpers.state());
         const me = p.objectId;
         const spellName = sp.name.toLowerCase();
+        // Whole, in the server's words (Spells.txt:5-6): 'Ice Cloud' is inside 'Ice Cloud (Minor)'.
+        const quoted = sp.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const ownBegin = new RegExp(`^you begin casting an? ${quoted} spell`, 'i');
+        const ownCast = new RegExp(`^you cast an? ${quoted} spell`, 'i');
         const servantSpell = info?.type === 'PetSpell';
         const summonKind = info ? petSpellKind(info.type) : null;
         // A charm has a roll of its own (CharmSpellHandler.cs:419-436), and the others no direct effect: a summon can't be resisted (SummonSpellHandler.cs:195), and what lands meanwhile is someone else's.
@@ -2305,7 +2542,7 @@ export class BotActions {
             };
             /** 'cast' = "You cast a <spell> spell!" (SpellHandler.cs:1337); 'hit' = weaker evidence after landing. */
             const evidence = (s: BotWorldState): 'cast' | 'hit' | null => {
-                if (watch.messages().some(m => /^you cast an? /i.test(m.text) && m.text.toLowerCase().includes(spellName))) return 'cast';
+                if (watch.messages().some(m => ownCast.test(m.text))) return 'cast';
                 if (servantCasts(s) || servantQueued(s)) return 'cast';
                 for (const m of landed(s)) {
                     if (/extra damage|for an additional/i.test(m.text)) continue; // damage add / procs
@@ -2343,6 +2580,13 @@ export class BotActions {
                 && s.combatEvents.some(e => e.id > baseline && e.kind === 'death' && e.targetObjectId === obj.objectId);
             // That line comes k x 33 ms behind the 0xA2 (reaper, then the cast's tick: GameLoop.cs:152-161), so one snapshot can hold both: the death's, and no refusal.
             const lineOfTheDeath = (m: GameMessage, s: BotWorldState): boolean => /you must select a target/i.test(m.text) && aimDied(s);
+            // Amnesia at a cast with a cast time, once it has begun: nothing else will say it ended. Before that it found nothing to clear, and it leaves a song alone.
+            const wipedCast = (m: GameMessage, s: BotWorldState): boolean => {
+                if ((info?.instrumentRequirement ?? 0) !== 0 || info?.castTime === 0) return false;
+                const lines = watch.messages();
+                const begin = lines.findIndex(l => /you begin casting/i.test(l.text));
+                return (castEvent(s)?.receivedAt ?? Infinity) <= m.receivedAt || (begin >= 0 && begin < lines.indexOf(m));
+            };
             // What the rest of the group's fight earns on this stream: the side tick's attack order answers beside any cast, and only an Enemy spell can earn these itself (ATTACK_ONLY_REFUSALS). A servant's spell goes by its own rules.
             const earnsNoAttackLine = !!info && !servantSpell && info.target.toLowerCase() !== 'enemy';
             const notOurAttack = (m: GameMessage): boolean => earnsNoAttackLine && ATTACK_ONLY_REFUSALS.some(r => m.text.toLowerCase().includes(r));
@@ -2356,9 +2600,9 @@ export class BotActions {
             const orderNotCast = (m: GameMessage, s: BotWorldState): boolean => answersOrder(m) && (begun(s) || Date.now() - m.receivedAt < BEGIN_LINE_TICK_MS);
             // A line from before our send answers something else. A game line waits for the client's next publish, up to 250 ms (client.ts:163-168), and the watch goes by id, so the last cast's end line can come in here, the wait for that cast over, with nothing else sent yet (20261104-050819: 'Petcab: petBuff: no_target', 60 s of buffRetryMs, the cast running).
             const refusal = (s: BotWorldState): string | null =>
-                watch.findText(CAST_ANSWERS, m => m.receivedAt >= castStart && !petLostTarget(m, s) && !spotDroppedInCast(m, s) && !lineOfTheDeath(m, s) && !notOurAttack(m) && !orderNotCast(m, s) && (!TARGET_IS_DEAD.test(m.text) || deadOfOurs(m))) ?? (interruptEvent(s) ? 'Your spell is interrupted.' : null);
+                watch.findText(CAST_ANSWERS, m => m.receivedAt >= castStart && !ITEM_RECAST.test(m.text) && (!CAST_WIPED.test(m.text) || wipedCast(m, s)) && !petLostTarget(m, s) && !spotDroppedInCast(m, s) && !lineOfTheDeath(m, s) && !notOurAttack(m) && !orderNotCast(m, s) && (!TARGET_IS_DEAD.test(m.text) || deadOfOurs(m))) ?? (interruptEvent(s) ? watch.findText([HELD_LINE]) ?? 'Your spell is interrupted.' : null);
             // Sent during a cast that runs on: that cast's own lines are no answer to this one (20261104-050819: the line and "You must select a target for this spell!" in one snapshot), nor what it lands as, under the same name. Until this one's own begin line: it was held, and now it goes.
-            const heldBehind = (): GameMessage | null => (watch.messages().some(m => /^you begin casting/i.test(m.text) && m.text.toLowerCase().includes(spellName)) ? null : watch.find([ALREADY_CASTING]));
+            const heldBehind = (): GameMessage | null => (watch.messages().some(m => ownBegin.test(m.text)) ? null : watch.find([ALREADY_CASTING]));
             const msgs = () => watch.messages().slice();
             const diedResult = (castTimeMs: number | null) => fail(`Died while casting ${sp.name}`, 'died', { ...base, castTimeMs, messages: msgs() });
             const ownCastMs = () => (info ? info.castTime * 1000 : 3000);
@@ -2368,6 +2612,13 @@ export class BotActions {
                 // The server goes on to the cast's end (see castSpell): the next cast is told when that is. With no sign it began, it can't have gone far enough to hold anything.
                 if (ev || watch.find(['you begin casting'])) this.castHeld = { until: (ev?.receivedAt ?? castStart) + (ev?.castTimeMs ?? castTimeMs ?? ownCastMs()) + CAST_END_MARGIN_MS, seen: baseline };
                 return fail(`${nameOf(obj!)} died before ${sp.name} could land`, 'already_dead', { ...base, castTimeMs, messages: msgs(), targetDied: true as const });
+            };
+
+            // The line says nothing of what it wants: which song, and what we could bring out for it (a melee slot's club is the usual reason, gear-template.ts).
+            const answer = (text: string): string => {
+                if (!text.toLowerCase().includes(NO_INSTRUMENT)) return text;
+                const worn = this.helpers.state()?.equipment.find(i => i.objectType === ObjectType.Instrument);
+                return `${text} ${sp.name} needs one in hand: ${worn ? `${worn.name}, in slot ${worn.slot}` : 'we wear none'}`;
             };
 
             const heldResult = () => {
@@ -2395,8 +2646,10 @@ export class BotActions {
             if (started === 'held') return heldResult();
             if (started === 'refused') {
                 const text = refusal(this.helpers.state()!)!;
-                return { ...fail(text, castFailureReason(text), base), messages: msgs(), retryAfterMs: retryAfter(text) };
+                return { ...fail(answer(text), castFailureReason(text), base), messages: msgs(), retryAfterMs: retryAfter(text) };
             }
+            // Dead between our read and the baseline: no event for aimDied, and the server stays silent (SpellHandler.cs:923-926). Only after the silence: an id comes back fast, and a new mob on it is no corpse.
+            if (!started && obj && hangsOnAim && this.helpers.diedLately(this.helpers.state(), obj.objectId)) return aimDiedResult(null);
             if (!started) return fail(`No cast observed for ${sp.name}`, 'no_response', { ...base, messages: msgs() });
             let castTimeMs = castEvent(this.helpers.state()!)?.castTimeMs ?? null;
             let done: 'cast' | 'hit' | null = started === 'started' ? null : started;
@@ -2415,7 +2668,7 @@ export class BotActions {
                 if (end === 'aimDied') return aimDiedResult(castTimeMs);
                 if (end === 'refused') {
                     const text = refusal(this.helpers.state()!)!;
-                    return { ...fail(text, castFailureReason(text, 'interrupted'), base), castTimeMs, messages: msgs(), retryAfterMs: retryAfter(text) };
+                    return { ...fail(answer(text), castFailureReason(text, 'interrupted'), base), castTimeMs, messages: msgs(), retryAfterMs: retryAfter(text) };
                 }
                 done = end;
             }
@@ -2600,10 +2853,11 @@ export class BotActions {
      * out_of_range (a ground target beyond the spell, a charm's mob), refused (a spot off the walkable surface, and the
      * server's other refusals), resisted (a charm), in_combat (a charm's mob, for now), timeout (cast, but no pet within `appearTimeout`),
      * unknown_action (the client runs older code). A refusal reports the pet that stands. With `replace` the pet stays unless the cast can go: reasons cooldown,
-     * no_power below the most the spell can cost, in_combat for a spell with a cast time with melee on us (a swing of ours holds any such cast back for its weapon's interval, up to about 5 s on a staff, with "You must wait N seconds", so wait that out; a hit on us holds none back, and interrupts it at its half way while its timer runs, so that needs the mob gone, SpellHandler.cs:356-372, :603-620), and for a turret no_ground_target,
+     * no_power below the most the spell can cost, in_combat for a spell with a cast time with melee on us or on the pet within what it covers by the half way (SummonPetOptions.replace; a swing of ours holds any such cast back for its weapon's interval, up to about 5 s on a staff, with "You must wait N seconds", so wait that out, and so does a cast a hit has broken, for 2.2 s; a hit alone holds none back, and interrupts it at its half way while its timer runs, so that needs the mob gone, SpellHandler.cs:356-372, :603-620), and for a turret no_ground_target,
      * out_of_range (within 16 of the range too, or where a loaded mesh would put the spot beyond it: the server moves a spot to the nearest walkable ground and then measures in 3D), refused, all before anything is released, and for a charm what charmPet says. A charm goes at what was judged, not at what a release leaves selected.
      * That no_power goes by the worst case, 120 % of the price for a focus caster: a focus item can lower the real cost, so it can refuse a cast that would have gone, at the price
-     * of some regen with the pet kept. releasePet by hand goes on regardless. With no pet up nothing is judged: there is nothing to lose, and the server answers.
+     * of some regen with the pet kept. releasePet by hand goes on regardless. With no pet up nothing is judged: there is nothing to lose, and the server answers. With a cast the server still runs (see castSpell) `replace` waits for its end first, the pet there for the wait, and judges what stands then.
+     * A spot with no z refused that way goes back to the one before it; with none before, the refused one is wiped, so a later summon with no spot reads no_ground_target.
      */
     async summonPet(spell?: NamePattern | Spell, options: SummonPetOptions = {}): Promise<SummonPetResult> {
         const s0 = this.helpers.state();
@@ -2627,8 +2881,10 @@ export class BotActions {
             if (s0.pet === undefined) return fail(OLDER_CLIENT_NO_PETS, 'unknown_action', found);
             if (s0.pet) {
                 if (!options.replace) return kept({ message: 'We already have a pet: release it first, or pass replace', reason: 'pet_exists' });
+                // castSpell would wait for a cast the server runs on with the pet already gone, and melee can reach us in that time: seconds, behind a follow-up. Wait first, and judge what stands then.
+                if (info?.castTime !== 0) await this.castHeldOver();
                 // A release can't be taken back: a summon that can't go yet leaves the pet we have (a Hunter's recast is 120 s).
-                const cannot = this.summonCantGo(sp, info, kind, s0, options);
+                const cannot = this.summonCantGo(sp, info, kind, this.helpers.state() ?? s0, options);
                 if (cannot) return kept(cannot);
             }
         }
@@ -2641,6 +2897,8 @@ export class BotActions {
                 if (far) {
                     // With a z the same refusal comes before any placing. A later summon with no spot goes by what stands.
                     if (s0.groundTarget) await this.sdk.sendSetGroundTarget(s0.groundTarget.x, s0.groundTarget.y, s0.groundTarget.z);
+                    // Nothing stood: a later summon with no spot should read no_ground_target, not "closer ground target" of this one.
+                    else await this.placeGroundTarget(NO_ZONE_SPOT);
                     return kept(far);
                 }
             }
@@ -2810,7 +3068,8 @@ export class BotActions {
         if (t.level > limit) return { message: `${name} is too strong for ${sp.name}: level ${t.level}, above ${limit}${limit === bySpec ? `, which is 110 % of our spec of ${spec}` : ''}`, reason: 'refused', target: t };
         if (!pulsing && (t.inCombat || (t.targetObjectId !== null && pets.has(t.targetObjectId)) || mobInCombatLately(s, t.objectId))) return { message: `We can't charm ${name} while it is in combat`, reason: 'in_combat', target: t };
         const range = spellRange(info, options);
-        if (options.approach === false && t.distance > range) return { message: `${name} is ${t.distance} from us, beyond the ${range} of ${sp.name}`, reason: 'out_of_range', target: t };
+        const within = range - CHARM_REPLACE_MARGIN;
+        if (options.approach === false && t.distance > within) return { message: `${name} is ${t.distance} from us: with a pet to lose ${sp.name} wants it within ${within} of its ${range}`, reason: 'out_of_range', target: t };
         return null;
     }
 
@@ -2819,8 +3078,10 @@ export class BotActions {
         const wanted = options.target ?? this.helpers.player()?.targetObjectId;
         const t = wanted === null || wanted === undefined ? null : this.helpers.resolveAny(wanted);
         const range = spellRange(info, options);
-        if (!t || t.distance <= range) return null;
-        const walk = await this.walkIntoSpellRange(t, range);
+        const within = range - CHARM_REPLACE_MARGIN;
+        if (!t || t.distance <= within) return null;
+        const stop = Math.max(range * SPELL_WALK_NEARER_SHARE, Math.min(within, spellWalkStop(range), range - MOB_ROAM_SPEED * info.castTime - CHARM_WALK_SLACK));
+        const walk = await this.walkInto(t, { range: stop, firstReading: true, enough: within });
         if (!walk.success) return { message: walk.message, reason: walk.reason ?? 'out_of_reach', target: t };
         return this.summonCantGo(sp, info, 'charm', this.helpers.state()!, options);
     }
@@ -2852,6 +3113,7 @@ export class BotActions {
      * With `replace` the pet stays through what we can see, all before the release: in_combat (the mob on our pet, or in any fight, mez or stun we saw in the last 10 s or that may still run: to
      * the server all of that is combat, GameLiving.cs:227), refused (a named mob, one above our level or the spell's value, for a pulsing charm above 110 % of our modified spec), out_of_range with
      * approach off, and a walk into range that fails or dies; only then is it released. A mez that ended early or was resisted still reads as held, so the refusal can come too soon; try again later.
+     * In range for a replace means within the range less 60: the server measures at the end of the cast, in 3D, and readings of 994 and 999 of 1000 lost the pet. Beyond that it walks in first, to the range less 70 units/s for the cast and 20 (about 700 of 1000), so a mob roaming away all the way still lands, and with approach off it is out_of_range, the pet kept. A mob that roams that far from within the range less 60, with no walk, can still lose it, and so can one faster than a roam.
      * What we can't see can still lose the pet: a wrong type, a resist, and a fight or a hold we saw nothing of, out of view or past the last 200 events. For a Hunter that costs a 120 s recast.
      * A mob on its way to us reads as in combat, though the server, which goes by swings, might take the charm (GameLiving.cs:227): its first swing would stop the cast anyway. With no spell named, a mob too strong for them all names the highest limit among them.
      */
@@ -3055,12 +3317,12 @@ export class BotActions {
     /**
      * Have our pet kill a target while we stand off: order it, and wait for the death, ordering again when it has dropped
      * the target for over 5 s, never while its order stands. We walk only into range of the order, never into melee, and not at
-     * all for a turret. A first order the server refuses as out of range gets that walk and one more try: our reading lags a mob on the move (GamePlayer.cs:12185), so a refusal can come at a reading short of 2000.
+     * all for a turret: to 1500, and for a mob 1000 or more above or below us until it reads within 1900, on a slope too. A first order the server refuses as out of range gets that walk, at least 100 nearer than it read, and one more try: our reading lags a mob on the move (GamePlayer.cs:12185), so a refusal can come at a reading short of 2000.
      * An NPC at 0 % is not dead: the fight goes on to its death (GameLiving.cs:2621).
      * A shade is on its servant's tether, 1500 for 10 s and 2000 at once (NecromancerPetBrain.cs:300-326), so it walks within 1000 of the
      * target first, and steps after a servant over 1200 away or at the server's warning (`approach`).
      * Reports XP, money and items by delta, like killNpc, and the duration up to the death. Reasons: petAttack's, attacked (another
-     * mob is on us, `attacker` on the result: the pet keeps fighting, or with no order out yet has none, and the message says which. The caller decides, or passes `ignoreAttackers`), arrived (only with `endWithin`),
+     * mob is on us, `attacker` on the result: the pet keeps fighting, or with no order out yet has none, and the message says which. The caller decides, or passes `ignoreAttackers`), arrived (only with `endWithin` or `endOnUsWithin`),
      * pet_died (the pet is gone, however: state.lastPetLoss tells, and the message says when the tether took it), died,
      * target_lost (it left view alive), timeout, out_of_range (also a turret's target that stays beyond its reach for about 2 s in the fight: the message says it left, and the turret's order stands), out_of_reach (the pet isn't getting there: at a standstill over 200 from the target, with no swing or spell by it or on it and no
      * health lost by the target for over 8 s; the follow order that frees it has gone out, and a long mezz can read as this. Never for a turret). Our own target stays moved, and a swing
@@ -3167,11 +3429,17 @@ export class BotActions {
         const targetDied = (st: BotWorldState) => st.combatEvents.some(e => e.id > baseline && e.kind === 'death' && e.targetObjectId === id);
         // Into range of an order. A shade's walk is for the tether, not for the order: with no way there, the order still reaches, and the servant has a way of its own. The order's limit is 3D (GamePlayer.cs:12185, Point3D.cs:126-158), and a mob above or below us leaves that much less of it on the plane.
         // Null to go on: also at the mob's death, which the next pass reads as its kill.
-        const walkIntoRange = async (from: PlayerState, to: T): Promise<FightOutcome | null> => {
+        const walkIntoRange = async (from: PlayerState, to: T, refused = false): Promise<FightOutcome | null> => {
             sent.move = true;
-            const range = from.isShade ? SHADE_ORDER_APPROACH : PET_ORDER_APPROACH;
-            const stop = this.helpers.approachPoint(from, to, Math.max(PET_ORDER_APPROACH_MIN, Math.sqrt(Math.max(0, range ** 2 - (to.z - from.z) ** 2))));
-            const walk = await this.walkUntil(stop.x, stop.y, { z: stop.z, tolerance: 100 }, targetDied);
+            const dz = to.z - from.z;
+            const high = !from.isShade && Math.abs(dz) >= PET_ORDER_HIGH;
+            const reach = from.isShade ? SHADE_ORDER_APPROACH : high ? PET_ORDER_HIGH_REACH : PET_ORDER_APPROACH;
+            const range = refused ? Math.min(reach, to.distance - PET_ORDER_RETRY_NEARER) : reach;
+            // High up it aims all the way to the floor: the reading ends it, and an aim worked out on the plane from the start ended at a mob that had moved on, still out of reach.
+            const stop = this.helpers.approachPoint(from, to, high ? PET_ORDER_APPROACH_MIN : Math.max(PET_ORDER_APPROACH_MIN, Math.sqrt(Math.max(0, range ** 2 - dz ** 2))));
+            // By what it reads as we go: on a slope the height falls as we climb, and a plane worked out at the start would take us nearly under it. That close to the limit the reading has to end it, not an arrival radius.
+            const inReach = (st: BotWorldState) => { const mob = foe.find(st); return !!mob && mob.distance <= range; };
+            const walk = await this.walkUntil(stop.x, stop.y, { z: stop.z, tolerance: high ? 16 : 100 }, st => targetDied(st) || inReach(st));
             if (!walk) return null;
             const orderReaches = to.distance <= PET_ORDER_RANGE && (walk.reason === 'stuck' || walk.reason === 'no_path');
             return walk.success || orderReaches ? null : { message: walk.message, reason: walk.reason ?? 'out_of_reach' };
@@ -3198,6 +3466,8 @@ export class BotActions {
                 return { message: `${name} disappeared at ${lastHp}% health`, reason: 'target_lost' };
             }
             if (options.endWithin !== undefined && t.distance <= options.endWithin) return { message: `${name} is ${t.distance} from us`, reason: 'arrived' };
+            // By a swing's naming: a spell's, a DoT's tick above all, says nothing of where the mob stands (client/model CombatAnimation).
+            if (options.endOnUsWithin !== undefined && t.distance <= options.endOnUsWithin && t.kind === 'npc' && t.targetObjectId === s.player.objectId && !t.targetBySpell) return { message: `${name} is on us, ${t.distance} from us`, reason: 'arrived' };
 
             // An ordered pet won't turn to help (ControlledMobBrain.cs:549-552), so standing by would be dying: the pet fights on, and the caller decides.
             if (!options.ignoreAttackers) {
@@ -3255,7 +3525,7 @@ export class BotActions {
                 lastOrderAt = 0;
                 const late = this.helpers.state();
                 const mob = late && foe.find(late);
-                const stopped = late?.player && mob ? await walkIntoRange(late.player, mob) : null;
+                const stopped = late?.player && mob ? await walkIntoRange(late.player, mob, true) : null;
                 if (stopped) return stopped;
                 continue;
             }
@@ -4590,7 +4860,8 @@ export class BotActions {
      * `noTargetTimeoutMs` (default 60 s) without any candidate. With `pet`, or in shade,
      * a window pet fights: see GrindOptions, and GrindPetOptions for reason not_supported. Other
      * errors keep their own reason. A kill that fails at once waits 1 s before the next pass, so no refusal can spin. With no pet plan and no melee weapon the first target ends the run: stopReason 'error', reason 'refused', and no order goes to a pet that is up: the message says to pass `pet: true`.
-     * A mob of a fight of ours that dies while a pass looks elsewhere, the pet's kill while we swing at another, counts, with its killLog entry and onKill, at xp 0: the XP goes to the run's total. `failures` counts a lost pet once: the owner's death and a shade's wait for its icon to go are none.
+     * A mob of a fight of ours that dies while a pass looks elsewhere, the pet's kill while we swing at another, counts, with its killLog entry and onKill, at xp 0: the XP goes to the run's total. `failures` counts a lost pet once, lost between two passes too: the owner's death and a shade's wait for its icon to go are none.
+     * Started on a corpse: reason 'dead', stopReason 'error', with nothing sent, as summonPet, castSpell and rest answer. With `respawn` it releases and goes on, and says so in the message; that death came before the run, and isn't in `deaths`.
      */
     async grind(options: GrindOptions = {}): Promise<GrindResult> {
         const started = Date.now();
@@ -4619,8 +4890,8 @@ export class BotActions {
         let summonFailures = 0;
         // What a recast holds back: its name, and when it is over.
         let summonWait: { name: string; until: number; mustWait: boolean } | null = null;
-        // The last try that failed for anything else, until one goes, for the end note.
-        let summonFailed: { message: string; reason: string | undefined; spell: Spell | null } | null = null;
+        // The last try that failed for anything else, until one goes, for the end note: with the power it had then, and whether a rest went for it.
+        let summonFailed: { message: string; reason: string | undefined; spell: Spell | null; mana: number; rested: boolean } | null = null;
         const lossAtStart = this.helpers.state()?.lastPetLoss?.at;
         // The last loss a pass or the loop head has looked at.
         let lossSeen = lossAtStart;
@@ -4630,6 +4901,12 @@ export class BotActions {
         let shadeBefore = !!p0.isShade;
         // A new pet the last pass of the run hasn't sent yet, at a mob on us.
         let newPetPass = false;
+        // The mob a pass just ended at as it arrived. It swings at a new pet in passing and reads on that until its next swing, still running at us: for the next pass it is on us.
+        let cameOn: number | null = null;
+        // A mob on us we are letting come, since when it has read no speed.
+        let standing = null as { id: number; since: number } | null;
+        // On a corpse from before the run, with `respawn`: that death isn't this run's.
+        let corpseAtStart = p0.isDead;
         // The fight the last lost pet went down in. Engaged: it read as on the pet or on us at the loss, so it is coming; a pet lost on its way hasn't drawn it.
         let lostWith: { objectId: number; name: string; baseline: number; healthPercent: number; shade: boolean; engaged: boolean } | null = null;
         let idleSince: number | null = null;
@@ -4679,7 +4956,7 @@ export class BotActions {
             const held = summonWait && !s?.pet ? summonWait.until - Date.now() : 0;
             const waitNote = held > 0 ? `; waiting on ${summonWait!.name} (${Math.ceil(held / 1000)}s)` : '';
             const failed = s?.pet || !p ? null : summonFailed;
-            const summonNote = !failed ? '' : failed.reason === 'no_power' ? `; no pet: ${this.shortOfPower(failed.spell, p!)}` : `; could not summon: ${failed.message}`;
+            const summonNote = !failed ? '' : failed.reason === 'no_power' ? `; no pet: ${this.shortOfPower(failed.spell, p!, failed.mana, failed.rested && stopReason === 'duration')}` : `; could not summon: ${failed.message}`;
             const petNow = petPlan ? this.sdk.getPet() : null;
             const restNote = petNow && petNow.objectId === this.restingPet && petNow.healthPercent < petPlan!.restTo ? `; resting our pet (${petNow.healthPercent} %, to ${petPlan!.restTo} %)`
                 // A run short of time stops before the gate is looked at, and a call-off has said it.
@@ -4690,6 +4967,8 @@ export class BotActions {
             if (!result.success) result.reason = reason ?? (stopReason === 'died' || stopReason === 'no_targets' ? stopReason : result.kills === 0 ? 'no_kills' : stopReason);
             return result;
         };
+        // As summonPet, castSpell and rest answer. With `respawn` that is what was asked for, and the loop's first look releases it.
+        if (p0.isDead && !options.respawn) return finish('error', 'We are dead', 'dead');
         if (petPlan) {
             const refusal = this.grindPetRefusal(petPlan.spell);
             if (refusal) return finish('error', refusal.message, refusal.reason);
@@ -4762,7 +5041,7 @@ export class BotActions {
             await this.setPetAggression('defensive');
             await this.petFollow();
             result.calledOff = { mob: { objectId: standing.objectId, name, healthPercent: standing.healthPercent }, petHealthPercent: petHealth };
-            endNote = `; our pet was still fighting: called off${petHealth === null ? '' : ` at ${petHealth} %`} with ${name} at ${standing.healthPercent} %, and it hits back if that mob stays on it`;
+            endNote += `; our pet was still fighting: called off${petHealth === null ? '' : ` at ${petHealth} %`} with ${name} at ${standing.healthPercent} %, and it hits back if that mob stays on it`;
         };
         // A mob of a fight that died while a pass looked elsewhere: the pet's kill while we swing at another. Looked at between passes and as the run ends. Its XP goes to the run's total (finish).
         const creditDeaths = async (): Promise<GrindResult | null> => {
@@ -4822,12 +5101,12 @@ export class BotActions {
             // The time a melee pass lasts while we wait (GRIND_MELEE_PASS_MS), so a long recast doesn't cut one up every few seconds.
             summonRetryAt = Date.now() + Math.max(summon.retryAfterMs ?? PET_SUMMON_RETRY_MS, held);
             // A recast has its own note, and a death says itself.
-            if (summon.reason !== 'cooldown' && summon.reason !== 'must_wait' && summon.reason !== 'died') summonFailed = { message: summon.message, reason: summon.reason, spell: summon.spell ?? null };
+            if (summon.reason !== 'cooldown' && summon.reason !== 'must_wait' && summon.reason !== 'died') summonFailed = { message: summon.message, reason: summon.reason, spell: summon.spell ?? null, mana: this.helpers.player()?.mana ?? 0, rested: false };
             // Neither cures itself, so these end the run with a mob on us too, before melee can take us in: a charmed pet that got lost has nothing to summon it back with, and a window turret has no spot until one is set.
             if (summon.reason === 'spell_not_found' && plan.spell === undefined) return finish('error', `Could not summon a pet: ${summon.message}`, 'not_supported');
             if (summon.reason === 'no_ground_target' && !this.helpers.state()?.groundTarget) return finish('error', `Could not summon a pet: ${summon.message}`, summon.reason);
             if (mobOnUs) return null;
-            // Wait these out and try again; a hit before its half way stops a cast of ours (SpellHandler.cs:342-372), and a Hunter's has a 120 s recast.
+            // Wait these out and try again; a swing's timer still running at its half way stops a cast of ours (SpellHandler.cs:342-372), and a Hunter's has a 120 s recast.
             const passing = summon.reason === 'died' || summon.reason === 'cooldown' || summon.reason === 'must_wait' || summon.reason === 'interrupted' || summon.reason === 'crowd_controlled';
             if (!passing) summonFailures++;
             // These don't cure themselves.
@@ -4839,7 +5118,9 @@ export class BotActions {
             }
             if (summonFailures >= PET_SUMMON_ATTEMPTS) return finish('error', `Could not summon a pet: ${summon.message}`, summon.reason);
             if (summon.reason === 'no_power') {
-                await this.rest({ healthPercent: restTo, manaPercent: this.summonRestMana(summon.spell ?? null), timeout: Math.max(5000, Math.min(120_000, remaining())) });
+                const rested = await this.rest({ healthPercent: restTo, manaPercent: this.summonRestMana(summon.spell ?? null), timeout: Math.max(5000, Math.min(120_000, remaining())) });
+                // One that waited for nothing is no rest (GRIND_RETRY_MS).
+                if (summonFailed && (rested.success || rested.durationMs >= GRIND_RETRY_MS)) summonFailed.rested = true;
                 summonRetryAt = 0;
             }
             return null;
@@ -4849,9 +5130,11 @@ export class BotActions {
             const sp = this.summonSpellOf(petPlan!.spell);
             return sp && this.getSpellInfo(sp);
         };
-        // How far off a mob on us must be for the summon to go: a hit before its half way stops it (SpellHandler.cs:356-372). Less than any with no cast time, or nothing to summon with, which ends the run; and with no melee of ours to go to, the cast is all we have.
+        // Melee is no answer for a Necromancer: 3-7 a swing, with the run-in it would spend walking to the mob, and 980 units of that live, into its death 8.9 s on; a summon from there lasted about 8 s longer. And its cast is 20 s, whose room (2406) a tether's cut at about 2100 never has. So it goes as one with no weapon does.
+        const noMeleeWorthGoing = (): boolean => noMelee() || summonInfo()?.type === 'SummonNecroPet';
+        // How far off a mob on us must be for the summon to go: a swing's timer still running at its half way stops it, and one that has arrived keeps one running (SpellHandler.cs:356-372). Less than any with no cast time, or nothing to summon with, which ends the run; and with no melee of ours to go to, the cast is all we have.
         const summonRoom = (mob: NearbyNpc): number => {
-            if (!this.summonSpellOf(petPlan!.spell) || noMelee()) return -1;
+            if (!this.summonSpellOf(petPlan!.spell) || noMeleeWorthGoing()) return -1;
             const info = summonInfo();
             return !info ? GRIND_SUMMON_ROOM : info.uninterruptible || info.castTime <= 0 ? -1 : castRoom(info.castTime, mob.speed);
         };
@@ -4868,7 +5151,9 @@ export class BotActions {
             // deathCount also catches a death the server auto-released ("release automatically
             // in 8 more seconds") while we were busy looting, resting or in onKill.
             if (p.isDead || p.deathCount !== deathCountSeen) {
-                stats.deaths += Math.max(1, p.deathCount - deathCountSeen);
+                if (corpseAtStart && p.deathCount === deathCountSeen) endNote = '; we began on a corpse, and released it';
+                else stats.deaths += Math.max(1, p.deathCount - deathCountSeen);
+                corpseAtStart = false;
                 deathCountSeen = p.deathCount;
                 fights.clear();
                 if (!options.respawn) return finish('died');
@@ -4894,13 +5179,25 @@ export class BotActions {
             const loss = s?.lastPetLoss;
             if (loss && loss.at !== lossSeen) {
                 lossSeen = loss.at;
-                if (loss.cause !== 'owner_died' && loss.cause !== 'region_change') lostWith = lossFight(loss, shadeBefore || !!p.isShade);
+                if (loss.cause !== 'owner_died' && loss.cause !== 'region_change') {
+                    lostWith = lossFight(loss, shadeBefore || !!p.isShade);
+                    // One loss, one failure, with no pass to hear of it: the next summon means none will.
+                    if (loss.at !== lossCounted) result.failures++;
+                    lossCounted = loss.at;
+                }
             }
             shadeBefore = !!p.isShade;
+            // No weapon, no pet and none to come: nothing is left to fight with, and a pass could only be refused, one failure a second with the mob swinging. lossNote says the rest of a lost pet's mob.
+            if (petPlan && !this.sdk.getPetState() && !wantsPet(s) && noMelee()) {
+                const on = this.getAttackers().filter(n => n.objectId !== lostWith?.objectId).sort((a, b) => a.distance - b.distance)[0];
+                return finish('error', `We have no weapon, and no pet left to fight with${on ? `: ${nameOf(on)} is on us` : ''}`, 'no_pet');
+            }
             const attackers = this.getAttackers();
+            // A mob our own nuke pulled reads no target on its way (0xFFFF, PacketLib168.cs:820-828), so nothing above names it: while we want a pet its room counts, if a fight of ours or a hit of ours says it is ours and it closes.
+            const pulled = wantsPet(s) ? (s?.nearbyNpcs ?? []).filter(n => n.targetObjectId === null && n.inCombat && !n.isPet && !attackers.some(a => a.objectId === n.objectId) && closesOn(n, p) && (fights.has(n.objectId) || hitByUs(s!, n))) : [];
             // A failed fight rules out a mob hitting us from where we can't get at it, not one in melee range.
             // Its target doesn't tell them apart: the client shows a spell's hit as its target until its next update.
-            const fightable = attackers.filter(n => n.distance <= MELEE_RANGE || !avoid.has(n.objectId));
+            const fightable = [...attackers, ...pulled].filter(n => n.distance <= MELEE_RANGE || !avoid.has(n.objectId));
             // Until one has arrived the pet stays on the one it has: a pass with it lasts only a run-in, and the next would have it swap onto a nearer one for nothing. Among them a fight of ours or a hurt one first: one at full health can be an add on the pet that was never hit, on its way home, not to us (StandardMobBrain.cs:566-571).
             const beside = fightable.filter(n => n.distance <= GRIND_SUMMON_ROOM);
             const pool = beside.length ? beside : fightable;
@@ -4915,7 +5212,7 @@ export class BotActions {
                 continue;
             }
             // With nothing to swing there is nothing else to do about it until the next try: killNpc would only refuse. It stays our fight, for killLog and the overrun.
-            if (target && wantsPet(s) && noMelee()) {
+            if (target && wantsPet(s) && noMeleeWorthGoing()) {
                 idleSince = null;
                 if (!fights.has(target.objectId)) fights.set(target.objectId, newFight(target));
                 const wait = summonRetryAt - Date.now();
@@ -4935,7 +5232,7 @@ export class BotActions {
                         if (summonSpent) break;
                         continue;
                     }
-                    if (petOnly() || wait <= 2 * PET_SUMMON_RETRY_MS || summonJustHeld()) {
+                    if (petOnly() || noMeleeWorthGoing() || wait <= 2 * PET_SUMMON_RETRY_MS || summonJustHeld()) {
                         // The overrun is for a fight, and a recast it can't outlast leaves us none to wait for, unless the mob is coming: that one is ours to fight when it reads so.
                         if (Date.now() >= deadline && wait >= fightEnd - Date.now() && !(left && comingForUs(left))) break;
                         await this.helpers.sleep(Math.min(wait, 500));
@@ -5013,12 +5310,21 @@ export class BotActions {
             const fight = known && known.name === target.name && !diedSince(this.helpers.state(), target.objectId, known.baseline) ? known : newFight(target);
             fights.delete(target.objectId);
             fights.set(target.objectId, fight);
+            // By its hits too: one at range reads no target. As a turret's fight it would come straight back from the refusal, with no wait.
+            const onUs = target.targetObjectId === p.objectId || attackers.some(n => n.objectId === target!.objectId) || pulled.includes(target) || cameOn === target.objectId;
+            cameOn = null;
+            // Below the room with no pet yet, and it is coming: walking out to meet it spends the distance the next try wants, and took a caster into the bandit camp it came from. Melee as it arrives. One with no speed gets a moment: it may be turning, or a caster mob that means to stand, and that one we go to.
+            if (wantsPet(s) && onUs && target.distance > MELEE_REACH) {
+                if (standing?.id !== target.objectId) standing = { id: target.objectId, since: Date.now() };
+                if (target.speed > 0 ? closesOn(target, p) : Date.now() - standing.since < GRIND_LET_COME_MS) {
+                    await this.helpers.sleep(GRIND_LET_COME_LOOK_MS);
+                    continue;
+                }
+            }
             const passStart = Date.now();
             const lossBefore = s?.lastPetLoss?.at;
             // A pass is when we look: while the pet wears the mob down it goes on to the end of the overrun. Its order stands from pass to pass: petFight gives none while the model has it on the mob.
             const killTimeout = Math.max(0, Math.min(options.killTimeout ?? 60_000, fightEnd - passStart));
-            // By its hits too: one at range reads no target. As a turret's fight it would come straight back from the refusal, with no wait.
-            const onUs = target.targetObjectId === p.objectId || attackers.some(n => n.objectId === target!.objectId);
             const arrived = target.distance <= GRIND_SUMMON_ROOM;
             // A mob on us that a turret can't reach is ours to fight, and so is one that has arrived, if we can swing: a new pet's threat can take long to take it off us, and killNpc orders the pet as well.
             const petFights = petOnly() && !!this.sdk.getPetState() && !(onUs && (beyondTurret(target) || (arrived && !p.isShade && !noMelee())));
@@ -5033,7 +5339,8 @@ export class BotActions {
             const kill = petFights
                 // A mob on us is already the answer to the others on us: they wait their turn. `attacked` would only swap between them, with no order standing.
                 // As it arrives the pass is over: the mob is ours to swing at as well, whatever it ran at.
-                ? await this.petKill(target, { timeout: passTimeout, ignoreAttackers: onUs, ...(onUs && !arrived ? { endWithin: GRIND_SUMMON_ROOM } : {}) })
+                // Whatever it read at the start: a mob that turns on us during the pass is under us for the rest of it, with nothing in petFight to end that (attackers leaves out its own target), and 3 of 3 live cost the owner his fight.
+                ? await this.petKill(target, { timeout: passTimeout, ignoreAttackers: onUs, ...(onUs && !arrived ? { endWithin: GRIND_SUMMON_ROOM } : {}), ...(!p.isShade && !noMelee() ? { endOnUsWithin: GRIND_SUMMON_ROOM } : {}) })
                 // With a new pet to get, or a run to end for want of one, its loss ends the pass: nothing else in it would look, and the next goes on with the fight.
                 : await this.killNpc(target, { timeout: passTimeout, styles: options.styles, useStyle: options.useStyle, force: true, endOnPetLoss: !!petPlan?.resummon && !!this.sdk.getPetState() });
             // A pass can run out with the death in the last snapshot gap: the kill is the same, its XP may just not have come yet (finish() still counts it). A snapshot is about 250 ms apart.
@@ -5088,8 +5395,11 @@ export class BotActions {
                         continue;
                     }
                 }
-                // It has got here. Melee, or the pet's fight with no such end: both have to go by what the next pass reads.
-                if (kill.reason === 'arrived') continue;
+                // It has got here. Melee, or the pet's fight with no such end: both have to go by what the next pass reads, with this on the mob's side of it.
+                if (kill.reason === 'arrived') {
+                    cameOn = target.objectId;
+                    continue;
+                }
                 const atOnce = Date.now() - passStart < GRIND_RETRY_MS;
                 // Another mob on us is next, and says nothing against this one. Should it let go of us first, it still comes before a fresh one.
                 if (kill.reason === 'attacked') {
@@ -5175,12 +5485,13 @@ export class BotActions {
         return Math.min(PET_SUMMON_MANA, Math.ceil((worstPowerCost(info.power, p) + PET_SUMMON_MANA_MARGIN) / p.maxMana * 100));
     }
 
-    /** What a summon that lacked power comes to at the end of a run, in words: a rest can have seen to it with no time left for the cast. */
-    private shortOfPower(sp: Spell | null, p: PlayerState): string {
+    /** What a summon that lacked power comes to at the end of a run, in words: a rest can have seen to it with no time left for the cast, and plain regen can have too, in a fight, with no rest at all. `manaThen` is what it had at the failure. */
+    private shortOfPower(sp: Spell | null, p: PlayerState, manaThen: number, rested: boolean): string {
         const info = sp && this.getSpellInfo(sp);
         const cost = info ? worstPowerCost(info.power, p) : null;
-        if (cost !== null && p.mana >= cost) return `rested for ${sp!.name}, no time left to cast it`;
-        return `short of power for ${sp?.name ?? 'our summon'}${cost !== null ? ` (it can cost ${cost}, and we have ${p.mana})` : ''}`;
+        const name = sp?.name ?? 'our summon';
+        if (cost === null || p.mana < cost) return `short of power for ${name}${cost !== null ? ` (it can cost ${cost}, and we have ${p.mana})` : ''}`;
+        return rested ? `rested for ${sp!.name}, no time left to cast it` : `short of power for ${name} at the time (it can cost ${cost}, and we had ${manaThen})`;
     }
 
     // ============ Internals ============
@@ -5592,7 +5903,7 @@ export class BotActions {
         const started = Date.now();
         let deadline = options.timeout !== undefined ? started + options.timeout : 0;
         let reissues = 0;
-        const timedOut = () => at({ message: `Walk timed out after ${deadline - started}ms`, reason: 'timeout', reissues });
+        const timedOut = () => at({ message: `Walk timed out after ${Math.round(deadline - started)}ms`, reason: 'timeout', reissues });
         let remainingVia = via.slice();
         const plan = (from: Vec3) => withExecutionDeadline<Vec3[] | string | null>(options.timeout !== undefined ? deadline - Date.now() : PLAN_TIMEOUT_MS, async () => {
             const pts: Vec3[] = [];

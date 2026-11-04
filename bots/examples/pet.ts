@@ -29,6 +29,7 @@ const main = async ({ bot, sdk, args = {} }: ScriptContext & { args?: Args }) =>
 
     // A pet still up from an earlier script, or a charm, stays. Otherwise grind summons the best main one before its first
     // fight and again after a loss. It also answers a mob already on us, which a script ending here would leave swinging at an idle owner.
+    // A charmer has nothing to summon: its loss ends the run with reason not_supported and the mob on us, so read lastPetLoss and answer that yourself.
     if (!sdk.getPetState() && !bot.findSummonSpell('main')) {
         const others = (['turret', 'fnf', 'minion', 'charm'] as const).map(kind => bot.findSummonSpell(kind)?.name).filter(Boolean);
         const why = others.length ? `no main pet spell, only ${others.join(', ')}: see learnings/pets.md` : 'no pet spell';

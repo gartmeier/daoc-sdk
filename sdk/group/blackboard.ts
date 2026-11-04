@@ -41,6 +41,7 @@
 import type { BotWorldState, CombatEvent, PetLoss, PlayerState, Realm } from '../types';
 import { isKillable, PLAYER_AIM_MS } from '../actions-helpers';
 import { isAttackable } from '../index';
+import { mobRunInMs } from '../mob-speed';
 import { CC_IMMUNE_MS, npcCcLanded, readCcEnds, serverNameKey, type CcEnd, type CcImmunity, type CcKind, type NpcCcRun } from './cc';
 import type { Activity, Capabilities, MemberCombat, Contact, GroupEvent, GroupPicture, MemberReport, Orders, OrdersUpdate, PetReport, Point, Role, Sighting } from './types';
 
@@ -70,6 +71,10 @@ export interface MemberSelf {
     activity: Activity;
     capabilities: Capabilities;
     combat?: MemberCombat;
+    /** MemberReport.petRecast. */
+    petRecast?: boolean;
+    /** PetReport.orderedOn. */
+    petOrderedOn?: number | null;
 }
 
 /** Who killed a member, as its client saw them (the board's 'death' event data). Enemy players go by race name. */
@@ -94,6 +99,8 @@ export interface Observation {
      * or a hostile spell, which counts whatever it did: the effect animation doesn't tell a nuke from a mezz.
      */
     hits?: number[];
+    /** Enemy pets this member or its pets landed something on in that window. A pet that goes with none of that is no kill of ours (Blackboard.kill). Absent with none. */
+    petHits?: number[];
     /** While the member is dead: who killed it; null when it is alive or the killer is unknown. */
     killer?: Killer | null;
     /** How its last window pet went (state.lastPetLoss), for the note when the report's pet goes. */
@@ -214,6 +221,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     const deaths: number[] = [];
     const foeKills: number[] = [];
     const hits = new Set<number>();
+    const petHits = new Set<number>();
     const petSwings: NonNullable<Observation['petSwings']> = [];
     const ownSwings: NonNullable<Observation['ownSwings']> = [];
     for (const e of state.combatEvents) {
@@ -236,6 +244,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         const landed = e.kind !== 'melee' || e.result === undefined || e.result === 'hit' || e.result === 'styledHit';
         // A pet's damage credits its owner (GameLiving.cs:1299-1300).
         if (hostile && landed && (by === p.objectId || ownPets.has(by)) && isPlayer.has(on!) && age < PLAYER_TARGET_MS) hits.add(on!);
+        if (hostile && landed && (by === p.objectId || ownPets.has(by)) && isPet.has(on!) && age < PLAYER_TARGET_MS) petHits.add(on!);
         if (hostile && on !== null && ownPets.has(by) && age < SWING_WINDOW_MS) petSwings.push({ targetId: on, at: e.receivedAt, landed });
         if (e.kind === 'melee' && landed && by === p.objectId && on !== null && age < SWING_WINDOW_MS) ownSwings.push({ targetId: on, at: e.receivedAt });
         if (effect && !hostile && on !== by && isPlayer.has(on!) && age < HELPED_MS) helped.add(by);
@@ -265,6 +274,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         sightings.push({
             objectId: n.objectId, kind: 'npc', name: n.name, level: n.level, realm: n.realm,
             x: n.x, y: n.y, z: n.z, hp: Math.max(1, n.healthPercent), targetId, inCombat: heldBySpell ? false : n.inCombat, speed: n.speed,
+            ...(n.speed > 0 ? { fixedAt: now - n.lastSeenAgo } : {}),
             spellTargetId: spell?.targetId ?? (heldBySpell ? n.targetObjectId : null),
             // A spell that landed counts, not a cast start, which may be a self-buff. Like a swing it ends a mezz:
             // a mezz stops the cast under way and any new one (CrowdControlECSEffect.cs OnHardCCStart,
@@ -303,9 +313,11 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         at: state.timestamp, pet: petReport(state),
     };
     if (state.summons?.length) report.summons = [...state.summons];
+    if (self.petRecast) report.petRecast = true;
+    if (report.pet && self.petOrderedOn != null) report.pet.orderedOn = self.petOrderedOn;
     const intercepts = interceptsOf(state);
     const ccEnds = readCcEnds(state.gameMessages ?? [], state.timestamp - CC_END_MS);
-    return { report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(intercepts.length ? { intercepts } : {}), ...(ccEnds.length ? { ccEnds } : {}) };
+    return { report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(petHits.size ? { petHits: [...petHits] } : {}), ...(intercepts.length ? { intercepts } : {}), ...(ccEnds.length ? { ccEnds } : {}) };
 }
 
 const isBlow = (e: CombatEvent) => e.kind === 'melee' || e.kind === 'spellEffect';
@@ -379,11 +391,17 @@ const DEATH_ECHO_MS = 6000;
 /**
  * A mob that kills a pet comes for its owner, and reads as on nobody until its next swing or 0xA1 (NearbyNpc.targetObjectId) in a group of two or more: the server
  * sends no target (65535) while a mob runs. It idles about 1 s, and a caster stands 900-1400 away and keeps stepping out: 9-10 s live (20261103-165547, 20261103-163415). It stays a threat
- * while its sighting reads that, in combat and moving with no target, up to this long after the pet's loss, so its run-in isn't read as the fight being over.
+ * while its sighting reads that, in combat and moving with no target, so its run-in isn't read as the fight being over: for as long as it can take from where it reads now at its hurt speed (mobRunInMs: at 21 % that is 106 units/s,
+ * and a flat 15 s let a summon start 4 s before Growler arrived, 20261104-052514), and no longer than this after the pet's loss, as the model's hand-over goes by.
  */
-const PET_KILLER_RUN_IN_MS = 15_000;
+const PET_KILLER_RUN_IN_MS = 30_000;
 /** A pet's swing this soon after crowd control was marked can be one from before it landed: the mark follows the cast's result. */
 const CC_SETTLE_MS = 500;
+/**
+ * A running mob's position says where a root stopped it only from an update this much newer than the root: until the next 0xA1 a client reckons it on to where it was going (Sighting.fixedAt), and live that read 120 off with the root
+ * holding for 8 s more ('05:28:05.098 feet are frozen', '05:28:08 root on moss sheerie broke', the server's own line at '05:28:13.264'). A snapshot, as the mark itself can be one late.
+ */
+const ROOT_UPDATE_AFTER_MS = 250;
 /**
  * A rooted mob this far from where it stood once the mark settled is free: a root's end says nothing, as every root in spell.sql has an empty Message3 and Message4. `can move normally again` is a snare's
  * (DamageSpeedDecrease, StyleSpeedDecrease), and comes as a root replaces one (live: `can move normally again` and `feet are frozen` at 16:36:00.306, in that order), so that line doesn't end a root: it is before the mark, and ccEnded takes it for its predecessor's.
@@ -394,16 +412,24 @@ const ROOT_MOVED = 120;
 const WITH_OWNER_MS = 1000;
 /** ... and with this much health left: one we killed reads near 0. */
 const WITH_OWNER_HP = 10;
+/**
+ * An enemy pet gone with this much health left has gone for another reason than us, its death event being empty as every NPC's is (world-model.ts, 0xA2): a Necromancer's servant beyond its tether at 100 % (NecromancerPetBrain.cs:301), a release,
+ * and live that read `necroservant (L21) died`, `won in 16 s, kills 2` for 1 player (20261104-043622). A pet at half that a big hit took down reads so as well: it is worth nothing either way (GameNPC.cs:2731-2732).
+ */
+const LOST_PET_HP = 50;
+/** ... and one nobody of ours has landed anything on for this long, whatever its health. Observation.petHits holds a hit for PLAYER_TARGET_MS first. */
+const PET_HIT_LATELY_MS = 2000;
 
 /**
  * `engaged`: the group fought it, so its death is a kill event (not `engagedAt`, the engage order).
  * `hit`: a member hit it (an enemy player), so it is our kill even when another realm finishes it:
  * the server shares a player kill among all who damaged it (PlayerKillRewardProcessor.cs).
  * `deathEchoUntil`: it inherited the id of something dead; deaths reported for that id until then are the old one's.
- * `petKillerUntil`: it fought a pet of ours that went; until then its run-in counts (PET_KILLER_RUN_IN_MS).
+ * `petKillerUntil`: it fought a pet of ours that went; until then its run-in counts (PET_KILLER_RUN_IN_MS), and `petKillerOf` says whose, and when.
  * `ccAt`: where it stood once a root's mark settled (ROOT_MOVED).
+ * `petHitAt`: an enemy pet: when a member last reported a hit on it (Observation.petHits).
  */
-type InternalContact = Contact & { engaged: boolean; hit: boolean; ccSince: number; ccAt: Point | null; ccRuns?: Partial<Record<CcKind, NpcCcRun>>; lastHostile: number; deathEchoUntil: number; petKillerUntil: number };
+type InternalContact = Contact & { engaged: boolean; hit: boolean; petHitAt: number; ccSince: number; ccAt: Point | null; ccRuns?: Partial<Record<CcKind, NpcCcRun>>; lastHostile: number; deathEchoUntil: number; petKillerUntil: number; petKillerOf: { owner: string; at: number } | null };
 
 export class Blackboard {
     private readonly reports = new Map<string, MemberReport>();
@@ -515,7 +541,7 @@ export class Blackboard {
             let c = this.contacts.get(key);
             let cantSay = false;
             if (!c) {
-                c = { ...s, targetBySpell: bySpell, regionId: r.regionId, target, targetPet, targetSince: now, engagedAt: 0, movedAt: 0, seenBy: [], firstSeen: now, lastSeen: r.at, stale: false, threat: false, hostileSince: 0, cc: null, engaged: false, hit: false, ccSince: 0, ccAt: null, lastHostile: 0, deathEchoUntil, petKillerUntil: 0 };
+                c = { ...s, targetBySpell: bySpell, regionId: r.regionId, target, targetPet, targetSince: now, engagedAt: 0, movedAt: 0, seenBy: [], firstSeen: now, lastSeen: r.at, stale: false, threat: false, hostileSince: 0, cc: null, engaged: false, hit: false, petHitAt: 0, ccSince: 0, ccAt: null, lastHostile: 0, deathEchoUntil, petKillerUntil: 0, petKillerOf: null };
                 if (s.kind === 'player') Object.assign(c, { healer: false, caster: false });
                 Object.assign(c, this.ccMemory.get(key));
                 this.ccMemory.delete(key);
@@ -566,6 +592,9 @@ export class Blackboard {
                 if (now - c.lastHostile > this.hostileMs) c.hostileSince = now;
                 c.lastHostile = now;
             } else if (now < c.petKillerUntil && s.inCombat && (s.speed ?? 0) > 0 && s.targetId === null) {
+                // As it comes, from where it reads now: its owner can have stepped out, and only that reading ends this. A 0 or a real id is another branch.
+                const owner = c.petKillerOf && this.reports.get(c.petKillerOf.owner);
+                if (owner && owner.regionId === c.regionId) c.petKillerUntil = Math.max(c.petKillerUntil, Math.min(c.petKillerOf!.at + PET_KILLER_RUN_IN_MS, now + mobRunInMs(Math.hypot(s.x - owner.x, s.y - owner.y), s.hp)));
                 if (now - c.lastHostile > this.hostileMs) c.hostileSince = now;
                 // Threat lasts hostileMs from lastHostile, so this ends with petKillerUntil at the latest.
                 c.lastHostile = Math.max(c.lastHostile, Math.min(now, c.petKillerUntil - this.hostileMs));
@@ -574,8 +603,10 @@ export class Blackboard {
             // GameLiving.HandleCrowdControlOnAttacked), or with the mob moving. A monster's swing is at what stands in its reach (live: `The water beetle hits your hand for 25 damage!`, feet frozen), so it stays controlled.
             // A landed spell has no such reach, and a player can't be rooted again for the immunity (cc.ts), so those aren't controlled any more and the group must be free to kill them, but the root is still on them: no note.
             if (c.cc?.kind === 'root') {
-                if (!c.ccAt || now - c.ccSince <= CC_SETTLE_MS) c.ccAt = { x: c.x, y: c.y };
-                if (Math.hypot(c.x - c.ccAt.x, c.y - c.ccAt.y) > ROOT_MOVED) this.ccBroke(c, now);
+                // Only a position that means it: this very sighting's (a late one wrote nothing), and one still reckoned on from before the root isn't (ROOT_UPDATE_AFTER_MS).
+                const placed = c.lastSeen === r.at && (!s.speed || (s.fixedAt ?? r.at) - c.ccSince >= ROOT_UPDATE_AFTER_MS);
+                if (placed && (!c.ccAt || now - c.ccSince <= CC_SETTLE_MS)) c.ccAt = { x: c.x, y: c.y };
+                if (placed && Math.hypot(c.x - c.ccAt!.x, c.y - c.ccAt!.y) > ROOT_MOVED) this.ccBroke(c, now);
                 else if (s.swinging && (s.kind === 'player' || s.spellLanded) && now - c.ccSince > SWING_WINDOW_MS) c.cc = null;
             } else if (c.cc && s.swinging && now - c.ccSince > SWING_WINDOW_MS) this.ccBroke(c, now);
         }
@@ -583,6 +614,10 @@ export class Blackboard {
         for (const id of obs.hits ?? []) {
             const c = this.contacts.get(`${r.regionId}:${id}`);
             if (c) c.hit = c.engaged = true;
+        }
+        for (const id of obs.petHits ?? []) {
+            const c = this.contacts.get(`${r.regionId}:${id}`);
+            if (c) { c.petHitAt = now; c.engaged = true; }
         }
         const foeKills = new Set(obs.foeKills);
         // Players first: a pet goes right after its owner, and is no kill then (kill).
@@ -614,19 +649,34 @@ export class Blackboard {
             if (now - c.lastHostile > this.hostileMs) c.hostileSince = now;
             // hostileMs covers the moment it stands before it runs; publish keeps it from there.
             c.lastHostile = now;
-            c.petKillerUntil = now + PET_KILLER_RUN_IN_MS;
+            c.petKillerUntil = now + Math.min(PET_KILLER_RUN_IN_MS, mobRunInMs(Math.hypot(c.x - r.x, c.y - r.y), c.hp));
+            c.petKillerOf = { owner: r.name, at: now };
         }
     }
 
     /**
      * A member's pet attacked a mob. Any swing breaks a mezz, a miss too, and any spell but a mezz on an NPC does; a root takes a hit (GameLiving.cs:1689-1704, :1729-1730).
      * A note for the observer, and the mob comes off cc for the group: a broken mezz sends no line of its own (live).
+     * A root on a focus with nothing else free had done its job (ccHolds), and petControl sends a pet in on purpose: that note counts for nothing.
      */
     private petSwung(r: MemberReport, swing: NonNullable<Observation['petSwings']>[number], now: number): void {
         const c = this.contacts.get(`${r.regionId}:${swing.targetId}`);
         if (!c?.cc || swing.at - c.ccSince <= CC_SETTLE_MS || !(swing.landed || c.cc.kind === 'mezz')) return;
-        this.emit({ at: now, kind: 'note', member: r.name, targetId: c.objectId, text: `${r.name}'s pet broke the ${c.cc.kind} on ${c.name}`, data: { petBrokeCc: true, kind: c.cc.kind, by: c.cc.by } });
+        if (c.cc.kind === 'root' && c.objectId === this.orders.focus && !this.anotherFree(c, now)) this.emit({ at: now, kind: 'note', member: r.name, targetId: c.objectId, text: `${r.name}'s pet ended the root on ${c.name}, with nothing else free`, data: { kind: c.cc.kind, by: c.cc.by } });
+        else this.emit({ at: now, kind: 'note', member: r.name, targetId: c.objectId, text: `${r.name}'s pet broke the ${c.cc.kind} on ${c.name}`, data: { petBrokeCc: true, kind: c.cc.kind, by: c.cc.by } });
         this.ccEnded(c, c.cc.kind as CcKind, now);
+    }
+
+    /** Anything else fighting the group here and under no crowd control: ccHolds' question, on the board. */
+    private anotherFree(c: InternalContact, now: number): boolean {
+        for (const t of this.contacts.values()) if (t !== c && t.regionId === c.regionId && !(t.cc && t.cc.until > now) && this.isThreat(t, now)) return true;
+        return false;
+    }
+
+    /** Contact.threat, as of `now`. */
+    private isThreat(c: InternalContact, now: number): boolean {
+        // A player contact at 0 % is alive (a dead one is no contact): it still fights.
+        return now - c.lastSeen <= this.staleAfterMs && (c.kind === 'player' || c.hp > 0) && now - c.lastHostile < this.hostileMs && !untouchable(c, now);
     }
 
     /** Crowd control it no longer has, by what we saw of it: a note for the observer. */
@@ -637,7 +687,7 @@ export class Blackboard {
 
     /**
      * `byFoe`: a player another realm (or a monster) killed, which is ours only if we hit it too.
-     * An enemy pet that went with its owner is no kill in the fight: the owner's death frees it (GamePlayer.cs:5988-5989), and live it read `kills 3` for 2 players with the turret at 74 %.
+     * An enemy pet that went with its owner is no kill in the fight: the owner's death frees it (GamePlayer.cs:5988-5989), and live it read `kills 3` for 2 players with the turret at 74 %. Nor is one that went for any other reason (LOST_PET_HP).
      */
     private kill(key: string, by: string, now: number, byFoe = false): void {
         const c = this.contacts.get(key);
@@ -651,6 +701,10 @@ export class Blackboard {
         if (!c.engaged) return;
         if (c.isPet && c.hp >= WITH_OWNER_HP && now - (this.playerDiedAt.get(c.realm) ?? -Infinity) <= WITH_OWNER_MS) {
             this.emit({ at: now, kind: 'note', member: by, targetId: c.objectId, text: `${c.name} (L${c.level}) went with its owner` });
+            return;
+        }
+        if (c.isPet && (c.hp >= LOST_PET_HP || now - c.petHitAt > PET_HIT_LATELY_MS)) {
+            this.emit({ at: now, kind: 'note', member: by, targetId: c.objectId, text: `${c.name} (L${c.level}) was lost, no kill of ours` });
             return;
         }
         if (byFoe && !c.hit) this.emit({ at: now, kind: 'note', member: by, targetId: c.objectId, text: `${c.name} (L${c.level}) died to someone else` });
@@ -720,10 +774,9 @@ export class Blackboard {
             if (c.cc && c.cc.until <= now) c.cc = null;
             for (const k of Object.keys(c.ccImmune ?? {}) as CcKind[]) if (c.ccImmune![k]! <= now) delete c.ccImmune![k];
             if (c.unattackableUntil !== undefined && c.unattackableUntil <= now) delete c.unattackableUntil;
-            const { engaged: _e, hit: _h, ccSince: _s, ccAt: _a, ccRuns: _r, deathEchoUntil: _d, petKillerUntil: _k, lastHostile, ...pub } = c;
+            const { engaged: _e, hit: _h, petHitAt: _p, ccSince: _s, ccAt: _a, ccRuns: _r, deathEchoUntil: _d, petKillerUntil: _k, petKillerOf: _o, fixedAt: _f, lastHostile: _l, ...pub } = c;
             const stale = now - c.lastSeen > this.staleAfterMs;
-            // A player contact at 0 % is alive (a dead one is no contact): it still fights.
-            const threat = !stale && (c.kind === 'player' || c.hp > 0) && now - lastHostile < this.hostileMs && !untouchable(c, now);
+            const threat = this.isThreat(c, now);
             contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null, ...(c.ccImmune ? { ccImmune: { ...c.ccImmune } } : {}) });
         }
         return { at: now, members: [...this.reports.values()].map(m => ({ ...m })), contacts, orders: this.getOrders() };

@@ -489,6 +489,12 @@ describe('the passive group frame', () => {
             expect('owner' in view.world[0]!.npc!).toBe(false);
         });
 
+        test('a shade says so on its contact, with or without a board: "Briton L24 100%, seen 3, 1166 away" for model 822, no tag to say why', () => {
+            const view = compose({ tankuser: tankState({ nearbyPlayers: [makePlayerObj({ objectId: 800, name: 'Briton', realm: 'midgard', isShade: true, x: 1100, y: 1000 }), makePlayerObj({ objectId: 801, name: 'Troll', realm: 'midgard', x: 1200, y: 1000 })] }) });
+            expect(view.world.find((w: any) => w.objectId === 800)).toMatchObject({ kind: 'player', isShade: true });
+            expect('isShade' in view.world.find((w: any) => w.objectId === 801)!).toBe(false);
+        });
+
         test('enemy is another realm\'s player or pet: not a monster\'s pet, nor one of our realm, nor a member\'s', () => {
             const view = compose({ tankuser: tankState({ pet: { ...WINDOW, icons: [] }, nearbyNpcs: [
                 pet({ isPet: true }),

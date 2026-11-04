@@ -5,6 +5,7 @@ import { makeMessage, makeNpc, makePlayer, makePlayerObj, makeState } from '../t
 import type { BotWorldState, CombatEvent, NearbyNpc, PetState } from '../types';
 import { Blackboard, diedLately, isAlive, observeState, untouchable, type Killer, type MemberSelf } from './blackboard';
 import { obs, report, sighting } from './fixtures';
+import { GroupObserver } from './observer';
 import type { GroupEvent, MemberReport, PetReport, Sighting } from './types';
 
 const T = 1_800_000_000_000;
@@ -367,8 +368,8 @@ describe('pets on the board', () => {
             const b = new Blackboard();
             const events: GroupEvent[] = [];
             b.onEvent(e => events.push(e));
-            b.publish(obs(report('Tank', { at: T, objectId: 11 }), [sighting(700, { realm: 'midgard', isPet: true, targetId: 11 }), sighting(7, { targetId: 11 })]), T);
-            b.publish(obs(report('Tank', { at: T + 100, objectId: 11 }), [], [700, 7]), T + 100);
+            b.publish(obs(report('Tank', { at: T, objectId: 11 }), [sighting(700, { realm: 'midgard', isPet: true, targetId: 11, hp: 5 }), sighting(7, { targetId: 11 })]), T);
+            b.publish({ ...obs(report('Tank', { at: T + 100, objectId: 11 }), [], [700, 7]), petHits: [700] }, T + 100);
             const kills = events.filter(e => e.kind === 'kill');
             expect(kills.find(e => e.targetId === 700)!.data).toMatchObject({ pet: true, realm: 'midgard' });
             expect(kills.find(e => e.targetId === 7)!.data).not.toHaveProperty('pet');
@@ -496,13 +497,13 @@ describe('pets on the board', () => {
                 expect(contactOf(b, T + 13_000)!.target).toBe('Hrafna');
             });
 
-            test('up to 15 s from the loss: 20261103-163415 ran in for 9.6 s, and nothing runs in for longer', () => {
+            test('up to 30 s from the loss, the model\'s bound for a run-in: 20261103-163415 ran in for 9.6 s, 20261104-052514 for 19 s at 21 %', () => {
                 const b = new Blackboard({ hostileMs: 4000 });
                 b.publish(obs(owner(T, petOf({ targetId: 7 })), [sighting(7, { targetId: 500, inCombat: true })]), T);
                 b.publish(obs(owner(T + 500, null), [sighting(7, { targetId: null, inCombat: false })]), T + 500);
-                runsIn(b, 1000, 20_000);
-                expect(contactOf(b, T + 15_400)!.threat).toBe(true);
-                expect(contactOf(b, T + 15_600)!.threat).toBe(false);
+                runsIn(b, 1000, 35_000);
+                expect(contactOf(b, T + 30_400)!.threat).toBe(true);
+                expect(contactOf(b, T + 30_600)!.threat).toBe(false);
             });
 
             test('a mob that doesn\'t come: only hostileMs. Standing, or going home (out of combat)', () => {
@@ -846,23 +847,235 @@ describe('RvR on the board', () => {
             expect(say(events)).toEqual(['kill: Celt (L20) died', "note: grove's hunter (L17) went with its owner"]);
         });
 
-        test('one the group killed itself is a kill: near 0, or with no such death beside it', () => {
+        test('one the group killed itself is a kill: near 0 with a hit of ours on it, or with no such death beside it', () => {
             const low = fought(celt(), turret(3));
-            low.b.publish(obs(pethun(T + 250), [], [428, 433]), T + 250);
+            low.b.publish({ ...obs(pethun(T + 250), [], [428, 433]), petHits: [433] }, T + 250);
             expect(say(low.events)).toEqual(['kill: Celt (L20) died', "kill: grove's hunter (L17) died"]);
-            const alone = fought(turret(74));
-            alone.b.publish(obs(pethun(T + 250), [], [433]), T + 250);
+            const alone = fought(turret(30));
+            alone.b.publish({ ...obs(pethun(T + 250), [], [433]), petHits: [433] }, T + 250);
             expect(say(alone.events)).toEqual(["kill: grove's hunter (L17) died"]);
         });
 
         test('nor does a player of another realm dying beside it, or an owner who died a while ago', () => {
-            const other = fought(sighting(427, { kind: 'player', name: 'Briton', realm: 'albion', level: 20, targetId: 429, inCombat: true }), turret(74));
-            other.b.publish(obs(pethun(T + 250), [], [427, 433]), T + 250);
+            const other = fought(sighting(427, { kind: 'player', name: 'Briton', realm: 'albion', level: 20, targetId: 429, inCombat: true }), turret(30));
+            other.b.publish({ ...obs(pethun(T + 250), [], [427, 433]), petHits: [433] }, T + 250);
             expect(say(other.events)).toEqual(['kill: Briton (L20) died', "kill: grove's hunter (L17) died"]);
-            const before = fought(celt(), turret(74));
-            before.b.publish(obs(pethun(T + 250), [turret(74)], [428]), T + 250);
-            before.b.publish(obs(pethun(T + 5000), [], [433]), T + 5000);
+            const before = fought(celt(), turret(30));
+            before.b.publish(obs(pethun(T + 250), [turret(30)], [428]), T + 250);
+            before.b.publish({ ...obs(pethun(T + 5000), [], [433]), petHits: [433] }, T + 5000);
             expect(say(before.events)).toEqual(['kill: Celt (L20) died', "kill: grove's hunter (L17) died"]);
         });
+    });
+});
+
+describe('a pet on a rooted lone focus: the rule let it go in, so nothing was broken', () => {
+    // 20261104-054051: '05:41:10.757 feet are frozen', '05:41:11.257 You command the minor nature spirit to kill your target!', '05:41:13.857 ... hits for 10', timeline 'Petdru's pet broke the root on water beetle', Broke cc 2, and pet-mezz said to look for what got round petControl.
+    // 20261104-050645: '00:53 engage on Celt: ... 0 of 1 enemy vs 2', '00:56 Rebon: Rebon's pet broke the root on Celt', Pets table 'Broke cc 1'.
+    const ME = 11;
+    const petOf = (targetId: number | null): PetReport => ({ objectId: 500, name: 'minor nature spirit', level: 7, x: 1000, y: 1000, z: 0, hp: 90, targetId, inCombat: true, aggression: 'defensive', walk: 'follow', icons: [] });
+    const druid = (at: number) => report('Petdru', { at, objectId: ME, pet: petOf(7) });
+    const beetle = (over: Partial<Sighting> = {}) => sighting(7, { name: 'water beetle', targetId: ME, inCombat: true, ...over });
+    const add = () => sighting(8, { name: 'moss sheerie', targetId: ME, inCombat: true, x: 1600 });
+    const swung = (kind: string, o: { focus?: number; others?: Sighting[]; addCc?: boolean } = {}) => {
+        const b = new Blackboard();
+        const events: GroupEvent[] = [];
+        b.onEvent(e => events.push(e));
+        b.setOrders({ phase: 'engage', focus: o.focus ?? 7, cc: [], reason: 'test' }, T);
+        b.publish(obs(druid(T), [beetle(), ...(o.others ?? [])]), T);
+        b.markCc(7, 200, 'Petdru', kind, 60_000, T);
+        if (o.addCc) b.markCc(8, 200, 'Oisin', 'mezz', 60_000, T);
+        b.publish({ ...obs(druid(T + 3000), [beetle(), ...(o.others ?? [])]), petSwings: [{ targetId: 7, at: T + 2900, landed: true }] }, T + 3000);
+        return { b, events, counted: events.filter(e => e.data?.petBrokeCc) };
+    };
+    const onBeetle = (b: Blackboard) => b.picture(T + 3000).contacts.find(c => c.objectId === 7)!;
+
+    test('a root on the focus with nothing else free is no broken crowd control, and the timeline doesn\'t call it one', () => {
+        const { b, events, counted } = swung('root');
+        expect(counted).toEqual([]);
+        expect(events.filter(e => e.kind === 'note' && e.text.includes('\'s pet broke'))).toEqual([]);
+        // It is off all the same: the hit ended it (GameLiving.cs:1689-1694).
+        expect(onBeetle(b).cc).toBeNull();
+    });
+
+    test('so the report has no Broke cc and no pet-mezz', () => {
+        const { b, events } = swung('root');
+        const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T - 1000 });
+        o.sample(b.picture(T + 3000));
+        for (const e of events) o.handle(e);
+        const r = o.report();
+        expect(r.members.Petdru!.pet!.brokeCc).toBe(0);
+        expect(r.findings.map(f => f.topic)).not.toContain('pet-mezz');
+    });
+
+    test('with something else free the root still held at the swing: that counts', () => {
+        expect(swung('root', { others: [add()] }).counted).toMatchObject([{ text: 'Petdru\'s pet broke the root on water beetle', data: { petBrokeCc: true, kind: 'root' } }]);
+    });
+
+    test('an add under crowd control of its own is nothing free', () => {
+        expect(swung('root', { others: [add()], addCc: true }).counted).toEqual([]);
+    });
+
+    test('a root on an add counts: it isn\'t the focus', () => {
+        expect(swung('root', { focus: 8, others: [add()] }).counted.length).toBe(1);
+    });
+
+    test('a mezz always counts, lone focus or not', () => {
+        expect(swung('mezz').counted).toMatchObject([{ text: 'Petdru\'s pet broke the mezz on water beetle' }]);
+    });
+});
+
+describe('a slow pet killer\'s run-in goes by its distance and its hurt speed', () => {
+    // 20261104-052514: pet lost 05:26:10.407, threat gone 05:26:25.751, '05:26:25.952 You begin casting a Ruby Simulacrum spell!', '05:26:29.381 Growler hits your torso for 37 (-2) damage!'. Growler at 19-23 %: 150 x (0.2 + 0.21 x 2.42) = 106 units/s.
+    const PET: PetReport = { objectId: 500, name: 'ruby simulacrum', level: 7, x: 1000, y: 1000, z: 0, hp: 40, targetId: 7, inCombat: true, aggression: 'defensive', walk: 'follow', icons: [] };
+    const owner = (at: number, pet: PetReport | null, x = 1000) => report('Petcab', { at, objectId: 11, x, y: 1000, pet });
+    const growler = (x: number, over: Partial<Sighting> = {}) => sighting(7, { name: 'Growler', hp: 21, x, y: 1000, targetId: null, inCombat: true, speed: 106, ...over });
+    const lost = (from: number) => {
+        const b = new Blackboard({ hostileMs: 4000 });
+        b.publish(obs(owner(T, PET), [growler(from, { targetId: 500 })]), T);
+        // It idles about 1 s reading no combat, and runs.
+        b.publish(obs(owner(T + 400, null), [growler(from, { inCombat: false })]), T + 400);
+        b.publish(obs(owner(T + 900, null), [growler(from, { inCombat: false })]), T + 900);
+        return b;
+    };
+    const threat = (b: Blackboard, at: number) => b.picture(at).contacts.find(c => c.objectId === 7)!.threat;
+
+    test('still a threat 18 s on, where the flat 15 s let a summon start four seconds before it arrived', () => {
+        const b = lost(3000);
+        for (let ms = 1000; ms <= 18_500; ms += 500) b.publish(obs(owner(T + ms, null), [growler(3000 - 0.106 * ms)]), T + ms);
+        expect(threat(b, T + 15_600)).toBe(true);
+        expect(threat(b, T + 18_600)).toBe(true);
+        b.publish(obs(owner(T + 19_000, null), [growler(1050, { targetId: 11, swinging: true })]), T + 19_000);
+        expect(b.picture(T + 19_000).contacts[0]).toMatchObject({ threat: true, target: 'Petcab' });
+    });
+
+    test('a hurt one\'s first estimate alone covers what a full-health one\'s doesn\'t', () => {
+        // No sighting for a while after the loss: 2000 at 21 % is 21 s, against 15 s.
+        const b = lost(3000);
+        for (let ms = 1000; ms <= 15_000; ms += 500) b.publish(obs(owner(T + ms, null), [growler(3000 - 0.106 * ms)]), T + ms);
+        b.publish(obs(owner(T + 15_800, null), [growler(1400)]), T + 15_800);
+        expect(threat(b, T + 15_900)).toBe(true);
+    });
+
+    test('a reading that says it let go ends it, however far it had to come', () => {
+        const b = lost(3000);
+        b.publish(obs(owner(T + 1000, null), [growler(2900)]), T + 1000);
+        for (let ms = 1500; ms <= 8000; ms += 500) b.publish(obs(owner(T + ms, null), [growler(3000, { inCombat: false })]), T + ms);
+        expect(threat(b, T + 8000)).toBe(false);
+    });
+});
+
+describe('a root read broken by position: only from a sighting newer than the root', () => {
+    // 20261104-052629: '05:28:05.098 The moss sheerie's feet are frozen to the ground!', log '05:28:08 Petdru: root on moss sheerie broke', and the server's own line only at '05:28:13.264 ... The moss sheerie can move normally again.'
+    // A moving NPC is reckoned on toward its last 0xA1's destination at its last speed (WorldModel.npcPosition) until the next 0xA1.
+    const member = (at: number) => report('Petdru', { at, objectId: 11, x: 1100 });
+    const sheerie = (over: Partial<Sighting> = {}) => sighting(7, { name: 'moss sheerie', targetId: 11, inCombat: true, ...over });
+    const rooted = () => {
+        const b = new Blackboard();
+        const events: GroupEvent[] = [];
+        b.onEvent(e => events.push(e));
+        b.publish(obs(member(T), [sheerie({ x: 1500, speed: 150, fixedAt: T - 100 })]), T);
+        b.markCc(7, 200, 'Petdru', 'root', 40_000, T);
+        return { b, notes: () => events.filter(e => e.kind === 'note').map(e => e.text), cc: (at: number) => b.picture(at).contacts[0]!.cc };
+    };
+
+    test('reckoned on from before the root, it still stands rooted however far that reads', () => {
+        const { b, notes, cc } = rooted();
+        for (let ms = 250; ms <= 3000; ms += 250) b.publish(obs(member(T + ms), [sheerie({ x: 1500 + 0.15 * ms, speed: 150, fixedAt: T - 100 })]), T + ms);
+        expect(notes()).toEqual([]);
+        expect(cc(T + 3000)).toMatchObject({ kind: 'root' });
+    });
+
+    test('the update that says it stopped is where it was rooted, however far from the reckoning', () => {
+        const { b, notes, cc } = rooted();
+        b.publish(obs(member(T + 800), [sheerie({ x: 1620, speed: 150, fixedAt: T - 100 })]), T + 800);
+        b.publish(obs(member(T + 1000), [sheerie({ x: 1520, speed: 0 })]), T + 1000);
+        b.publish(obs(member(T + 2000), [sheerie({ x: 1525, speed: 0 })]), T + 2000);
+        expect(notes()).toEqual([]);
+        expect(cc(T + 2000)).toMatchObject({ kind: 'root' });
+    });
+
+    test('an update newer than the root that has it running is a broken root', () => {
+        const { b, notes, cc } = rooted();
+        b.publish(obs(member(T + 1000), [sheerie({ x: 1520, speed: 0 })]), T + 1000);
+        b.publish(obs(member(T + 4000), [sheerie({ x: 1700, speed: 150, fixedAt: T + 3900 })]), T + 4000);
+        expect(notes()).toEqual(['root on moss sheerie broke']);
+        expect(cc(T + 4000)).toBeNull();
+    });
+
+    test('an update within a snapshot of the root can still be the run: not one to measure by', () => {
+        const { b, notes } = rooted();
+        b.publish(obs(member(T + 200), [sheerie({ x: 1800, speed: 150, fixedAt: T + 100 })]), T + 200);
+        expect(notes()).toEqual([]);
+    });
+
+    test('observeState says when the position of a moving one was sent; one standing reads as it is', () => {
+        const state = makeState({
+            timestamp: T, inGame: true, player: makePlayer({ objectId: 11, name: 'Petdru', regionId: 1 }), pet: null, nearbyPlayers: [], combatEvents: [], gameMessages: [],
+            nearbyNpcs: [makeNpc({ objectId: 7, name: 'moss sheerie', level: 10, speed: 150, lastSeenAgo: 900 }), makeNpc({ objectId: 8, name: 'rock crab', level: 10, speed: 0, lastSeenAgo: 900 })],
+        });
+        const seen = observeState(state, self)!.sightings;
+        expect(seen.find(s => s.objectId === 7)!.fixedAt).toBe(T - 900);
+        expect(seen.find(s => s.objectId === 8)!.fixedAt).toBeUndefined();
+    });
+});
+
+describe('an enemy pet lost for other reasons is no kill', () => {
+    // 20261104-043622: servant at 100 % 1950 from its owner, 'You have lost your bond to your servant.', 'death null -> #422', timeline '00:23 Rehea: necroservant (L21) died', fight 'Celt / necroservant: won in 16 s, kills 2' for 1 player. The tether is NecromancerPetBrain.cs:301 (2000).
+    // An NPC's death event names no attacker (world-model.ts, 0xA2): only a player's does.
+    const rehea = (at: number) => report('Rehea', { at, objectId: 11, x: 1100 });
+    const servant = (hp: number) => sighting(422, { name: 'necroservant', level: 21, realm: 'midgard', isPet: true, hp, targetId: 11, inCombat: true });
+    const said = (e: GroupEvent[]) => e.filter(x => x.kind === 'kill' || x.kind === 'note').map(x => `${x.kind}: ${x.text}`);
+    const gone = (hp: number, o: { hitAt?: number; diesAt?: number } = {}) => {
+        const b = new Blackboard();
+        const events: GroupEvent[] = [];
+        b.onEvent(e => events.push(e));
+        b.publish(obs(rehea(T), [servant(hp)]), T);
+        if (o.hitAt !== undefined) b.publish({ ...obs(rehea(o.hitAt), [servant(hp)]), petHits: [422] }, o.hitAt);
+        const at = o.diesAt ?? T + 500;
+        b.publish(obs(rehea(at), [], [422]), at);
+        return said(events);
+    };
+
+    test('at 100 %, or at half, with an empty death: a note', () => {
+        expect(gone(100)).toEqual(['note: necroservant (L21) was lost, no kill of ours']);
+        expect(gone(50, { hitAt: T + 400 })).toEqual(['note: necroservant (L21) was lost, no kill of ours']);
+    });
+
+    test('hurt, and nobody of ours hit it lately: a note', () => {
+        expect(gone(30)).toEqual(['note: necroservant (L21) was lost, no kill of ours']);
+        expect(gone(30, { hitAt: T + 100, diesAt: T + 5000 })).toEqual(['note: necroservant (L21) was lost, no kill of ours']);
+    });
+
+    test('hurt, with a hit of ours just now: a kill, still marked as a pet', () => {
+        const b = new Blackboard();
+        const events: GroupEvent[] = [];
+        b.onEvent(e => events.push(e));
+        b.publish({ ...obs(rehea(T), [servant(30)]), petHits: [422] }, T);
+        b.publish(obs(rehea(T + 500), [], [422]), T + 500);
+        expect(said(events)).toEqual(['kill: necroservant (L21) died']);
+        expect(events.find(e => e.kind === 'kill')!.data).toMatchObject({ pet: true });
+    });
+
+    test('a monster is none of this: its death with nobody\'s hit reported is a kill as ever', () => {
+        const b = new Blackboard();
+        const events: GroupEvent[] = [];
+        b.onEvent(e => events.push(e));
+        b.publish(obs(rehea(T), [sighting(7, { name: 'wolf', targetId: 11, inCombat: true })]), T);
+        b.publish(obs(rehea(T + 500), [], [7]), T + 500);
+        expect(said(events)).toEqual(['kill: wolf (L6) died']);
+    });
+
+    test('observeState: what we and our pets landed on an enemy pet lately; a miss did nothing, and a monster isn\'t one', () => {
+        const blow = (attackerObjectId: number, targetObjectId: number, over: Partial<CombatEvent> = {}): CombatEvent => ({ id: 1, kind: 'melee', attackerObjectId, targetObjectId, result: 'hit', receivedAt: T - 100, ...over });
+        const look = (events: CombatEvent[]) => observeState(makeState({
+            timestamp: T, inGame: true, player: makePlayer({ objectId: 11, name: 'Rehea', regionId: 1, realm: 'albion' }), pet: { objectId: 500, name: 'pet', aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null }, nearbyPlayers: [], combatEvents: events, gameMessages: [],
+            nearbyNpcs: [makeNpc({ objectId: 500, name: 'pet', realm: 'albion', isPet: true }), makeNpc({ objectId: 422, name: 'necroservant', realm: 'midgard', isPet: true, level: 21 }), makeNpc({ objectId: 7, name: 'wolf', level: 6 })],
+        }), self)!.petHits;
+        expect(look([blow(11, 422)])).toEqual([422]);
+        expect(look([blow(500, 422)])).toEqual([422]);
+        expect(look([blow(11, 422, { kind: 'spellEffect', result: undefined })])).toEqual([422]);
+        expect(look([blow(11, 422, { result: 'miss' })])).toBeUndefined();
+        expect(look([blow(11, 7)])).toBeUndefined();
+        expect(look([blow(11, 422, { receivedAt: T - 60_000 })])).toBeUndefined();
     });
 });

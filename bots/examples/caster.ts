@@ -17,7 +17,7 @@ import { scriptArgs } from '../examples/script-args';
 
 const DAMAGE = /^(DirectDamage|Bolt|DamageOverTime|Lifedrain|DirectDamageWithDebuff)$/;
 const BUFF = /Buff|Shield|Absorb|DamageAdd/;
-/** castSpell's own approach stops at 0.85 x range (sdk/actions.ts castSpell); do the same. */
+/** Stand this far inside the range: more room than castSpell's own approach leaves (the smaller of 10 % or 150), for a mob's first steps. */
 const STANDOFF = 0.85;
 /** castSpell reasons that end the casting loop instead of retrying it. */
 const STOP_CASTING = new Set(['no_power', 'not_found', 'spell_not_found', 'no_target', 'invalid_target', 'died', 'dead']);

@@ -71,3 +71,23 @@ export function petPanel(state: Partial<BotWorldState> | null | undefined, nameO
 export function authHeaders(password: string): Record<string, string> {
     return password ? { Authorization: `Bearer ${password}` } : {};
 }
+
+/** What a region marker is, in words. */
+export function enemyWord(e: { isPet?: boolean }): string {
+    return e.isPet ? 'Enemy pet' : 'Enemy player';
+}
+
+/** The region's enemies in a line: players, and pets when there are any. */
+export function enemyHeading(enemies: readonly { isPet?: boolean }[]): string {
+    const count = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
+    const pets = enemies.filter(e => e.isPet).length;
+    return [count(enemies.length - pets, 'enemy player'), pets ? count(pets, 'enemy pet') : ''].filter(Boolean).join(', ');
+}
+
+/** A line per enemy pet whose aim stands on the map. */
+export function enemyAims<E extends { isPet?: boolean; targetId?: number | null }, P>(enemies: readonly E[], at: (objectId: number) => P | null): { from: E; to: P }[] {
+    return enemies.flatMap(e => {
+        const to = e.isPet && e.targetId != null ? at(e.targetId) : null;
+        return to ? [{ from: e, to }] : [];
+    });
+}

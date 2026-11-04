@@ -330,7 +330,7 @@ describe('runGroup with a pet', () => {
         await until(() => have.sdk.getSkills().spells.length > 0, 'the spell list');
         const run = start('rg', { have, strategy: roleList(), seconds: 0.2 });
         await run.done;
-        expect(listsOf()).toEqual([['release', 'sprint', 'petControl', 'retreat', 'petHeal', 'summonPet', 'tank', 'holdFormation', 'petBuff', 'buff', 'rest']]);
+        expect(listsOf()).toEqual([['release', 'sprint', 'petControl', 'retreat', 'petHeal', 'summonPet', 'tank', 'petBuffAtStart', 'holdFormation', 'petBuff', 'buff', 'rest']]);
     });
 
     test('a member without one: the list as the strategy gave it', async () => {
