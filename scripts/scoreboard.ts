@@ -114,8 +114,9 @@ function loadRuns(): Run[] {
     const runs = new Map<string, Run>();
     for (const groups of groupsDirs()) {
         for (const group of readdirSync(groups)) {
+            // A worktree's own test groups (rehearsals, clones) aren't on the board.
             const dir = join(groups, group, 'runs');
-            if (!existsSync(dir)) continue;
+            if (!existsSync(join(REPO, 'groups', group, 'group.json')) || !existsSync(dir)) continue;
             for (const file of readdirSync(dir)) {
                 if (!file.endsWith('.json')) continue;
                 const path = join(dir, file);
