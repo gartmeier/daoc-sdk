@@ -6,9 +6,11 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 - **Server code:** read from the server source or data, or worked out by the same `Spellbook` a member fights with.
 - **Community, unverified:** other players' advice, written for other servers and patches.
 
-## No kit
+## The kit
 
-There is no `sdk/classes/healer.ts`. `roleForClass` makes a Healer a healer and the list casts what the bot knows, so a kit would hold nothing of the class's own. Sigrid runs on the plain role list.
+`sdk/classes/healer.ts` holds only the role, `healer`, which is what `roleForClass` gives. It changes nothing against the role list, and Sigrid plays the same either way.
+
+**Server code: nothing that exists fits.** `assist` has no spell to cast, since Mending first has no damage spell, and outside the wolf pack it would still walk her toward a focus she can't see. `song` would play Ease of Movement, which the Skald's speed song outdoes in the same group. What she'd want is under "Not supported yet", and each needs a behaviour.
 
 ## Builds
 

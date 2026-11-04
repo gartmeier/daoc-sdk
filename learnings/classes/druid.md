@@ -6,9 +6,19 @@ Hibernia's main healer: strong heals from Regrowth, the group's spec buffs from 
 - **Server code:** read from the server source or data, or worked out by the same `Spellbook` a member fights with.
 - **Community, unverified:** other players' advice, written for other servers and patches.
 
-## No kit
+## The kit
 
-There is no `sdk/classes/druid.ts`. `roleForClass` already makes a Druid a healer, and the healer's list casts what the bot knows, so a kit would hold nothing of the class's own. Brigid runs on the plain role list. A kit is due when something below becomes a behaviour.
+`sdk/classes/druid.ts` holds the role, and for a Nature build, its DoTs on the focus:
+
+```typescript
+import { druid } from '../../sdk/classes/druid';
+export default druid();                        // Heal or Buff druid
+export default druid({ dotsAbove: 50 });       // Group or Solo Nature: Wither and up, above 50 % power
+```
+
+**`druid()` changes nothing against the role list,** which is what `roleForClass` gives. **Server code:** a Heal druid at Nature 1 has no damage spell, so `assist` would have nothing to cast, and outside the wolf pack it would still walk her toward a focus she can't see. Brigid should play this one.
+
+**`dotsAbove`** is for a Nature build, and nobody runs one. Group Nature at 24 casts Wither (27 a tick for 24 s, 3 s to cast, 9 power). Not played, and 50 is a guess.
 
 ## Builds
 
@@ -68,7 +78,7 @@ It's two levels away, for a spell the role lists don't use:
 What the class has that no behaviour uses:
 
 - **The pet:** Call Minor Nature Spirit at Nature 1, stronger ones at 7, 12 and 20. Group and Solo Nature are built round something no bot has summoned.
-- **Nature's damage:** the DoTs are for `assist`, which isn't in the healer's list. A Nature Druid would need it added by its character.
+- **Nature's damage:** the DoTs are for `assist`, which isn't in the healer's list. `druid({ dotsAbove })` adds it for a Nature build.
 - **Group heals:** Healing Conflux, Renewing Conflux, and Bith's Benison at Regrowth 23 (instant, 50 %, 20 minutes). A rule would have to count who is hurt.
 - **Cures:** poison, disease and nearsight. No behaviour watches for them.
 - **Area roots:** Patch of Ivy and up in Nature. `isRoot` wants a single target.
