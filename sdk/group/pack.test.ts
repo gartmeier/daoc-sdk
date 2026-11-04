@@ -107,6 +107,19 @@ describe('decidePack: who makes it rest', () => {
     });
 });
 
+describe('decidePack: a focus being healed', () => {
+    test('is given up for the next, and comes back after a while', () => {
+        const m: any = { pack: 'kill', killAt: 0 };
+        const two = (hp: number) => [foe(101, 11_000, 10_000, { hp }), foe(102, 11_100), foe(103, 13_900)];
+        expect(decidePack(ctx(picture(team(), two(20)), { memory: m, orders: { focus: 101 }, now: 500 })).focus).toBe(101);
+        expect(decidePack(ctx(picture(team(), two(45)), { memory: m, orders: { focus: 101 }, now: 1000 })).focus).toBe(101);
+        expect(decidePack(ctx(picture(team(), two(60)), { memory: m, orders: { focus: 101 }, now: 1500 })).focus).toBe(102);
+        expect(decidePack(ctx(picture(team(), two(60)), { memory: m, orders: { focus: 102 }, now: 2000 })).focus).toBe(102);
+        m.killAt = 16_000;
+        expect(decidePack(ctx(picture(team(), [foe(101, 11_000, 10_000, { hp: 60 })]), { memory: m, orders: { focus: 102 }, now: 17_000 })).focus).toBe(101);
+    });
+});
+
 describe('decidePack: prey', () => {
     test('five against two is hunted even while cooling down, and killed with the Hero, not stood off from', () => {
         const m: any = { raidEnd: 5000 };
@@ -131,6 +144,18 @@ describe('decidePack: prey', () => {
 
 describe('decidePack: raid, pull back, kill, leave', () => {
     const raid = (over: object = {}) => ({ pack: 'raid', raidAt: 1000, packAnchor: { x: 10_000, y: 10_000, z: 0 }, ...over });
+
+    test('parked just outside the opening distance from enemies that stand still: opens after idleMs', () => {
+        const m: any = { pack: 'stalk' };
+        const pic = picture(team(), fiveAt(BASE.x + 1360));
+        expect(decidePack(ctx(pic, { memory: m, now: 1000 })).phase).toBe('travel');
+        expect(decidePack(ctx(pic, { memory: m, now: 1000 + PACK_SETTINGS.pack.idleMs })).phase).toBe('engage');
+    });
+
+    test('a stalk aims inside the opening distance', () => {
+        const u = decidePack(ctx(picture(team(), fiveAt(BASE.x + 2500)), { memory: { pack: 'stalk' } }));
+        expect(distTo(u.anchor!, { x: BASE.x + 2500, y: BASE.y })).toBeLessThanOrEqual(PACK_SETTINGS.pack.openAt);
+    });
 
     test('the burst ends by the clock and pulls back away from them', () => {
         const m: any = raid();
