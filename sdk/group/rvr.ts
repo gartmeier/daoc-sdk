@@ -31,7 +31,7 @@
 
 import { estimateZ, getClass, realmName } from '../../data/index';
 import type { Realm } from '../types';
-import { assist, buff, crowdControl, flee, guard, heal, holdFormation, meleeFight, position, rejoinFight, release, rest, retreat, rez, shedLoad, song, sprint, tank, type TacticsSettings } from './behaviors';
+import { assist, buff, crowdControl, flee, guard, heal, holdFormation, meleeFight, position, rejoinFight, release, rest, retreat, rez, shedLoad, song, spareNuke, sprint, tank, type TacticsSettings } from './behaviors';
 import type { Behavior } from './member';
 import type { Finding, RunReport } from './observer';
 import { isAlive } from './blackboard';
@@ -498,8 +498,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 /** Behaviour lists by role. No healer() visit: battlegrounds have no town healer, and RvR deaths cost no constitution. */
 export function rvrBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
-        tank: [release(), sprint(), retreat(), rejoinFight(), rez(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
-        healer: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
+        tank: [release(), sprint(), retreat(), rejoinFight(), rez(), song(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
+        healer: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), spareNuke(), shedLoad(), holdFormation(), buff(), rest()],
         support: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
         nuker: [release(), sprint(), retreat(), rejoinFight(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
         melee: [release(), sprint(), retreat(), rejoinFight(), rez(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],

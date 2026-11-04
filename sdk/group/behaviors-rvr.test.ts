@@ -6,7 +6,10 @@ import { describe, expect, test } from 'bun:test';
 import type { CastResult, KillPlayerOptions, KillPlayerResult } from '../actions';
 import { executionContext } from '../execution-context';
 import type { NearbyNpc, NearbyPlayer } from '../types';
-import { assist, ckey, crowdControl, fightRejoin, flee, holdFormation, leashFallback, onMember, peelTarget, pull, rejoinFight, tank, type TacticsSettings } from './behaviors';
+import { shaman } from '../classes/shaman';
+import { assist, ckey, crowdControl, fightRejoin, flee, holdFormation, leashFallback, onMember, peelTarget, pull, rejoinFight, spareNuke, tank, type TacticsSettings } from './behaviors';
+import { withCharacter } from './character';
+import { rvrBehaviors } from './rvr';
 import { contact, enemy, picture, report } from './fixtures';
 import type { MemberContext } from './member';
 import { PVE_SETTINGS } from './pve';
@@ -488,4 +491,59 @@ describe('holdFormation in a fight', () => {
             }
         });
     }
+});
+
+describe('spareNuke: a healer with nothing to heal', () => {
+    const nuke = { spell: { name: 'Minor Judgement' }, type: 'DirectDamage', range: 1500 };
+    const scene = (o: { mana?: number; canNuke?: boolean; at?: Point } = {}) => {
+        const s = stub({ name: 'Cleric', role: 'healer', at: o.at ?? { x: 10_000, y: 10_000 }, contacts: [foe(51, 11_000, 10_000)], orders: { focus: 51 }, settings: { ...LEASHED, standStep: 500 } as TacticsSettings });
+        const spells = s.ctx.spells as unknown as Record<string, unknown>;
+        spells.nuke = () => (o.canNuke === false ? null : nuke);
+        spells.capabilities = () => ({ nuke: o.canNuke !== false });
+        const me = s.ctx.me();
+        (s.ctx as unknown as { me: () => unknown }).me = () => ({ ...me, manaPercent: o.mana ?? 100 });
+        const opts: unknown[] = [];
+        (s.ctx.bot as unknown as { castSpell: unknown }).castSpell = async (_: unknown, id: number, castOpts: unknown) => { s.calls.castSpell.push(id); opts.push(castOpts); return { success: true, message: 'Cast' }; };
+        return { ...s, opts };
+    };
+
+    test('hits the focus on spare power, from where it stands', async () => {
+        const s = scene();
+        expect(await spareNuke().run(s.ctx)).toBe(true);
+        expect(s.calls.castSpell).toEqual([51]);
+        expect(s.opts).toEqual([{ approach: false }]);
+    });
+
+    test('below the floor it saves its power for heals, and the rez that needs 75 %', async () => {
+        const s = scene({ mana: 74 });
+        expect(await spareNuke().run(s.ctx)).toBe(false);
+        expect(s.calls.castSpell).toEqual([]);
+        expect(s.skips).toEqual(['spareNuke: saving power (< 75 %)']);
+        expect(await spareNuke().run(scene({ mana: 75 }).ctx)).toBe(true);
+    });
+
+    test('a short step for a focus just out of range, and no walk out of healing reach for one further off, whatever standStep says', async () => {
+        const near = scene({ at: { x: 9300, y: 10_000 } });
+        expect(await spareNuke().run(near.ctx)).toBe(true);
+        expect(near.calls.walkTo).toEqual([{ x: 9600, y: 10_000 }]);
+        expect(near.calls.castSpell).toEqual([]);
+        const far = scene({ at: { x: 8000, y: 10_000 } });
+        expect(await spareNuke().run(far.ctx)).toBe(false);
+        expect(far.calls.walkTo).toEqual([]);
+        expect(far.calls.castSpell).toEqual([]);
+    });
+
+    test('a member with no nuke: nothing, and no idle reason that says it is short of power', async () => {
+        const s = scene({ canNuke: false });
+        expect(await spareNuke().run(s.ctx)).toBe(false);
+        expect(s.skips).toEqual([]);
+    });
+
+    test('in the RvR healer list it comes after every heal, and a character\'s fight still goes where it did', () => {
+        const list = rvrBehaviors().healer.map(b => b.name);
+        for (const before of ['emergencyHeal', 'rez', 'heal', 'crowdControl', 'position']) expect(list.indexOf(before)).toBeLessThan(list.indexOf('spareNuke'));
+        const kit = withCharacter(rvrBehaviors().healer, shaman()).map(b => b.name);
+        expect(kit.indexOf('assist')).toBe(kit.indexOf('position') - 1);
+        expect(kit.indexOf('spareNuke')).toBe(kit.indexOf('position') + 1);
+    });
 });

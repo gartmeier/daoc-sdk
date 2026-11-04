@@ -550,7 +550,7 @@ describe('safePath avoid circles', () => {
 
 describe('rvrRoaming', () => {
     test('role lists without a town healer visit; tank list as specified', () => {
-        expect(rvrRoaming.behaviors.tank.map(b => b.name)).toEqual(['release', 'sprint', 'retreat', 'rejoinFight', 'rez', 'tank', 'guard', 'shedLoad', 'holdFormation', 'buff', 'rest']);
+        expect(rvrRoaming.behaviors.tank.map(b => b.name)).toEqual(['release', 'sprint', 'retreat', 'rejoinFight', 'rez', 'song', 'tank', 'guard', 'shedLoad', 'holdFormation', 'buff', 'rest']);
         expect(Object.values(rvrRoaming.behaviors).flat().some(b => b.name === 'healer')).toBe(false);
         expect(rvrRoaming.board).toEqual({ staleAfterMs: 4000, forgetAfterMs: 30_000, hostileMs: 6000 });
     });
