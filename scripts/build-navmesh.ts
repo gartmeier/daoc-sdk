@@ -3,7 +3,7 @@
 // server/buildnav, plus the native Detour library the SDK loads through Bun FFI.
 // Windows only: buildnav is a WinForms app and RecastDemo.exe a Win64 binary.
 //
-//   bun run navmesh:build                              # regions 1, 100, 200 (the classic home realms)
+//   bun run navmesh:build                              # DEFAULT_REGIONS: the classic home realms, their capitals, Thidranki
 //   bun run navmesh:build --regions=1,10 --zones=27    # specific regions / zones
 //   bun run navmesh:build --all                        # every zone (hours, several GB)
 //   bun run navmesh:build --skip-existing              # leave zones that already have a .nav
@@ -39,6 +39,8 @@ const CORE_LINK = join(ROOT, 'server', 'OpenDAoC-Core');
 const BUILDNAV = join(ROOT, 'server', 'buildnav');
 const BUILDNAV_OUT = join(BUILDNAV, 'bin', 'Release', 'net10.0-windows7.0');
 export const NAVMESH_DIR = join(ROOT, 'server', 'navmesh');
+/** Home realms 1, 100, 200; capitals 10 (Camelot), 101 (Jordheim), 201 (Tir na Nog); 252 (Thidranki). */
+export const DEFAULT_REGIONS = [1, 100, 200, 10, 101, 201, 252];
 
 export interface BuildArgs {
     daoc: string;
@@ -151,7 +153,7 @@ export function parseArgs(argv: string[], env: Record<string, string | undefined
     const all = argv.includes('--all');
     return {
         daoc,
-        regions: regions.length || zones.length || all ? regions : [1, 100, 200],
+        regions: regions.length || zones.length || all ? regions : DEFAULT_REGIONS,
         zones,
         all,
         skipExisting: argv.includes('--skip-existing'),

@@ -6,9 +6,28 @@ Hibernia's tank: a large shield with blades, or a two-hander or spear in the oth
 - **Server code:** read from the server source or data.
 - **Community, unverified:** other players' advice, written for other servers and patches.
 
-## No kit
+## The kit
 
-There is no `sdk/classes/hero.ts`. `roleForClass` makes a Hero a tank, and the tank's list reads taunt and damage styles from the server, so a kit would hold nothing of the class's own. Cuchulainn runs on the plain role list.
+`sdk/classes/hero.ts` is the tank's list with a fight that also swings what a block, a parry or a position opens:
+
+```typescript
+import { hero } from '../../sdk/classes/hero';
+export default hero();
+```
+
+**What changes, server code:** the plain `tank` swings Fire Blade. With the kit, `reactingTank` (`sdk/classes/reacting-tank.ts`) queues a style ahead of it, and Fire Blade stays the backup:
+
+| What just happened | First in the queue |
+|---|---|
+| He blocked | The first reaction to a block the server lists: in the data's order Horizon Blade (4 s stun), not Incapacitate (5 s) |
+| The enemy's on someone else | Disable (4 s stun, from the side) |
+| Anything else | Return Blade (needs a parry) |
+
+Taunts still go in only as the tank's list decides. Styles stop at the same 15 % endurance. A reaction that lands costs its own endurance, 5 for Horizon Blade against 15 for Fire Blade.
+
+**In the wolf pack:** it applies. `rvrPack` has no `memberBehaviors`, and its tank list keeps `tank`, which this replaces in place. The same is true of `rvrRoaming`.
+
+**Not played.** To look for: "You perform your Horizon Blade perfectly" and stuns in the fight log, kills and the group's deaths against plain `tank`, and his endurance.
 
 ## Builds
 
@@ -44,7 +63,7 @@ The lines' KeyName is `Shields`, which the client and the trainer show as Shield
 | Glowing Blade (Blades 10) | from the side | 60 % snare, 14 s |
 | Numb (Shields 3) | any time | 2 s stun |
 
-Numb is an anytime style, and `tankStyles` skips it once Fire Blade is worth more per endurance. The stuns are what a Hero has that a healer behind him would want. **Not tried:** `tank({ style: fighterStyle() })` in a character's `fight` would queue the reactions behind the plain style, as a Skald's list does. Against a player it's worth a run, comparing kills and the group's deaths. It spends more endurance, and styles stop silently below 15 %.
+Numb is an anytime style, and `tankStyles` skips it once Fire Blade is worth more per endurance. The stuns are what a Hero has that a healer behind him would want, and the kit is what swings them.
 
 Slam, the 9 s anytime stun, is Shields 42, past level 40 in this build, so it doesn't help in Thidranki.
 

@@ -4,7 +4,9 @@ import type { GameMessage } from '../types';
 import { Blackboard, observeState, type MemberSelf } from './blackboard';
 import { CC_IMMUNE_MS, canControl, ccKindOfType, immuneKinds, npcCcLanded, readCcEnds, serverNameKey } from './cc';
 import { contact, enemy, obs, report, sighting } from './fixtures';
-import { assignCc } from './pve';
+import { MemberAgent } from './member';
+import { assignCc, PVE_SETTINGS } from './pve';
+import type { Capabilities } from './types';
 
 const T = 1_000_000;
 const R = 200;
@@ -216,5 +218,28 @@ describe('assignCc', () => {
         expect(assignCc([enemy(1, 'midgard', { ccImmune: { mezz: T - 1 } })], [bard], [], now)).toEqual([{ targetId: 1, by: 'Bard' }]);
         const old = report('Old', { role: 'nuker', capabilities: { heal: false, cc: true, nuke: false, buffs: [], buffSpells: [] } });
         expect(assignCc([contact(1, { ccImmune: { mezz: T + 1000 } })], [old], [], now)).toEqual([{ targetId: 1, by: 'Old' }]);
+    });
+});
+
+describe('crowd control goes to whoever casts it', () => {
+    const shout = { type: 'Mesmerize', target: 'Enemy', range: 700, radius: 0, power: 0, castTime: 0, recastDelay: 30, duration: 18, concentration: 0, pulse: 0, value: 0, damage: 0, spellGroup: 0, effectGroup: 0, frequency: 0 };
+    const caps = (names: string[]) => (new MemberAgent({
+        bot: 'x', role: 'melee',
+        sdk: { getGameMessages: () => [], onStateUpdate: () => () => {}, getState: () => null, getSkills: () => ({ spells: [{ name: 'Crippling Shout', level: 10 }] }), getPlayer: () => null },
+        actions: { getSpellInfo: () => shout },
+    } as never, new Blackboard(), names.map(name => ({ name, run: () => false })), PVE_SETTINGS) as unknown as { capabilities: Capabilities }).capabilities;
+    const member = (name: string, role: 'nuker' | 'melee', ccOn: boolean) => report(name, { role, capabilities: { heal: false, cc: ccOn, ccKinds: ccOn ? ['mezz'] : [], nuke: false, buffs: [], buffSpells: [] } });
+
+    test('a list with no crowdControl says it has none, whatever its spells: a Skald\'s shout', () => {
+        expect(caps(['song', 'assistMelee'])).toMatchObject({ cc: false, ccKinds: [] });
+        expect(caps(['crowdControl', 'assistMelee'])).toMatchObject({ cc: true, ccKinds: ['mezz'] });
+    });
+
+    test('why it matters: an assignment is kept, and keeps a real mezzer who comes free off its target', () => {
+        const foes = [enemy(52, 'albion')];
+        const held = [{ targetId: 52, by: 'Skald' }];
+        expect(assignCc(foes, [member('Skald', 'melee', true), member('Mage', 'nuker', true)], held)).toEqual(held);
+        expect(assignCc(foes, [member('Skald', 'melee', false), member('Mage', 'nuker', true)], held)).toEqual([{ targetId: 52, by: 'Mage' }]);
+        expect(assignCc(foes, [member('Skald', 'melee', false)], [])).toEqual([]);
     });
 });

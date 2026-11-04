@@ -1145,7 +1145,7 @@ describe('withPets: where they go', () => {
 
     test('the RvR lists the same way', () => {
         expect(names(withPets(rvr.nuker, MAIN))).toEqual(['release', 'sprint', 'petControl', 'retreat', 'summonOnTheWayBack', 'rejoinFight', 'flee', 'rez', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'petHeal', 'assist', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(rvr.tank, MAIN))).toEqual(['release', 'hand', 'sprint', 'petControl', 'retreat', 'summonOnTheWayBack', 'rejoinFight', 'rez', 'petHeal', 'summonPet', 'tank', 'guard', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(rvr.tank, MAIN))).toEqual(['release', 'hand', 'sprint', 'petControl', 'retreat', 'summonOnTheWayBack', 'rejoinFight', 'rez', 'song', 'petHeal', 'summonPet', 'tank', 'guard', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
     });
 
     test('a Theurgist: fnfPet before the fight and nothing else, as there is no window pet to look after', () => {

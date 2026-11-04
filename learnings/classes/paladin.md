@@ -15,10 +15,11 @@ import { paladin } from '../../sdk/classes/paladin';
 export default paladin();
 ```
 
-**Why: without it no chant ever plays.** The tank's list has no `song`, so Galahad's report shows no chant in 46 minutes, while his build spends its most points on Chants. Chant of Persistence is the only endurance song in the Camelot group, and styles stop silently below 15 % endurance ([group-coordination.md](../group-coordination.md)). The kit puts `song` above the fight, as it stands in the melee list.
+**Why: outside RvR, without it no chant ever plays.** The default tank list has no `song` (`rvrBehaviors` has had one since 2026-11-04), so Galahad's report showed no chant in 46 minutes, while his build spends its most points on Chants. Chant of Persistence is the only endurance song in the Camelot group, and styles stop silently below 15 % endurance ([group-coordination.md](../group-coordination.md)). The kit puts `song` above the fight, as it stands in the melee list.
 
-- **What it plays:** `chooseSong` wants endurance in every phase he has a song for, so Chant of Persistence (value 3, instant, range 1000) stays on, and Battle Fury only if a build has no endurance song. An instant one goes out raw while he swings, so it doesn't lose the mob.
-- **Not played.** Galahad has no `character.ts`, and this kit changes nothing until he does. A Skald's instant songs work through this path (**verified**, Bragi, [skald.md](skald.md)). A Paladin's may come through the skills list instead (`useSkill`), which `song` handles and no run has tried. Watch his effects for the chant and his `kill` failures for a stopped swing.
+- **What it plays:** in a fight Crusader's Defense (the armor kind), or Chant of Persistence while he is below 30 % endurance (`songs.enduranceBelow`). Out of a fight, Persistence. Refreshment and Battle Fury only if a build lacks the others: one pulse at a time means those two don't get a turn. Which of these is best in a fight hasn't been measured.
+- **Verified, throwaway stack (2026-11-04):** his chants come through the skills list (`useSkill`), are instant, reach the group, and don't stop the swing. Three probes: 5, 6 and 6 hits in the 16 s before a chant, 6, 5 and 3 in the 16 s after it, and he never left attack state. An instant one goes out raw while he swings, so it doesn't lose the mob.
+- **Twisting works on this server, and no behaviour does it.** A new chant ends the running pulse (`CancelIncompatiblePulseEffects`), but what the old one already put on the group runs out by itself (Duration 5-6 s). Changing chant every 2 s kept 2-3 of his 4 on him and on the Cleric at once, for free. Left alone, only the last one stays. `song` plays one.
 
 ## Builds
 
@@ -59,8 +60,7 @@ The fewest deaths of the group, with the lowest damage of the three tanks: Slash
 
 All of these are his and no behaviour casts them:
 
-- **Crusader's Refreshment** (Chants 20), a group heal pulse. `songKind` has no kind for `CombatHeal`.
-- **Crusader's Defense** (Chants 23, value 61), a group AF pulse. Its slot is pulsing, so `buffs` skips it, and `songKind` has no kind for it either.
+- **Crusader's Refreshment** (Chants 20), a group heal pulse: a `combatHeal` song, but it never gets a turn with an armor chant known. It heals nobody out of combat (`CombatHealSpellHandler`), so it isn't a between-fights `health` song.
 - **Aura of Indestructability** (Chants 24, value 37, 17 power, 20 minutes), a self AF. `slotOf` doesn't know `PaladinArmorFactorBuff`.
 - **Aggravate** (Chants 15), an instant taunt at range 1350, every 30 s. It would peel an add without walking.
-- Only one pulse plays at a time ([spells.md](../spells.md)), so endurance, heal, AF and damage are a choice. **Community, unverified:** a Paladin twists them.
+- Only one pulse plays at a time ([spells.md](../spells.md)), so without twisting (above) endurance, heal, AF and damage are a choice. Crusader's Defense counts as a spec AF, capped at level x 1.875 (45 at 24; `ArmorFactorCalculator`), so its 61 gives 45 at most.

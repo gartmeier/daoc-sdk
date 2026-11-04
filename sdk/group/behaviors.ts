@@ -1113,8 +1113,9 @@ export function holdState(mob: Pick<Contact, 'target' | 'targetPet' | 'targetSin
  * Never touches a mezzed mob, nor a rooted one while anything else in the fight is free (ccHolds).
  * Melee leaves a focus beyond the chase leash for the nearest enemy inside it (leashFallback).
  * `style` picks the styles of its melee (fighterStyle, or a character's own); without one it swings plain.
+ * `holdGround` casts only from where it stands, or a step of at most that many units, whatever the settings say.
  */
-export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePick } = {}): Behavior<TacticsSettings> => ({
+export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePick; holdGround?: number } = {}): Behavior<TacticsSettings> => ({
     name: opts.melee ? 'assistMelee' : 'assist',
     interruptible: false,
     async run(ctx) {
@@ -1131,7 +1132,7 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
         const seen = foeInView(ctx, mob.objectId);
         if (seen && isDown(ctx, seen)) return ctx.skip('assist: focus just died');
         if (!seen) {
-            if (ctx.settings.standGround) return ctx.skip('assist: focus not in view, holding ground');
+            if (ctx.settings.standGround || opts.holdGround !== undefined) return ctx.skip('assist: focus not in view, holding ground');
             // Others see it, we don't (beyond our view): close in on where the group last saw it.
             const me0 = ctx.me();
             const d = dist(me0, mob);
@@ -1156,10 +1157,10 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
             const dotted: Set<string> = ctx.memory.get(key) ?? new Set();
             const sp = ctx.spells.nuke({ dotted, targetHp: mob.hp, aoe: ctx.settings.aoe, byDamage: ctx.settings.strongestNuke });
             if (sp) {
-                const stand = !!ctx.settings.standGround;
+                const stand = !!ctx.settings.standGround || opts.holdGround !== undefined;
                 if (stand && seen.distance > sp.range) {
                     // Just out of reach: a short step in, unless that means walking onto enemies (standStep). Further: hold.
-                    const step = standStepTo(ctx.me(), seen, sp.range, ctx.settings.standStep ?? 0, ctx.picture().contacts);
+                    const step = standStepTo(ctx.me(), seen, sp.range, opts.holdGround ?? ctx.settings.standStep ?? 0, ctx.picture().contacts);
                     if (!step) return ctx.skip('assist: focus out of reach, holding ground');
                     ctx.doing('move', mob.objectId, 'step in range');
                     await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 });
@@ -1206,6 +1207,29 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
 function inBounds(me: PlayerState, safe: (p: Point) => boolean): (p: Point) => boolean {
     return onMap(me.regionId, me) ? p => safe(p) && onMap(me.regionId, p) : safe;
 }
+
+/** Nukes stop below this % power: a rez at equal level costs half the pool and keeps a reserve of 25 (RVR_SETTINGS.rez), and heals need the rest. */
+const SPARE_NUKE_MANA = 75;
+/** The most it steps toward a focus just out of range: half its idle fight time went on that without a step (throwaway run, learnings/rvr.md). */
+const SPARE_NUKE_STEP = 400;
+
+/**
+ * A healer with nothing to heal hits the focus, on spare power only and within a short step of where it
+ * stands, so the nuke costs no heal: below heal() in the list, and no walk out of healing reach. Nothing for a
+ * member with no nuke. Its own name, so it is no role fight: a character's fight still goes where it did.
+ */
+export const spareNuke = (minMana = SPARE_NUKE_MANA): Behavior<TacticsSettings> => {
+    const inner = assist({ holdGround: SPARE_NUKE_STEP });
+    return {
+        ...inner,
+        name: 'spareNuke',
+        async run(ctx) {
+            if (ctx.orders().phase !== 'engage' || !ctx.spells.capabilities().nuke) return false;
+            if (ctx.me().manaPercent < minMana) return ctx.skip(`spareNuke: saving power (< ${minMana} %)`);
+            return inner.run(ctx);
+        },
+    };
+};
 
 /**
  * Stay within our role's limits from the fight (combatRange, narrowed by the spell we cast;
@@ -1372,7 +1396,7 @@ export const song = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         const songs = ctx.spells.songs();
         if (!songs.length || ctx.bot.isDead()) return false;
-        const kind = chooseSong(songs.map(s => s.kind), ctx.orders().phase, ctx.members(), ctx.settings.songs ?? SONG_SETTINGS);
+        const kind = chooseSong(songs.map(s => s.kind), ctx.orders().phase, ctx.members(), ctx.settings.songs ?? SONG_SETTINGS, ctx.me().endurancePercent);
         const want = songs.find(s => s.kind === kind);
         if (!want) return false;
         const playing = (ctx.sdk.getState()?.effects ?? []).map(e => e.name);
