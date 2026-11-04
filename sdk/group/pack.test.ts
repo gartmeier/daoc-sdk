@@ -3,7 +3,7 @@ import { areaMezzCatch, backupHealWanted, confuse, interrupt, rest, SAVING_POWER
 import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
 import { enemy, obs, picture, report, sighting } from './fixtures';
-import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings, noticePhantom, reversedRing, shouldBolt } from './pack';
+import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings, noticePhantom, shouldBolt } from './pack';
 import { RVR_SETTINGS, rvrBehaviors, rvrRoaming } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { pickNuke, type SpellPick } from './spells';
@@ -613,13 +613,6 @@ describe('a phantom focus', () => {
         const u = decidePack(ctx(picture(team(), [foe(101, 11_000, 10_000, { hp: 33 })]), { memory: { pack: 'stalk', phantoms: { 101: 500_000 } }, now: 1000 }));
         expect(u.focus ?? null).toBeNull();
         expect(u.phase).not.toBe('engage');
-    });
-});
-
-describe('reversedRing', () => {
-    test('same start, the other way round', () => {
-        expect(reversedRing([1, 2, 3, 4])).toEqual([1, 4, 3, 2]);
-        expect(reversedRing([])).toEqual([]);
     });
 });
 

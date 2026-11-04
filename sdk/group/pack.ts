@@ -23,7 +23,7 @@ import { backupHeal, confuse, crowdControl, flee, interrupt, rest, rez, release,
 import { isAlive, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
-import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, onWhom, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, defaultPatrol, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, onWhom, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -61,11 +61,6 @@ export interface PackOptions {
     phantomMs: number;
     /** Refuse more free enemies than this round their nearest. */
     maxFoes: number;
-    /**
-     * Walk the ring the other way. Hibernia and Albion go round the same way (PATROL_TURN), at the same speed, so they only
-     * meet if one stops; rounds with little contact are rounds with few kills.
-     */
-    reversePatrol: boolean;
     /** ... counting those within this of it. */
     crowdRadius: number;
     /** How long the burst lasts ... */
@@ -112,7 +107,7 @@ export interface PackSettings extends RvrSettings {
 export const PACK_OPTIONS: PackOptions = {
     standoff: 1500, reach: 1500, openAt: 1450, idleMs: 3000, waitMs: 0, minPack: 3, minTogether: 3,
     // User, live: fights may be joined head on, the first version avoided all of them. Only a real crowd is refused.
-    boltRun: 0, boltMs: 15_000, boltCoolMs: 30_000, frozenMs: 20_000, phantomMs: 120_000, maxFoes: 8, reversePatrol: false, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
+    boltRun: 0, boltMs: 15_000, boltCoolMs: 30_000, frozenMs: 20_000, phantomMs: 120_000, maxFoes: 8, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
     raidMs: 8000, finishMs: 4000, finishHp: 25, closeCount: 3, closeIn: 700,
     pullBack: 1500, pullMs: 6000, maxChasers: 2, chaseGap: 800, maxLegs: 0, killMs: 12_000, preyHp: 40, healedBy: 30, droppedMs: 15_000,
     leave: 2000, cooldownMs: 0,
@@ -171,14 +166,6 @@ export function packCc(foes: readonly Contact[], members: readonly MemberReport[
     });
 }
 
-/** A flag's text or a setting. */
-const isOn = (v: unknown): boolean => !!v && v !== 'false' && v !== '0';
-
-/** The same ring the other way round, from the same first waypoint. */
-export function reversedRing<T>(ring: readonly T[]): T[] {
-    return ring.length ? [ring[0]!, ...ring.slice(1).reverse()] : [];
-}
-
 /**
  * Whether a pack in a fight should run for it. Live, it lost four or five within a minute or so when two groups converged,
  * one at a time, still turning on its chasers after each 1500-unit pull back.
@@ -207,16 +194,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const k = s.pack;
     const players = (c: Contact) => c.kind === 'player';
     // rvr-roam with no enemy players on the board: patrol, rest, regroup, monsters that attack us, winding down.
-    const calm = () => {
-        const loop = isOn(k.reversePatrol) && !s.patrol ? patrolOf() : null;
-        return decideRvr({ ...ctx, ...(loop ? { settings: { ...s, patrol: loop } } : {}), picture: { ...p, contacts: p.contacts.filter(c => !players(c)) } });
-    };
-    const patrolOf = () => {
-        const regionId = groupRegion(p.members), realm = realmOfGroup(p.members), level = Math.max(...p.members.map(m => m.level));
-        const key = `${regionId}:${realm}:${level}`;
-        if (mem.reversedKey !== key) { mem.reversed = reversedRing(defaultPatrol(regionId, realm, level, s)); mem.reversedKey = key; mem.wp = undefined; }
-        return mem.reversed as Point3[];
-    };
+    const calm = () => decideRvr({ ...ctx, picture: { ...p, contacts: p.contacts.filter(c => !players(c)) } });
     const alive = p.members.filter(m => !m.isDead);
     if (!alive.length) { mem.pack = 'home'; return calm(); }
     const regionId = groupRegion(alive);
