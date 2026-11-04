@@ -139,10 +139,14 @@ export class MemberAgent<S = any> {
         this.publish();
     }
 
-    /** From the spell list; rez only if our list also casts it, since corpses wait for whoever says it can. */
+    /**
+     * From the spell list; rez only if our list also casts it, since corpses wait for whoever says it can, and
+     * crowd control likewise, since an assignment keeps the others off its target (a Skald's shout, on a list with no crowdControl).
+     */
     private currentCapabilities(): Capabilities {
         const caps = this.spells.capabilities();
-        return { ...caps, rez: !!caps.rez && this.behaviors.some(b => b.name === 'rez') };
+        const cc = caps.cc && this.behaviors.some(b => b.name === 'crowdControl');
+        return { ...caps, cc, ccKinds: cc ? caps.ccKinds : [], rez: !!caps.rez && this.behaviors.some(b => b.name === 'rez') };
     }
 
     /** Push our latest snapshot (with the current activity) to the blackboard. */

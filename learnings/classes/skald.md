@@ -67,7 +67,7 @@ About twice the damage, with the ranges apart. Styles, joining at once and the s
 
 ## An order nobody carries out
 
-**Server code.** `Spellbook.capabilities().cc` counts Crippling Shout (a mezz, range 700, instant, 18 s, 30 s between uses), so `assignCc` can hand Bragi an add, after Hrafna, Sigrid and Ulfgar. The melee list has no `crowdControl`, so in a fight with a fourth add that assignment does nothing, and the blackboard thinks it's under control until `peelAfterMs` runs out.
+**Server code.** `Spellbook.capabilities().cc` counts Crippling Shout (a mezz, range 700, instant, 18 s, 30 s between uses), but a member reports `cc` only when its list has `crowdControl`, and the melee list doesn't, so `assignCc` no longer hands Bragi an add. In round 11 it did, and the assignment did nothing ([rvr.md](../rvr.md)).
 
 **Not tried:** `{ ...skald(), react: [crowdControl({ assignedOnly: true })] }` in a character. An instant mezz from a melee at range 700 is what the shout is for, and it needs a run: it stops his swing each time, and range 700 is close for most of an add's life.
 
