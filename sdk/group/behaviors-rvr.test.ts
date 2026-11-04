@@ -7,7 +7,7 @@ import type { CastResult, KillPlayerOptions, KillPlayerResult } from '../actions
 import { executionContext } from '../execution-context';
 import type { CombatEvent, NearbyNpc, NearbyPlayer } from '../types';
 import { shaman } from '../classes/shaman';
-import { assist, ckey, crowdControl, fightRejoin, flee, heal, holdFormation, isDown, leashFallback, onMember, peelTarget, pull, rejoinFight, rest, retreat, spareNuke, tank, type TacticsSettings } from './behaviors';
+import { assist, ckey, crowdControl, fightRejoin, flee, guard, heal, holdFormation, isDown, leashFallback, onMember, peelTarget, pull, rejoinFight, rest, retreat, spareNuke, tank, type TacticsSettings } from './behaviors';
 import { withCharacter } from './character';
 import { rvrBehaviors } from './rvr';
 import { contact, enemy, picture, report } from './fixtures';
@@ -742,11 +742,47 @@ describe('refusals that come back at once: reported, so the agent paces them (me
         const s = stub({ name: 'Tank', role: 'tank', at: ANCHOR, contacts: [npc], orders: { focus: 60 }, killNpc: { success: false, killed: false, reason: 'refused', message: 'We have no weapon' } });
         expect(await tank().run(s.ctx)).toBe(true);
         expect(s.results).toEqual([{ kind: 'kill', success: false, reason: 'refused', targetId: 60 }]);
-        for (const reason of ['already_dead', 'not_attackable', 'not_found', 'refused']) {
+        for (const reason of ['not_attackable', 'not_found', 'refused']) {
             const p = stub({ name: 'Tank', role: 'tank', at: ANCHOR, contacts: [foe(51, 10_300, 10_000, { target: 'Tank' })], orders: { focus: 51 }, killPlayer: async () => ({ success: false, killed: false, reason, message: 'no' }) });
             expect(await tank().run(p.ctx)).toBe(true);
             expect(p.results).toEqual([{ kind: 'kill', success: false, reason, targetId: 51 }]);
         }
+    });
+
+    test('tank: a target that died as it came is no failure, as for melee', async () => {
+        // r17on, r19on: 'kill: already_dead' twice, 1 s apart, on a kill the group had just made.
+        const player = stub({ name: 'Tank', role: 'tank', at: ANCHOR, contacts: [foe(51, 10_300, 10_000, { target: 'Tank' })], orders: { focus: 51 }, killPlayer: async () => ({ success: false, killed: false, reason: 'already_dead', message: 'died as we came' }) });
+        expect(await tank().run(player.ctx)).toBe(true);
+        expect(player.results).toEqual([]);
+        const npc = stub({ name: 'Tank', role: 'tank', at: ANCHOR, contacts: [contact(60, { regionId: R, x: 10_100, y: 10_000, threat: true, target: 'Tank' })], orders: { focus: 60 }, killNpc: { success: false, killed: false, reason: 'already_dead', message: 'died as we came' } });
+        expect(await tank().run(npc.ctx)).toBe(true);
+        expect(npc.results).toEqual([]);
+    });
+
+    test('guard: a member out of view gets no Guard: the select does not take, and the ability lands on what we hold', async () => {
+        // r17on Rbpal: "You can't guard yourself!", 6 lines, with no member near.
+        const cleric = report('Cleric', { role: 'healer', regionId: R, x: 10_000, y: 10_000, objectId: 7 });
+        const scene = (inView: boolean) => {
+            const s = stub({ name: 'Tank', role: 'tank', at: ANCHOR, members: [cleric], orders: { phase: 'travel', focus: null }, settings: { ...LEASHED, guard: { guard: 'healer' } } as TacticsSettings });
+            const selected: number[] = [];
+            let used = 0;
+            Object.assign(s.ctx.sdk, {
+                findAbility: () => ({ name: 'Guard' }),
+                getNearbyPlayers: () => (inView ? [{ objectId: 7 }] : []),
+                sendSetTarget: async (id: number) => { selected.push(id); return { success: true, message: '' }; },
+            });
+            (s.ctx.bot as unknown as { useAbility: unknown; isDead: unknown }).useAbility = async () => { used++; return { success: true, message: '', messages: [{ text: 'You are now guarding Cleric.' }] }; };
+            (s.ctx.bot as unknown as { isDead: unknown }).isDead = () => false;
+            return { s, selected, used: () => used };
+        };
+        const far = scene(false);
+        expect(await guard().run(far.s.ctx)).toBe(false);
+        expect(far.selected).toEqual([]);
+        expect(far.used()).toBe(0);
+        const near = scene(true);
+        expect(await guard().run(near.s.ctx)).toBe(true);
+        expect(near.selected).toEqual([7]);
+        expect(near.used()).toBe(1);
     });
 
     test('a leg cut by its own timeout is no failure: flee, tank and assist hand the next turn the decision that way, so a report gets no walk:timeout from them', async () => {

@@ -16,7 +16,7 @@ import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } fr
 import { dirname, join } from 'path';
 import { findBotEnv } from '../index';
 import { isAlive, type Blackboard } from './blackboard';
-import { CC_WALK } from './cc';
+import { CC_WALK, MEZZED } from './cc';
 import type { GroupEvent, GroupPicture, MemberCombat, MemberReport, Phase } from './types';
 import type { LiveReport } from './wire';
 
@@ -58,7 +58,8 @@ export interface FightSummary {
     openerMs: Record<string, number | null>;
     deaths: string[];
     retreated: boolean;
-    outcome: 'won' | 'retreated' | 'wiped' | 'lost' | 'unfinished';
+    /** `lost`: a member died and there is nothing to show for it. `stopped`: nobody died and nothing did: the focus went off or was called off. */
+    outcome: 'won' | 'retreated' | 'wiped' | 'lost' | 'stopped' | 'unfinished';
     /** RvR: distinct enemy players among the fight's focus and attackers, and their realms. */
     enemyPlayers?: number;
     enemyRealms?: string[];
@@ -83,8 +84,15 @@ export interface PetStats {
      * and from an older client. They count as not held all the same.
      */
     intercepted?: number;
+    /** Of `drewFocus`: samples after an order of its own on that target, accepted in that fight. Only with `drewFocus`. A mob a mezz woke goes for a pet with no order at all, whatever the run's other fights did (pet-aggro's cause). */
+    drewOrdered?: number;
     /** % of the samples behind `up` that it was down after its owner's death took it (GamePlayer.cs:5988-5989), until the next pet. Absent with none. */
     lostToOwner?: number;
+    /** % of those samples that it was down with its summon on recast (MemberReport.petRecast), and with its owner on a pull of his own: pet-down's reasons. Absent with none. */
+    onRecast?: number;
+    ownerPulling?: number;
+    /** % of all the run's samples its owner was dead, when that is most of them: what's left of the run is the first summon. */
+    ownerDead?: number;
     /** Times it died: a release or a region change is no death, and a dead owner's pet isn't counted. */
     deaths: number;
     /** Summons that landed. A fire-and-forget pet's are its new object ids, as those casts count as nukes. */
@@ -193,6 +201,12 @@ interface PetTrack {
     intercepts: number; interceptAt: number; steppedIn: number | null; intercepted: number;
     /** Its owner's death took it and no new one has come yet, and the samples that went so. */
     ownerGone: boolean; afterOwner: number;
+    /** Down samples otherwise: its summon on recast, its owner pulling. */
+    onRecast: number; pulling: number;
+    /** All samples of it, whatever its owner, and those with its owner dead. */
+    allSamples: number; dead: number;
+    /** Hold samples with the focus on it, after an order of its own on that target in that fight (OpenFight.ordered). */
+    drewOrdered: number;
     deaths: number; brokeCc: number;
     /** Pets with no window (MemberReport.summons): any seen, those in the last sample, and new ones for a fire-and-forget caster. */
     hadSummons: boolean; summons: number[]; fnfSummons: number;
@@ -217,8 +231,10 @@ interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outc
     engageAt: number | null; engaged: Set<string>; firstNuke: Map<string, number>;
     /** Enemy players among the focus and attackers: realm by region:objectId. */
     enemies: Map<string, string>;
-    /** Enemy pets killed: not in kills, though they can be all the fight was won by. */
-    petsDown: number;
+    /** Enemy pets killed, by name: not in kills, though they can be all the fight was won by. */
+    petsDown: string[];
+    /** By member: the targets its pet accepted an order on in this fight. Ids are reused, so this goes with the fight. */
+    ordered: Map<string, Set<number>>;
 }
 
 const pct = (a: number, b: number) => b > 0 ? Math.round(100 * a / b) : 0;
@@ -241,15 +257,19 @@ const INTERCEPT_READS_MS = 4000;
 const PET_AGGRO_FIGHT_MS = 10_000;
 
 /** One sample of a member's pet. A dead owner's pet went with it (GamePlayer.cs:5988-5989), which is the deaths finding's and not pet up's. */
-function samplePet(t: PetTrack, m: MemberReport, at: number): void {
+function samplePet(t: PetTrack, m: MemberReport, at: number, pulling: boolean): void {
     t.kind = m.capabilities.pet ?? null;
     if (m.pet?.name) t.name = m.pet.name;
     if (m.isDead) t.ownerGone = true;
     else if (m.pet) t.ownerGone = false;
+    t.allSamples++;
+    if (m.isDead) t.dead++;
     if (m.pet !== undefined && !m.isDead) {
         t.samples++;
         if (m.pet) t.up++;
         else if (t.ownerGone) t.afterOwner++;
+        else if (m.petRecast) t.onRecast++;
+        else if (pulling) t.pulling++;
     }
     const intercepts = m.combat?.petIntercepts ?? 0;
     if (intercepts > t.intercepts) { t.intercepts = intercepts; t.interceptAt = at; }
@@ -263,11 +283,14 @@ function samplePet(t: PetTrack, m: MemberReport, at: number): void {
  * One hold sample for a pet, with the focus reading on it (`on`, its id) or not. A pet that steps in front of its owner reads as the mob on it, and what that starts reads the same until the mob is seen
  * elsewhere: a blow at the owner isn't a focus it drew.
  */
-function holdSample(t: PetTrack, on: number | null, at: number): void {
+function holdSample(t: PetTrack, on: number | null, at: number, ordered: boolean): void {
     if (on === null) { t.steppedIn = null; return; }
     if (at - t.interceptAt <= INTERCEPT_READS_MS) t.steppedIn = on;
     if (t.steppedIn === on) t.intercepted++;
-    else t.drewFocus++;
+    else {
+        t.drewFocus++;
+        if (ordered) t.drewOrdered++;
+    }
 }
 
 /** A member's pet stats; undefined for one with no pet, up or possible. `holdSamples`: the group's, behind the tank hold. */
@@ -282,7 +305,11 @@ function petStats(t: Track, holdSamples: number): PetStats | undefined {
         drewFocus: holdSamples ? pct(p.drewFocus, holdSamples) : null, deaths: p.deaths,
         summons: (t.actions.summon ?? 0) + p.fnfSummons, brokeCc: p.brokeCc,
         ...(p.intercepted ? { intercepted: pct(p.intercepted, holdSamples) } : {}),
+        ...(p.drewFocus ? { drewOrdered: pct(p.drewOrdered, holdSamples) } : {}),
         ...(p.afterOwner ? { lostToOwner: pct(p.afterOwner, p.samples) } : {}),
+        ...(p.onRecast ? { onRecast: pct(p.onRecast, p.samples) } : {}),
+        ...(p.pulling ? { ownerPulling: pct(p.pulling, p.samples) } : {}),
+        ...(p.dead * 2 > p.allSamples ? { ownerDead: pct(p.dead, p.allSamples) } : {}),
     };
 }
 
@@ -403,7 +430,7 @@ export class GroupObserver {
         for (const m of p.members) {
             let t = this.members.get(m.name);
             if (!t) {
-                t = { role: m.role, className: m.className, level0: m.level, level1: m.level, xp0: m.experience, xp1: m.experience, deaths: 0, actions: {}, failures: {}, fightSamples: 0, engageSamples: 0, idle: 0, idleReasons: {}, targeted: 0, inMelee: 0, moving: 0, minHp: m.hp, waitMs: {}, rp0: null, rp1: 0, killedBy: {}, pet: { kind: null, name: '', samples: 0, up: 0, focusSamples: 0, onFocus: 0, drewFocus: 0, intercepts: 0, interceptAt: -Infinity, steppedIn: null, intercepted: 0, ownerGone: false, afterOwner: 0, deaths: 0, brokeCc: 0, hadSummons: false, summons: [], fnfSummons: 0 } };
+                t = { role: m.role, className: m.className, level0: m.level, level1: m.level, xp0: m.experience, xp1: m.experience, deaths: 0, actions: {}, failures: {}, fightSamples: 0, engageSamples: 0, idle: 0, idleReasons: {}, targeted: 0, inMelee: 0, moving: 0, minHp: m.hp, waitMs: {}, rp0: null, rp1: 0, killedBy: {}, pet: { kind: null, name: '', samples: 0, up: 0, focusSamples: 0, onFocus: 0, drewFocus: 0, intercepts: 0, interceptAt: -Infinity, steppedIn: null, intercepted: 0, ownerGone: false, afterOwner: 0, onRecast: 0, pulling: 0, allSamples: 0, dead: 0, drewOrdered: 0, deaths: 0, brokeCc: 0, hadSummons: false, summons: [], fnfSummons: 0 } };
                 this.members.set(m.name, t);
             }
             t.className = m.className;
@@ -416,7 +443,7 @@ export class GroupObserver {
                 t.rp1 = Math.max(t.rp1, m.realmPoints);
             }
             t.minHp = Math.min(t.minHp, m.hp);
-            samplePet(t.pet, m, p.at);
+            samplePet(t.pet, m, p.at, p.orders.phase === 'pull' && p.orders.puller === m.name);
         }
         for (const c of p.contacts) if (c.kind === 'player') this.enemies.add(`${c.regionId}:${c.objectId}`);
         for (const w of p.orders.waiting ?? []) {
@@ -428,7 +455,7 @@ export class GroupObserver {
         this.calm = fighting ? 0 : this.calm + 1;
         if (fighting && !this.fight) {
             this.fight = {
-                start: Math.round((p.at - this.started) / 1000), at: p.at, focus: [], kills: [], petsDown: 0, maxAttackers: 0, deaths: [], retreated: false, attackers: new Set(), holdSamples: 0, heldSamples: 0,
+                start: Math.round((p.at - this.started) / 1000), at: p.at, focus: [], kills: [], petsDown: [], ordered: new Map(), maxAttackers: 0, deaths: [], retreated: false, attackers: new Set(), holdSamples: 0, heldSamples: 0,
                 engageAt: null, engaged: new Set(), firstNuke: new Map(), enemies: new Map(),
             };
         }
@@ -456,7 +483,7 @@ export class GroupObserver {
             f.holdSamples++;
             this.holdSamples++;
             if (focus.target === tank.name) f.heldSamples++;
-            for (const [name, t] of this.members) holdSample(t.pet, name === focus.targetPet ? focus.objectId : null, p.at);
+            for (const [name, t] of this.members) holdSample(t.pet, name === focus.targetPet ? focus.objectId : null, p.at, !!f.ordered.get(name)?.has(focus.objectId));
         }
         // A pet isn't asked to be on a monster before its hold is over: that wait is no idleness. An enemy player has none (assist, prey).
         const petsFrom = focus && focus.kind !== 'player' ? Math.max(f.engageAt ?? 0, focus.engagedAt) + (this.meta.petHoldMs ?? 0) : 0;
@@ -464,9 +491,9 @@ export class GroupObserver {
             if (m.isDead) continue;
             const t = this.members.get(m.name)!;
             t.fightSamples++;
-            // Idle and moving count while engaged only: during a pull, waiting at the base is the job.
+            // Idle and moving count while engaged only: during a pull, waiting at the base is the job. A mezz on it is nothing its list could have done, and no idle finding's advice fits that.
             if (phase === 'engage') t.engageSamples++;
-            if (phase === 'engage' && m.activity.kind === 'idle') { t.idle++; inc(t.idleReasons, m.activity.detail || 'nothing to do'); }
+            if (phase === 'engage' && m.activity.kind === 'idle' && m.activity.detail !== MEZZED) { t.idle++; inc(t.idleReasons, m.activity.detail || 'nothing to do'); }
             // A walk to a crowd-control target is the way to a cast at something else: combatRange's limits, round the focus, have nothing to say about it.
             if (phase === 'engage' && m.activity.kind === 'move' && !m.activity.detail?.startsWith(CC_WALK)) t.moving++;
             if (ordered) f.engaged.add(m.name);
@@ -490,7 +517,7 @@ export class GroupObserver {
         if (!f) return;
         this.fight = null;
         const alive = p ? p.members.filter(m => !m.isDead).length : 1;
-        const outcome = p && alive === 0 ? 'wiped' : f.retreated ? 'retreated' : f.kills.length || f.petsDown ? 'won' : at === Infinity ? 'unfinished' : 'lost';
+        const outcome = p && alive === 0 ? 'wiped' : f.retreated ? 'retreated' : f.kills.length || f.petsDown.length ? 'won' : at === Infinity ? 'unfinished' : f.deaths.length ? 'lost' : 'stopped';
         // The sampler trails the engage order by up to a sample, so a nuke can come first: 0.
         const openerMs: Record<string, number | null> = {};
         if (f.engageAt !== null) {
@@ -501,7 +528,8 @@ export class GroupObserver {
             }
         }
         const fight: FightSummary = {
-            start: f.start, durationMs: (at === Infinity ? this.last : at) - f.at, focus: f.focus, kills: f.kills,
+            // A run that left the engage within a tick saw no focus, and has what died to go by.
+            start: f.start, durationMs: (at === Infinity ? this.last : at) - f.at, focus: f.focus.length ? f.focus : [...new Set([...f.kills, ...f.petsDown])], kills: f.kills,
             adds: Math.max(0, f.attackers.size - 1), maxAttackers: f.maxAttackers,
             tankHold: f.holdSamples ? pct(f.heldSamples, f.holdSamples) : null, openerMs,
             deaths: f.deaths, retreated: f.retreated, outcome,
@@ -549,10 +577,14 @@ export class GroupObserver {
         const t = e.member ? this.members.get(e.member) : undefined;
         if (t) this.credit(t, e);
         else if (e.member && CREDITED.has(e.kind)) this.early.push(e);
+        if (e.kind === 'result' && e.data?.action === 'petAttack' && e.data.success && e.member && typeof e.targetId === 'number' && this.fight) {
+            const on = this.fight.ordered.get(e.member) ?? new Set<number>();
+            this.fight.ordered.set(e.member, on.add(e.targetId));
+        }
         if (e.kind === 'kill') {
             // An enemy pet is worth nothing (GameNPC.cs:2731-2732): no kill in the totals or the fight's line, though its death can end a fight, and that fight was won.
             if (e.data?.pet) {
-                if (this.fight) this.fight.petsDown++;
+                this.fight?.petsDown.push(String(e.data?.name ?? e.text));
             } else {
                 this.kills++;
                 this.fight?.kills.push(String(e.data?.name ?? e.text));
@@ -683,17 +715,19 @@ export class GroupObserver {
 const top = (r: Record<string, number>, n = 2) => Object.entries(r).sort((a, b) => b[1] - a[1]).slice(0, n).map(([k, v]) => `${k} (${v})`).join(', ');
 
 /**
- * Why the focus was on this pet, for pet-aggro: a note for its evidence (none for the plain case) and what to do. pet.holdMs is the advice only for a pet it reached: one ordered in by petControl, or cast by fnfPet.
- * A blow it took for its owner is no part of this (holdSample).
+ * Why the focus was on this pet, for pet-aggro: a note for its evidence (none for the plain case) and what to do. pet.holdMs is the advice only for a pet it reached: one ordered in by petControl, most of that time on that target and in that fight (drewOrdered), or cast by fnfPet.
+ * That goes first for the tank's own too: passive holds it until its order, and a mob it turned by damage after that (20261104-043654) is a hold too short. A blow it took for its owner is no part of this (holdSample).
  */
 function drewCause(name: string, m: MemberStats, r: RunReport): { note: string; advice: string } {
     const p = m.pet!;
     if (p.brokeCc) return { note: r.timeline.filter(l => l.includes(`${name}'s pet broke`)).at(-1) ?? `it broke crowd control ${p.brokeCc}×`, advice: 'What it broke turned on it: see pet-mezz.' };
-    if (m.role === 'tank') return { note: 'the tank\'s own', advice: 'A defensive pet answers the first hit on its owner in ~33 ms, unordered (ControlledMobBrain.cs:614-638), so a hold reaches the tank\'s own only as passive: petControl keeps it passive until its hold is done, so have that on the list (pet.enabled), or set the stance yourself. A mob already on it stays on it.' };
     const list = m.routine ?? [];
-    const ordered = (list.includes('petControl') && (m.actions.petAttack ?? 0) > 0) || (list.includes('fnfPet') && p.summons > 0);
-    if (!ordered) return { note: 'no order', advice: 'It went in with no order, so no hold reaches it: a defensive pet goes for whoever hits its owner (ControlledMobBrain.cs:614-638). Keep the mob off its owner (combatRange, flee, crowd control), or set the pet passive.' };
-    return { note: '', advice: 'Raise pet.holdMs, so the tank has built up its lead before a pet goes in.' };
+    const windowOrdered = list.includes('petControl') && (m.actions.petAttack ?? 0) > 0 && (p.drewOrdered === undefined || p.drewOrdered * 2 >= (p.drewFocus ?? 0));
+    const ordered = windowOrdered || (list.includes('fnfPet') && p.summons > 0);
+    const own = m.role === 'tank' ? 'the tank\'s own' : '';
+    if (ordered) return { note: own, advice: 'Raise pet.holdMs, so the tank has built up its lead before a pet goes in.' };
+    if (own) return { note: own, advice: 'A defensive pet answers the first hit on its owner in ~33 ms, unordered (ControlledMobBrain.cs:614-638), so a hold reaches the tank\'s own only as passive: petControl keeps it passive until its hold is done, so have that on the list (pet.enabled), or set the stance yourself. A mob already on it stays on it.' };
+    return { note: 'no order', advice: 'It went in with no order, so no hold reaches it: a defensive pet goes for whoever hits its owner (ControlledMobBrain.cs:614-638). Keep the mob off its owner (combatRange, flee, crowd control), or set the pet passive.' };
 }
 
 /** The pet-* findings about one member's pet. */
@@ -708,9 +742,15 @@ function petFindings(name: string, m: MemberStats, r: RunReport): Finding[] {
     // A run under a minute is mostly the first summon. A pet it has from elsewhere isn't one it can bring back.
     if (p.kind === 'main' && p.up !== null && p.up < 75 && r.durationMs > 60_000) {
         const failed = top(Object.fromEntries(Object.entries(m.failures).filter(([k]) => k.startsWith('summon:'))), 2);
-        // Most of the time it was down came after its owner's death, which took it (GamePlayer.cs:5988-5989): no setting of a pet's brings that back.
-        const ownerDeath = (p.lostToOwner ?? 0) * 2 >= 100 - p.up;
-        out.push({ severity: 'medium', topic: 'pet-down', member: name, issue: `${name} had no pet ${100 - p.up}% of the run`, evidence: `summoned ${p.summons}×, it died ${p.deaths}×${m.deaths ? `, its owner died ${m.deaths}×` : ''}${failed ? `; ${failed}` : ''}`, suggestion: ownerDeath ? 'It went with its owner, and that is the cause: see the deaths finding. summonPet casts before the walk back, once nothing hostile is within 2500.' : 'Lower pet.summonMana (below it summonPet waits: "pet: saving power"), keep the pet alive (pet.healBelow, a later pet.holdMs), or hold pulls for it (pet.waitForSummon).' });
+        // What most of the time it was down came from, where no setting of its power brings that back. Its owner's death took it (GamePlayer.cs:5988-5989).
+        const most = (share = 0) => share * 2 >= 100 - p.up!;
+        const why = [p.onRecast ? `on recast ${p.onRecast}% of the run` : '', p.ownerPulling ? `its owner pulling ${p.ownerPulling}% of the run` : ''].filter(Boolean).map(w => `; ${w}`).join('');
+        const suggestion = p.ownerDead ? `Its owner was dead ${p.ownerDead}% of the run, and that share of what's left is mostly its first summon: see the deaths finding.`
+            : most(p.lostToOwner) ? 'It went with its owner, and that is the cause: see the deaths finding. summonPet casts before the walk back, once nothing hostile is within 2500.'
+            : most(p.onRecast) ? 'Its summon was on its recast, which no setting of a pet\'s shortens: keep the pet alive (pet.healBelow, a later pet.holdMs), or hold pulls for it (pet.waitForSummon).'
+            : most(p.ownerPulling) ? 'A summon with a cast time waits out its owner\'s own pull, as it would stand him still with the mob coming: hold pulls for it (pet.waitForSummon), or let him rest long enough to cast it first.'
+            : 'Lower pet.summonMana (below it summonPet waits: "pet: saving power"), keep the pet alive (pet.healBelow, a later pet.holdMs), or hold pulls for it (pet.waitForSummon).';
+        out.push({ severity: 'medium', topic: 'pet-down', member: name, issue: `${name} had no pet ${100 - p.up}% of the run`, evidence: `summoned ${p.summons}×, it died ${p.deaths}×${m.deaths ? `, its owner died ${m.deaths}×` : ''}${failed ? `; ${failed}` : ''}${why}`, suggestion });
     }
     return out;
 }
@@ -752,7 +792,9 @@ export function findingsFor(r: RunReport): Finding[] {
             out.push({ severity: 'high', topic: 'deaths', member: name, issue: `${name} died ${m.deaths}×`, evidence, suggestion });
         }
         const interrupts = Object.entries(m.failures).filter(([k]) => k.endsWith(':interrupted')).reduce((a, [, v]) => a + v, 0);
-        if (interrupts >= 2) out.push({ severity: 'medium', topic: 'interrupts', member: name, issue: `${name} was interrupted ${interrupts}×`, evidence: `targeted ${m.targeted}% of fight time, in melee range ${m.inMelee}%`, suggestion: 'Wait longer for the tank (holdMs), stand farther (combatRange), or let flee() run before casting.' });
+        // With no tank there is nobody to wait for or run to: flee stands aside, and it took 10 and 11 in a row live (20261104-044005, -045536).
+        const tankless = !Object.values(r.members).some(x => x.role === 'tank');
+        if (interrupts >= 2) out.push({ severity: 'medium', topic: 'interrupts', member: name, issue: `${name} was interrupted ${interrupts}×`, evidence: `targeted ${m.targeted}% of fight time, in melee range ${m.inMelee}%`, suggestion: tankless ? 'With no tank to wait for or run to: stand farther (combatRange), have crowd control take what is on it, or give it an instant spell, as assist takes one after 2 interrupts in a row by one attacker.' : 'Wait longer for the tank (holdMs), stand farther (combatRange), or let flee() run before casting. For a stretch with the tank released, or over 5000 off, flee stands aside, and an instant spell is what assist takes after 2 interrupts in a row by one attacker.' });
         // Healers and supports idle when nobody needs them; that is fine.
         if ((m.role === 'nuker' || m.role === 'melee') && m.idleInFights > 40) out.push({ severity: 'medium', topic: 'idle', member: name, issue: `${name} was idle ${m.idleInFights}% of fight time`, evidence: `idle because: ${top(m.idleReasons, 3) || 'unknown'}`, suggestion: 'Check its behaviour list and spells for the role; "no power" points at mana (ready.mana, rest), "waiting for the tank" at holdMs.' });
         // A melee member belongs in melee range; these two are about casters.

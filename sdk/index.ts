@@ -793,7 +793,7 @@ export class BotSDK {
         return bestNameMatch(specs, pattern) ?? specs.find(s => matches(specKey(s.name))) ?? null;
     }
 
-    /** Spell by name; pass its lineIndex/spellIndex to sendCastSpell. Highest level wins among equal names. */
+    /** Spell by name; pass its lineIndex/spellIndex to sendCastSpell, or for a hybrid's, those being -1, its skillIndex to sendUseSkill. Highest level wins among equal names. */
     findSpell(pattern: NamePattern): Spell | null {
         const matches = nameMatcher(pattern);
         const spells = this.getSkills().spells.filter(s => matches(s.name));

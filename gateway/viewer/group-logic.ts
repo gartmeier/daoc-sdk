@@ -320,11 +320,11 @@ export function contactListed(c: WorldContact, realms: ReadonlySet<string>): boo
     return c.realm === 'none' || !realms.has(c.realm);
 }
 
-/** A contact's tags in the panel: `pet` on a pet, and what the run's board saw an enemy player do (Contact.healer, Contact.caster). */
+/** A contact's tags in the panel: `pet` on a pet, `shade` on a Necromancer in shade (why no focus picks it), and what the run's board saw an enemy player do (Contact.healer, Contact.caster). */
 export function enemyTags(c: WorldContact): string[] {
     if (c.npc?.isPet) return ['pet'];
-    if (c.kind !== 'player' || !c.board) return [];
-    return [c.board.healer ? 'healer' : '', c.board.caster ? 'caster' : ''].filter(Boolean);
+    if (c.kind !== 'player') return [];
+    return [c.isShade ? 'shade' : '', c.board?.healer ? 'healer' : '', c.board?.caster ? 'caster' : ''].filter(Boolean);
 }
 
 /** A contact's line in the CLI's --live, with what the page's panel has of it: `*` on the focus, level, health, who it is on, tags and crowd control, how many see it and how near. */

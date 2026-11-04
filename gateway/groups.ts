@@ -590,6 +590,7 @@ export function composePassive(group: DiskGroup, src: SessionSources, now: numbe
                 npc: npc ? { isPeaceful: bool(npc.isPeaceful), isTargetable: npc.isTargetable !== false, isPet: bool(npc.isPet) || !!owner, role: strOrNull(npc.role, 32), ...(owner ? { owner } : {}) } : null,
                 // A pet of ours has an owner, whichever member's report this is. A monster's has no realm.
                 enemy: (!!pc || (!!npc && bool(npc.isPet) && !owner)) && o.realm !== u.player.realm && o.realm !== 'none',
+                ...(pc && bool(pc.isShade) ? { isShade: true as const } : {}),
                 seenBy: [u.name],
                 nearest: Infinity,
                 board: null,

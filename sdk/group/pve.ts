@@ -331,7 +331,10 @@ function decide(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
         const focus = kept ?? pickFocus(threats, tank)!;
         // A body pull in progress: the puller brings the focus home before the fight starts.
         // On a member's pet it isn't coming: the fight starts where it stands. No branch comes back from that, so not on a reading a snapshot could still correct (readsOnPet).
-        if (o.phase === 'pull' && o.anchor && kept && threats.length === 1 && (focus.target === o.puller || focus.target === null) && !readsOnPet(focus, now)
+        // So too with the puller's own pet gone in, as petControl sends it once the mob has been on him for its hold: 9 s of hits on a long walk home killed him with the nukers waiting on this phase (a2). A pet parked on stay that answered a blow hasn't gone in, and petControl calls that off; the order goes for it as for any, and leaves it on stay.
+        const pullerPet = p.members.find(m => m.name === o.puller)?.pet;
+        const petWentIn = !!pullerPet && pullerPet.targetId === focus.objectId && (pullerPet.walk !== 'stay' || pullerPet.orderedOn === focus.objectId);
+        if (o.phase === 'pull' && o.anchor && kept && threats.length === 1 && (focus.target === o.puller || focus.target === null) && !readsOnPet(focus, now) && !petWentIn
             && dist(focus, o.anchor) > s.engageRadius && now - (mem.pullStart ?? now) < s.pullTimeoutMs) {
             return { phase: 'pull', reason: `${o.puller} brings ${focus.name} to the base (${Math.round(dist(focus, o.anchor))} away)` };
         }

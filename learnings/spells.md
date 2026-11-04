@@ -13,7 +13,7 @@ nuke.details;                                   // from the server: castTimeMs, 
 
 - **The tooltip's wording is its own.** `SpellInfo.description` comes from the database and `spell.details.description` from the server's handler, and they differ: "Heals the target for 36" against "Heals the target for 38 hit points.", "increased by 123%" against "increased to 123% of normal". Test a regex on what the client really holds. A routine reading a tooltip's wording silently never fired on the database's.
 - **A negative heal value is a percent of the caster's own full health,** not the target's (`HealSpellHandler.cs:33`): "Heals the target for 33% hit points." A Healer with 600 health heals 198 with it, on a tank of any size.
-- **A negative `powerCost` or `info.power` is a percent of the pool:** Nature's Ward -8 costs 8 % of full power (`SpellHandler.cs` PowerCost). 267 spell rows, among them pets, skins and hybrid self-buffs. A focus caster pays 120 % of any cost with no focus item, down to 80 % with a good one, so `info.power` understates it ([pets.md](pets.md#summoning)).
+- **A negative `powerCost` or `info.power` is a percent of the pool:** Nature's Ward -8 costs 8 % of full power (`SpellHandler.cs` PowerCost). 267 spell rows, among them pets, skins and hybrid self-buffs. A focus caster pays 120 % of any cost with no focus item, down to 80 % with a good one and the spec for the spell, so `info.power` understates it ([pets.md](pets.md#summoning)).
 - `info.target` is one of `Enemy`, `Self`, `Realm`, `Group`, `Pet` or `Corpse` (resurrection: `bot.resurrect`, learnings/death-and-rest.md).
 - Common `info.type` values: `DirectDamage`, `Bolt`, `DamageOverTime`, `Lifedrain`, `Heal`, `BaseArmorFactorBuff`, `DamageAdd`, `DamageShield`, `SpeedDecrease`, `Mesmerize`.
 - **Hybrid classes** (Fighter-type classes that later gain spells, and the Cleric/Acolyte line) keep their spells in the skills list instead of a spell line: `lineIndex` is -1 and `skillIndex` is set. `castSpell` handles both forms.
@@ -25,7 +25,7 @@ const c = await bot.castSpell(nuke, mob);       // target: NPC, player, name, ob
 // c.completed, c.damage, c.resisted, c.effectImmune, c.castTimeMs, c.reason, c.retryAfterMs
 ```
 
-1. Walks into range (85 % of the spell's range from the DB, else 1500) unless `approach: false`.
+1. Walks into range unless `approach: false`, stopping inside the spell's range from the DB, else 1500, by the smaller of 10 % or 150, in 3D, as the target reads while it goes. A target that moves on from there reads `out_of_range` at the cast's end, and the next walk at it stops short by what it left in a cast, at most at half the range: from the margin again a target walking off at 100 failed for as long as it walked. A target that dies on the way ends the walk: `already_dead`, with `targetDied`. So does a friend's death: a healer doesn't walk into what killed its friend.
 2. Selects the target every time, even when the state already shows it: the server drops our target when we die and doesn't tell the client, so the snapshot can show a stale one after a release. On "You must select a target" it selects again and retries once. Then it stops moving, stands up if sitting, and faces the target.
 3. Casts, then waits for "You begin casting a X spell!".
 4. Waits for completion. "You cast a X spell!" (SpellHandler.cs:1337) counts at once. Weaker evidence counts only once the cast time is up: a spell effect, a resist, "Your X hits" for this spell, or a bare "You hit the Y for N damage!". "Extra damage" and "additional" lines (damage adds, procs, crits) never count, and an interrupt after weak evidence still wins. `c.damage` sums only this spell's hits.
@@ -38,8 +38,9 @@ const c = await bot.castSpell(nuke, mob);       // target: NPC, player, name, ob
 
 | Reason | Meaning / what to do |
 |---|---|
-| `interrupted` | hit while casting ("The Y attacks you and your spell is interrupted!"); retry after `retryAfterMs` (~2 s) |
+| `interrupted` | hit while casting ("The Y attacks you and your spell is interrupted!"); retry after `retryAfterMs` (2.2 s, the server's own wait) |
 | `must_wait` | "You must wait N seconds to cast a spell!"; `retryAfterMs` says how long |
+| `already_dead` | the target died before the cast, in the walk or during it (`targetDied`). The server's cast runs on to its end, and the next `castSpell` waits that out ([pets.md](pets.md#traps)) |
 | `no_power` | out of mana: `bot.rest({ manaPercent: 90 })` |
 | `out_of_range` / `not_visible` | approach failed or `approach: false`; walk closer and face the target |
 | `no_target` | "You must select a target for this spell!" |
@@ -54,7 +55,9 @@ const c = await bot.castSpell(nuke, mob);       // target: NPC, player, name, ob
   - **So in melee a cast almost never lands:** a Warden tried 7 times and all 7 were interrupted, 5.1 s each.
   - **A mob below your level sometimes skips the timer,** 5 % per level (`GameLiving.cs:707`), so about 10 % at two levels below and never at your level or above.
   - **Past the halfway mark a swing doesn't interrupt** (`hard_interrupt_on_attacked` is off). Focus spells still do, and moving and crowd control still end a cast. An `Uninterruptible` spell ignores swings, not moving.
-  - **Your own swing holds a timer too,** checked when the cast begins: "You must wait N seconds to cast a spell!" (`must_wait`). Stop swinging first, and the shared `heal` behaviour does.
+  - **Your own swing holds a timer too,** checked when the cast begins: "You must wait N seconds to cast a spell!" (`must_wait`). Stop swinging first, and the shared `heal` behaviour does. A cast broken at the halfway mark starts one of 2.2 s the same way, with no swing of yours (`SpellHandler.cs:372`).
+  - **A swing request cuts your own cast at once,** even one that can't land: "Your spell is cancelled!" (`AttackComponent.cs:661-665`). A walk doesn't: the client holds it for the cast's time + 250 ms (`client/session.ts:501`).
+  - **Quickcast gets one through:** 2 s, immune to the interrupt, at twice the power, off for 30 s after (`SpellHandler.cs:389`, `:1226`). 7 of 7 with a mob casting at a Theurgist.
   - **A swing at someone else sets nothing on you:** a Warden fighting beside a tank landed 13 heals out of 13 in two runs. A fighter who heals should hold the heal while a mob is on it and cast once the tank has the mob back.
 - **Open from range:** buff yourself, nuke from as far away as the spell allows, then finish in melee or retreat. `bots/examples/caster.ts` does exactly this.
   - Don't walk into the camp first. Walking to a spawn point (tolerance 300) left a fresh Mage 255 units from a puny skeleton: one cast for 4 damage, two interrupts, then it died in melee.

@@ -29,6 +29,8 @@ import type { BattlegroundLayout } from '../sdk/group/rvr';
 /** Nearby players read per bot state (a client reports far fewer). */
 const MAX_NEARBY = 500;
 const MAX_ENEMIES = 300;
+/** An enemy pet's last blow says what it aims at for this long (the board's PLAYER_AIM_MS). */
+const PET_AIM_MS = 6000;
 const MAX_ROUTE = 200;
 const REALMS: readonly string[] = ['none', 'albion', 'midgard', 'hibernia'] satisfies Realm[];
 
@@ -119,7 +121,7 @@ export interface RegionRun {
     size: number;
 }
 
-/** A player of another realm that a bot sees and that is none of our bots (a human who joined), by object id. */
+/** A player of another realm that a bot sees and that is none of our bots (a human who joined), by object id; or such a player's pet (isPet). */
 export interface RegionEnemy {
     objectId: number;
     name: string;
@@ -134,6 +136,10 @@ export interface RegionEnemy {
     inCombat: boolean;
     /** Character names of the bots that see it. */
     seenBy: string[];
+    /** An enemy pet: the server sends every client the flag and the realm, never who owns it (PacketLib1124.cs:186-187). Absent for a player. */
+    isPet?: true;
+    /** An enemy pet's aim: what its entry names, else what it last hit (petAim); null with neither. Absent for a player, whose target no client is told. */
+    targetId?: number | null;
 }
 
 /** A keep of the region's battleground layout (sdk/group/rvr.ts). */
@@ -326,10 +332,19 @@ export function listRegions(src: Pick<RegionSources, 'sessions' | 'groupOf'>): R
     return [...byRegion.values()].sort((a, b) => b.bots - a.bots || a.regionId - b.regionId);
 }
 
+/** What an enemy pet aims at: a caster's entry names that only on its victim's client and for moments (live), and its blows reach every client in view. */
+function petAim(state: BotWorldState, n: { objectId: number; targetObjectId?: unknown }): number | null {
+    const named = numOrNull(n.targetObjectId);
+    if (named !== null) return named;
+    const now = num(state.timestamp);
+    const blow = arr(state.combatEvents).findLast(e => isObj(e) && e.attackerObjectId === n.objectId && (e.kind === 'melee' || e.kind === 'spellEffect') && now - num(e.receivedAt) < PET_AIM_MS);
+    return numOrNull(blow?.targetObjectId);
+}
+
 /**
  * One region's frame: its in-game bots (sorted by username), the current runs
  * with a member there, the enemy players the shown bots see that are none of
- * ours (deduplicated by object id, the freshest state first) and the layout's
+ * ours and then their pets (deduplicated by object id, the freshest state first) and the layout's
  * keeps. `may(username)` says whether the request may read a bot's state or,
  * for a run, its leader's group. Every bot here counts as ours, shown or not,
  * so a hidden bot never turns up as an enemy marker.
@@ -340,9 +355,12 @@ export function composeRegion(regionId: number, src: RegionSources, now: number,
     const bots = shownHere.map(h => botView(h, src, now));
     const byObject = new Map(bots.map(b => [b.objectId, b]));
     const ours = new Set(here.map(h => num(h.p.objectId, NaN)));
+    // Another realm's bot's pet is ours as that bot is: only a stranger's is a marker. A hidden bot's too.
+    for (const h of here) for (const id of [h.state.pet?.objectId, ...arr(h.state.summons)]) if (Number.isFinite(id)) ours.add(id as number);
 
     const enemies = new Map<number, RegionEnemy>();
-    for (const h of [...shownHere].sort((a, b) => b.session.lastStateReceivedAt - a.session.lastStateReceivedAt)) {
+    const seers = [...shownHere].sort((a, b) => b.session.lastStateReceivedAt - a.session.lastStateReceivedAt);
+    for (const h of seers) {
         const seer = str(h.p.name, 64) || h.username;
         const own = realmOf(h.p.realm);
         for (const o of arr(h.state.nearbyPlayers).slice(0, MAX_NEARBY)) {
@@ -359,6 +377,28 @@ export function composeRegion(regionId: number, src: RegionSources, now: number,
                 objectId: o.objectId, name: str(o.name, 64), level: num(o.level), realm,
                 x: o.x, y: o.y, z: num(o.z), heading: num(o.heading), hp: num(o.healthPercent),
                 isDead: bool(o.isDead), inCombat: bool(o.inCombat), seenBy: [seer],
+            });
+        }
+    }
+    // After every player: a pet takes no player's place in a full list.
+    for (const h of seers) {
+        const seer = str(h.p.name, 64) || h.username;
+        const own = realmOf(h.p.realm);
+        for (const n of arr(h.state.nearbyNpcs).slice(0, MAX_NEARBY)) {
+            if (!isObj(n) || !bool(n.isPet) || !Number.isFinite(n.objectId) || !Number.isFinite(n.x) || !Number.isFinite(n.y) || ours.has(n.objectId)) continue;
+            const realm = realmOf(n.realm);
+            if (realm === 'none' || realm === own) continue;
+            const known = enemies.get(n.objectId);
+            if (known) {
+                if (!known.seenBy.includes(seer)) known.seenBy.push(seer);
+                known.targetId ??= petAim(h.state, n);
+                continue;
+            }
+            if (enemies.size >= MAX_ENEMIES) continue;
+            enemies.set(n.objectId, {
+                objectId: n.objectId, name: str(n.name, 64), level: num(n.level), realm,
+                x: n.x, y: n.y, z: num(n.z), heading: num(n.heading), hp: num(n.healthPercent),
+                isDead: false, inCombat: bool(n.inCombat), seenBy: [seer], isPet: true, targetId: petAim(h.state, n),
             });
         }
     }

@@ -10,7 +10,7 @@ import {
     contactLine, listedContacts, logLineKind, mapLabel, mapRegion, memberPetRow, memberRealms, mergeEvents, npcShown, petLine, petSide, petTitle, phaseClass, retryRuns, roleLetter, runFailed, runPill, runRegion, timeLeft,
     type FeedFilters,
 } from './group-logic';
-import { authHeaders, isOwnPet, petPanel, REGION_RETRY_MS, shouldLoadRegion, unseenTarget } from './logic';
+import { authHeaders, enemyAims, enemyHeading, enemyWord, isOwnPet, petPanel, REGION_RETRY_MS, shouldLoadRegion, unseenTarget } from './logic';
 import { buildAppBundle, buildBundle } from './routes';
 import { drawPass } from './ui-kit';
 import type { GroupMemberView, MemberPlayer, PassiveEvent, RunView, WorldContact } from '../group-types';
@@ -661,6 +661,13 @@ describe('group page logic', () => {
         expect(listedContacts([], members)).toEqual([]);
     });
 
+    test('enemyTags: a shade, whatever the board has of it: "Briton L24 100%, seen 3, 1166 away" for model 822, never picked, no tag to say why', () => {
+        const shade = contact({ kind: 'player', npc: null, realm: 'midgard', enemy: true, name: 'Briton', level: 24, isShade: true });
+        expect(enemyTags(shade)).toEqual(['shade']);
+        expect(enemyTags({ ...shade, board: board({ caster: true }) })).toEqual(['shade', 'caster']);
+        expect(contactLine(shade, null)).toContain('[shade]');
+    });
+
     test('enemyTags: what the board saw an enemy player do; nothing for monsters or without a run', () => {
         const enemy = (b: Partial<NonNullable<WorldContact['board']>>) => contact({ kind: 'player', npc: null, realm: 'midgard', enemy: true, board: board(b) });
         expect(enemyTags(enemy({ healer: true, caster: true, casting: false }))).toEqual(['healer', 'caster']);
@@ -842,5 +849,27 @@ describe('group page logic', () => {
         expect(['tank', 'healer', 'support', 'nuker', 'melee'].map(roleLetter).join('')).toBe('THSNM');
         expect(roleLetter(null)).toBe('?');
         expect(roleLetter('toString')).toBe('?');
+    });
+});
+
+describe('enemy pets on the region page', () => {
+    type Enemy = { objectId: number; name: string; x: number; y: number; isPet?: true; targetId?: number | null };
+    const player: Enemy = { objectId: 21, name: 'Troll', x: 100, y: 200 };
+    const pet: Enemy = { objectId: 600, name: 'spirit warrior', x: 300, y: 400, isPet: true, targetId: 11 };
+
+    test('each says what it is', () => {
+        expect(enemyWord(player)).toBe('Enemy player');
+        expect(enemyWord(pet)).toBe('Enemy pet');
+    });
+
+    test('the panel\'s count tells them apart, and reads as it did with no pet', () => {
+        expect(enemyHeading([player, { ...player, objectId: 22 }])).toBe('2 enemy players');
+        expect(enemyHeading([player, pet])).toBe('1 enemy player, 1 enemy pet');
+        expect(enemyHeading([pet])).toBe('0 enemy players, 1 enemy pet');
+    });
+
+    test('a line from a pet to what it aims at, wherever that stands on the map; none with nothing known', () => {
+        const at = (id: number) => (id === 11 ? { x: 1, y: 2 } : null);
+        expect(enemyAims([player, pet, { ...pet, objectId: 601, targetId: 99 }, { ...pet, objectId: 602, targetId: null }], at)).toEqual([{ from: pet, to: { x: 1, y: 2 } }]);
     });
 });

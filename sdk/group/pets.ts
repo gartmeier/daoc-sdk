@@ -23,11 +23,11 @@ import type { BotActions } from '../actions';
 import { firstReasonLine, PET_ANSWERS, PET_REFUSALS, PVP_IMMUNE_RETRY_MS } from '../actions-helpers';
 import type { BotSDK } from '../index';
 import type { NearbyNpc, NearbyPlayer, PetCommand, PetState, PlayerState } from '../types';
-import { beyondLeash, buffRetryMs, ccHolds, claimedBy, farFromFight, foeInView, holdState, isDown, QUIET_PHASES, REST_MANA_UP_TO, SAVING_POWER, stopSwinging, underGuards, type TacticsSettings } from './behaviors';
+import { beyondLeash, buffRetryMs, ccHolds, ccSpellFor, claimedBy, farFromFight, foeInView, holdState, isDown, loneFocus, QUIET_PHASES, REST_MANA_UP_TO, SAVING_POWER, stopSwinging, underGuards, type TacticsSettings } from './behaviors';
 import { isAlive, readsOnPet } from './blackboard';
 import { ROLE_FIGHT, type Character } from './character';
 import type { Behavior, MemberContext } from './member';
-import { Spellbook } from './spells';
+import { Spellbook, type SpellPick } from './spells';
 import { onMap } from './terrain';
 import type { Contact, MemberReport } from './types';
 
@@ -68,8 +68,10 @@ const ATTACK_THROTTLE_MS = 3000;
 const CC_CLAIM_MS = 4000;
 /** A summon stands still for 6 s: not with an enemy player this near. */
 const SUMMON_ENEMY_RADIUS = 2500;
-/** Between fights, petHeal tops the pet up below this: its own regen is nothing for ~20 s after a fight, then ~10 % per 6 s (live). */
+/** Between fights, petHeal tops the pet up below this: its own regen can be nothing for up to ~37 s after a fight, the last in-combat tick being 30 s off (GameLiving.cs:2448), then ~10 % per 6 s (live). */
 const QUIET_HEAL_BELOW = 80;
+/** A pet below this gets its heal ahead of crowd control, with PET_HEAL_RESERVE left after it: real pets reached 9 % with their owner at full power and a cc turn every turn (r1on to r8on: 0 of them healed). */
+const PET_HEAL_URGENT = 25;
 /** ... but only with this much power, as for a heal on a member out of combat. */
 const QUIET_HEAL_MANA = 50;
 /** In a fight a heal on friends goes on the pet only with this % of the pool left after it: those are the group's heals, out of one pool. A Pet-target heal is a tenth of that. */
@@ -95,6 +97,12 @@ const SELECTS_NOTHING: ReadonlySet<string> = new Set(['move', 'flee', 'release',
 
 /** Why a summon doesn't go. */
 const OFF_THE_MAP = 'pet: off the map, no summon';
+/** In a member's memory: its list has summonInOurPull, so pull hands the turn back for it. */
+const SUMMONS_IN_PULL = 'summonsInPull';
+/** A retreat's follow goes again, off the same target, only for a pet this far from us. */
+const RETREAT_FOLLOW_AGAIN = 300;
+/** A run's start, for petBuffAtStart: its first minute. Then the buffs left wait for a quiet phase, as ever. */
+const PET_BUFF_START_MS = 60_000;
 
 const dist = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y);
 /** A setting that can come in as a flag's text (--pet.enabled=false). */
@@ -119,7 +127,12 @@ export function waitsForPet(m: Pick<MemberReport, 'capabilities' | 'pet'>, s: Pa
 /** Whether it has crowd control on it that holds (ccHolds), or on its way to it (orders, another member's cast, or our own turn's): a swing would break that. */
 function underCc(ctx: MemberContext<TacticsSettings>, c: Contact): boolean {
     const turn = ctx.turn();
-    return ccHolds(ctx, c) || ctx.orders().cc.some(a => a.targetId === c.objectId) || claimedBy(ctx, 'cc', c.objectId, CC_CLAIM_MS).length > 0 || (turn?.kind === 'cc' && turn.targetId === c.objectId);
+    const ownTurn = turn?.kind === 'cc' && turn.targetId === c.objectId;
+    const assignedTo = (a: { targetId: number; by: string }) => a.targetId === c.objectId;
+    const ours = ownTurn || ctx.orders().cc.some(a => assignedTo(a) && a.by === ctx.name);
+    // Our own root on a focus with nothing else free: it will have done its job as it lands (ccHolds), and the pet would only come off to go straight back, 5-6 s of hits for it (20261104-054051).
+    const ownRoot = ours && loneFocus(ctx, c) && ccSpellFor(ctx, c)?.kind === 'root';
+    return ccHolds(ctx, c) || ctx.orders().cc.some(a => assignedTo(a) && !(ownRoot && a.by === ctx.name)) || claimedBy(ctx, 'cc', c.objectId, CC_CLAIM_MS).length > 0 || (ownTurn && !ownRoot);
 }
 
 /** Whether this member brings the mob itself: the tank, or the puller of this focus, through the fight its pull became (the orders name no puller then). */
@@ -171,17 +184,37 @@ function orderInForce(ctx: MemberContext, id: number): boolean {
     return pet.targetObjectId === id || (pet.targetObjectId === null && Date.now() - last.at < ATTACK_THROTTLE_MS);
 }
 
+/** PetReport.orderedOn: the target of our attack order, while it stands. Null with none. */
+export function petOrderedOn(ctx: MemberContext): number | null {
+    const last: AttackOrder | undefined = ctx.memory.get('petAttack');
+    return last && orderInForce(ctx, last.id) ? last.id : null;
+}
+
 /**
- * The orders' focus if a pet may go for it now: engaged, alive, in our region and our client's view, not under crowd control (a root with nothing else free in the fight has done its job: ccHolds), inside the leash,
+ * A long pull-back: the mob has reached the puller, and pet.holdMs on from its first swing at him the pull still stands. His pet may go in, which ends the pull where it stands (decidePve): held to the end of the walk it stood by 9 s of hits
+ * until he died en route, with the nukers waiting on the phase (a2). A short walk home is an engage by then. His own swings don't count: the pull starts with one. Nor do its swings from before this pull: a mob pulled again after a fight stays a contact, and its old swing would send the pet at it where it stands, with the group at the base.
+ */
+function pullReached(ctx: MemberContext<TacticsSettings>, s: PetSettings, mob: Contact): boolean {
+    const o = ctx.orders();
+    if (o.phase !== 'pull' || o.puller !== ctx.name || mob.kind !== 'npc' || mob.isPet) return false;
+    const me = ctx.me().objectId;
+    const since = Math.max(mob.firstSeen, o.issuedAt);
+    const swing = ctx.sdk.getState()?.combatEvents.find(e => e.kind === 'melee' && e.attackerObjectId === mob.objectId && e.targetObjectId === me && e.receivedAt >= since);
+    return !!swing && Date.now() >= swing.receivedAt + (s.holdMs ?? ctx.settings.holdMs);
+}
+
+/**
+ * The orders' focus if a pet may go for it now: engaged, or on a long pull-back (pullReached), alive, in our region and our client's view, not under crowd control (a root with nothing else free in the fight has done its job: ccHolds), inside the leash,
  * and held by the tank for pet.holdMs (an enemy player at once, as for assist). A pet takes nothing else: no add, no stand-in for a
  * focus beyond the leash. Ids are per region (Region.cs:151, :779), so from a bind elsewhere an NPC beside us can hold the focus's.
  */
 function prey(ctx: MemberContext<TacticsSettings>, s: PetSettings): { mob: Contact; seen: NearbyNpc | NearbyPlayer } | null {
     const mob = ctx.focus();
-    if (ctx.orders().phase !== 'engage' || !mob || mob.regionId !== ctx.me().regionId || mob.stale || !isAlive(mob) || underCc(ctx, mob) || beyondLeash(ctx, mob)) return null;
+    const reached = !!mob && pullReached(ctx, s, mob);
+    if ((ctx.orders().phase !== 'engage' && !reached) || !mob || mob.regionId !== ctx.me().regionId || mob.stale || !isAlive(mob) || underCc(ctx, mob) || beyondLeash(ctx, mob)) return null;
     const seen = foeInView(ctx, mob.objectId);
     if (!seen || isDown(ctx, seen)) return null;
-    return holdDone(ctx, s, mob) ? { mob, seen } : null;
+    return reached || holdDone(ctx, s, mob) ? { mob, seen } : null;
 }
 
 /**
@@ -206,7 +239,7 @@ export function castRunning(ctx: MemberContext): boolean {
 }
 
 /**
- * Whether an attack order's select may go now: it moves the server's target (0xB0), which a cast's end check reads and a swing follows. So not while the turn runs on another target, whose cast
+ * Whether an attack order's select may go now: it moves the server's target (0xB0), which a swing follows and a cast reads at its begin (SpellHandler.cs:451-453). So not while the turn runs on another target, whose cast
  * would land where the select went (castSpell selects, then sends), and not in our own cast or swing at anything else. With that target selected already there is nothing to disturb: a tank's killNpc has the focus.
  * A swing with nothing to hit, on a corpse or at what has left the world, is nothing to disturb either: 8 s of it held an order live, with the pet following while the focus stood free (run 20261104-044005).
  */
@@ -264,7 +297,8 @@ async function orderAttack(ctx: MemberContext, id: number): Promise<void> {
     const r = await ctx.sdk.sendPetCommand('attack', id);
     if (r.success) return;
     sent.answered = true;
-    ctx.result('petAttack', r, id);
+    // The focus went between the read and the send, and the next tick orders the next one: as for no_response in attackAnswer, no failure.
+    if (r.reason !== 'unknown_object') ctx.result('petAttack', r, id);
 }
 
 /**
@@ -340,7 +374,7 @@ export function petHoldOf(settings: unknown): number | undefined {
  * The window pet follows the orders. In a fight it goes for the focus (prey); off a target it may not have (crowd-controlled, beyond
  * the leash) it comes away. With a focus or a target beyond the leash (or under a keep's guards) and nothing to order it onto, it also stays passive: a defensive pet goes for
  * whoever hits its owner, from any range, and a follow holds only until the next hit (ControlledMobBrain.cs:614-638, GamePlayer.cs:12200-12209). An attack order lifts that.
- * On retreat it turns passive and follows. Otherwise a pet's fight doesn't start on its own: it comes off the focus during a pull (the tank's to bring) and off a stray fight
+ * On retreat it turns passive and follows. Otherwise a pet's fight doesn't start on its own: it comes off the focus during a pull (the tank's to bring, until the mob has been on the puller for his pet's hold: pullReached) and off a stray fight
  * between fights, which would slow our regen (GamePlayer.cs:2318-2320), and in a strategy that walks off with a threat in sight off any (pet.strayFightsOff).
  *
  * It runs on the member's side tick, every 250 ms, between and during turns: as a turn it waited for a tank's killNpc to the mob's death and a nuker's walk and cast, and a pet stayed on an add and
@@ -367,7 +401,12 @@ export const petControl = (): Behavior<TacticsSettings> => ({
         if (parked && o.focus === null && !inOurFight(ctx, pet)) return false;
         if (o.phase === 'retreat') {
             if (pet.aggression !== 'passive') await order(ctx, 'stance', 'passive');
-            if (pet.walk !== 'follow' || pet.targetObjectId !== null) await order(ctx, 'walk', 'follow');
+            // The first follow off a target always goes. After it, a pet beside us with that target still in its entry has nothing left to hear: r20on's sent 5 in 16 s, 3 of them at about 110.
+            const told = ctx.memory.get('petFollowedOff') === pet.targetObjectId && (ctx.sdk.getPet()?.distance ?? Infinity) <= RETREAT_FOLLOW_AGAIN;
+            if (pet.walk !== 'follow' || (pet.targetObjectId !== null && !told)) {
+                await order(ctx, 'walk', 'follow');
+                ctx.memory.set('petFollowedOff', pet.targetObjectId);
+            }
             return false;
         }
         const on = pet.targetObjectId;
@@ -384,7 +423,7 @@ export const petControl = (): Behavior<TacticsSettings> => ({
         if (!parked && pet.aggression !== stance) await order(ctx, 'stance', stance);
         // Calling it off leaves a parked pet parked: both orders end its fight (GamePlayer.cs:12200-12225).
         const away = parked ? 'stay' : 'follow';
-        if (o.phase === 'engage') {
+        if (o.phase === 'engage' || go) {
             // Read again: the stance order above can have taken a moment, and the turn can have announced itself meanwhile.
             if (go && go.seen.distance <= PET_ORDER_RANGE && selectFree(ctx, go.mob.objectId)) {
                 const stands = on === go.mob.objectId && standsIdle(ctx, pet, go.seen);
@@ -406,18 +445,19 @@ export const petControl = (): Behavior<TacticsSettings> => ({
 
 /**
  * Our own crowd control is about to go on `target`: our pet comes off it first, and turns passive as well if the mob is on it, or it hits back (run 163503: root 16:36:00.307, the pet's swing .505, its follow .738).
- * A turret, a shade's pet and a run with no pets stay out of it, as for petControl. It stays off: underCc reads our own turn and the mark that follows it.
+ * A turret, a shade's pet and a run with no pets stay out of it, as for petControl. It stays off: underCc reads our own turn and the mark that follows it. Not for a root on a focus with nothing else free, which ccHolds lets a pet break: off and back it lost 5-6 s of hits for a root it broke 3 s later, three times of three (20261104-054051).
  */
-export async function petOffForCc(ctx: MemberContext<TacticsSettings>, target: Contact): Promise<void> {
+export async function petOffForCc(ctx: MemberContext<TacticsSettings>, target: Contact, kind: 'mezz' | 'root' = 'mezz'): Promise<void> {
     const pet = ctx.sdk.getState()?.pet;
     if (!pet || pet.targetObjectId !== target.objectId || !petSettings(ctx).enabled || ctx.me().isShade || ctx.spells.knowsTurret()) return;
+    if (kind === 'root' && loneFocus(ctx, target)) return;
     if (target.targetPet === ctx.name && pet.walk !== 'stay') await order(ctx, 'stance', 'passive');
     await order(ctx, 'walk', pet.walk === 'stay' ? 'stay' : 'follow');
 }
 
 /**
  * Summon the main pet we don't have, before the walk back if we just released. Not with anything hostile within SUMMON_ENEMY_RADIUS of us (the pull's mob on the way, a hostile focus, an
- * enemy player), which is what stops it, and not the phase: a roam's walk to a passive mob is an engage with no threat, and a fight 25000 off is no reason at a bind point. Never in a retreat or our own pull, and never off the map.
+ * enemy player), which is what stops it, and not the phase: a roam's walk to a passive mob is an engage with no threat, and a fight 25000 off is no reason at a bind point. Never in a retreat or, with a cast time, our own pull, and never off the map.
  * Below the power for it the turn goes on, and the rest below stops as soon as there is enough (REST_MANA_UP_TO, shown as SAVING_POWER): rested on to rest.mana it would
  * summon only when a pull cut that short, past the ready gate, and go into the fight on what was left. Summon spell, power and timer: Spellbook.summon.
  */
@@ -427,17 +467,9 @@ export const summonPet = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         const s = petSettings(ctx);
         ctx.memory.delete(REST_MANA_UP_TO);
-        // undefined: a client from before pets.
-        if (!s.enabled || ctx.sdk.getState()?.pet !== null || ctx.bot.isDead()) return false;
-        const sp = ctx.spells.summon();
-        if (!sp || sp.spell.cooldownRemaining > 0) return false;
-        const o = ctx.orders();
-        if (o.phase === 'retreat' || (o.phase === 'pull' && o.puller === ctx.name)) return false;
+        const sp = summonFree(ctx, s);
+        if (!sp) return false;
         const me = ctx.me();
-        const near = (c: Contact) => c.regionId === me.regionId && dist(c, me) < SUMMON_ENEMY_RADIUS;
-        if (ctx.threats().some(near)) return false;
-        if (Date.now() < (ctx.memory.get('summonRetry') ?? 0)) return false;
-        if (ctx.picture().contacts.some(c => c.kind === 'player' && !c.stale && near(c))) return false;
         if (!onMap(me.regionId, me, SUMMON_MAP_MARGIN)) return ctx.skip(OFF_THE_MAP);
         const cost = ctx.spells.powerOf(sp);
         if (me.mana < cost || me.manaPercent < s.summonMana) {
@@ -451,6 +483,50 @@ export const summonPet = (): Behavior<TacticsSettings> => ({
         return true;
     },
 });
+
+/** The summon, if nothing but its power and the map speaks against it now (summonPet). An instant one stands still for nothing, so in our own pull the mob we are bringing is no reason. */
+function summonFree(ctx: MemberContext<TacticsSettings>, s: PetSettings): SpellPick | null {
+    // undefined: a client from before pets.
+    if (!s.enabled || ctx.sdk.getState()?.pet !== null || ctx.bot.isDead()) return null;
+    const sp = ctx.spells.summon();
+    if (!sp || sp.spell.cooldownRemaining > 0) return null;
+    const o = ctx.orders();
+    const ownPull = o.phase === 'pull' && o.puller === ctx.name;
+    if (o.phase === 'retreat' || (ownPull && sp.castTime > 0)) return null;
+    const me = ctx.me();
+    const near = (c: Contact) => c.regionId === me.regionId && dist(c, me) < SUMMON_ENEMY_RADIUS;
+    if (ctx.threats().some(c => near(c) && !(ownPull && c.objectId === o.focus))) return null;
+    if (Date.now() < (ctx.memory.get('summonRetry') ?? 0)) return null;
+    if (ctx.picture().contacts.some(c => c.kind === 'player' && !c.stale && near(c))) return null;
+    return sp;
+}
+
+/**
+ * summonPet in our own pull, for one with no cast time (PetKit.instantSummon): it costs the walk nothing, and pull takes every turn of it, above where summonPet stands. A Hunter's on its recast came up at the release tick of an 18 s pull, and he died with none (a1).
+ */
+export const summonInOurPull = (): Behavior<TacticsSettings> => {
+    const summon = summonPet();
+    return {
+        ...summon,
+        name: 'summonInOurPull',
+        run(ctx) {
+            const o = ctx.orders();
+            if (o.phase !== 'pull' || o.puller !== ctx.name) return false;
+            ctx.memory.set(SUMMONS_IN_PULL, true);
+            return ctx.spells.summon()?.castTime === 0 ? summon.run(ctx) : false;
+        },
+    };
+};
+
+/** Whether pull's walk should hand the turn back to summonInOurPull, with its recast over: on a list without that it would only cut the walk up. */
+export function instantSummonDue(ctx: MemberContext<TacticsSettings>): boolean {
+    if (!ctx.memory.get(SUMMONS_IN_PULL)) return false;
+    const s = petSettings(ctx);
+    const sp = summonFree(ctx, s);
+    if (sp?.castTime !== 0) return false;
+    const me = ctx.me();
+    return me.mana >= ctx.spells.powerOf(sp) && me.manaPercent >= s.summonMana && onMap(me.regionId, me, SUMMON_MAP_MARGIN);
+}
 
 /**
  * summonPet on the way back from a release to a fight, where rejoinFight takes every turn and ends beside the fight, where its gate no longer lets a summon go. Near the fight this has no say:
@@ -512,6 +588,9 @@ const isFullyHealed = (line: string, name: string) => line.endsWith(' is fully h
 /** A summoned pet's full health by its level, unbuffed: CON 30 + level - 1, a template's percent aside (MaxHealthCalculator.cs:102, GameSummonedPet.cs SetStats; ServerProperties pet_autoset_con_base, _multiplier). */
 export const petMaxHp = (level: number): number => Math.round(17 * (level + 1) + 0.535 * level * level + (30 + Math.max(1, level - 1) - 25) * 3);
 
+/** What a heal on it has to cover, as far as its level tells (petMaxHp). */
+const petMissingHp = (pet: NearbyNpc): number | undefined => (pet.level ? Math.round(petMaxHp(pet.level) * (100 - pet.healthPercent) / 100) : undefined);
+
 export const petHeal = (): Behavior<TacticsSettings> => ({
     name: 'petHeal',
     interruptible: false,
@@ -523,7 +602,7 @@ export const petHeal = (): Behavior<TacticsSettings> => ({
         const quiet = QUIET_PHASES.has(ctx.orders().phase) && !ctx.threats().length;
         if (quiet && me.manaPercent < QUIET_HEAL_MANA) return false;
         if (pet.healthPercent >= (quiet ? QUIET_HEAL_BELOW : s.healBelow) || healLanding(ctx, pet)) return false;
-        const sp = ctx.spells.petHeal(pet.level ? Math.round(petMaxHp(pet.level) * (100 - pet.healthPercent) / 100) : undefined);
+        const sp = ctx.spells.petHeal(petMissingHp(pet));
         if (!sp || sp.spell.cooldownRemaining > 0 || pet.distance > sp.range) return false;
         const friends = sp.target === 'Realm' || sp.target === 'Group';
         if (friends && !quiet && me.maxMana > 0 && 100 * (me.mana - ctx.spells.powerOf(sp)) / me.maxMana < PET_HEAL_RESERVE) return false;
@@ -538,9 +617,46 @@ export const petHeal = (): Behavior<TacticsSettings> => ({
 });
 
 /**
- * While the group waits, or during another member's pull: keep the pet's buffs up. On when the window shows its icon. The window lists 8 at most (PacketLib181.cs:157-166), so a
- * buff that landed also waits out most of its time, and a failed one buffRetryMs. Those timers go with this pet: ids are reused fast, so a new one is told by the last loss.
+ * petHeal ahead of crowd control, below PET_HEAL_URGENT with power to spare, as its own place on the list stands below that and position: a nuker in a roam has a cc turn nearly always.
+ * Only with PET_HEAL_RESERVE left after it, a Pet-target heal's as well: an assignment's mezz waits one cast for this, and with less it is the assignment's turn.
  */
+export const petHealUrgent = (): Behavior<TacticsSettings> => {
+    const heal = petHeal();
+    return {
+        ...heal,
+        name: 'petHealUrgent',
+        run(ctx) {
+            const pet = ctx.sdk.getPet();
+            const me = ctx.me();
+            if (!pet || pet.healthPercent >= PET_HEAL_URGENT || me.maxMana <= 0) return false;
+            const sp = ctx.spells.petHeal(petMissingHp(pet));
+            return sp && 100 * (me.mana - ctx.spells.powerOf(sp)) / me.maxMana >= PET_HEAL_RESERVE ? heal.run(ctx) : false;
+        },
+    };
+};
+
+/** The next of the pet's buffs that is due, cast. On when the window shows its icon. The window lists 8 at most (PacketLib181.cs:157-166), so a buff that landed also waits out most of its time, and a failed one buffRetryMs. Those timers go with this pet: ids are reused fast, so a new one is told by the last loss. */
+async function castPetBuff(ctx: MemberContext<TacticsSettings>, state: PetState, pet: NearbyNpc): Promise<boolean> {
+    const whose = `${pet.objectId}:${ctx.sdk.getState()?.lastPetLoss?.at ?? 0}`;
+    if (ctx.memory.get('petBuffsOf') !== whose) { ctx.memory.set('petBuffsOf', whose); ctx.memory.set('petBuffRetry', new Map()); }
+    const retry: Map<string, number> = ctx.memory.get('petBuffRetry');
+    const me = ctx.me();
+    const low = me.maxMana > 0 && me.manaPercent < ctx.settings.buffMana;
+    const now = Date.now();
+    const next = ctx.spells.petBuffs().find(b => !(b.icon > 0 && state.icons.includes(b.icon))
+        && now >= (retry.get(b.spell.name) ?? 0) && b.spell.cooldownRemaining <= 0 && pet.distance <= b.range
+        // Timed buffs cost power; concentration buffs cost none.
+        && (b.power === 0 || (!low && me.mana >= ctx.spells.powerOf(b)))
+        && b.concentration <= (me.concentration ?? 0));
+    if (!next) return false;
+    ctx.doing('buff', pet.objectId, `${next.spell.name} on ${pet.name}`);
+    const c = await ctx.bot.castSpell(next.spell);
+    ctx.result('petBuff', c, pet.objectId);
+    retry.set(next.spell.name, Date.now() + (c.success ? next.duration * 900 : buffRetryMs(c)));
+    return true;
+}
+
+/** While the group waits, or during another member's pull: keep the pet's buffs up (castPetBuff). */
 export const petBuff = (): Behavior<TacticsSettings> => ({
     name: 'petBuff',
     interruptible: false,
@@ -550,23 +666,33 @@ export const petBuff = (): Behavior<TacticsSettings> => ({
         const pet = ctx.sdk.getPet();
         const o = ctx.orders();
         if (!s.enabled || !state || !pet || ctx.bot.isDead() || ctx.threats().length || !(QUIET_PHASES.has(o.phase) || (o.phase === 'pull' && o.puller !== ctx.name))) return false;
-        const whose = `${pet.objectId}:${ctx.sdk.getState()?.lastPetLoss?.at ?? 0}`;
-        if (ctx.memory.get('petBuffsOf') !== whose) { ctx.memory.set('petBuffsOf', whose); ctx.memory.set('petBuffRetry', new Map()); }
-        const retry: Map<string, number> = ctx.memory.get('petBuffRetry');
-        const me = ctx.me();
-        const low = me.maxMana > 0 && me.manaPercent < ctx.settings.buffMana;
+        return castPetBuff(ctx, state, pet);
+    },
+});
+
+/**
+ * The same in a run's first minute (PET_BUFF_START_MS), above holdFormation, travelling too, with nothing hostile near: holdFormation takes every travel turn, so in a roam or a pack petBuff never got one (0 of 3 kinds cast in five rounds). A pet's buffs last 20 minutes, and this is the run's one quiet moment.
+ */
+export const petBuffAtStart = (): Behavior<TacticsSettings> => ({
+    name: 'petBuffAtStart',
+    interruptible: false,
+    async run(ctx) {
         const now = Date.now();
-        const next = ctx.spells.petBuffs().find(b => !(b.icon > 0 && state.icons.includes(b.icon))
-            && now >= (retry.get(b.spell.name) ?? 0) && b.spell.cooldownRemaining <= 0 && pet.distance <= b.range
-            // Timed buffs cost power; concentration buffs cost none.
-            && (b.power === 0 || (!low && me.mana >= ctx.spells.powerOf(b)))
-            && b.concentration <= (me.concentration ?? 0));
-        if (!next) return false;
-        ctx.doing('buff', pet.objectId, `${next.spell.name} on ${pet.name}`);
-        const c = await ctx.bot.castSpell(next.spell);
-        ctx.result('petBuff', c, pet.objectId);
-        retry.set(next.spell.name, Date.now() + (c.success ? next.duration * 900 : buffRetryMs(c)));
-        return true;
+        const start: number = ctx.memory.get('petBuffStart') ?? now;
+        ctx.memory.set('petBuffStart', start);
+        const s = petSettings(ctx);
+        const state = ctx.sdk.getPetState();
+        const pet = ctx.sdk.getPet();
+        const o = ctx.orders();
+        if (now - start > PET_BUFF_START_MS || !s.enabled || !state || !pet || ctx.bot.isDead() || o.phase === 'engage' || o.phase === 'retreat' || (o.phase === 'pull' && o.puller === ctx.name)) return false;
+        const me = ctx.me();
+        const near = (c: Contact) => c.regionId === me.regionId && dist(c, me) < SUMMON_ENEMY_RADIUS;
+        if (ctx.threats().some(near) || ctx.picture().contacts.some(c => c.kind === 'player' && !c.stale && near(c))) return false;
+        // One while the group walks: a cast is 3 s of its walk, and a Cabalist's four left it 900 behind at the first engage, its first order 4.5 s later, with no gain seen (r19on-r21on). The rest wait for a quiet phase.
+        if (o.phase === 'travel' && ctx.memory.get('petBuffOnTheWay')) return false;
+        const cast = await castPetBuff(ctx, state, pet);
+        if (cast && o.phase === 'travel') ctx.memory.set('petBuffOnTheWay', true);
+        return cast;
     },
 });
 
@@ -574,6 +700,8 @@ export const petBuff = (): Behavior<TacticsSettings> => ({
 export interface PetKit {
     /** It summons a window pet by itself (Spellbook.summon). */
     main?: boolean;
+    /** That summon has no cast time: a Hunter's. */
+    instantSummon?: boolean;
     /** It casts a Theurgist's pets (Spellbook.fnf). */
     fnf?: boolean;
     /** A window pet is up that petControl can order: a charm from an earlier script, say. */
@@ -591,7 +719,8 @@ export function petLeftAlone(sdk: Pick<BotSDK, 'getSkills' | 'getPlayer'>, bot: 
 export function petKit(sdk: Pick<BotSDK, 'getSkills' | 'getPlayer' | 'getPetState'>, bot: Pick<BotActions, 'getSpellInfo'>): PetKit {
     const book = new Spellbook(sdk as BotSDK, bot as BotActions);
     const p: PlayerState | null = sdk.getPlayer();
-    return { main: !!book.summon(), fnf: !!book.fnf(), window: !!sdk.getPetState() && !p?.isShade && !book.knowsTurret() };
+    const summon = book.summon();
+    return { main: !!summon, ...(summon?.castTime === 0 ? { instantSummon: true } : {}), fnf: !!book.fnf(), window: !!sdk.getPetState() && !p?.isShade && !book.knowsTurret() };
 }
 
 /** A member's kit as its character has it: none with pet false, whatever it knows or has up. */
@@ -646,6 +775,9 @@ export function withPets<S>(list: Behavior<S>[], kit: PetKit | null | undefined)
         [petBuff, l => nameIndex(l, 'buff', 'rest')],
     );
     if (kit.main && list.some(b => b.name === 'rejoinFight')) steps.push([summonOnTheWayBack, l => nameIndex(l, 'rejoinFight')]);
+    if (kit.main && kit.instantSummon && list.some(b => b.name === 'pull')) steps.push([summonInOurPull, l => nameIndex(l, 'pull')]);
+    if (kit.main && list.some(b => b.name === 'crowdControl')) steps.push([petHealUrgent, l => nameIndex(l, 'crowdControl')]);
+    if (kit.main && list.some(b => b.name === 'holdFormation')) steps.push([petBuffAtStart, l => nameIndex(l, 'holdFormation')]);
     let out = list;
     for (const [make, place] of steps) {
         const b = make() as unknown as Behavior<S>;

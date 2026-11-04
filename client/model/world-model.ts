@@ -1362,6 +1362,9 @@ export class WorldModel {
         this.self.deathCount++;
         this.self.lastDeathAt = now;
         this.self.attacking = false;
+        // The 0xAE says nothing of health, and the next status packet can be seconds off.
+        this.self.health = 0;
+        this.self.healthPercent = 0;
         // GamePlayer.Die clears the target server-side (TargetObject = null, GamePlayer.cs:5743 and :5900)
         // without telling the client, so drop ours too.
         this.self.targetObjectId = null;

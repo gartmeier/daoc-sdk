@@ -6,11 +6,16 @@ import { setDefaultPathProvider, StraightLinePathProvider } from '../pathfinding
 import { FakeWorld } from '../test/fake-world';
 import { makeNpc, makePlayer, makePlayerObj } from '../test/fixtures';
 import type { BotWorldState, NearbyNpc, NearbyPlayer, PetState } from '../types';
-import { assist, crowdControl, meleeFight } from './behaviors';
+import { assist, buff, buffRetryMs, crowdControl, defaultBehaviors, flee, heal, meleeFight, song } from './behaviors';
 import { Blackboard } from './blackboard';
-import { MemberAgent, type Behavior } from './member';
-import { petControl, summonPet } from './pets';
-import { RVR_SETTINGS } from './rvr';
+import { MEZZED } from './cc';
+import { obs, report } from './fixtures';
+import { MemberAgent, type Behavior, type MemberAgentOptions } from './member';
+import { GroupObserver } from './observer';
+import { packBehaviors } from './pack';
+import { PET_SETTINGS, petControl, petKit, summonPet, withPets } from './pets';
+import { decidePve, PVE_SETTINGS } from './pve';
+import { RVR_SETTINGS, rvrBehaviors } from './rvr';
 import type { OrdersUpdate, Role } from './types';
 
 let navmeshAt: Mock<NavmeshStore['at']>;
@@ -43,7 +48,7 @@ afterEach(async () => {
     running = [];
 });
 
-function member(o: { list: Behavior<any>[]; role?: Role; world?: Partial<BotWorldState>; player?: object; settings?: object; orders?: Orders; spells?: ReturnType<typeof spell>[] }) {
+function member(o: { list: Behavior<any>[]; role?: Role; world?: Partial<BotWorldState>; player?: object; settings?: object; orders?: Orders; spells?: ReturnType<typeof spell>[]; agent?: MemberAgentOptions }) {
     const w = new FakeWorld({
         pet: petWindow(), nearbyObjects: [], nearbyPlayers: [], nearbyNpcs: [petNpc()], effects: [], combatEvents: [],
         player: makePlayer({ level: 20, mana: 500, maxMana: 500, manaPercent: 100, healthPercent: 100, health: 100, maxHealth: 100, ...o.player }),
@@ -56,7 +61,7 @@ function member(o: { list: Behavior<any>[]; role?: Role; world?: Partial<BotWorl
     w.onTick = world => { world.state.timestamp = Date.now(); stamp?.(world); };
     const bot = new BotActions(w.sdk);
     const board = new Blackboard();
-    const agent = new MemberAgent({ bot: 'testbot', role: o.role ?? 'nuker', sdk: w.sdk, actions: bot }, board, o.list, { ...RVR_SETTINGS, ...o.settings }, { minTurnMs: 10, idleMs: 10, failedTurnMs: 50, sideTickMs: 20, sightRadius: 40_000 });
+    const agent = new MemberAgent({ bot: 'testbot', role: o.role ?? 'nuker', sdk: w.sdk, actions: bot }, board, o.list, { ...RVR_SETTINGS, ...o.settings }, { minTurnMs: 10, idleMs: 10, failedTurnMs: 50, sideTickMs: 20, sightRadius: 40_000, ...o.agent });
     const order = (u: Orders) => { board.setOrders({ reason: 'test', ...u }); };
     if (o.orders) order(o.orders);
     const stop = new AbortController();
@@ -512,4 +517,586 @@ describe('a defensive pet and a crowd-controlled mob on its owner', () => {
         await Bun.sleep(120);
         expect(m.stances()).toEqual([]);
     });
+});
+
+describe('a focus that dies during attack\'s walk', () => {
+    const FOCUS = 501;
+    // c4: 'Pethun: melee: not_found (sveawolf mother disappeared)' and 2 more, Failures melee:not_found (3) in 5 kills; c3 1 in 1. Also in live4 (4).
+    const walking = () => member({ role: 'melee', list: [meleeFight()], settings: { chaseLeash: 5000 }, orders: { phase: 'engage', focus: FOCUS, cc: [], anchor: ANCHOR }, world: { nearbyNpcs: [petNpc(), mob(FOCUS, 1500)] } });
+    const dies = (w: FakeWorld) => {
+        w.removeNpc(FOCUS);
+        w.combat({ kind: 'death', attackerObjectId: null, targetObjectId: FOCUS, targetHealthPercent: 0 });
+    };
+
+    test('it is no failure of the member\'s, and the walk ends with it', async () => {
+        const m = walking();
+        await until(() => m.w.state.movement.moving);
+        expect(m.w.state.movement.moving).toBe(true);
+        dies(m.w);
+        await until(() => !m.w.state.movement.moving, 500);
+        expect(m.w.state.movement.moving).toBe(false);
+        await Bun.sleep(100);
+        expect(m.results()).toEqual([]);
+    });
+
+    test('nor is one gone by the time attack is asked, with the board still naming it', async () => {
+        const m = walking();
+        await until(() => m.w.state.movement.moving);
+        m.w.handlers.moveTo = () => ({ success: false, message: 'no way there', reason: 'no_path' });
+        dies(m.w);
+        m.order({ phase: 'engage', focus: FOCUS, cc: [], anchor: ANCHOR });
+        await Bun.sleep(200);
+        expect(m.results().filter(r => r.includes('not_found'))).toEqual([]);
+    });
+});
+
+describe('a song with no instrument out', () => {
+    // r1on Rbbar: 'You are not wielding the right type of instrument!' at 04:35:17, :35, :47, 04:36:01, :15, with `song: no_response` each time; 20261104-050645: song:no_response (13), a try every 3-11 s.
+    const ROAD = spell('Clear Road', 5153);
+    let clock: { mockRestore: () => void } | null = null;
+    afterEach(() => { clock?.mockRestore(); clock = null; });
+
+    test('it reads refused, and the next try waits what the refusal says, not the 10 s of a song just cast', async () => {
+        const realNow = Date.now.bind(Date);
+        let skew = 0;
+        clock = spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+        const m = member({ role: 'support', list: [song()], spells: [ROAD], orders: { phase: 'travel', focus: null, cc: [], anchor: ANCHOR } });
+        m.w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('You are not wielding the right type of instrument!', { type: 'resisted' }), 5); };
+        const casts = () => m.w.sentOf('castSpell').length;
+        await Bun.sleep(40);
+        skew += 20_000; // past the wait for a pulse overdue
+        await until(() => casts() > 0, 1500);
+        expect(casts()).toBe(1);
+        await until(() => m.results().length > 0, 500);
+        expect(m.results()[0]).toContain('song: refused');
+        expect(m.results()[0]).toContain('Clear Road');
+        skew += 11_000;
+        await Bun.sleep(80);
+        expect(casts()).toBe(1);
+        skew += 60_000;
+        await until(() => casts() > 1, 500);
+        expect(casts()).toBe(2);
+    });
+});
+
+describe('a long pull-back: the puller\'s pet goes in once the mob has reached him', () => {
+    const FOCUS = 700;
+    // a2: 'pull lake serpent L11 (con 1) 1354 away' at Pethun hp69. Hits 04:36:12.869 37, 15.885 40, 18.898 35, 21.913 40; 'Pethun: walk: died (Died en route to (718359, 778447))'. Pet 'passive/follow tgt=null' d110 all the way.
+    const HOLD = 150;
+    const home = { x: ME.x - 1300, y: ME.y, z: ME.z };
+    const pulling = (list: Behavior<any>[], o: { dx?: number } = {}) => member({
+        role: 'tank', list, settings: { holdMs: HOLD, pet: { ...PET_SETTINGS, holdMs: HOLD } }, orders: { phase: 'pull', focus: FOCUS, puller: 'Testbot', cc: [], anchor: home },
+        world: { nearbyNpcs: [petNpc(), mob(FOCUS, o.dx ?? 120, { targetObjectId: 100, inCombat: true })] },
+    });
+    const swing = (m: ReturnType<typeof member>) => m.w.combat({ kind: 'melee', attackerObjectId: FOCUS, targetObjectId: 100, result: 'hit' });
+
+    test('held back through the walk with nothing on him yet, as ever', async () => {
+        const m = pulling([petControl()]);
+        await Bun.sleep(HOLD + 150);
+        expect(m.stances()).toEqual(['passive']);
+        expect(m.attacks()).toEqual([]);
+    });
+
+    test('holdMs after its first swing at him the order goes, with the pull still standing', async () => {
+        const m = pulling([petControl()]);
+        await Bun.sleep(60);
+        m.w.state.pet = petWindow({ aggression: 'passive' });
+        swing(m);
+        await Bun.sleep(HOLD - 90);
+        expect(m.attacks()).toEqual([]);
+        await until(() => m.attacks().length > 0, HOLD + 200);
+        expect(m.attacks()).toEqual([FOCUS]);
+    });
+
+    test('on a tank\'s real list, in the middle of pull\'s walk home: the walk isn\'t disturbed', async () => {
+        const m = pulling(withPets(defaultBehaviors().tank, { main: true }));
+        await until(() => m.w.state.movement.moving);
+        expect(m.w.state.movement.moving).toBe(true);
+        swing(m);
+        await until(() => m.attacks().length > 0, HOLD + 300);
+        expect(m.attacks()).toEqual([FOCUS]);
+        expect(m.w.state.movement.moving).toBe(true);
+    });
+
+    test('someone else\'s pull: its pet is no part of it', async () => {
+        const m = member({ list: [petControl()], settings: { holdMs: 0, pet: { ...PET_SETTINGS, holdMs: 0 } }, orders: { phase: 'pull', focus: FOCUS, puller: 'Tank', cc: [], anchor: home }, world: { nearbyNpcs: [petNpc(), mob(FOCUS, 120, { targetObjectId: 100, inCombat: true })] } });
+        swing(m);
+        await Bun.sleep(150);
+        expect(m.attacks()).toEqual([]);
+    });
+
+    describe('a pet parked on stay', () => {
+        const parkedPull = () => member({
+            role: 'tank', list: [petControl()], settings: { holdMs: HOLD, pet: { ...PET_SETTINGS, holdMs: HOLD } }, orders: { phase: 'pull', focus: FOCUS, puller: 'Testbot', cc: [], anchor: home },
+            world: { pet: petWindow({ walk: 'stay' }), nearbyNpcs: [petNpc(), mob(FOCUS, 120, { targetObjectId: 100, inCombat: true })] },
+        });
+        const decide = (m: ReturnType<typeof member>) => {
+            const p = m.board.picture();
+            const now = Date.now();
+            return decidePve({ picture: p, orders: p.orders, memory: { camp: { ...home, zone: '', count: 0, names: 'x' }, campLevel: 20, base: home, pullStart: now - 5000 }, settings: PVE_SETTINGS, now, windingDown: false });
+        };
+
+        test('its order, which leaves it on stay (ControlledMobBrain.cs:211-226), ends the pull like any: he walked on being hit with the nukers on the phase', async () => {
+            const m = parkedPull();
+            await Bun.sleep(40);
+            swing(m);
+            await until(() => m.attacks().length > 0, HOLD + 400);
+            expect(m.attacks()).toEqual([FOCUS]);
+            m.w.state.pet = petWindow({ walk: 'stay', targetObjectId: FOCUS });
+            m.w.publish();
+            await Bun.sleep(40);
+            expect(m.board.picture().members[0]!.pet).toMatchObject({ walk: 'stay', targetId: FOCUS, orderedOn: FOCUS });
+            expect(decide(m)).toMatchObject({ phase: 'engage', focus: FOCUS, puller: null });
+        });
+
+        test('one that answered a blow with no order of ours ends no pull: the walk home goes on', async () => {
+            const m = parkedPull();
+            await Bun.sleep(30);
+            m.w.state.pet = petWindow({ walk: 'stay', targetObjectId: FOCUS });
+            m.w.publish();
+            await Bun.sleep(30);
+            expect(m.attacks()).toEqual([]);
+            expect(m.board.picture().members[0]!.pet?.orderedOn).toBeUndefined();
+            expect(decide(m).phase).toBe('pull');
+        });
+    });
+
+    test('a swing from an earlier fight with the mob isn\'t this pull\'s: its pet goes for a new one', async () => {
+        const m = member({ role: 'tank', list: [petControl()], settings: { holdMs: HOLD, pet: { ...PET_SETTINGS, holdMs: HOLD } }, orders: { phase: 'recover', focus: null, cc: [], anchor: home }, world: { nearbyNpcs: [petNpc(), mob(FOCUS, 1500)] } });
+        await Bun.sleep(40);
+        swing(m);
+        await Bun.sleep(HOLD + 60);
+        m.w.state.pet = petWindow({ aggression: 'passive' });
+        m.order({ phase: 'pull', focus: FOCUS, puller: 'Testbot', cc: [], anchor: home });
+        await Bun.sleep(120);
+        expect(m.attacks()).toEqual([]);
+        swing(m);
+        await Bun.sleep(HOLD - 90);
+        expect(m.attacks()).toEqual([]);
+        await until(() => m.attacks().length > 0, HOLD + 200);
+        expect(m.attacks()).toEqual([FOCUS]);
+    });
+
+    test('the RvR lists have no pull, and decideRvr orders none: this changes nothing there', () => {
+        for (const lists of [rvrBehaviors(), packBehaviors()]) for (const list of Object.values(lists)) expect(list.map(b => b.name)).not.toContain('pull');
+    });
+});
+
+describe('our own root on a lone focus leaves our pet on it', () => {
+    const FOCUS = 710, ADD = 711;
+    // 20261104-054051: '05:41:08.291 You begin casting a Bonding Vines', '05:41:08.423 to follow you!', pet d=685 by 05:41:08.647; root 05:41:10.757; '05:41:11.257 to kill your target!', first hit 05:41:13.857, 3.1 s after the root. Three times of three, 5-6 s of hits lost each.
+    const ROOT = spell('Bonding Vines', 5202);
+    const casting = (spells: ReturnType<typeof spell>[], o: { add?: boolean } = {}) => member({
+        list: [crowdControl({ assignedOnly: true }), petControl()], spells, orders: { phase: 'engage', focus: FOCUS, cc: [{ targetId: FOCUS, by: 'Testbot' }], anchor: ANCHOR },
+        world: { pet: petWindow({ targetObjectId: FOCUS }), nearbyNpcs: [petNpc(), mob(FOCUS, 300, { targetObjectId: PET, inCombat: true }), ...(o.add ? [mob(ADD, 400, { targetObjectId: 100, inCombat: true })] : [])] },
+    });
+    const off = (m: ReturnType<typeof member>) => m.w.sentOf('petCommand').map(a => a.command).filter(c => c === 'follow' || c === 'passive');
+
+    test('nothing else free: it isn\'t called off, by the cast or by the side tick', async () => {
+        const m = casting([ROOT]);
+        await until(() => m.w.sentOf('castSpell').length > 0);
+        expect(m.w.sentOf('castSpell').length).toBe(1);
+        await Bun.sleep(120);
+        expect(off(m)).toEqual([]);
+    });
+
+    test('something else free: the root still has a job, and the pet comes off', async () => {
+        const m = casting([ROOT], { add: true });
+        await until(() => off(m).length > 0, 300);
+        expect(off(m)).toContain('follow');
+    });
+
+    test('a mezz always takes it off: any swing breaks one', async () => {
+        const m = casting([MEZZ]);
+        await until(() => off(m).length > 0, 300);
+        expect(off(m)).toContain('follow');
+    });
+});
+
+describe('a member too far to buff', () => {
+    // Run 20261104-050639: 'ACT petdru: buff Dexterity of the Ferret on Petenc' 05:06:43 and no other activity until the run's end 05:07:49, Petenc 4445 from base. She couldn't heal in that time: buff has interruptible false. Report: 0 kills in 70 s.
+    const STR = spell('Blessed Strength', 1451);
+    const RANGE = 1000, GATHER = 1200, TANK = 77;
+    const buffer = (dx: number) => {
+        const m = member({
+            role: 'healer', list: [buff()], spells: [STR], settings: { gatherRadius: GATHER }, player: { concentration: 20, maxConcentration: 20 }, orders: { phase: 'idle', focus: null, cc: [], anchor: ME },
+            world: { pet: null, nearbyNpcs: [], nearbyPlayers: [makePlayerObj({ objectId: TANK, name: 'Tank', realm: 'albion', x: ME.x + dx, y: ME.y, z: ME.z, distance: dx, distance2d: dx })] },
+        });
+        m.board.publish(obs(report('Tank', { role: 'tank', objectId: TANK, regionId: 1, x: ME.x + dx, y: ME.y, z: ME.z })));
+        return m;
+    };
+
+    test('more than gatherRadius beyond the spell\'s range: no walk and no cast, and the turn goes on', async () => {
+        const m = buffer(RANGE + GATHER + 50);
+        await Bun.sleep(150);
+        expect(m.w.sentOf('castSpell')).toEqual([]);
+        expect(m.w.state.movement.moving).toBe(false);
+        expect(m.activity()).toBe('idle');
+    });
+
+    test('within that it walks and casts as ever', async () => {
+        const m = buffer(RANGE + 150);
+        m.w.stepSize = 60;
+        await until(() => m.w.sentOf('castSpell').length > 0, 800);
+        expect(m.w.sentOf('castSpell').length).toBe(1);
+    });
+
+    test('a walk that gets nowhere has a time limit, and that is a failure of its own, not 66 s of no heals', async () => {
+        const realNow = Date.now.bind(Date);
+        let skew = 0;
+        const clock = spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+        try {
+            const m = buffer(RANGE + 150);
+            m.w.stepSize = 0;
+            await until(() => m.w.state.movement.moving);
+            expect(m.w.state.movement.moving).toBe(true);
+            skew = 16_000;
+            await until(() => m.results().some(r => r.startsWith('buff: timeout')), 1500);
+            expect(m.results().filter(r => r.startsWith('buff:'))).toMatchObject([expect.stringContaining('buff: timeout')]);
+            expect(m.w.sentOf('castSpell')).toEqual([]);
+            expect(m.w.state.movement.moving).toBe(false);
+        } finally {
+            clock.mockRestore();
+        }
+    });
+});
+
+describe('a nuker with no tank under melee', () => {
+    // 20261104-044005 Rebon: 'nuke:interrupted (10)', 'nuke:must_wait (2)', 37 s, 'The necroservant attacks you and your spell is interrupted!', then dead. 20261104-045536: 11 interrupted, 00:13-00:53, by the turret.
+    const FOCUS = 720;
+    const LONG = spell('Ice Cloud (Minor)', 151, 0), INSTANT = spell('Tormenting Cackle', 6531, 1);
+    const LINE = 'The necroservant attacks you and your spell is interrupted!';
+    const under = (o: { spells?: ReturnType<typeof spell>[]; tank?: boolean | { x?: number; regionId?: number }; dx?: number } = {}) => {
+        const m = member({ list: [assist()], spells: o.spells ?? [LONG, INSTANT], orders: { phase: 'engage', focus: FOCUS, cc: [], anchor: ANCHOR }, world: { pet: null, nearbyNpcs: [], nearbyPlayers: [foe(FOCUS, o.dx ?? 300)] } });
+        if (o.tank) m.board.publish(obs(report('Tank', { role: 'tank', objectId: 77, regionId: 1, x: ME.x, y: ME.y, z: ME.z, ...(o.tank === true ? {} : o.tank) })));
+        m.w.handlers.castSpell = (a, world) => {
+            if (a.type !== 'castSpell') return;
+            setTimeout(() => {
+                if (a.spellIndex === 1) { world.message(`You cast a ${INSTANT.name} spell!`, { type: 'spell' }); return; }
+                world.message(`You begin casting a ${LONG.name} spell!`, { type: 'spell' });
+                world.combat({ kind: 'spellCast', attackerObjectId: world.player.objectId, targetObjectId: null, castTimeMs: 2600 });
+                setTimeout(() => {
+                    world.message(LINE, { type: 'spell' });
+                    world.combat({ kind: 'interrupt', attackerObjectId: world.player.objectId, targetObjectId: null });
+                }, 10);
+            }, 5);
+        };
+        return { m, casts: () => m.w.sentOf('castSpell').map(a => a.spellIndex) };
+    };
+
+    test('after two in a row by one attacker it takes the instant', async () => {
+        const { casts } = under();
+        await until(() => casts().length >= 3, 6000);
+        expect(casts().slice(0, 3)).toEqual([0, 0, 1]);
+    }, 8000);
+
+    test('with a tank to run to it goes on as it did', async () => {
+        const { casts } = under({ tank: true });
+        await until(() => casts().length >= 3, 6000);
+        expect(casts().slice(0, 3)).toEqual([0, 0, 0]);
+    }, 8000);
+
+    test('inside the 5000 flee runs within, the tank still counts', async () => {
+        const { casts } = under({ tank: { x: ME.x + 3000 } });
+        await until(() => casts().length >= 3, 6000);
+        expect(casts().slice(0, 3)).toEqual([0, 0, 0]);
+    }, 8000);
+
+    // 20261104-052629: 'flee to Petani' 2 s after his respawn, about 9000 off. flee stands aside for him (R9), so he is no tank to run to here either.
+    test.each([['released to his bind, 9000 off', { x: ME.x + 9000 }], ['in another region', { regionId: 2 }]])('with the tank %s: what it does with none', async (_what, tank) => {
+        const { casts, m } = under({ tank });
+        await until(() => casts().length >= 3, 6000);
+        expect(casts().slice(0, 3)).toEqual([0, 0, 1]);
+        expect(m.w.sentOf('moveTo')).toEqual([]);
+    }, 8000);
+
+    test('with an instant out of reach of the focus it doesn\'t walk for it: the long one stands', async () => {
+        const { casts, m } = under({ dx: 1200 });
+        await until(() => casts().length >= 3, 6000);
+        expect(casts().slice(0, 3)).toEqual([0, 0, 0]);
+        expect(m.w.sentOf('moveTo')).toEqual([]);
+    }, 8000);
+});
+
+describe('an instant summon in our own pull', () => {
+    const FOCUS = 730;
+    // a1: 'Hunter's Pet L7 ... cd 18s' at start, mana 100 %, pull took 18 s, pet first up at the release tick 04:31:05.97. '[pet-down] Pethun had no pet 37% of the run'. Tank died with no pet.
+    const HUNTER = spell('Hunter\'s Pet', 3587);
+    const home = { x: ME.x - 1300, y: ME.y, z: ME.z };
+    const pulling = (spells: ReturnType<typeof spell>[], kit: Parameters<typeof withPets>[1]) => member({
+        role: 'tank', list: withPets(defaultBehaviors().tank, kit), spells, orders: { phase: 'pull', focus: FOCUS, puller: 'Testbot', cc: [], anchor: home },
+        world: { pet: null, nearbyNpcs: [mob(FOCUS, 120, { targetObjectId: 100, inCombat: true })] },
+    });
+
+    test('petKit says so from the spell\'s row', () => {
+        const m = member({ list: [], spells: [HUNTER], world: { pet: null, nearbyNpcs: [] } });
+        expect(petKit(m.w.sdk, m.bot)).toMatchObject({ main: true, instantSummon: true });
+        const n = member({ list: [], spells: [SUMMON], world: { pet: null, nearbyNpcs: [] } });
+        expect(petKit(n.w.sdk, n.bot)).not.toHaveProperty('instantSummon');
+    });
+
+    test('it goes, with the mob on him, on a tank\'s real list: above pull, which takes every turn', async () => {
+        const m = pulling([HUNTER], { main: true, instantSummon: true });
+        await until(() => m.w.sentOf('castSpell').length > 0, 1500);
+        expect(m.w.sentOf('castSpell').length).toBe(1);
+    });
+
+    test('one with a cast time doesn\'t: it would stand him still, with the mob on him', async () => {
+        const m = pulling([SUMMON], { main: true });
+        await until(() => m.w.state.movement.moving);
+        await Bun.sleep(100);
+        expect(m.w.sentOf('castSpell')).toEqual([]);
+    });
+
+    test('on its recast the walk goes on, and it goes when that is over: the walk hands the turn back', async () => {
+        const m = pulling([{ ...HUNTER, cooldownRemaining: 18 }], { main: true, instantSummon: true });
+        await until(() => m.w.state.movement.moving);
+        expect(m.w.sentOf('castSpell')).toEqual([]);
+        await Bun.sleep(100);
+        m.w.state.skills = { ...m.w.state.skills, spells: [{ ...HUNTER, cooldownRemaining: 0 }] };
+        await until(() => m.w.sentOf('castSpell').length > 0, 1200);
+        expect(m.w.sentOf('castSpell').length).toBe(1);
+    });
+
+    test('a list with none of this has none of it: a character\'s pet false', async () => {
+        const m = pulling([HUNTER], null);
+        await until(() => m.w.state.movement.moving);
+        await Bun.sleep(700);
+        expect(m.w.sentOf('castSpell')).toEqual([]);
+        // The walk isn't cut up for a summon nobody will cast.
+        expect(m.w.sentOf('moveTo').length).toBe(1);
+    });
+});
+
+describe('an order on a focus just gone', () => {
+    const FOCUS = 740;
+    // 20261104-051811: '05:19:13 Petcab: petAttack: unknown_object (unknown objectId 23124)', Failures 'petAttack:unknown_object (1)', with focus 23124 at 1 % at 05:19:13.648.
+    const ordering = (answer: { success: false; message: string; reason: string }) => {
+        const m = member({ list: [petControl()], orders: { phase: 'engage', focus: FOCUS, cc: [], anchor: ANCHOR }, world: { nearbyPlayers: [foe(FOCUS, 300)] } });
+        m.w.handlers.petCommand = () => answer;
+        return m;
+    };
+
+    test('is no failed petAttack', async () => {
+        const m = ordering({ success: false, message: 'unknown objectId 23124', reason: 'unknown_object' });
+        await until(() => m.w.sentOf('petCommand').length > 0, 300);
+        await Bun.sleep(60);
+        expect(m.results()).toEqual([]);
+    });
+
+    test('any other refused send still is', async () => {
+        const m = ordering({ success: false, message: 'no pet', reason: 'no_pet' });
+        await until(() => m.results().length > 0, 300);
+        expect(m.results()).toEqual(['petAttack: no_pet (no pet)']);
+    });
+});
+
+describe('flee with the tank out of the fight\'s reach', () => {
+    const ON_ME = 750, TANK = 77;
+    // Run 20261104-052629: Petani died 05:28:01.965, respawned 05:28:13 at the bind (about 295553,642168). '05:28:15.285 ACT petenc: flee to Petani', Petenc about (294754,651198), so about 9000 away, for up to the 6 s walk.
+    const chased = (dx: number, regionId = 1) => {
+        const m = member({ list: [flee()], orders: { phase: 'engage', focus: ON_ME, cc: [], anchor: ANCHOR }, world: { pet: null, nearbyNpcs: [mob(ON_ME, 100, { targetObjectId: 100, inCombat: true })] } });
+        m.board.publish(obs(report('Petani', { role: 'tank', objectId: TANK, regionId, x: ME.x + dx, y: ME.y, z: ME.z })));
+        return m;
+    };
+
+    test('a released one at his bind, 9000 off: no run', async () => {
+        const m = chased(9000);
+        await Bun.sleep(100);
+        expect(m.w.sentOf('moveTo')).toEqual([]);
+        expect(m.activity()).not.toBe('flee');
+    });
+
+    test('nor to one in another region, whatever his numbers read', async () => {
+        const m = chased(1000, 2);
+        await Bun.sleep(100);
+        expect(m.w.sentOf('moveTo')).toEqual([]);
+    });
+
+    test('in reach of the fight it runs as ever', async () => {
+        const m = chased(3000);
+        await until(() => m.w.sentOf('moveTo').length > 0, 300);
+        expect(m.activity()).toBe('flee');
+    });
+});
+
+describe('a pet\'s health and buffs get their turn on the real lists', () => {
+    // Across r1on, r2on, r4on, r6on, r8on: 0 Replenish Spirit, Restore Simulacrum, Reinforce Ally; 0 Valkyrie's Agility, Craftiness; 1 Intensify Spirit. --live: 'Rbcab nuker mana 100% cc Major Crippling Pet: emerald simulacrum L21 9%'.
+    const FOCUS = 760, ADD = 761;
+    const HEAL = spell('Mend Simulacrum', 821, 1), PET_BUFF = spell('Strengthen Spirit', 811, 1);
+    const LISTS: [string, () => Behavior<any>[]][] = [
+        ['rvrBehaviors', () => rvrBehaviors().nuker], ['packBehaviors', () => packBehaviors().nuker], ['pveLeveling', () => defaultBehaviors().nuker],
+    ];
+    const hurt = (list: Behavior<any>[], o: { hp?: number; mana?: number } = {}) => member({
+        list: withPets(list, { main: true }), spells: [MEZZ, HEAL], player: { mana: o.mana ?? 500, manaPercent: Math.round((o.mana ?? 500) / 5) },
+        orders: { phase: 'engage', focus: FOCUS, cc: [{ targetId: ADD, by: 'Testbot' }], anchor: ANCHOR },
+        world: { nearbyPlayers: [foe(FOCUS, 900), foe(ADD, 900)], nearbyNpcs: [{ ...petNpc(), healthPercent: o.hp ?? 9 }] },
+    });
+    const firstCast = async (m: ReturnType<typeof member>) => {
+        await until(() => m.w.sentOf('castSpell').length > 0, 500);
+        return m.w.sentOf('castSpell')[0]?.spellIndex;
+    };
+
+    for (const [name, list] of LISTS) {
+        describe(name, () => {
+            test('under 25 % with power to spare: above crowd control', async () => {
+                expect(await firstCast(hurt(list()))).toBe(1);
+            });
+
+            test('with no power to spare the assignment comes first', async () => {
+                expect(await firstCast(hurt(list(), { mana: 120 }))).toBe(0);
+            });
+
+            test('over 25 % the assignment comes first, as ever', async () => {
+                expect(await firstCast(hurt(list(), { hp: 40 }))).toBe(0);
+            });
+
+            test('its buffs at the run\'s start, before the walk: phase travel', async () => {
+                const far = { x: ME.x + 9000, y: ME.y, z: ME.z };
+                const m = member({ list: withPets(list(), { main: true }), spells: [PET_BUFF], orders: { phase: 'travel', focus: null, cc: [], anchor: far } });
+                await until(() => m.w.sentOf('castSpell').length > 0, 500);
+                expect(m.w.sentOf('castSpell').length).toBe(1);
+                expect(m.w.sentOf('moveTo')).toEqual([]);
+            });
+
+            test('not with an enemy near: the walk goes on', async () => {
+                const far = { x: ME.x + 9000, y: ME.y, z: ME.z };
+                const m = member({ list: withPets(list(), { main: true }), spells: [PET_BUFF], orders: { phase: 'travel', focus: null, cc: [], anchor: far }, world: { nearbyPlayers: [foe(FOCUS, 1500, { inCombat: true })] } });
+                await until(() => m.w.sentOf('moveTo').length > 0, 500);
+                expect(m.w.sentOf('castSpell')).toEqual([]);
+            });
+
+            test('and not past the run\'s start', async () => {
+                const realNow = Date.now.bind(Date);
+                let skew = 0;
+                const clock = spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+                try {
+                    const far = { x: ME.x + 9000, y: ME.y, z: ME.z };
+                    // Its first turn starts the clock, in whatever phase the run has it.
+                    const held = member({ list: withPets(list(), { main: true }), spells: [PET_BUFF], orders: { phase: 'engage', focus: null, cc: [], anchor: ME } });
+                    await Bun.sleep(60);
+                    expect(held.w.sentOf('castSpell')).toEqual([]);
+                    skew = 61_000;
+                    held.order({ phase: 'travel', focus: null, cc: [], anchor: far });
+                    await until(() => held.w.sentOf('moveTo').length > 0, 500);
+                    expect(held.w.sentOf('moveTo').length).toBeGreaterThan(0);
+                    expect(held.w.sentOf('castSpell')).toEqual([]);
+                } finally {
+                    clock.mockRestore();
+                }
+            });
+        });
+    }
+});
+
+describe('a mezzed member', () => {
+    // 20261104-050645 Rehea: 'heal:crowd_controlled (15)', 'You can't cast while mesmerized!' at 00:36, 00:38, 00:40 ... for one 42 s mezz. The report's timeline is mostly this.
+    const CURE = spell('Minor Rejuvenation', 1301);
+    const effect = (name: string, remainingSeconds = 42) => ({ index: 0, name, icon: 1, spellId: 911, remainingSeconds, isNegative: true });
+    const held = (effects: ReturnType<typeof effect>[]) => {
+        const m = member({ role: 'healer', list: [heal()], spells: [CURE], player: { healthPercent: 30, health: 30 }, orders: { phase: 'engage', focus: null, cc: [], anchor: ANCHOR }, world: { pet: null, nearbyNpcs: [], effects } });
+        let answer = 'You can\'t cast while mesmerized!';
+        m.w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message(answer, { type: 'system' }), 5); };
+        return { m, free: (line: string) => { answer = 'You begin casting a Minor Rejuvenation spell!'; m.w.state.effects = []; if (line) m.w.message(line, { type: 'spellExpires' }); }, fails: () => m.results().filter(r => r.includes('crowd_controlled')) };
+    };
+
+    test('one failure for one mezz, however long it lasts', async () => {
+        const { m, fails } = held([effect('Minor Mesmerization')]);
+        await until(() => fails().length > 0, 800);
+        await Bun.sleep(2600);
+        expect(fails().length).toBe(1);
+        expect(m.w.sentOf('castSpell').length).toBe(1);
+    }, 6000);
+
+    for (const line of ['You are no longer entranced.', 'You recover from the mesmerize.']) {
+        test(`"${line}": it goes on at once`, async () => {
+            const { m, free, fails } = held([effect('Minor Mesmerization')]);
+            await until(() => fails().length > 0, 800);
+            await Bun.sleep(2300);
+            free(line);
+            await until(() => m.w.sentOf('castSpell').length > 1, 500);
+            expect(m.w.sentOf('castSpell').length).toBe(2);
+        }, 6000);
+    }
+
+    test('the effect gone says the same, with the line missed', async () => {
+        const { m, free, fails } = held([effect('Minor Mesmerization')]);
+        await until(() => fails().length > 0, 800);
+        await Bun.sleep(2300);
+        free('');
+        await until(() => m.w.sentOf('castSpell').length > 1, 500);
+        expect(m.w.sentOf('castSpell').length).toBe(2);
+    }, 6000);
+
+    test('its time up says the same, with neither', async () => {
+        const { m, fails } = held([effect('Minor Mesmerization', 1)]);
+        await until(() => fails().length > 0, 800);
+        await until(() => m.w.sentOf('castSpell').length > 1, 3500);
+        expect(m.w.sentOf('castSpell').length).toBe(2);
+    }, 6000);
+
+    test('a turn with no sleep of its own, as petHeal, buff or song: the failed-turn pause doesn\'t come after the wait. "next cast 1045 ms after the mezz ended", the owner free and the pet hurt', async () => {
+        const mend = spell('Mend Simulacrum', 821);
+        const refused: Behavior<any> = { name: 'mend', async run(ctx) { ctx.result('mend', await ctx.bot.castSpell(mend)); return true; } };
+        const m = member({ list: [refused], spells: [mend], agent: { minTurnMs: 250, failedTurnMs: 1000 }, orders: { phase: 'engage', focus: null, cc: [], anchor: ANCHOR }, world: { effects: [effect('Minor Mesmerization')] } });
+        let answer = 'You can\'t cast while mesmerized!';
+        m.w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message(answer, { type: 'system' }), 5); };
+        await until(() => m.results().some(r => r.includes('crowd_controlled')), 800);
+        await Bun.sleep(100);
+        expect(m.w.sentOf('castSpell').length).toBe(1);
+        answer = 'You begin casting a Mend Simulacrum spell!';
+        m.w.state.effects = [];
+        m.w.message('You are no longer entranced.', { type: 'spellExpires' });
+        const freed = Date.now();
+        await until(() => m.w.sentOf('castSpell').length > 1, 1500);
+        expect(m.w.sentOf('castSpell').length).toBe(2);
+        expect(Date.now() - freed).toBeLessThan(500);
+    }, 6000);
+
+    test('the report\'s idle leaves that out: before the wait it read its last turn, and a 42 s mezz in 100 s of fight now said "idle 42 %, check its behaviour list"', async () => {
+        const NUKE = spell('Murk Blast', 2508);
+        const m = member({ list: [assist()], spells: [NUKE], orders: { phase: 'engage', focus: 760, cc: [], anchor: ANCHOR }, world: { pet: null, nearbyNpcs: [], nearbyPlayers: [foe(760, 300)], effects: [effect('Minor Mesmerization')] } });
+        m.w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('You can\'t cast while mesmerized!', { type: 'system' }), 5); };
+        const observer = new GroupObserver(m.board, { group: 'g', strategy: 's', sampleMs: 50 }).start();
+        await until(() => m.board.picture().members[0]?.activity.detail === MEZZED, 3500);
+        expect(m.board.picture().members[0]?.activity).toMatchObject({ kind: 'idle', detail: MEZZED });
+        await Bun.sleep(1200);
+        const r = observer.stop();
+        const { idleInFights, idleReasons } = Object.values(r.members)[0]!;
+        expect(idleInFights).toBe(0);
+        expect(idleReasons).toEqual({});
+        expect(r.findings.filter(f => f.topic === 'idle')).toEqual([]);
+    }, 8000);
+
+    test('a stun isn\'t waited for like this: its 2 s stands', async () => {
+        const { m, fails } = held([]);
+        m.w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('You can\'t cast while stunned!', { type: 'system' }), 5); };
+        await until(() => fails().length > 1, 3000);
+        expect(fails().length).toBe(2);
+    }, 6000);
+});
+
+describe('a cast that crowd control broke', () => {
+    // 'You are entranced!' or 'You are stunned!' beside the 0x0B reads crowd_controlled (A10, R14), where it read interrupted, and the 60 s was every other reason's: a 5 s stun at a summon, no second cast until +60 s.
+    test('as the interrupt it was: tried again after 8 s, not 60', () => {
+        expect(buffRetryMs({ success: false, reason: 'crowd_controlled', message: 'You are stunned!' })).toBe(8000);
+        expect(buffRetryMs({ success: false, reason: 'interrupted', message: 'Your spell is interrupted.' })).toBe(8000);
+    });
+
+    test.each([['You are stunned!', 'Stunning Flash'], ['You are entranced!', 'Minor Mesmerization']])('a summon broken by "%s" tries again in 8 s: no pet for 60 s of a 180 s round', async (line, effect) => {
+        const m = member({ list: [summonPet()], spells: [SUMMON], orders: { phase: 'recover', focus: null, cc: [], anchor: ANCHOR }, world: { pet: null, nearbyNpcs: [] } });
+        m.w.handlers.castSpell = (_a, world) => {
+            world.message(`You begin casting a ${SUMMON.name} spell!`, { type: 'spell' });
+            world.combat({ kind: 'spellCast', attackerObjectId: world.player.objectId, targetObjectId: null, castTimeMs: 5670 });
+            setTimeout(() => {
+                world.state.effects = [{ index: 0, name: effect, icon: 1, spellId: 911, remainingSeconds: 0.1, isNegative: true }];
+                world.combat({ kind: 'interrupt', attackerObjectId: world.player.objectId, targetObjectId: null });
+                world.message(line, { type: 'spell' });
+            }, 10);
+        };
+        const t0 = Date.now();
+        await until(() => m.results().some(r => r.startsWith('summon')), 1500);
+        expect(m.results().find(r => r.startsWith('summon'))).toContain('crowd_controlled');
+        expect(m.agent.ctx.memory.get('summonRetry') - t0).toBeLessThan(10_000);
+    }, 6000);
 });

@@ -244,6 +244,9 @@ export const ALREADY_CASTING = 'you are already casting a spell';
 /** ... and how it goes on with the spell queue on, as it is unless a player turns it off: the spell starts by itself when the running one ends, unless another replaces it or the running one fails at its end (CastingComponent.cs:224-228). */
 export const FOLLOW_UP = 'as a follow up';
 
+/** A song with no instrument in hand (SpellHandler.cs:581, :894): the server asks for the active weapon's type, and any instrument will do (:252-261). */
+export const NO_INSTRUMENT = 'you are not wielding the right type of instrument';
+
 /** Spell refusals and interruptions (SpellHandler.cs, CastingComponent.cs). */
 export const CAST_REFUSALS = [
     "you can't cast while sitting",
@@ -271,6 +274,7 @@ export const CAST_REFUSALS = [
     ...PET_CAST_REFUSALS.map(([text]) => text),
     ...PULSE_CANCELLED,
     'is already considering a resurrection',
+    NO_INSTRUMENT,
 ] as const;
 
 /**
@@ -283,6 +287,9 @@ export function resurrectCost(maxMana: number, casterLevel: number, targetLevel:
 
 /** "{0} is dead!" to a spell at the dead (SpellHandler.cs:783, HealSpellHandler.cs:78). All before it is a name, so it goes by its end. */
 export const TARGET_IS_DEAD = / is dead!$/;
+
+/** How long a death explains an id being gone: the time a group's board and a member's turn take to hear of it. */
+const RECENT_DEATH_MS = 5000;
 
 /** GameLiving.IN_COMBAT_DURATION (GameLiving.cs:31). */
 const MOB_IN_COMBAT_MS = 10_000;
@@ -994,6 +1001,14 @@ export class ActionHelpers {
      */
     npcJustDied(state: BotWorldState | null, n: NearbyNpc): boolean {
         return n.healthPercent <= 0 && !!state?.combatEvents.some(e => e.kind === 'death' && e.targetObjectId === n.objectId && e.receivedAt > (n.firstSeenAt ?? 0));
+    }
+
+    /**
+     * Whether an id gone from our view went by a death: its event within RECENT_DEATH_MS. Not for a longer past, as the server hands a dead mob's id to the next object it adds (Region.cs:955). A target merely out of view has none.
+     */
+    diedLately(state: BotWorldState | null, id: number): boolean {
+        const since = Date.now() - RECENT_DEATH_MS;
+        return !!state?.combatEvents.some(e => e.kind === 'death' && e.targetObjectId === id && e.receivedAt >= since);
     }
 
     /** Who swung at us (hit or miss) or landed a spell effect on us within `windowMs` of the snapshot. */

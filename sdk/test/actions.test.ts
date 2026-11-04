@@ -2,14 +2,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test, type Moc
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { BotSDK } from '../index';
+import { BotSDK, headingBetween } from '../index';
 import { BotActions, castFailureReason, tradeSlotWait, getNavmeshStore, type KillResult, type NavMesh, type NavmeshStore, type PetCommandResult } from '../actions';
 import { ActionHelpers, PVP_IMMUNE_RETRY_MS, resurrectCost } from '../actions-helpers';
 import { setDefaultPathProvider, StraightLinePathProvider, type PathProvider } from '../pathfinding';
 import { executionContext } from '../execution-context';
 import { ObjectType } from '../types';
 import type { Build } from '../../data/builds/types';
-import { getSpells } from '../../data/index';
+import { getSpells, getZoneAt } from '../../data/index';
 import { specKey } from '../../data/spec-names';
 import type { ActionResult, BotAction, BotWorldState, GameMessage, InventoryItem, NearbyNpc, NearbyPlayer, PetCommand, PetState, PlayerState, Spell } from '../types';
 import { makeNpc, makeObject, makePlayer, makePlayerObj, makeState } from './fixtures';
@@ -4728,11 +4728,11 @@ describe('attack: a target that died as we came', () => {
         });
     });
 
-    test('another refusal stays as it was, attack mode and all', async () => {
+    test('another refusal for good reads refused, and ends the swing too: the server says it again each round', async () => {
         const { w, bot } = world({ nearbyNpcs: [], nearbyPlayers: [makePlayerObj({ objectId: 415, name: 'Briton', realm: 'hibernia', x: 560050, y: 511000, distance: 50, distance2d: 50 })] });
         w.handlers.attack = answering("You can't attack a member of your realm!", 15);
         expect(await bot.attack(415)).toMatchObject({ success: false, reason: 'refused' });
-        expect(w.sentOf('attack').map(a => a.on)).toEqual([true]);
+        expect(w.sentOf('attack').map(a => a.on)).toEqual([true, false]);
     });
 });
 
@@ -6585,7 +6585,7 @@ describe('pets', () => {
                 respawns(w);
                 summoning(w);
                 const r = await bot.grind({ pet: true, respawn: true, durationMs: 1200, minEngageMs: 0, noTargetTimeoutMs: 0, anchor: { x: 560000, y: 511000, z: 2500 } });
-                expect(r.deaths).toBe(1);
+                expect(r.deaths).toBe(0);
                 expect(order(w).slice(0, 3)).toEqual(['release', 'castSpell', 'moveTo']);
                 expect(w.sentOf('castSpell')).toHaveLength(1);
             });
@@ -8698,7 +8698,8 @@ describe('pets', () => {
                 fightSim(w, { dmg: 50 });
                 const melee = spyOn(bot, 'killNpc');
                 expect(await bot.grind({ pet: true, maxKills: 1, durationMs: 5000, killTimeout: 30_000, loot: false })).toMatchObject({ kills: 1 });
-                expect(melee.mock.calls[0]![1]!.timeout).toBeGreaterThan(11_000);
+                // Less the moment a mob on us with no speed gets to come.
+                expect(melee.mock.calls[0]![1]!.timeout).toBeGreaterThan(10_000);
                 expect(melee.mock.calls[0]![1]!.timeout).toBeLessThanOrEqual(12_000);
             });
 
@@ -9539,7 +9540,7 @@ describe('pets', () => {
                 w.handlers.setGroundTarget = (a, world) => { if (a.type === 'setGroundTarget') world.state.groundTarget = { x: a.x, y: a.y, z: 2940 }; }; // 890 away and 440 up: 993 of 1000
                 const r = await bot.summonPet(turret, { replace: true, groundTarget: { x: 560890, y: 511000 } });
                 expect(r).toMatchObject({ success: false, reason: 'out_of_range', pet: { objectId: PET_ID } });
-                expect(w.sent.map(a => a.type)).toEqual(['setGroundTarget']);
+                expect(w.sent.map(a => a.type)).toEqual(['setGroundTarget', 'setGroundTarget']);
             });
 
             describe('a mesh loaded: 16 is the server\'s search box per axis, no limit on the move, and it keeps the closest point it finds (LocalPathfindingMgr.cs:301-306, :341-349)', () => {
@@ -9569,7 +9570,7 @@ describe('pets', () => {
                     w.handlers.setGroundTarget = (a, world) => { if (a.type === 'setGroundTarget') world.state.groundTarget = { x: a.x, y: a.y, z: 2500 }; };
                     const r = await bot.summonPet(turret, { replace: true, groundTarget: { x: 560980, y: 511000 } });
                     expect(r).toMatchObject({ success: false, reason: 'out_of_range', pet: { objectId: PET_ID } });
-                    expect(w.sent.map(a => a.type)).toEqual(['setGroundTarget']);
+                    expect(w.sent.map(a => a.type)).toEqual(['setGroundTarget', 'setGroundTarget']);
                 });
             });
 
@@ -9601,7 +9602,7 @@ describe('pets', () => {
                 expect(r).toMatchObject({ success: false, reason: 'out_of_range', pet: { objectId: PET_ID }, petState: { objectId: PET_ID } });
                 expect(r.message).toContain('1082');
                 expect(Date.now() - t0).toBeGreaterThanOrEqual(280); // the wait for an off-mesh answer stays
-                expect(w.sent.map(a => a.type)).toEqual(['setGroundTarget']);
+                expect(w.sent.map(a => a.type)).toEqual(['setGroundTarget', 'setGroundTarget']);
             });
 
             test('in range in 3D as well: released and cast', async () => {
@@ -13128,6 +13129,1420 @@ describe('pets', () => {
                     bowInHand(w);
                     expect(await bot.takeMeleeSlot({ weapon: 'Spear' })).toMatchObject({ success: true, slot: 12 });
                     expect(await bot.takeMeleeSlot({ weapon: 'Hammer' })).toMatchObject({ success: false, reason: 'not_found', slot: null });
+                });
+            });
+        });
+
+        describe('what the solo re-check found', () => {
+            const nuke = spellOf('Minor Vitality Drain', 651);
+            const heal = spellOf('Minor Rejuvenation', 1301);
+            const revive = spellOf('Revive', 1315, 10, 3);
+            const friend = (o: Partial<NearbyPlayer> = {}) => makePlayerObj({ objectId: 400, name: 'Pettan', x: 563000, ...o });
+            const castsOf = (w: FakeWorld) => w.sentOf('castSpell');
+            const down = (w: FakeWorld, id: number, o: Partial<NearbyPlayer>) => { w.state.nearbyPlayers = w.state.nearbyPlayers.map(p => p.objectId === id ? { ...p, ...o } : p); };
+            const running = (o: Partial<NearbyNpc>, at: { x: number; y: number } = { x: 560000, y: 511000 }) => {
+                const n = mob({ speed: 190, ...o });
+                return { ...n, heading: o.heading ?? headingBetween(n, at) };
+            };
+
+            describe('A1: a walk ends on its target\'s death', () => {
+                // out5/h4c1.log: '23.33 S {"atk":false,"myT":null,"e":null,"mv":true}', '23.95 attack 6668 ms {"s":false,"r":"not_found","m":"black mauler juvenile disappeared","npc":[18013,28]}', with 'The black mauler juvenile dies!' on the way.
+                const far = (o: Partial<BotWorldState> = {}) => {
+                    const made = world({ pet: null, skills: skillsWith(nuke), nearbyNpcs: [mob({ x: 562000 })], nearbyPlayers: [], nearbyObjects: [], ...o });
+                    made.w.stepSize = 5;
+                    return made;
+                };
+                const stands = async (w: FakeWorld) => {
+                    await Bun.sleep(30);
+                    expect(w.state.movement.moving).toBe(false);
+                    const { x } = w.player;
+                    await Bun.sleep(30);
+                    expect(w.player.x).toBe(x);
+                };
+
+                test('attack: already_dead as it dies, the mover stopped, no swing', async () => {
+                    const { w, bot } = far();
+                    setTimeout(() => dies(w, 700), 60);
+                    const t0 = Date.now();
+                    expect(await bot.attack(700)).toMatchObject({ success: false, reason: 'already_dead', npc: { objectId: 700 }, target: { objectId: 700 } });
+                    expect(Date.now() - t0).toBeLessThan(500);
+                    await stands(w);
+                    expect(w.sentOf('attack')).toEqual([]);
+                });
+
+                test('a swing from before goes off with it: the API says so', async () => {
+                    const { w, bot } = far();
+                    w.player.attacking = true;
+                    w.player.targetObjectId = 900;
+                    w.publish();
+                    setTimeout(() => dies(w, 700), 60);
+                    expect(await bot.attack(700)).toMatchObject({ reason: 'already_dead' });
+                    expect(w.sentOf('attack').map(a => a.on)).toEqual([false]);
+                });
+
+                test('a player goes by its dead flag as well', async () => {
+                    const { w, bot } = far({ nearbyNpcs: [], nearbyPlayers: [makePlayerObj({ objectId: 415, name: 'Briton', realm: 'hibernia', x: 562000 })] });
+                    setTimeout(() => down(w, 415, { isDead: true, healthPercent: 0 }), 60);
+                    const t0 = Date.now();
+                    expect(await bot.attack(415)).toMatchObject({ success: false, reason: 'already_dead', target: { objectId: 415 } });
+                    expect(Date.now() - t0).toBeLessThan(500);
+                    await stands(w);
+                });
+
+                test('castSpell: dead before it looked and a silent server read already_dead; with no death it stays no_response', async () => {
+                    // rbhib 20261104-154227: Rbenc 'nuke: no_response' at 15:44:47, 3 s behind Rbsor's kill at 44.113 (SpellHandler.cs:923-926 says nothing to a corpse).
+                    const near = () => world({ pet: null, skills: skillsWith(nuke), nearbyNpcs: [mob({ x: 560100, firstSeenAt: Date.now() + 1000 })], nearbyPlayers: [], nearbyObjects: [] });
+                    const dead = near();
+                    dead.w.combat({ kind: 'death', attackerObjectId: null, targetObjectId: 700, targetHealthPercent: 0 });
+                    dead.w.publish();
+                    expect(await dead.bot.castSpell(nuke, 700)).toMatchObject({ success: false, reason: 'already_dead', targetDied: true });
+                    const alive = near();
+                    expect(await alive.bot.castSpell(nuke, 700)).toMatchObject({ success: false, reason: 'no_response' });
+                }, 10_000);
+
+                test('castSpell: already_dead with targetDied, nothing cast, nothing held', async () => {
+                    // cw-nuke: 'RESULT (6194 ms) {"success":false,"message":"spriggarn elder disappeared","reason":"not_found","castTimeMs":null,...} targetDied undefined moved 1050 speed 0'.
+                    const { w, bot } = far();
+                    setTimeout(() => dies(w, 700), 60);
+                    const t0 = Date.now();
+                    expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: false, reason: 'already_dead', targetDied: true, spell: { name: nuke.name }, target: { objectId: 700 } });
+                    expect(Date.now() - t0).toBeLessThan(500);
+                    await stands(w);
+                    expect(castsOf(w)).toEqual([]);
+                    expect(bot.castHeldLeftMs()).toBe(0);
+                });
+
+                test('a friend who dies on the way: the healer stops, and doesn\'t walk into what killed it', async () => {
+                    // 'heal from 2991 19305 ms {reason:already_dead, msg:Pettan is dead!} he died at 974 her model {d:1032, dead:true, hp:0}', 'The bandit hits your leg for 13'. She died.
+                    const { w, bot } = far({ skills: skillsWith(heal), nearbyNpcs: [], nearbyPlayers: [friend()] });
+                    setTimeout(() => down(w, 400, { isDead: true, healthPercent: 0 }), 60);
+                    const t0 = Date.now();
+                    expect(await bot.castSpell(heal, 400)).toMatchObject({ success: false, reason: 'already_dead', message: 'Pettan is dead!', targetDied: true });
+                    expect(Date.now() - t0).toBeLessThan(500);
+                    await stands(w);
+                    expect(w.player.x).toBeLessThan(560300);
+                    expect(castsOf(w)).toEqual([]);
+                });
+
+                test('a corpse that gets up on the way: the same stop, in a Corpse spell\'s own words', async () => {
+                    const scene = () => far({ skills: skillsWith(revive), nearbyNpcs: [], nearbyPlayers: [friend({ isDead: true, healthPercent: 0, level: 20 })], player: makePlayer({ level: 20, mana: 1000, maxMana: 1000 }) });
+                    const raw = scene();
+                    setTimeout(() => down(raw.w, 400, { isDead: false, healthPercent: 60 }), 60);
+                    expect(await raw.bot.castSpell(revive, 400)).toMatchObject({ success: false, reason: 'invalid_target', message: 'This spell only works on dead members of your realm!' });
+                    await stands(raw.w);
+                    expect(castsOf(raw.w)).toEqual([]);
+                    const rez = scene();
+                    setTimeout(() => down(rez.w, 400, { isDead: false, healthPercent: 60 }), 60);
+                    expect(await rez.bot.resurrect(400)).toMatchObject({ success: false, reason: 'not_dead' });
+                    expect(castsOf(rez.w)).toEqual([]);
+                });
+
+                test('out of view with no death: not_found, at the end of the walk', async () => {
+                    const { w, bot } = far();
+                    w.stepSize = 100;
+                    setTimeout(() => w.removeNpc(700), 30);
+                    expect(await bot.attack(700)).toMatchObject({ success: false, reason: 'not_found', message: 'young wolf disappeared' });
+                    expect(w.player.x).toBeGreaterThan(561000);
+                });
+
+                test('walkToObject stops too, with targetDied for what reads it; a walk to a corpse goes on', async () => {
+                    const { w, bot } = far();
+                    setTimeout(() => dies(w, 700), 60);
+                    expect(await bot.walkToObject(700, { range: 100 })).toMatchObject({ success: false, reason: 'already_dead', targetDied: true, target: { objectId: 700 } });
+                    const corpse = world({ pet: null, nearbyNpcs: [], nearbyPlayers: [friend({ isDead: true, healthPercent: 0 })], nearbyObjects: [] });
+                    expect(await corpse.bot.walkToObject(400, { range: 200 })).toMatchObject({ success: true });
+                    expect(corpse.w.player.x).toBeGreaterThan(562000);
+                });
+
+                describe('unknown_object: the client\'s model has dropped the object, and the snapshot still holds it', () => {
+                    // out5/h4a.log: '10.92 attack unknown_object unknown objectId 4683 took 0 atk true entry true', 2 of 54 calls on that mob.
+                    const gap = (o: Partial<PlayerState> = {}) => {
+                        const made = world({ pet: null, player: makePlayer({ attacking: true, targetObjectId: 700, ...o }), nearbyNpcs: [mob({ x: 560050 })], nearbyPlayers: [], nearbyObjects: [] });
+                        made.w.handlers.setTarget = () => ({ success: false, message: 'unknown objectId 700', reason: 'unknown_object' });
+                        return made;
+                    };
+
+                    test('with its death in the next snapshot: already_dead, the swing off', async () => {
+                        const { w, bot } = gap();
+                        setTimeout(() => dies(w, 700), 15);
+                        expect(await bot.attack(700)).toMatchObject({ success: false, reason: 'already_dead' });
+                        expect(w.player.attacking).toBe(false);
+                    });
+
+                    test('with none: not_found', async () => {
+                        const { w, bot } = gap();
+                        setTimeout(() => w.removeNpc(700), 15);
+                        expect(await bot.attack(700)).toMatchObject({ success: false, reason: 'not_found', message: 'young wolf disappeared' });
+                    });
+                });
+
+                describe('an id gone by the time we ask, with its death just behind it: 3 melee:not_found in 5 kills (brief 5 R12)', () => {
+                    const gone = async (ago: number | null) => {
+                        const made = world({ pet: null, skills: skillsWith(nuke), nearbyNpcs: [mob({ x: 560500 })], nearbyPlayers: [], nearbyObjects: [] });
+                        if (ago !== null) dies(made.w, 700);
+                        else made.w.removeNpc(700);
+                        made.w.state.combatEvents = made.w.state.combatEvents.map(e => ({ ...e, receivedAt: e.receivedAt - (ago ?? 0) }));
+                        await Bun.sleep(30);
+                        return made;
+                    };
+
+                    test('attack, castSpell, killNpc and a walk read already_dead', async () => {
+                        const { bot } = await gone(100);
+                        expect(await bot.attack(700)).toMatchObject({ success: false, reason: 'already_dead', npc: null });
+                        expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: false, reason: 'already_dead', targetDied: true });
+                        expect(await bot.killNpc(700)).toMatchObject({ success: false, reason: 'already_dead' });
+                        expect(await bot.walkToObject(700)).toMatchObject({ success: false, reason: 'already_dead', targetDied: true });
+                    });
+
+                    test('a death long past, or none, stays not_found', async () => {
+                        for (const ago of [60_000, null]) {
+                            const { bot } = await gone(ago);
+                            expect(await bot.attack(700)).toMatchObject({ reason: 'not_found' });
+                            expect(await bot.castSpell(nuke, 700)).toMatchObject({ reason: 'not_found' });
+                            expect(await bot.killNpc(700)).toMatchObject({ reason: 'not_found' });
+                            expect(await bot.walkToObject(700)).toMatchObject({ reason: 'not_found' });
+                        }
+                    });
+
+                    test('by name there is nobody to say it of', async () => {
+                        const { bot } = await gone(100);
+                        expect(await bot.attack('young wolf')).toMatchObject({ reason: 'not_found' });
+                    });
+                });
+            });
+
+            describe('A2: attack mode left on', () => {
+                // out6/vh4b-111613: 'death at 5485 attacking true target null', the same at 1, 2 and 3 s. vh4c-111643, 30 s later: 'now attacking true target null hp 113 inC true'.
+                const beside = (o: Partial<BotWorldState> = {}) => petWorld({ nearbyNpcs: [petNpc(), mob({ x: 560050 }), mob({ objectId: 701, x: 560060 })], ...o });
+                const onLeft = (w: FakeWorld) => w.sentOf('attack').map(a => a.on);
+
+                test('a swing at a mob the pet kills goes off at its death', async () => {
+                    const { w, bot } = beside();
+                    expect(await bot.attack(700)).toMatchObject({ success: true });
+                    w.player.targetObjectId = null;
+                    dies(w, 700);
+                    await Bun.sleep(40);
+                    expect(onLeft(w)).toEqual([true, false]);
+                    expect(w.player.attacking).toBe(false);
+                });
+
+                test('with our selection on it still, as well', async () => {
+                    const { w, bot } = beside();
+                    await bot.attack(700);
+                    dies(w, 700);
+                    await Bun.sleep(40);
+                    expect(onLeft(w)).toEqual([true, false]);
+                });
+
+                test('a player\'s goes by its dead flag', async () => {
+                    const { w, bot } = beside({ nearbyNpcs: [petNpc()], nearbyPlayers: [makePlayerObj({ objectId: 415, name: 'Briton', realm: 'hibernia', x: 560050 })] });
+                    await bot.attack(415);
+                    down(w, 415, { isDead: true, healthPercent: 0 });
+                    await Bun.sleep(40);
+                    expect(onLeft(w)).toEqual([true, false]);
+                });
+
+                test('a swing gone on to the next mob stays: what comes of the old one is nothing to it', async () => {
+                    const { w, bot } = beside();
+                    await bot.attack(700);
+                    await bot.attack(701);
+                    dies(w, 700);
+                    await Bun.sleep(40);
+                    expect(onLeft(w)).toEqual([true, true]);
+                    expect(w.player.attacking).toBe(true);
+                });
+
+                test('one on a mob that merely left view stays, and so does one on the living', async () => {
+                    const { w, bot } = beside();
+                    await bot.attack(700);
+                    w.removeNpc(700);
+                    w.publish();
+                    await Bun.sleep(40);
+                    expect(onLeft(w)).toEqual([true]);
+                });
+
+                test('a melee fight takes over from it: its first swing isn\'t cut, with the select not yet shown', async () => {
+                    const { w, bot } = beside();
+                    await bot.attack(700);
+                    w.handlers.setTarget = () => {};
+                    const fight = bot.killNpc(701, { timeout: 1000, usePet: false });
+                    await Bun.sleep(20);
+                    dies(w, 700);
+                    await Bun.sleep(40);
+                    expect(onLeft(w)).toEqual([true]);
+                    dies(w, 701);
+                    expect(await fight).toMatchObject({ success: true });
+                    expect(onLeft(w)).toEqual([true, false]);
+                });
+
+                test('asked at a target just dead, with our swing on it: already_dead, and off; a swing on another stays', async () => {
+                    const corpse = mob({ x: 560050, healthPercent: 0 });
+                    const on = world({ pet: null, player: makePlayer({ attacking: true, targetObjectId: 700 }), nearbyNpcs: [corpse], nearbyPlayers: [] });
+                    on.w.combat({ kind: 'death', attackerObjectId: null, targetObjectId: 700, targetHealthPercent: 0 });
+                    on.w.publish();
+                    expect(await on.bot.attack(700)).toMatchObject({ success: false, reason: 'already_dead' });
+                    expect(onLeft(on.w)).toEqual([false]);
+                    const other = world({ pet: null, player: makePlayer({ attacking: true, targetObjectId: 701 }), nearbyNpcs: [corpse, mob({ objectId: 701, x: 560060 })], nearbyPlayers: [] });
+                    other.w.combat({ kind: 'death', attackerObjectId: null, targetObjectId: 700, targetHealthPercent: 0 });
+                    other.w.publish();
+                    expect(await other.bot.attack(700)).toMatchObject({ reason: 'already_dead' });
+                    expect(onLeft(other.w)).toEqual([]);
+                });
+
+                test('once off, a later death sends nothing more: killNpc has ended its own', async () => {
+                    const { w, bot } = beside();
+                    await bot.attack(700);
+                    await w.sdk.sendAttack(false);
+                    await Bun.sleep(30);
+                    dies(w, 700);
+                    await Bun.sleep(40);
+                    expect(onLeft(w)).toEqual([true, false]);
+                });
+
+                describe('a same-realm player by id', () => {
+                    // Petcle: '#3 1004 ms {s:true, msg:Attacking Pettan} atk=true' with chat '31:You enter combat mode and target [Pettan]', then '1496:You can't attack a member of your realm!' after the call returned.
+                    const REFUSED = "You can't attack a member of your realm!";
+                    const sword = (speed: number) => ({ slot: 10, name: 'sword', level: 1, count: 1, model: 3, objectType: 3, condition: 100, durability: 100, quality: 85, weight: 30, value1: 12, value2: speed, hand: 0 });
+                    const scene = (realm: 'albion' | 'hibernia', after: number, speed = 20) => {
+                        const made = world({ pet: null, equipment: [sword(speed)], nearbyNpcs: [], nearbyPlayers: [makePlayerObj({ objectId: 415, name: 'Pettan', realm, x: 560050 })] });
+                        made.w.handlers.attack = (a, world) => {
+                            if (a.type !== 'attack') return;
+                            world.player.attacking = a.on;
+                            if (a.on) setTimeout(() => world.message(REFUSED), after);
+                        };
+                        return made;
+                    };
+
+                    test('the refusal with the next round is read, and the swing ends', async () => {
+                        const { w, bot } = scene('albion', 1300);
+                        expect(await bot.attack(415)).toMatchObject({ success: false, reason: 'refused', message: REFUSED });
+                        expect(onLeft(w)).toEqual([true, false]);
+                        expect(w.player.attacking).toBe(false);
+                    });
+
+                    test('an enemy goes as ever: 1 s and no line reads as a swing on its way', async () => {
+                        const { w, bot } = scene('hibernia', 60_000);
+                        const t0 = Date.now();
+                        expect(await bot.attack(415)).toMatchObject({ success: true });
+                        expect(Date.now() - t0).toBeLessThan(1400);
+                        expect(onLeft(w)).toEqual([true]);
+                    });
+                });
+
+                test('a line we can walk or turn out of keeps the swing: the fight goes on from there', async () => {
+                    const { w, bot } = world({ pet: null, nearbyNpcs: [mob({ x: 560050 })], nearbyPlayers: [] });
+                    w.handlers.attack = (a, world) => {
+                        if (a.type !== 'attack') return;
+                        world.player.attacking = a.on;
+                        if (a.on) world.message('The young wolf is not in view!');
+                    };
+                    expect(await bot.attack(700)).toMatchObject({ reason: 'refused' });
+                    expect(onLeft(w)).toEqual([true]);
+                });
+
+                test('a bow in hand has no attack mode to end: the hand switch goes on as ever', async () => {
+                    const bow = { slot: 13, name: 'rowan bow', level: 1, count: 1, model: 3, objectType: 9, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0, hand: 0 };
+                    const sword = { slot: 10, name: 'training sword', level: 1, count: 1, model: 3, objectType: 3, condition: 100, durability: 100, quality: 85, weight: 30, value1: 12, value2: 37, hand: 0 };
+                    const { w, bot } = world({ pet: null, equipment: [sword, bow], nearbyNpcs: [mob({ x: 560050 })], nearbyPlayers: [] });
+                    let inHand = false;
+                    w.handlers.attack = (a, world) => {
+                        if (a.type !== 'attack') return;
+                        if (inHand) world.player.attacking = a.on;
+                        else world.message("You can't enter melee combat mode with a ranged weapon!");
+                    };
+                    w.handlers.useItem = (_a, world) => { inHand = true; world.message('You attempt to use the training sword.'); };
+                    expect(await bot.attack(700)).toMatchObject({ success: true });
+                    expect(onLeft(w)).toEqual([true, true]);
+                });
+            });
+
+            describe('A3: castSpell\'s approach stops inside the range', () => {
+                // ov: 'Cast Ice Cloud (Minor) on Weakened demon for 6 damage' (10280 ms) 'd0 1907 range 1500 moved 1133 d now 796'. logs5/z4.log: 'clump approach 12951 ms success ... dF 2063', a 4000 spell.
+                const castAt = (o: Partial<NearbyNpc>, stepSize = 10) => {
+                    const made = world({ pet: null, skills: skillsWith(nuke), nearbyNpcs: [mob(o)], nearbyPlayers: [], nearbyObjects: [] });
+                    made.w.stepSize = stepSize;
+                    const seen = { at: Infinity };
+                    made.w.handlers.castSpell = (_a, world) => {
+                        seen.at = world.npc(700)!.distance;
+                        setTimeout(() => world.message(`You cast a ${nuke.name} spell!`, { type: 'spell' }), 5);
+                    };
+                    return { ...made, seen };
+                };
+
+                test('a 1500 spell: at 150 inside it, not at half of it', async () => {
+                    const { bot, seen } = castAt({ x: 561907 });
+                    expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: true });
+                    expect(seen.at).toBeLessThanOrEqual(1350);
+                    expect(seen.at).toBeGreaterThan(1250);
+                });
+
+                test('a 4000 one: 150 too', async () => {
+                    const { bot, seen } = castAt({ x: 564147 }, 25);
+                    expect(await bot.castSpell(nuke, 700, { range: 4000 })).toMatchObject({ success: true });
+                    expect(seen.at).toBeLessThanOrEqual(3850);
+                    expect(seen.at).toBeGreaterThan(3700);
+                });
+
+                test('a 500 one: 10 %', async () => {
+                    const { bot, seen } = castAt({ x: 560700 }, 5);
+                    expect(await bot.castSpell(nuke, 700, { range: 500 })).toMatchObject({ success: true });
+                    expect(seen.at).toBeLessThanOrEqual(450);
+                    expect(seen.at).toBeGreaterThan(400);
+                });
+
+                test('in 3D: a mob above us counts its height', async () => {
+                    const { bot, seen } = castAt({ x: 561500, z: 3500 });
+                    expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: true });
+                    expect(seen.at).toBeLessThanOrEqual(1350);
+                    expect(seen.at).toBeGreaterThan(1250);
+                });
+
+                test('it looks as it goes: a mob walking off is followed by what it reads now', async () => {
+                    const { w, bot, seen } = castAt({ x: 561700 });
+                    w.onTick = world => { const m = world.npc(700); if (m) m.x += 3; };
+                    expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: true });
+                    expect(seen.at).toBeLessThanOrEqual(1400);
+                    expect(seen.at).toBeGreaterThan(1250);
+                });
+
+                test('the server\'s "too far away" stays out_of_range, for a target that moved on after the walk', async () => {
+                    const { w, bot } = castAt({ x: 561700 });
+                    w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('That target is too far away!', { type: 'resisted' }), 5); };
+                    expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: false, reason: 'out_of_range' });
+                });
+
+                describe('a target that moved on from the margin', () => {
+                    const NUKE_CAST_SECONDS = getSpells().find(r => r.id === nuke.internalId)!.castTime;
+                    // Probe, 1600 off, a mob walking off at 100 with a 3 s cast and the server measuring at the end: 'try 0 out_of_range reading 1628', 'try 1 ... 1630', 'try 2 ... 1631'. Each walk stopped at the same margin. Where the walk stopped at half the range it landed.
+                    const tooFar = (o: Partial<NearbyNpc>, extra: NearbyNpc[] = []) => {
+                        const made = world({ pet: null, skills: skillsWith(nuke), nearbyNpcs: [mob(o), ...extra], nearbyPlayers: [], nearbyObjects: [] });
+                        made.w.stepSize = 20;
+                        const at: number[] = [];
+                        made.w.handlers.castSpell = (a, world) => {
+                            if (a.type !== 'castSpell') return;
+                            at.push(world.state.player!.targetObjectId === 701 ? world.npc(701)!.distance : world.npc(700)!.distance);
+                            setTimeout(() => world.message(at.length === 1 ? 'That target is too far away!' : `You cast a ${nuke.name} spell!`, { type: at.length === 1 ? 'resisted' : 'spell' }), 5);
+                        };
+                        return { ...made, at };
+                    };
+
+                    test('after its "too far away" the next walk at it stops short by what it leaves in a cast, by our readings', async () => {
+                        const { w, bot, at } = tooFar({ x: 561600 });
+                        expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: false, reason: 'out_of_range' });
+                        expect(at[0]).toBeGreaterThan(1250);
+                        // 170 units in a second.
+                        await Bun.sleep(1000);
+                        w.npc(700)!.x = w.player.x + at[0]! + 170;
+                        w.publish();
+                        expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: true });
+                        const wanted = 1350 - 170 * NUKE_CAST_SECONDS;
+                        expect(at[1]).toBeLessThanOrEqual(wanted + 60);
+                        expect(at[1]).toBeGreaterThan(wanted - 100);
+                    });
+
+                    test('at half the range at most: a target that seems to outrun anything still gets the nearest walk there was', async () => {
+                        const { w, bot, at } = tooFar({ x: 561600 });
+                        await bot.castSpell(nuke, 700);
+                        w.npc(700)!.x = w.player.x + 1628;
+                        w.publish();
+                        expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: true });
+                        expect(at[1]).toBeLessThanOrEqual(750);
+                        expect(at[1]).toBeGreaterThan(650);
+                    });
+
+                    test('and the walk after a cast that landed is the margin\'s again', async () => {
+                        const { w, bot, at } = tooFar({ x: 561600 });
+                        await bot.castSpell(nuke, 700);
+                        w.npc(700)!.x = w.player.x + 1628;
+                        w.publish();
+                        await bot.castSpell(nuke, 700);
+                        w.npc(700)!.x = w.player.x + 1628;
+                        w.publish();
+                        expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: true });
+                        expect(at[2]).toBeGreaterThan(1250);
+                    });
+
+                    test('another target keeps the margin', async () => {
+                        const { bot, at } = tooFar({ x: 561600 }, [mob({ objectId: 701, x: 560300, y: 512600 })]);
+                        await bot.castSpell(nuke, 700);
+                        expect(await bot.castSpell(nuke, 701)).toMatchObject({ success: true });
+                        expect(at[1]).toBeGreaterThan(1250);
+                    });
+                });
+
+                describe('a mob high above us: the walk\'s arrival radius leaves only the climb', () => {
+                    // Up a cliff: the plane closes and the height stays.
+                    const cliff = (w: FakeWorld) => {
+                        w.handlers.moveTo = (a, world) => {
+                            if (a.type !== 'moveTo') return;
+                            const dest = { x: a.x, y: a.y, z: world.player.z };
+                            world.tolerance = a.tolerance ?? 16;
+                            world.state.movement = { ...world.state.movement, moving: true, destination: dest, waypoints: [dest], lastStopReason: null };
+                        };
+                    };
+
+                    // walks-and-casts probe: range 1500, 1500 on the plane and 1100 up: 'out_of_reach | Could not get within 1350 of wolf (at 1366) | reading now 1185 | moving true | casts 0'. The same shape, closer.
+                    test('the first reading in range ends it there too, and the mover with it', async () => {
+                        const { w, bot, seen } = castAt({ x: 560300, z: 2900 }, 1);
+                        expect(await bot.castSpell(nuke, 700, { range: 490 })).toMatchObject({ success: true });
+                        expect(seen.at).toBeLessThanOrEqual(441);
+                        expect(seen.at).toBeGreaterThan(405);
+                        expect(w.state.movement.moving).toBe(false);
+                    });
+
+                    test('a height it can\'t climb, in the spell\'s range but short of the margin: the cast goes from there', async () => {
+                        const { w, bot, seen } = castAt({ x: 560300, z: 3900 }, 1);
+                        cliff(w);
+                        expect(await bot.castSpell(nuke, 700, { range: 1420 })).toMatchObject({ success: true });
+                        expect(seen.at).toBeLessThanOrEqual(1420);
+                        expect(w.state.movement.moving).toBe(false);
+                    });
+
+                    test('out of reach all the same: the mover stops with the answer, and the answer reads where it got to', async () => {
+                        const { w, bot } = castAt({ x: 560300, z: 3900 }, 1);
+                        cliff(w);
+                        const r = await bot.walkToObject(700, { range: 500 });
+                        expect(r).toMatchObject({ success: false, reason: 'out_of_reach' });
+                        expect(w.state.movement.moving).toBe(false);
+                        expect(r.target!.distance).toBeLessThan(1431);
+                        expect(r.message).toContain(`(at ${r.target!.distance})`);
+                    });
+                });
+
+                test('a walk of the caller\'s own keeps its arrival radius', async () => {
+                    const { w, bot } = castAt({ x: 561907 }, 200);
+                    await bot.walkToObject(700, { range: 1275 });
+                    expect(w.sentOf('moveTo')[0]!.tolerance).toBe(765);
+                });
+            });
+
+            describe('A4: a replace at the edge of a charm\'s range', () => {
+                // logs5/edge3.log: judged d 994, d2 990, spd 0, 'You lose control of the puny skeleton!' at 82, 'You begin casting' at 149, 'That target is too far away!' at 4082, reason out_of_range, pet null. limit_l10.log: the same at 999. 989 and 997 went.
+                const edge = (x: number, z?: number) => {
+                    const made = petWorld({ skills: skillsWith(charm), player: makePlayer({ level: 20 }), nearbyNpcs: [petNpc(), mob({ x, ...(z === undefined ? {} : { z }) })] });
+                    orders(made.w, (_a, world) => { world.removeNpc(PET_ID); world.state.pet = null; });
+                    made.w.stepSize = 10;
+                    made.w.handlers.castSpell = (_a, world) => {
+                        setTimeout(() => {
+                            world.message('You cast a Persuade Will spell!', { type: 'spell' });
+                            world.state.pet = petWindow({ objectId: 700 });
+                        }, 5);
+                    };
+                    return made;
+                };
+
+                test('within the range but past range minus 60: it walks in first', async () => {
+                    const { w, bot } = edge(560994);
+                    expect(await bot.charmPet(700, { replace: true })).toMatchObject({ success: true });
+                    const kinds = w.sent.map(a => a.type);
+                    expect(kinds.indexOf('moveTo')).toBeGreaterThanOrEqual(0);
+                    expect(kinds.indexOf('moveTo')).toBeLessThan(kinds.indexOf('petCommand'));
+                    expect(w.npc(700)!.distance).toBeLessThanOrEqual(940);
+                });
+
+                describe('where that walk stops: range - 70 x cast - 20, as a mob roams at 70 (StandardMobState.cs:141), up to 280 in the 4 s cast', () => {
+                    // sorcerer-charm: 'mobs roam at 70'. Read at 1200, roaming away: the walk stopped at 900, the release went, 1174 at the cast's end: 'That target is too far away!', pet null. HEAD's walk went to about 510.
+                    const stopsAt = async (x: number) => {
+                        const made = edge(x);
+                        const seen = { at: Infinity };
+                        const cast = made.w.handlers.castSpell!;
+                        made.w.handlers.castSpell = (a, world) => { seen.at = world.npc(700)!.distance; return cast(a, world); };
+                        expect(await made.bot.charmPet(700, { replace: true })).toMatchObject({ success: true });
+                        return seen.at;
+                    };
+
+                    test.each([[1200], [995]])('read at %i: about 700 at the cast', async d => {
+                        const at = await stopsAt(560000 + d);
+                        expect(at).toBeLessThanOrEqual(700);
+                        expect(at).toBeGreaterThan(600);
+                    });
+
+                    test('with no walk to make it stays at 940: no walk is the gain of a replace within it', async () => {
+                        const { w, bot } = edge(560939);
+                        expect(await bot.charmPet(700, { replace: true })).toMatchObject({ success: true });
+                        expect(w.sentOf('moveTo')).toEqual([]);
+                    });
+
+                    const cliff = (w: FakeWorld) => {
+                        w.handlers.moveTo = (a, world) => {
+                            if (a.type !== 'moveTo') return;
+                            const dest = { x: a.x, y: a.y, z: world.player.z };
+                            world.tolerance = a.tolerance ?? 16;
+                            world.state.movement = { ...world.state.movement, moving: true, destination: dest, waypoints: [dest], lastStopReason: null };
+                        };
+                    };
+
+                    test('a height it can\'t climb: inside 940 is enough, the pet goes then and the charm with it', async () => {
+                        // walks-and-casts probe: 500 on the plane and 810 up, reading 952: 'charm: 2009 ms false out_of_reach | Could not get within 900 of young wolf (at 952) | reading now 820 | moving true | pet 600 | casts 0'.
+                        const { w, bot } = edge(560300, 3410);
+                        cliff(w);
+                        w.stepSize = 1;
+                        expect(await bot.charmPet(700, { replace: true })).toMatchObject({ success: true });
+                        expect(w.sentOf('castSpell').length).toBe(1);
+                        expect(w.state.movement.moving).toBe(false);
+                    });
+
+                    test('and short of it: out_of_reach with the pet kept, the mover stopped, nothing cast', async () => {
+                        const { w, bot } = edge(560300, 3500);
+                        cliff(w);
+                        w.stepSize = 1;
+                        const r = await bot.charmPet(700, { replace: true });
+                        expect(r).toMatchObject({ success: false, reason: 'out_of_reach', pet: { objectId: PET_ID } });
+                        expect(w.sentOf('castSpell')).toEqual([]);
+                        expect(w.sentOf('petCommand')).toEqual([]);
+                        expect(w.state.movement.moving).toBe(false);
+                    });
+                });
+
+                test('with approach off: out_of_range, the pet kept, nothing sent', async () => {
+                    const { w, bot } = edge(560994);
+                    const r = await bot.charmPet(700, { replace: true, approach: false });
+                    expect(r).toMatchObject({ success: false, reason: 'out_of_range', pet: { objectId: PET_ID }, petState: { objectId: PET_ID } });
+                    expect(r.message).toContain('940');
+                    expect(w.sent).toEqual([]);
+                });
+
+                test('inside that: no walk', async () => {
+                    const { w, bot } = edge(560930);
+                    expect(await bot.charmPet(700, { replace: true })).toMatchObject({ success: true });
+                    expect(w.sentOf('moveTo')).toEqual([]);
+                });
+
+                test('with no pet to lose nothing changes: the range is the range', async () => {
+                    const { w, bot } = world({ pet: null, skills: skillsWith(charm), player: makePlayer({ level: 20 }), nearbyNpcs: [mob({ x: 560994 })], nearbyPlayers: [], nearbyObjects: [] });
+                    w.handlers.castSpell = (_a, world) => { setTimeout(() => { world.message('You cast a Persuade Will spell!', { type: 'spell' }); world.state.pet = petWindow({ objectId: 700 }); }, 5); };
+                    expect(await bot.charmPet(700)).toMatchObject({ success: true });
+                    expect(w.sentOf('moveTo')).toEqual([]);
+                });
+            });
+
+            describe('a swing on another target that attack can\'t take over', () => {
+                // Swinging at A, attack(B), and the client has dropped B: the select fails, so the selection stays on A, alive and on us.
+                const A = 701;
+                const scene = () => {
+                    const made = world({ pet: null, player: makePlayer({ attacking: true, targetObjectId: A }), nearbyNpcs: [makeNpc({ objectId: A, name: 'water beetle', x: 560050, targetObjectId: ME }), mob({ x: 560060 })], nearbyPlayers: [], nearbyObjects: [] });
+                    made.w.handlers.setTarget = (a, world) => {
+                        if (a.type !== 'setTarget') return;
+                        if (a.objectId === A) { world.player.targetObjectId = A; return; }
+                        return { success: false, message: `unknown objectId ${a.objectId}`, reason: 'unknown_object' };
+                    };
+                    return made;
+                };
+
+                test('B dead in the gap after its death: already_dead, and A\'s swing stays on: it is A\'s', async () => {
+                    const { w, bot } = scene();
+                    setTimeout(() => dies(w, 700), 15);
+                    expect(await bot.attack(700)).toMatchObject({ success: false, reason: 'already_dead' });
+                    expect(w.sentOf('attack')).toEqual([]);
+                    expect(w.player.attacking).toBe(true);
+                });
+
+                test('that swing ends at A\'s death all the same, as it would have with no such call: "attacking stays true on A\'s corpse"', async () => {
+                    const { w, bot } = scene();
+                    await bot.attack(A);
+                    expect(w.player.attacking).toBe(true);
+                    w.sent.length = 0;
+                    setTimeout(() => dies(w, 700), 15);
+                    await bot.attack(700);
+                    expect(w.sentOf('attack')).toEqual([]);
+                    dies(w, A);
+                    await Bun.sleep(60);
+                    expect(w.sentOf('attack').map(a => a.on)).toEqual([false]);
+                });
+            });
+
+            describe('A5: no weapon, no pet, resummon off', () => {
+                // logs5/nowep_noresummon2.log, ms 40000: '0 kills, +0 xp, 0 deaths in 41s (duration); our pet died with puny skeleton at 90 %, and it is on us at 93 %', 'fails':36, moved 0, the mob swinging at us for about 30 s.
+                const onThePet = (o: Partial<NearbyNpc> = {}, extra: NearbyNpc[] = []) => {
+                    const made = petWorld({ equipment: [], skills: skillsWith(simulacrum), pet: petWindow({ targetObjectId: 701 }), nearbyNpcs: [petNpc(), mob({ objectId: 701, x: 560100, targetObjectId: PET_ID, healthPercent: 90, ...o }), ...extra] });
+                    orders(made.w, (a, world) => { if (a.command === 'attack') world.message(KILL); });
+                    return made;
+                };
+
+                test('the run ends at once: stop error, reason no_pet, one failure, and the note says the mob is on us', async () => {
+                    const { w, bot } = onThePet();
+                    setTimeout(() => { lose(w, { targetedBy: [701] }); w.npc(701)!.targetObjectId = ME; }, 30);
+                    const melee = spyOn(bot, 'killNpc');
+                    const t0 = Date.now();
+                    const r = await bot.grind({ pet: { resummon: false }, durationMs: 5000, loot: false });
+                    expect(r).toMatchObject({ success: false, stopReason: 'error', reason: 'no_pet', kills: 0, failures: 1 });
+                    expect(r.message).toContain('no weapon');
+                    expect(r.message).toContain('and it is on us at 90 %');
+                    expect(melee).not.toHaveBeenCalled();
+                    expect(Date.now() - t0).toBeLessThan(2000);
+                });
+
+                test('another mob on us is named: the note tells the truth about what stands there', async () => {
+                    const { w, bot } = onThePet({}, [mob({ objectId: 702, name: 'black wolf', x: 560090, targetObjectId: ME })]);
+                    setTimeout(() => { lose(w, { targetedBy: [701] }); w.npc(701)!.targetObjectId = ME; }, 30);
+                    const r = await bot.grind({ pet: { resummon: false }, durationMs: 5000, loot: false });
+                    expect(r).toMatchObject({ stopReason: 'error', reason: 'no_pet' });
+                    expect(r.message).toContain('black wolf is on us');
+                    expect(r.message).toContain('our pet died with young wolf at 90 %');
+                });
+
+                test('with nothing near as well: there is nothing it can fight with', async () => {
+                    const { w, bot } = onThePet();
+                    setTimeout(() => { lose(w); w.removeNpc(701); }, 30);
+                    const r = await bot.grind({ pet: { resummon: false }, durationMs: 5000, loot: false });
+                    expect(r).toMatchObject({ stopReason: 'error', reason: 'no_pet', failures: 1 });
+                    expect(r.message).not.toContain('on us');
+                });
+
+                test('with resummon on it waits for the summon, as ever; with a weapon it goes to melee', async () => {
+                    const waits = onThePet();
+                    waits.w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('The young wolf attacks you and your spell is interrupted!', { type: 'spell' }), 5); };
+                    setTimeout(() => { lose(waits.w, { targetedBy: [701] }); waits.w.npc(701)!.targetObjectId = ME; }, 30);
+                    setTimeout(() => dies(waits.w, 701), 250);
+                    expect((await waits.bot.grind({ pet: true, durationMs: 300, minEngageMs: 0, loot: false })).reason).not.toBe('no_pet');
+
+                    const armed = petWorld({ skills: skillsWith(simulacrum), pet: petWindow({ targetObjectId: 701 }), nearbyNpcs: [petNpc(), mob({ objectId: 701, x: 560050, targetObjectId: PET_ID })] });
+                    orders(armed.w, (a, world) => { if (a.command === 'attack') world.message(KILL); });
+                    setTimeout(() => { lose(armed.w, { targetedBy: [701] }); armed.w.npc(701)!.targetObjectId = ME; }, 30);
+                    setTimeout(() => dies(armed.w, 701), 200);
+                    expect(await armed.bot.grind({ pet: { resummon: false }, maxKills: 1, durationMs: 5000, loot: false })).toMatchObject({ kills: 1 });
+                });
+            });
+
+            describe('A6: a mob on us within reach, with a new pet up', () => {
+                // guard2: '87.99 PASS< petKill false arrived wood-eater royal guard is 231 from us', '87.99 PASS> petKill 24291 d 231 hp 27 mobTgt 24338 atk [] {timeout:19762, ignoreAttackers:false}', '90.01 attacks you and misses', own swings 0, timeout at 107.75, hp 100 to 32.
+                const scene = (o: Partial<NearbyNpc>, more: Partial<BotWorldState> = {}) => {
+                    const made = petWorld({ skills: skillsWith(simulacrum), pet: petWindow(), nearbyNpcs: [petNpc(), mob({ objectId: 701, healthPercent: 27, ...o })], ...more });
+                    orders(made.w, (a, world) => {
+                        if (a.command !== 'attack') return;
+                        world.message(KILL);
+                        world.state.pet = petWindow({ targetObjectId: a.targetObjectId! });
+                    });
+                    made.w.handlers.attack = (a, world) => {
+                        if (a.type !== 'attack') return;
+                        world.player.attacking = a.on;
+                        if (a.on && world.npc(701)) setTimeout(() => dies(world, 701), 20);
+                    };
+                    return made;
+                };
+
+                test('after \'arrived\': the next pass swings, though the mob read on the new pet in passing', async () => {
+                    const { w, bot } = scene({ x: 560900, targetObjectId: ME });
+                    w.onTick = world => {
+                        const m = world.npc(701);
+                        if (!m || m.x <= 560240) return;
+                        m.x -= 20;
+                        // '84.00 attacks your hunter's pet and misses': the model has it on the pet until its next swing.
+                        if (m.x <= 560250) m.targetObjectId = PET_ID;
+                    };
+                    const pet = spyOn(bot, 'petKill');
+                    const melee = spyOn(bot, 'killNpc');
+                    const r = await bot.grind({ pet: true, maxKills: 1, durationMs: 5000, loot: false });
+                    expect(r).toMatchObject({ kills: 1 });
+                    expect(pet).toHaveBeenCalledTimes(1);
+                    expect(melee).toHaveBeenCalledTimes(1);
+                    expect(w.sentOf('attack').map(a => a.on)).toContain(true);
+                });
+
+                test('a pass with the mob on the pet ends when it turns on us within reach: melee, not the rest of its timeout', async () => {
+                    const { w, bot } = scene({ x: 560200, targetObjectId: PET_ID });
+                    setTimeout(() => { w.npc(701)!.targetObjectId = ME; }, 60);
+                    const melee = spyOn(bot, 'killNpc');
+                    const t0 = Date.now();
+                    expect(await bot.grind({ pet: true, maxKills: 1, durationMs: 5000, loot: false })).toMatchObject({ kills: 1 });
+                    expect(melee).toHaveBeenCalledTimes(1);
+                    expect(Date.now() - t0).toBeLessThan(2500);
+                });
+
+                test('beyond that reach it stays the pet\'s: no walk out to it', async () => {
+                    const { w, bot } = scene({ x: 560400, targetObjectId: PET_ID });
+                    const stop = Date.now() + 200;
+                    w.onTick = world => { const m = world.npc(701); if (m && m.targetObjectId === ME && Date.now() > stop) dies(world, 701); };
+                    setTimeout(() => { w.npc(701)!.targetObjectId = ME; }, 60);
+                    const melee = spyOn(bot, 'killNpc');
+                    await bot.grind({ pet: true, maxKills: 1, durationMs: 3000, loot: false });
+                    expect(melee).not.toHaveBeenCalled();
+                });
+
+                test.each([['no weapon', { equipment: [] }], ['a shade', { player: makePlayer({ isShade: true }) }]])('with %s there is no melee to go to: the pass goes on', async (_what, o) => {
+                    const { w, bot } = scene({ x: 560200, targetObjectId: PET_ID }, o as Partial<BotWorldState>);
+                    setTimeout(() => { w.npc(701)!.targetObjectId = ME; }, 40);
+                    setTimeout(() => dies(w, 701), 200);
+                    const melee = spyOn(bot, 'killNpc');
+                    const pet = spyOn(bot, 'petKill');
+                    expect(await bot.grind({ pet: true, maxKills: 1, durationMs: 3000, loot: false })).toMatchObject({ kills: 1 });
+                    expect(melee).not.toHaveBeenCalled();
+                    expect(pet).toHaveBeenCalledTimes(1);
+                });
+
+                test('petKill reads it only when asked: a caller with no such option fights on', async () => {
+                    const { w, bot } = scene({ x: 560200, targetObjectId: ME });
+                    setTimeout(() => dies(w, 701), 100);
+                    expect(await bot.petKill(701, { ignoreAttackers: true })).toMatchObject({ success: true, killed: true });
+                    const asked = scene({ x: 560200, targetObjectId: ME });
+                    expect(await asked.bot.petKill(701, { ignoreAttackers: true, endOnUsWithin: 250, timeout: 1000 })).toMatchObject({ success: false, reason: 'arrived' });
+                });
+            });
+
+            describe('A7: counting', () => {
+                test('a pet lost between two passes counts one', async () => {
+                    // s6n 2: 'DONE petKill reason=pet_died ... (released)', then 'TEST release in onKill', 'CALL summonPet', result '2 kills ... failures:1' for 2 losses. logs5/a_between2.log: 'kills':1,'fails':0 with loss {cause:'died', targetedBy:[23019]}.
+                    const { w, bot } = petWorld({ skills: skillsWith(simulacrum), nearbyNpcs: [petNpc(), mob({ objectId: 701 }), mob({ objectId: 702, x: 560600 })] });
+                    kills(w);
+                    w.handlers.castSpell = (_a, world) => {
+                        setTimeout(() => {
+                            world.message('You cast a Amber Simulacrum spell!', { type: 'spell' });
+                            world.state.nearbyNpcs = [...world.state.nearbyNpcs, petNpc({ objectId: 620 })];
+                            world.state.pet = petWindow({ objectId: 620 });
+                        }, 5);
+                    };
+                    let once = false;
+                    const r = await bot.grind({
+                        pet: true, maxKills: 2, durationMs: 5000, loot: false,
+                        onKill: () => {
+                            if (once) return;
+                            once = true;
+                            lose(w, { cause: 'released' });
+                            w.publish();
+                        },
+                    });
+                    expect(r).toMatchObject({ kills: 2, failures: 1 });
+                });
+
+                test('heard at the loop head and again by a pass, it is still one', async () => {
+                    const { w, bot } = world({ pet: null, skills: skillsWith(simulacrum), nearbyNpcs: [mob({ objectId: 701 })], lastPetLoss: undefined });
+                    w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message("You don't have enough power to cast that!", { type: 'resisted' }), 5); };
+                    w.state.pet = petWindow();
+                    w.state.nearbyNpcs = [petNpc(), mob({ objectId: 701 })];
+                    w.publish();
+                    orders(w, (a, world) => {
+                        if (a.command !== 'attack') return;
+                        world.message(KILL);
+                        setTimeout(() => lose(world), 20);
+                    });
+                    spyOn(bot, 'rest').mockImplementation(async () => { await Bun.sleep(50); return { success: true, message: 'Rested', healthPercent: 100, manaPercent: 40, endurancePercent: 100, durationMs: 50 }; });
+                    const r = await bot.grind({ pet: true, durationMs: 300, minEngageMs: 0, loot: false });
+                    expect(r.failures).toBe(1);
+                });
+
+                test.each([['the owner\'s death', 'owner_died'], ['a region change', 'region_change']])('%s is no failure of its own', async (_what, cause) => {
+                    const { w, bot } = petWorld({ skills: skillsWith(simulacrum), nearbyNpcs: [petNpc(), mob({ objectId: 701 })] });
+                    kills(w);
+                    w.handlers.castSpell = (_a, world) => { setTimeout(() => { world.message('You cast a Amber Simulacrum spell!', { type: 'spell' }); world.state.nearbyNpcs = [...world.state.nearbyNpcs, petNpc({ objectId: 620 })]; world.state.pet = petWindow({ objectId: 620 }); }, 5); };
+                    w.state.nearbyNpcs.push(mob({ objectId: 702, x: 560600 }));
+                    let once = false;
+                    const r = await bot.grind({
+                        pet: true, maxKills: 2, durationMs: 5000, loot: false,
+                        onKill: () => {
+                            if (once) return;
+                            once = true;
+                            w.removeNpc(PET_ID);
+                            w.state.pet = null;
+                            w.state.lastPetLoss = { objectId: PET_ID, name: 'amber simulacrum', cause: cause as 'owner_died', at: Date.now() };
+                            w.publish();
+                        },
+                    });
+                    expect(r).toMatchObject({ kills: 2, failures: 0 });
+                });
+
+                describe('stylesUsed', () => {
+                    // h6c, sword only, styles ['Dazzling Spear']: 'stylesUsed':8 with 8 lines 'This style requires a Spear weapon!' and 0 'You perform'. h6b step 2: stylesUsed 5, performed 4, refused 1.
+                    const swinging = () => {
+                        const made = world({ pet: null, nearbyNpcs: [mob({ x: 560050 })], nearbyPlayers: [] });
+                        return made;
+                    };
+
+                    test('a style the server refused is none', async () => {
+                        const { w, bot } = swinging();
+                        w.handlers.useSkill = (_a, world) => { setTimeout(() => world.message('This style requires a Spear weapon!'), 5); };
+                        setTimeout(() => dies(w, 700), 150);
+                        expect(await bot.killNpc(700, { styles: ['Backslash'] })).toMatchObject({ success: true, stylesUsed: 0 });
+                        expect(w.sentOf('useSkill').length).toBeGreaterThan(0);
+                    });
+
+                    test('one it took counts', async () => {
+                        const { w, bot } = swinging();
+                        setTimeout(() => dies(w, 700), 150);
+                        expect(await bot.killNpc(700, { styles: ['Backslash'] })).toMatchObject({ success: true, stylesUsed: 1 });
+                    });
+                });
+            });
+
+            describe('A8: replace and the running cast', () => {
+                // s8 summon: 'first {reason:already_dead,left:1327}', then '3284 You lose control of the ruby simulacrum!', '4551 You must select a target for this spell!', '4617 You begin casting a Ruby Simulacrum spell!'. out5/cast6.log, the same, 2633 ms behind.
+                const NUKE = spellOf('Minor Vitality Drain', 651, 1, 0);
+                const SUMMON = spellOf('Amber Simulacrum', 801, 1, 1);
+                const held = async (castMs = 700) => {
+                    const made = petWorld({ skills: skillsWith(NUKE, SUMMON), player: caster(200), nearbyNpcs: [petNpc(), mob({ x: 560500 })] });
+                    made.w.handlers.castSpell = (a, world) => {
+                        if (a.type !== 'castSpell') return;
+                        if (a.spellIndex === 0) return void setTimeout(() => { world.message(`You begin casting a ${NUKE.name} spell!`, { type: 'spell' }); world.combat({ kind: 'spellCast', attackerObjectId: ME, targetObjectId: null, castTimeMs: castMs }); }, 5);
+                        setTimeout(() => {
+                            world.message(`You cast a ${SUMMON.name} spell!`, { type: 'spell' });
+                            world.state.nearbyNpcs = [...world.state.nearbyNpcs, petNpc({ objectId: 620 })];
+                            world.state.pet = petWindow({ objectId: 620 });
+                        }, 5);
+                    };
+                    const releasedAt = { at: 0 };
+                    orders(made.w, (a, world) => {
+                        if (a.command !== 'release') return;
+                        releasedAt.at = Date.now();
+                        world.removeNpc(PET_ID);
+                        world.state.pet = null;
+                    });
+                    setTimeout(() => dies(made.w, 700), 60);
+                    expect(await made.bot.castSpell(NUKE, 700)).toMatchObject({ reason: 'already_dead', targetDied: true });
+                    return { ...made, releasedAt };
+                };
+
+                test('the release comes after the hold: the pet is there for the wait', async () => {
+                    const { w, bot, releasedAt } = await held();
+                    const left = bot.castHeldLeftMs();
+                    expect(left).toBeGreaterThan(300);
+                    const t0 = Date.now();
+                    expect(await bot.summonPet(SUMMON, { replace: true })).toMatchObject({ success: true });
+                    expect(releasedAt.at - t0).toBeGreaterThanOrEqual(left - 60);
+                    expect(castsOf(w).length).toBe(2);
+                });
+
+                test('what the wait changed is judged: a mob on us by its end keeps the pet', async () => {
+                    const { w, bot } = await held();
+                    w.state.nearbyNpcs = [...w.state.nearbyNpcs, mob({ objectId: 701, x: 560050 })];
+                    setTimeout(() => { w.npc(701)!.targetObjectId = ME; }, 100);
+                    expect(await bot.summonPet(SUMMON, { replace: true })).toMatchObject({ success: false, reason: 'in_combat', petState: { objectId: PET_ID } });
+                    expect(w.sentOf('petCommand').filter(a => a.command === 'release')).toEqual([]);
+                });
+
+                test('with no pet there is no release to hold back, and the wait stays castSpell\'s', async () => {
+                    const { w, bot } = world({ pet: null, skills: skillsWith(SUMMON), player: caster(200), nearbyNpcs: [] });
+                    summons(w, SUMMON.name, 'amber simulacrum');
+                    const t0 = Date.now();
+                    expect(await bot.summonPet(SUMMON, { replace: true })).toMatchObject({ success: true });
+                    expect(Date.now() - t0).toBeLessThan(600);
+                });
+            });
+
+            describe('A9: end notes and a corpse', () => {
+                const tired = (o: Partial<BotWorldState> = {}) => world({ pet: null, skills: skillsWith(simulacrum), nearbyNpcs: [], nearbyPlayers: [], nearbyObjects: [], player: makePlayer({ health: 100, healthPercent: 100, mana: 10, maxMana: 200, manaPercent: 5 }), ...o });
+                const noPower = (w: FakeWorld) => { w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message("You don't have enough power to cast that!", { type: 'resisted' }), 5); }; };
+
+                test('no rest ran: the note says what it was at the time, and no "rested"', async () => {
+                    // z21r3.out: 'CALL summonPet 50 ms no_power', no rest call in the run, '... (died); we lost our pet first, with arachite shadowslinker at 86 %; no pet: rested for Summon Bone Chieftan, no time left to cast it'.
+                    const { w, bot } = tired({ nearbyNpcs: [mob({ objectId: 701, x: 561500, targetObjectId: ME })] });
+                    noPower(w);
+                    // Regen in a fight, no rest.
+                    setTimeout(() => { w.player.mana = 60; }, 50);
+                    setTimeout(() => dies(w, 701), 250);
+                    const rest = spyOn(bot, 'rest');
+                    const r = await bot.grind({ pet: true, durationMs: 200, minEngageMs: 0, killTimeout: 50, loot: false });
+                    expect(rest).not.toHaveBeenCalled();
+                    expect(r.message).not.toContain('rested for');
+                    expect(r.message).toContain('; no pet: short of power for Amber Simulacrum at the time (it can cost 50, and we had 10)');
+                });
+
+                test('a rest ran for it, but the run ended by a death: no "no time left"', async () => {
+                    const { w, bot } = tired();
+                    noPower(w);
+                    spyOn(bot, 'rest').mockImplementation(async () => {
+                        w.player.mana = 60;
+                        await Bun.sleep(50);
+                        w.player.isDead = true;
+                        w.player.deathCount = 1;
+                        return { success: false, reason: 'died', message: 'Died', healthPercent: 0, manaPercent: 30, endurancePercent: 100, durationMs: 50 };
+                    });
+                    const r = await bot.grind({ pet: true, durationMs: 2000, loot: false });
+                    expect(r.stopReason).toBe('died');
+                    expect(r.message).not.toContain('no time left');
+                });
+
+                test('a rest that ran for it and a run out of time keeps its wording', async () => {
+                    const { w, bot } = tired();
+                    noPower(w);
+                    spyOn(bot, 'rest').mockImplementation(async () => {
+                        w.player.mana = 60;
+                        await Bun.sleep(150);
+                        return { success: true, message: 'Rested', healthPercent: 100, manaPercent: 40, endurancePercent: 100, durationMs: 150 };
+                    });
+                    const r = await bot.grind({ pet: true, durationMs: 100, minEngageMs: 0 });
+                    expect(r.message).toContain('; no pet: rested for Amber Simulacrum, no time left to cast it');
+                });
+
+                test('still short at the end: the wording stays', async () => {
+                    const { w, bot } = tired();
+                    noPower(w);
+                    spyOn(bot, 'rest').mockImplementation(async () => { await Bun.sleep(150); return { success: false, reason: 'timeout', message: 'Rest timed out', healthPercent: 100, manaPercent: 5, endurancePercent: 100, durationMs: 100 }; });
+                    const r = await bot.grind({ pet: true, durationMs: 100, minEngageMs: 0 });
+                    expect(r.message).toContain('; no pet: short of power for Amber Simulacrum (it can cost 50, and we have 10)');
+                });
+
+                describe('started on a corpse', () => {
+                    // out6/vcorpse-110734: 'GRIND pet on corpse 9 {"s":false,"m":"0 kills, +0 xp, 1 deaths in 0s (died)","reason":"died","deaths":1}', plain grind the same in 0 ms. Beside it summonPet, castSpell, rest and petKill read 'We are dead', reason dead.
+                    const corpse = () => world({ pet: null, player: makePlayer({ isDead: true, health: 0, healthPercent: 0, deathCount: 3 }), skills: skillsWith(simulacrum), nearbyNpcs: [], nearbyObjects: [] });
+
+                    test.each([['a plain run', {}], ['with a pet', { pet: true }]])('%s reads as summonPet, castSpell and rest do, and counts no death', async (_what, o) => {
+                        const { w, bot } = corpse();
+                        const r = await bot.grind({ durationMs: 1000, ...o });
+                        expect(r).toMatchObject({ success: false, message: 'We are dead', reason: 'dead', stopReason: 'error', deaths: 0, kills: 0 });
+                        expect(w.sent).toEqual([]);
+                    });
+
+                    test('respawn: it releases as asked, says so, and that death isn\'t this run\'s', async () => {
+                        const { w, bot } = corpse();
+                        w.handlers.release = (_a, world) => { setTimeout(() => { world.player.isDead = false; world.player.health = 100; world.player.healthPercent = 100; world.player.x += 5000; }, 10); };
+                        const r = await bot.grind({ respawn: true, durationMs: 200, minEngageMs: 0, noTargetTimeoutMs: 0, anchor: { x: 560000, y: 511000, z: 2500 } });
+                        expect(r.deaths).toBe(0);
+                        expect(r.message).toContain('we began on a corpse');
+                        expect(w.sentOf('release')).toHaveLength(1);
+                    });
+
+                    test('a death of this run still counts, after that', async () => {
+                        const again = corpse();
+                        let released = 0;
+                        again.w.handlers.release = (_a, world) => {
+                            setTimeout(() => { world.player.isDead = false; world.player.health = 100; world.player.healthPercent = 100; world.player.x += 5000; }, 10);
+                            if (++released === 1) setTimeout(() => { world.player.isDead = true; world.player.deathCount = 4; }, 100);
+                        };
+                        expect((await again.bot.grind({ respawn: true, durationMs: 400, minEngageMs: 0, noTargetTimeoutMs: 0, anchor: { x: 560000, y: 511000, z: 2500 } })).deaths).toBe(1);
+                    });
+                });
+            });
+
+            describe('A10: lines', () => {
+                const castWith = (lines: (w: FakeWorld) => void, sp: ReturnType<typeof spellOf> = nuke, o: Partial<BotWorldState> = {}) => {
+                    const made = world({ pet: null, skills: skillsWith(sp), nearbyNpcs: [mob({ x: 560500 })], nearbyPlayers: [], nearbyObjects: [], ...o });
+                    made.w.handlers.castSpell = (_a, world) => { setTimeout(() => lines(world), 5); };
+                    return made;
+                };
+
+                test('an interrupt\'s retryAfterMs is the server\'s 2200 (SpellHandler.cs:372, ServerProperties.cs:2221-2222)', async () => {
+                    // cr-420: '15043 finish: earth ... false interrupted The spriggarn elder attacks you and your spell is interrupted!' with retryAfterMs 2000, slept exactly that, '17100 finish: earth ... false must_wait You must wait 1 seconds to cast a spell!'.
+                    const { bot } = castWith(world => world.message('The young wolf attacks you and your spell is interrupted!', { type: 'spell' }));
+                    expect(await bot.castSpell(nuke, 700)).toMatchObject({ reason: 'interrupted', retryAfterMs: 2200 });
+                });
+
+                describe('a spell\'s lines match its whole name', () => {
+                    // s8c-raw: 'NEXT after raw (2758 ms) {"success":false,"message":"That target is too far away!","reason":"out_of_range",... "msgs":["You begin casting a Ice Cloud (Minor) spell!","You are already casting a spell! You prepare this spell as a follow up!","That target is too far away!"]}'.
+                    const ice = spellOf('Ice Cloud', 152);
+                    const minor = spellOf('Ice Cloud (Minor)', 151);
+
+                    test('the begin line of a longer name doesn\'t lift the hold', async () => {
+                        const { bot } = castWith(world => {
+                            world.message('You begin casting a Ice Cloud (Minor) spell!', { type: 'spell' });
+                            world.message('You are already casting a spell! You prepare this spell as a follow up!', { type: 'resisted' });
+                            world.message('That target is too far away!', { type: 'resisted' });
+                        }, ice);
+                        expect(await bot.castSpell(ice, 700)).toMatchObject({ success: false, reason: 'must_wait' });
+                    });
+
+                    test('nor does its "You cast" land this one', async () => {
+                        const { w, bot } = castWith(world => {
+                            world.message('You begin casting a Ice Cloud spell!', { type: 'spell' });
+                            world.message('You cast a Ice Cloud (Minor) spell!', { type: 'spell' });
+                            setTimeout(() => world.message('You cast a Ice Cloud spell!', { type: 'spell' }), 120);
+                        }, ice);
+                        const t0 = Date.now();
+                        expect(await bot.castSpell(ice, 700)).toMatchObject({ success: true });
+                        expect(Date.now() - t0).toBeGreaterThanOrEqual(120);
+                        expect(w.state.gameMessages.at(-1)!.text).toContain('Ice Cloud spell');
+                    });
+
+                    test('a name with a pattern\'s characters in it finds its own lines', async () => {
+                        const { bot } = castWith(world => {
+                            world.message('You begin casting a Ice Cloud (Minor) spell!', { type: 'spell' });
+                            world.message('You cast a Ice Cloud (Minor) spell!', { type: 'spell' });
+                        }, minor);
+                        expect(await bot.castSpell(minor, 700)).toMatchObject({ success: true });
+                    });
+
+                    test('with an "an", as a name may take', async () => {
+                        const { bot } = castWith(world => world.message('You cast an Ice Cloud spell!', { type: 'spell' }), ice);
+                        expect(await bot.castSpell(ice, 700)).toMatchObject({ success: true });
+                    });
+                });
+
+                test('an item\'s recast line is no answer to a cast', async () => {
+                    // b6s: useItem reason=refused 'You must wait 29 more minutes and 58 seconds to discharge this item!', and castSpell returned at 1045 ms with reason=must_wait and that same line, completed false. Chat went on: 'You cast a Turtle's Shell spell!'.
+                    const shell = spellOf("Turtle's Shell", 3570);
+                    const { bot } = castWith(world => {
+                        world.message("You begin casting a Turtle's Shell spell!", { type: 'spell' });
+                        world.message('You must wait 29 more minutes and 58 seconds to discharge this item!', { type: 'system' });
+                        setTimeout(() => world.message("You cast a Turtle's Shell spell!", { type: 'spell' }), 60);
+                    }, shell);
+                    expect(await bot.castSpell(shell)).toMatchObject({ success: true, completed: true });
+                });
+
+                test('...and a cast\'s own wait still is', async () => {
+                    const { bot } = castWith(world => world.message('You must wait 2 seconds to cast a spell!', { type: 'resisted' }));
+                    expect(await bot.castSpell(nuke, 700)).toMatchObject({ reason: 'must_wait', retryAfterMs: 2000 });
+                });
+
+                describe('a song with no instrument out', () => {
+                    // r1on Rbbar: 'You are not wielding the right type of instrument!' at 04:35:17, :35, :47, 04:36:01, :15, with '00:20 Rbbar: song: no_response (No cast observed for Clear Road)' each time; 20261104-050645: song:no_response (13).
+                    const road = spellOf('Clear Road', 5153);
+                    const LINE = 'You are not wielding the right type of instrument!';
+                    const lute = { slot: 13, name: 'lute of ages', level: 1, count: 1, model: 3, objectType: 45, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0, hand: 0 };
+
+                    test('refused at once, with the song\'s name and what we wear, and a retry that backs off', async () => {
+                        const { bot } = castWith(world => world.message(LINE, { type: 'resisted' }), road, { equipment: [lute] });
+                        const t0 = Date.now();
+                        const r = await bot.castSpell(road);
+                        expect(r).toMatchObject({ success: false, reason: 'refused' });
+                        expect(r.message).toContain(LINE);
+                        expect(r.message).toContain('Clear Road');
+                        expect(r.message).toContain('lute of ages');
+                        expect(r.retryAfterMs).toBeGreaterThanOrEqual(30_000);
+                        expect(Date.now() - t0).toBeLessThan(1000);
+                    });
+
+                    test('with none worn it says so', async () => {
+                        const { bot } = castWith(world => world.message(LINE, { type: 'resisted' }), road, { equipment: [] });
+                        expect((await bot.castSpell(road)).message).toContain('we wear none');
+                    });
+
+                    test('castFailureReason reads it so whatever the fallback', () => {
+                        expect(castFailureReason(LINE, 'interrupted')).toBe('refused');
+                    });
+                });
+
+                describe('a cast that ends with no line of its own', () => {
+                    const BLANK = 'Your mind goes blank and you forget what you were doing!';
+                    const began = (world: FakeWorld, sp: { name: string }, ms = 3000) => {
+                        world.message(`You begin casting a ${sp.name} spell!`, { type: 'spell' });
+                        world.combat({ kind: 'spellCast', attackerObjectId: ME, targetObjectId: null, castTimeMs: ms });
+                    };
+
+                    test('Amnesia clears it with no 0x0B (AmnesiaSpellHandler.cs:50): crowd_controlled, not the end of a long wait', async () => {
+                        // r2on: 04:44:59.764 'You begin casting a Summon Aged Ice Spirit spell!', 04:45:00.798 'Your mind goes blank and you forget what you were doing!', then '01:59 Rbthe: nuke: timeout (Cast Summon Aged Ice Spirit, but no pet appeared)'.
+                        const { bot } = castWith(world => { began(world, nuke); setTimeout(() => world.message(BLANK, { type: 'spell' }), 40); });
+                        const t0 = Date.now();
+                        expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: false, reason: 'crowd_controlled', message: BLANK, retryAfterMs: 2000 });
+                        expect(Date.now() - t0).toBeLessThan(800);
+                    });
+
+                    test('a fire-and-forget summon reads it too, with no pet to wait for', async () => {
+                        const fnf = spellOf('Call Minor Earth Elemental', 101);
+                        const { bot } = castWith(world => { began(world, fnf); setTimeout(() => world.message(BLANK, { type: 'spell' }), 40); }, fnf);
+                        const t0 = Date.now();
+                        expect(await bot.summonPet(fnf, { target: 700 })).toMatchObject({ success: false, reason: 'crowd_controlled' });
+                        expect(Date.now() - t0).toBeLessThan(800);
+                    });
+
+                    test('a mezz or a stun sends its 0x0B (CrowdControlECSEffect.cs:26): with its line beside it, crowd_controlled', async () => {
+                        for (const line of ['You are entranced!', 'You are mesmerized!', 'You are stunned!']) {
+                            const { bot } = castWith(world => {
+                                began(world, nuke);
+                                setTimeout(() => { world.message(line, { type: 'spell' }); world.combat({ kind: 'interrupt', attackerObjectId: ME, targetObjectId: null }); }, 30);
+                            });
+                            expect(await bot.castSpell(nuke, 700)).toMatchObject({ success: false, reason: 'crowd_controlled', retryAfterMs: 2000 });
+                        }
+                    });
+
+                    test('an 0x0B alone stays interrupted', async () => {
+                        const { bot } = castWith(world => {
+                            began(world, nuke);
+                            setTimeout(() => world.combat({ kind: 'interrupt', attackerObjectId: ME, targetObjectId: null }), 30);
+                        });
+                        expect(await bot.castSpell(nuke, 700)).toMatchObject({ reason: 'interrupted', retryAfterMs: 2200 });
+                    });
+
+                    test('that line before our cast has begun, or during a song, ends nothing: Amnesia leaves a song alone (AmnesiaSpellHandler.cs:49)', async () => {
+                        const early = castWith(world => {
+                            world.message(BLANK, { type: 'spell' });
+                            setTimeout(() => { world.message(`You cast a ${nuke.name} spell!`, { type: 'spell' }); }, 30);
+                        });
+                        expect(await early.bot.castSpell(nuke, 700)).toMatchObject({ success: true });
+                        const road = spellOf('Clear Road', 5153);
+                        const song = castWith(world => {
+                            began(world, road, 100);
+                            world.message(BLANK, { type: 'spell' });
+                            setTimeout(() => world.message('You cast a Clear Road spell!', { type: 'spell' }), 30);
+                        }, road);
+                        expect(await song.bot.castSpell(road)).toMatchObject({ success: true });
+                    });
+                });
+
+                test('a walk\'s message prints a time whole', async () => {
+                    // 'walk: timeout (Walk timed out after 3644.32275390625ms)'.
+                    const { w, bot } = world();
+                    w.stepSize = 1;
+                    const r = await bot.walkTo(570000, 511000, { timeout: 44.32275390625, stuckMs: 10_000 });
+                    expect(r).toMatchObject({ success: false, reason: 'timeout' });
+                    expect(r.message).toMatch(/^Walk timed out after \d+ms$/);
+                    const obj = world({ pet: null, nearbyNpcs: [mob({ x: 562000 })], nearbyPlayers: [] });
+                    obj.w.stepSize = 1;
+                    expect((await obj.bot.walkToObject(700, { timeout: 44.32275390625 })).message).not.toContain('.');
+                });
+            });
+
+            describe('A11: selection and spots', () => {
+                describe('Release Clump with a mob selected', () => {
+                    // logs5/z2.log: 'selected 21235', then '5 no target, a mob selected, window turret up 304 ms success', '   selected after null'. Compare logs5/z33.log, releasePet: 'selection before 14486 after 14486'.
+                    const clump = spellOf('Release Clump', 11680);
+                    const released = (w: FakeWorld) => {
+                        w.handlers.castSpell = (_a, world) => {
+                            setTimeout(() => {
+                                world.message('You cast a Release Clump spell!', { type: 'spell' });
+                                world.removeNpc(PET_ID);
+                                world.state.pet = null;
+                                world.player.targetObjectId = null;
+                            }, 5);
+                        };
+                    };
+
+                    test('the selection comes back', async () => {
+                        const { w, bot } = petWorld({ skills: skillsWith(clump), player: makePlayer({ targetObjectId: 700 }) });
+                        released(w);
+                        expect(await bot.castSpell(clump)).toMatchObject({ success: true });
+                        expect(w.sentOf('setTarget').map(a => a.objectId)).toEqual([PET_ID, 700]);
+                        expect(w.player.targetObjectId).toBe(700);
+                    });
+
+                    test('a mob gone meanwhile: nothing selected, and not the deleted turret', async () => {
+                        const { w, bot } = petWorld({ skills: skillsWith(clump), player: makePlayer({ targetObjectId: 700 }) });
+                        released(w);
+                        const cast = w.handlers.castSpell!;
+                        w.handlers.castSpell = (a, world) => { world.removeNpc(700); return cast(a, world); };
+                        await bot.castSpell(clump);
+                        expect(w.sentOf('setTarget').at(-1)!.objectId).toBeNull();
+                    });
+
+                    test('a refused one too', async () => {
+                        const { w, bot } = petWorld({ skills: skillsWith(clump), player: makePlayer({ targetObjectId: 700 }) });
+                        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('You must cast this spell on a creature you are controlling', { type: 'system' }), 5); };
+                        expect(await bot.castSpell(clump)).toMatchObject({ success: false, reason: 'invalid_target' });
+                        expect(w.player.targetObjectId).toBe(700);
+                    });
+
+                    test('one of ours selected stays: no select at all', async () => {
+                        const { w, bot } = petWorld({ skills: skillsWith(clump), player: makePlayer({ targetObjectId: PET_ID }) });
+                        released(w);
+                        await bot.castSpell(clump);
+                        expect(w.sentOf('setTarget')).toEqual([]);
+                    });
+                });
+
+                test('a refused replace with no z and no earlier spot clears the refused one', async () => {
+                    // logs5/z6.log: after a drop wiped the spot, 'no previous spot no z d3 1006.5 ... out_of_range ... gt before null at result {"x":336364,...} after 350 {"x":336364,...}'. Then an FnF with no spot: 'You have to select a closer ground target.', where the state before the call would have read no_ground_target.
+                    const { w, bot } = petWorld({ skills: skillsWith(turret), player: makePlayer({ mana: 200, maxMana: 200, manaPercent: 100 }), groundTarget: null });
+                    // The server's way with a spot in no zone (PlayerGroundTargetHandler.cs:21-33, :72-73): Unset, then the line, and the model goes by the line.
+                    w.handlers.setGroundTarget = (a, world) => {
+                        if (a.type !== 'setGroundTarget') return;
+                        world.state.groundTarget = { x: a.x, y: a.y, z: a.z ?? 3400 };
+                        if (getZoneAt(1, a.x, a.y)) return;
+                        setTimeout(() => { world.state.groundTarget = null; world.message('Your ground target is not visible!', { type: 'system' }); }, 5);
+                    };
+                    const r = await bot.summonPet(turret, { replace: true, groundTarget: { x: 560600, y: 511000 } });
+                    expect(r).toMatchObject({ success: false, reason: 'out_of_range', pet: { objectId: PET_ID } });
+                    expect(w.state.groundTarget).toBeNull();
+                    expect(r.message).toContain('beyond');
+                });
+            });
+
+            describe('A12: reach, small', () => {
+                describe('petKill\'s walk for a mob high above us', () => {
+                    // out5/cliff.log: 'mob 24355 sveawolf mother d 2080 d2 1288 dz 1633', 'moved 907 me 725021 744231 6687'. z19.out: start d 2099, at '{d:1920,d2:1283,dz:1429}' the order would already reach; the walk went on to '{d:449,d2:383,dz:234}', 1011 units up a slope.
+                    const high = (d2: number, dz: number) => {
+                        const made = petWorld({ skills: skillsWith(simulacrum), nearbyNpcs: [petNpc(), mob({ x: 560000 + d2, z: 2500 + dz })] });
+                        made.w.stepSize = 10;
+                        const at = { d: Infinity, moved: 0 };
+                        orders(made.w, (a, world) => {
+                            if (a.command !== 'attack') return;
+                            at.d = world.npc(700)!.distance;
+                            at.moved = world.player.x - 560000;
+                            world.message(KILL);
+                            setTimeout(() => dies(world, 700), 20);
+                        });
+                        return { ...made, at };
+                    };
+
+                    test('it stops at the order\'s reach, not 300 from under it', async () => {
+                        const { bot, at } = high(1288, 1633);
+                        expect(await bot.petKill(700)).toMatchObject({ success: true });
+                        expect(at.d).toBeLessThanOrEqual(1925);
+                        expect(at.d).toBeGreaterThan(1800);
+                        expect(at.moved).toBeLessThan(450);
+                    });
+
+                    test('on a slope it looks as it goes: as soon as the reading is in reach', async () => {
+                        const { w, bot, at } = high(1500, 1480);
+                        w.onTick = world => { if (world.state.movement.moving) world.player.z += 8; };
+                        expect(await bot.petKill(700)).toMatchObject({ success: true });
+                        expect(at.d).toBeLessThanOrEqual(1900);
+                        expect(at.moved).toBeLessThan(250);
+                    });
+
+                    test('a mob that moves on: the reading ends the walk, not where it stood at the start. "refused@2004 walked 217", grind then avoids it for 60 s', async () => {
+                        const { w, bot, at } = high(1700, 1200);
+                        w.stepSize = 10;
+                        w.onTick = world => { const m = world.npc(700); if (m) m.x += 4; };
+                        expect(await bot.petKill(700)).toMatchObject({ success: true });
+                        expect(at.d).toBeLessThanOrEqual(1925);
+                    });
+
+                    test('a first order refused at a reading under 1900: it walks nearer than that reading, for the one more try. "orders 2, moves 0, moved 0"', async () => {
+                        const { w, bot } = high(1100, 1500);
+                        const tries: number[] = [];
+                        orders(w, (a, world) => {
+                            if (a.command !== 'attack') return;
+                            tries.push(world.npc(700)!.distance);
+                            if (tries.length === 1) return void world.message('Your target is too far away to attack with your pet!');
+                            world.message(KILL);
+                            setTimeout(() => dies(world, 700), 20);
+                        });
+                        expect(await bot.petKill(700)).toMatchObject({ success: true });
+                        expect(tries.length).toBe(2);
+                        expect(tries[1]).toBeLessThanOrEqual(tries[0]! - 100);
+                        expect(w.sentOf('moveTo').length).toBeGreaterThan(0);
+                    });
+
+                    test('a mob more or less level: 1500 and the walk\'s 100, as ever', async () => {
+                        const { bot, at } = high(2300, 300);
+                        expect(await bot.petKill(700)).toMatchObject({ success: true });
+                        expect(at.d).toBeLessThanOrEqual(1600);
+                        expect(at.d).toBeGreaterThan(1500);
+                    });
+
+                    test('a true cliff keeps the floor: we can only go so near', async () => {
+                        const { bot, w } = high(1000, 2200);
+                        const r = await bot.petKill(700, { timeout: 2000 });
+                        expect(w.sentOf('moveTo').length).toBeGreaterThan(0);
+                        expect(r.reason === 'out_of_range' || r.reason === 'timeout' || r.success).toBeTrue();
+                        expect(Math.abs(w.sentOf('moveTo')[0]!.x - (561000 - 300))).toBeLessThan(10);
+                    });
+                });
+
+                describe('a Necromancer who has lost its servant', () => {
+                    // logs5/d3-c.log: tether cut, L14 fellwood at 41 %, d 2137, HP 135: {killNpc} +11808 timeout 3000, again +14811, again +17814 (first swing +17854), '{killNpc} +20659 = died'. Owner moved from (576651,471045) to (577181,471873), 980 units toward the mob.
+                    const servant = spellOf('Call Minor Zombie Servant', 9401);
+                    const scene = (x: number) => world({ pet: null, skills: skillsWith(servant), player: makePlayer({ className: 'Necromancer', mana: 500, maxMana: 500, manaPercent: 100 }), nearbyNpcs: [mob({ objectId: 701, x, targetObjectId: ME, speed: 190, healthPercent: 41 })], nearbyPlayers: [], nearbyObjects: [] });
+
+                    test('no walk into melee: the summon goes, from inside its room too', async () => {
+                        const { w, bot } = scene(562137);
+                        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('The young wolf attacks you and your spell is interrupted!', { type: 'spell' }), 5); };
+                        setTimeout(() => dies(w, 701), 350);
+                        const melee = spyOn(bot, 'killNpc');
+                        const r = await bot.grind({ pet: true, durationMs: 300, minEngageMs: 0, loot: false });
+                        expect(castsOf(w).length).toBeGreaterThan(0);
+                        expect(melee).not.toHaveBeenCalled();
+                        expect(w.sentOf('moveTo')).toEqual([]);
+                        expect(r.failures).toBe(0);
+                    });
+
+                    test('and between tries it stands: what it would do with no weapon at all', async () => {
+                        const { w, bot } = scene(560100);
+                        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('The young wolf attacks you and your spell is interrupted!', { type: 'spell' }), 5); };
+                        setTimeout(() => dies(w, 701), 450);
+                        const melee = spyOn(bot, 'killNpc');
+                        await bot.grind({ pet: true, durationMs: 400, minEngageMs: 0, loot: false });
+                        expect(melee).not.toHaveBeenCalled();
+                        expect(w.sentOf('attack')).toEqual([]);
+                    });
+
+                    test('another list caster below the room still goes to melee', async () => {
+                        const { w, bot } = world({ pet: null, skills: skillsWith(simulacrum), player: makePlayer({ className: 'Cabalist', mana: 500, maxMana: 500, manaPercent: 100 }), nearbyNpcs: [mob({ objectId: 701, x: 560050, targetObjectId: ME })], nearbyPlayers: [], nearbyObjects: [] });
+                        setTimeout(() => dies(w, 701), 100);
+                        const melee = spyOn(bot, 'killNpc');
+                        await bot.grind({ pet: true, maxKills: 1, durationMs: 1000, loot: false });
+                        expect(melee).toHaveBeenCalled();
+                    });
+                });
+
+                describe('grind\'s summon room sees a mob our own nuke pulled', () => {
+                    // s2.log: 'pull {msg:Cast Minor Vitality Drain on spirit hound for 13 damage}', 'start {near:true,d:671,sp:131,hp:27,tgt:null,atk:[]}', '4 CALL summonPet {} atk=[]', mob '2002 d440', '3004 d307', '4004 d175'. At 190 from 671 it reaches its 200 reach in about 2.5 s, before the half way at 2.95 s.
+                    const pulled = (o: Partial<NearbyNpc>, hit = true) => {
+                        const made = world({ pet: null, skills: skillsWith(simulacrum), player: makePlayer({ className: 'Cabalist', mana: 500, maxMana: 500, manaPercent: 100 }), nearbyNpcs: [running({ objectId: 701, x: 560671, inCombat: true, healthPercent: 27, ...o })], nearbyPlayers: [], nearbyObjects: [] });
+                        if (hit) made.w.combat({ kind: 'spellEffect', attackerObjectId: ME, targetObjectId: 701, effectId: 1 });
+                        made.w.publish();
+                        return made;
+                    };
+
+                    test('below the room no summon starts into it', async () => {
+                        const { w, bot } = pulled({});
+                        setTimeout(() => dies(w, 701), 250);
+                        await bot.grind({ pet: true, durationMs: 200, minEngageMs: 0, loot: false, killTimeout: 50 });
+                        expect(castsOf(w)).toEqual([]);
+                        expect(w.sentOf('moveTo')).toEqual([]);
+                    });
+
+                    test('with room it goes', async () => {
+                        const { w, bot } = pulled({ x: 561500 });
+                        summons(w, simulacrum.name, 'amber simulacrum');
+                        await bot.grind({ pet: true, durationMs: 100, minEngageMs: 0, loot: false, killTimeout: 50 });
+                        expect(castsOf(w).length).toBeGreaterThan(0);
+                    });
+
+                    test('nothing of ours names it: no fight of ours, and the summon goes as ever', async () => {
+                        const { w, bot } = pulled({}, false);
+                        summons(w, simulacrum.name, 'amber simulacrum');
+                        await bot.grind({ pet: true, durationMs: 100, minEngageMs: 0, loot: false, killTimeout: 50 });
+                        expect(castsOf(w).length).toBeGreaterThan(0);
+                    });
+
+                    test('one that isn\'t closing: going away, or stood still, is no such mob', async () => {
+                        const away = mob({ objectId: 701, x: 560671, speed: 190, inCombat: true });
+                        const { w, bot } = pulled({ heading: headingBetween({ x: 560000, y: 511000 }, away) });
+                        summons(w, simulacrum.name, 'amber simulacrum');
+                        setTimeout(() => dies(w, 701), 200);
+                        await bot.grind({ pet: true, durationMs: 100, minEngageMs: 0, loot: false, killTimeout: 50 });
+                        expect(castsOf(w).length).toBeGreaterThan(0);
+                        const still = pulled({ speed: 0 });
+                        summons(still.w, simulacrum.name, 'amber simulacrum');
+                        setTimeout(() => dies(still.w, 701), 200);
+                        await still.bot.grind({ pet: true, durationMs: 100, minEngageMs: 0, loot: false, killTimeout: 50 });
+                        expect(castsOf(still.w).length).toBeGreaterThan(0);
+                    });
+
+                    test('with a pet up it isn\'t looked for: nothing changes for the pet\'s fight', async () => {
+                        const { w, bot } = petWorld({ skills: skillsWith(simulacrum), nearbyNpcs: [petNpc(), running({ objectId: 701, x: 560671, inCombat: true })] });
+                        w.combat({ kind: 'spellEffect', attackerObjectId: ME, targetObjectId: 701, effectId: 1 });
+                        kills(w);
+                        const melee = spyOn(bot, 'killNpc');
+                        expect(await bot.grind({ pet: true, maxKills: 1, durationMs: 2000, loot: false })).toMatchObject({ kills: 1 });
+                        expect(melee).not.toHaveBeenCalled();
+                    });
+                });
+
+                describe('below the room with a mob running at us: let it come', () => {
+                    // s2h: 'CALL killNpc bandit L6 #1703 hp17 d681 sp0 onMe=true', '1001 mob d463 sp115', '2001 mob d176 sp116': closing 218 and 287 units/s with the mob at 115, so we walk at it. That took a L10 caster into the bandit camp.
+                    const coming = (o: Partial<NearbyNpc>) => world({ pet: null, skills: skillsWith(simulacrum), player: makePlayer({ className: 'Cabalist', mana: 500, maxMana: 500, manaPercent: 100 }), nearbyNpcs: [running({ objectId: 701, x: 560681, targetObjectId: ME, healthPercent: 17, ...o })], nearbyPlayers: [], nearbyObjects: [] });
+
+                    test('no walk out to it; melee once it has arrived', async () => {
+                        const { w, bot } = coming({});
+                        w.onTick = world => { const m = world.npc(701); if (m && m.x > 560100) m.x -= 10; };
+                        setTimeout(() => dies(w, 701), 900);
+                        const melee = spyOn(bot, 'killNpc');
+                        await bot.grind({ pet: true, maxKills: 1, durationMs: 3000, loot: false, killTimeout: 2000 });
+                        expect(melee).toHaveBeenCalled();
+                        const first = melee.mock.calls[0]![0] as NearbyNpc;
+                        expect(first.distance).toBeLessThanOrEqual(170);
+                        expect(w.player.x).toBeLessThan(560100);
+                    });
+
+                    test('one reading no speed yet gets a moment to turn, as a mob just hit does', async () => {
+                        const { w, bot } = coming({ speed: 0 });
+                        setTimeout(() => { const m = w.npc(701); if (m) m.speed = 190; }, 200);
+                        w.onTick = world => { const m = world.npc(701); if (m && m.speed > 0 && m.x > 560100) m.x -= 10; };
+                        setTimeout(() => dies(w, 701), 1200);
+                        const melee = spyOn(bot, 'killNpc');
+                        await bot.grind({ pet: true, maxKills: 1, durationMs: 3000, loot: false, killTimeout: 2000 });
+                        const first = melee.mock.calls[0]![0] as NearbyNpc;
+                        expect(first.distance).toBeLessThanOrEqual(170);
+                    });
+
+                    test('one that stands, a caster mob: we go after that moment, as ever', async () => {
+                        const { w, bot } = coming({ speed: 0 });
+                        setTimeout(() => dies(w, 701), 1800);
+                        const melee = spyOn(bot, 'killNpc');
+                        const t0 = Date.now();
+                        await bot.grind({ pet: true, maxKills: 1, durationMs: 3000, loot: false, killTimeout: 2000 });
+                        expect(melee).toHaveBeenCalled();
+                        expect(Date.now() - t0).toBeLessThan(2600);
+                        expect(w.sentOf('moveTo').length).toBeGreaterThan(0);
+                    });
+
+                    test('with no pet plan nothing changes: a plain run walks out as it always has', async () => {
+                        const { bot } = coming({});
+                        const melee = spyOn(bot, 'killNpc').mockImplementation((async () => ({ success: true, killed: true, npc: null, xpGained: 0, durationMs: 1, message: 'ok', rpGained: 0, moneyGained: 0, itemsGained: [], levelsGained: 0, stylesUsed: 0 })) as unknown as typeof bot.killNpc);
+                        const t0 = Date.now();
+                        await bot.grind({ maxKills: 1, durationMs: 1000, loot: false });
+                        expect(melee).toHaveBeenCalled();
+                        expect(Date.now() - t0).toBeLessThan(150);
+                    });
                 });
             });
         });
