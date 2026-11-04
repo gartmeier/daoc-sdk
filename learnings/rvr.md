@@ -254,6 +254,8 @@ Alternating, 10 minutes each. The Hero's damage rose in two of three pairs (he r
 
 **Harder since the night:** the pack went from 15 kills, 0 deaths a round to about 10 and 2 once Midgard and Camelot had their fixes, and Ciaran had his pet and kit. Those arrived together, so this doesn't say which.
 
+**Ciaran's pet,** three rounds each, alternating: with it 27 kills, 10 deaths, 240 RP, 18 Midgard kills; without 7, 9, 84, 2. It doesn't hurt the raid. That's as far as this goes: the rounds without it also met far fewer enemies (travel 75, 89, 58 % against 54, 41, 55; one had no fight at all), which a pet shouldn't cause, so the gap in kills overstates it.
+
 **Within the noise so far:** Brigid's acuity and giving up a healed focus. Before the give-up the pack went 17/0, 16/0, 21/0 and 6/5; with it 8/2, 17/0, 13/1, 19/1, 18/1. It did stop the 5 minutes on one Troll, but single deaths now show up where the rounds before it had none. The early comparison (63/0 in 45 minutes against 20/10 in 22) overstated the gain: opponents get absent or farmed, and s17 and s18 (18/0, 11/1, 0 RP) had no Midgard at all, so count those out. c3, 12/0, was also the pack and no control.
 
 **Not done:** Oisin's mezz cure (Clarifying Harmonies): a member's report doesn't say it's mezzed. The Hero's post-block stuns. A member rezzed in the field isn't told apart from a released one for the rebuff.
