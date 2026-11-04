@@ -99,29 +99,38 @@ export function fighters(runs: Run[], last: number): Fighter[] {
     return [...out.values()].sort((a, b) => b.dealt - a.dealt);
 }
 
-const GROUPS = join(import.meta.dir, '..', 'groups');
+const REPO = join(import.meta.dir, '..');
 const seen = new Map<string, { mtimeMs: number; run: Run | null }>();
 
-/** Every round on disk. A report doesn't change once written, so each is parsed once. */
+/** The groups folders with reports: this checkout's, and each worktree's, where a session testing its own branch keeps them. */
+function groupsDirs(): string[] {
+    const worktrees = join(REPO, '.claude', 'worktrees');
+    const others = existsSync(worktrees) ? readdirSync(worktrees).map(w => join(worktrees, w, 'groups')) : [];
+    return [join(REPO, 'groups'), ...others].filter(d => existsSync(d));
+}
+
+/** Every round on disk, each once however many checkouts hold a copy. A report doesn't change once written, so each is parsed once. */
 function loadRuns(): Run[] {
-    const runs: Run[] = [];
-    for (const group of readdirSync(GROUPS)) {
-        const dir = join(GROUPS, group, 'runs');
-        if (!existsSync(dir)) continue;
-        for (const file of readdirSync(dir)) {
-            if (!file.endsWith('.json')) continue;
-            const path = join(dir, file);
-            const { mtimeMs } = statSync(path);
-            let hit = seen.get(path);
-            if (hit?.mtimeMs !== mtimeMs) {
-                try { hit = { mtimeMs, run: toRun(JSON.parse(readFileSync(path, 'utf-8'))) }; }
-                catch { hit = { mtimeMs, run: null }; } // still being written
-                seen.set(path, hit);
+    const runs = new Map<string, Run>();
+    for (const groups of groupsDirs()) {
+        for (const group of readdirSync(groups)) {
+            const dir = join(groups, group, 'runs');
+            if (!existsSync(dir)) continue;
+            for (const file of readdirSync(dir)) {
+                if (!file.endsWith('.json')) continue;
+                const path = join(dir, file);
+                const { mtimeMs } = statSync(path);
+                let hit = seen.get(path);
+                if (hit?.mtimeMs !== mtimeMs) {
+                    try { hit = { mtimeMs, run: toRun(JSON.parse(readFileSync(path, 'utf-8'))) }; }
+                    catch { hit = { mtimeMs, run: null }; } // still being written
+                    seen.set(path, hit);
+                }
+                if (hit.run) runs.set(`${group}/${file}`, hit.run);
             }
-            if (hit.run) runs.push(hit.run);
         }
     }
-    return runs;
+    return [...runs.values()];
 }
 
 const PAGE = `<!doctype html>
