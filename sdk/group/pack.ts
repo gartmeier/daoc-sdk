@@ -68,6 +68,10 @@ export interface PackOptions {
     chaseGap: number;
     /** More than that: run on, at most this many more times; then stand, since running on gets us killed from behind. */
     maxLegs: number;
+    /** Give up a focus whose health climbs this much above the lowest we had it at ... */
+    healedBy: number;
+    /** ... and leave it alone for this long. */
+    droppedMs: number;
     /** Stop fighting chasers after this long. */
     killMs: number;
     /** Don't turn on stragglers with a member below this % health. */
@@ -93,7 +97,7 @@ export const PACK_OPTIONS: PackOptions = {
     // User, live: fights may be joined head on, the first version avoided all of them. Only a real crowd is refused.
     maxFoes: 8, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
     raidMs: 8000, finishMs: 4000, finishHp: 25, closeCount: 3, closeIn: 700,
-    pullBack: 1500, pullMs: 6000, maxChasers: 2, chaseGap: 800, maxLegs: 0, killMs: 12_000, preyHp: 40,
+    pullBack: 1500, pullMs: 6000, maxChasers: 2, chaseGap: 800, maxLegs: 0, killMs: 12_000, preyHp: 40, healedBy: 30, droppedMs: 15_000,
     leave: 2000, cooldownMs: 0,
     rebuffMs: 20_000, rebuffReady: { hp: 90, mana: 80 }, keepRadius: 2500,
 };
@@ -156,6 +160,16 @@ export function packCc(foes: readonly Contact[], members: readonly MemberReport[
     });
 }
 
+/**
+ * Whether to give up the focus: its health climbed this much above the lowest we had it at, so a healer is out-healing
+ * us. s11: Troll#437 went 36, 11, 46, 92, while five members died round it. Remembers the lowest per target in `seen`.
+ */
+export function focusHealed(seen: Record<number, number>, focus: Pick<Contact, 'objectId' | 'hp'>, healedBy: number): boolean {
+    const low = Math.min(seen[focus.objectId] ?? 100, focus.hp);
+    seen[focus.objectId] = low;
+    return focus.hp - low >= healedBy;
+}
+
 export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     const { picture: p, orders: o, memory: mem, settings: s, now } = ctx;
     const k = s.pack;
@@ -198,6 +212,16 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         const x = Math.round(c.x / 200) * 200, y = Math.round(c.y / 200) * 200;
         return { x, y, z: zAt({ x, y }) };
     };
+    // The focus stays, unless it is out of reach or a healer is winning: then the next one, and that target rests a while.
+    const keepFocus = (pool: readonly Contact[]): Contact | null => {
+        mem.lowHp ??= {};
+        mem.dropped ??= {};
+        for (const [id, until] of Object.entries(mem.dropped) as [string, number][]) if (until <= now) { delete mem.dropped[id]; delete mem.lowHp[id]; }
+        const held = pool.find(c => c.objectId === o.focus);
+        if (held && focusHealed(mem.lowHp, held, k.healedBy)) mem.dropped[held.objectId] = now + k.droppedMs;
+        const fresh = pool.filter(c => !mem.dropped[c.objectId]);
+        return fresh.find(c => c.objectId === o.focus) ?? pickPackFocus(fresh.length ? fresh : pool, centre, k.reach);
+    };
     const startPull = (why: string, legs = 0): OrdersUpdate => {
         mem.pack = 'pull';
         mem.pullAt = now;
@@ -233,8 +257,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     if (mem.pack === 'raid') {
         const anchor: Point3 = mem.packAnchor;
         const reachable = free.filter(c => dist(c, centre) <= k.reach);
-        const held = reachable.find(c => c.objectId === o.focus) ?? null;
-        const focus = held ?? pickPackFocus(reachable, centre, k.reach);
+        const focus = keepFocus(reachable);
         const elapsed = now - mem.raidAt;
         const casters = main.filter(soft);
         const close = free.filter(c => casters.some(m => dist(m, c) <= k.closeIn)).length;
@@ -274,7 +297,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         else {
         const near = close.filter(c => dist(c, centre) <= k.crowdRadius).length;
         if (near > k.maxChasers + 1 && (mem.pullLegs ?? 0) < k.maxLegs) return startPull(`${near} on us`, (mem.pullLegs ?? 0) + 1);
-        const focus = close.find(c => c.objectId === o.focus) ?? pickPackFocus(close, centre, k.reach);
+        const focus = keepFocus(close);
         return fight('kill', focus, packCc(close, main, o.cc, { centre, focus, areaRadius, roots: true, now }), onFocus(focus), `${close.length} chasers vs ${main.length}`);
         }
     }

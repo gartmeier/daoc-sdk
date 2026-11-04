@@ -107,6 +107,19 @@ describe('decidePack: who makes it rest', () => {
     });
 });
 
+describe('decidePack: a focus being healed', () => {
+    test('is given up for the next, and comes back after a while', () => {
+        const m: any = { pack: 'kill', killAt: 0 };
+        const two = (hp: number) => [foe(101, 11_000, 10_000, { hp }), foe(102, 11_100), foe(103, 13_900)];
+        expect(decidePack(ctx(picture(team(), two(20)), { memory: m, orders: { focus: 101 }, now: 500 })).focus).toBe(101);
+        expect(decidePack(ctx(picture(team(), two(45)), { memory: m, orders: { focus: 101 }, now: 1000 })).focus).toBe(101);
+        expect(decidePack(ctx(picture(team(), two(60)), { memory: m, orders: { focus: 101 }, now: 1500 })).focus).toBe(102);
+        expect(decidePack(ctx(picture(team(), two(60)), { memory: m, orders: { focus: 102 }, now: 2000 })).focus).toBe(102);
+        m.killAt = 16_000;
+        expect(decidePack(ctx(picture(team(), [foe(101, 11_000, 10_000, { hp: 60 })]), { memory: m, orders: { focus: 102 }, now: 17_000 })).focus).toBe(101);
+    });
+});
+
 describe('decidePack: prey', () => {
     test('five against two is hunted even while cooling down, and killed with the Hero, not stood off from', () => {
         const m: any = { raidEnd: 5000 };
