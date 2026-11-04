@@ -212,6 +212,25 @@ From the analysis of rounds 9-11 (`groups/midgard/lab_log.md`). Checked with `sd
   - **Why it mattered:** an assignment is kept (`assignCc`) and the other mezzers stay off its target until the 8 s stall. In round 11 (20261103-211703) Bragi held a target for 191 s over 65 of 185 order lines, and for 178 s of those another of the three mezzers had no assignment. That's an upper bound, since the log doesn't show who was dead or away.
   - **Live:** the Skald reported `cc=false` and got none of the orders in 371 order lines. The Healer, Shaman and Spiritmaster got them all.
 
+## Casters that cast: Camelot on roaming, 2026-11-04
+
+Camelot's casters landed 0.7 nukes a minute each, first nuke about 44 s into a round, losing 2.7 kills to 7.3 deaths per 10 minutes. Alternating 10-minute rounds against the other two groups, in the order tried. Each row is 2-6 rounds a side, and identical settings vary from 4 to 23 kills, so only the sum of them means much. Flags in `groups/camelot/rvr.ts`, details in its lab log.
+
+| Change | Kills / deaths / RP | Against |
+|---|---|---|
+| Morgana and Taliesin don't root, `standGround` with no `position()`, `softFocus` (5 rounds) | 53 / 33 / 660 | 5 / 17 / 151 in 2 rounds of the control |
+| The same with no power floor, `standStep` 1000 (3) | 30 / 11 / 312 | 35 / 20 / 340 in the 3 alternating rounds |
+| Chant twist on the Paladin (3) | 28 / 8 / 313 | 33 / 19 / 310 |
+| `standStep` 1800 (6) | 86 / 32 / 1022 | 67 / 44 / 775 |
+| Clear Mind (`cureMezz`) (3): no clear gain | 42 / 14 / 236 | 33 / 13 / 405 |
+| Amplify Running in travel (3): no gain | 17 / 21 / 244 | 33 / 23 / 57 |
+
+- **Why the casters did so little:** a root doesn't stop a player casting and costs a cast; a cast that walks at its target walks into melee; and focus stuck on a healer who heals it back.
+- **`softFocus`** (`RvrSettings`, off by default): the pack's `pickPackFocus` and `focusHealed` on roaming, and known healers first for the mezz.
+- **A long step works on roaming:** with `standStep` 1800 casters stand closer together and deal more, against the pack's 500. A fight here lasts minutes instead of 8 s, so they need to follow it.
+- **The pack on Camelot, with its own choices:** 4 / 7 / 36 in two rounds, 64-73 % of the time walking. Too few rounds to say why; Camelot has no Bard to go in front.
+- **What isn't known:** whether this suits a group with a second melee fighter. Midgard and Hibernia haven't run it.
+
 ## Unverified / next
 
 - **Resurrection:** only a short run with one enemy so far (above), not yet a round against the other groups.
@@ -304,6 +323,8 @@ Alternating, 10 minutes each. The Hero's damage rose in two of three pairs (he r
 **A mezz cure for the pack:** tried and taken out. Oisin cured 1-24 times a round, and six rounds each came to 47 kills, 14 deaths with it, 68 and 12 without, phantom rounds included; 27 / 6 against 34 / 8 without them. Lines about acting while mezzed fell in the first three rounds (0, 1, 1 against 35, 26, 13) and not in the next three (11, 23, 0 against 0, 13, 28). Oisin is often mezzed himself. Main's `cureMezz` stays available for a list that wants it.
 
 **Harder since the night:** the pack went from 15 kills, 0 deaths a round to about 10 and 2 once Midgard and Camelot had their fixes, and Ciaran had his pet and kit. Those arrived together, so this doesn't say which.
+
+**Ciaran's pet,** three rounds each, alternating: with it 27 kills, 10 deaths, 240 RP, 18 Midgard kills; without 7, 9, 84, 2. It doesn't hurt the raid. That's as far as this goes: the rounds without it also met far fewer enemies (travel 75, 89, 58 % against 54, 41, 55; one had no fight at all), which a pet shouldn't cause, so the gap in kills overstates it.
 
 **Within the noise so far:** Brigid's acuity and giving up a healed focus. Before the give-up the pack went 17/0, 16/0, 21/0 and 6/5; with it 8/2, 17/0, 13/1, 19/1, 18/1. It did stop the 5 minutes on one Troll, but single deaths now show up where the rounds before it had none. The early comparison (63/0 in 45 minutes against 20/10 in 22) overstated the gain: opponents get absent or farmed, and s17 and s18 (18/0, 11/1, 0 RP) had no Midgard at all, so count those out. c3, 12/0, was also the pack and no control.
 
