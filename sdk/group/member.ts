@@ -157,6 +157,8 @@ export class MemberContext<S = any> {
     result(kind: string, r: { success: boolean; reason?: string; message?: string; targetDied?: true }, targetId: number | null = null): void {
         if (r.targetDied) return;
         if (!r.success && !this.onSide) this.agent.stepFailed = true;
+        if (r.reason === 'crowd_controlled' && /mesmeri[sz]ed/i.test(r.message ?? '')) this.agent.mezzedAt = Date.now();
+        else if (r.success) this.agent.mezzedAt = undefined;
         // For the whole group, whatever the client knows of models: the order, the cast or the swing was at a shade.
         const region = this.sdk.getPlayer()?.regionId;
         if (targetId !== null && region !== undefined && r.message?.includes(SHADE_REFUSED)) this.agent.board.markUnattackable(targetId, region, UNATTACKABLE_MS);
@@ -200,6 +202,7 @@ export class MemberAgent<S = any> {
     lastSkip = '';
     /** The behaviour now running reported a failed action. */
     stepFailed = false;
+    mezzedAt: number | undefined;
     /** What the behaviour now running has announced (MemberContext.turn). */
     turn: { kind: string; targetId: number | null } | null = null;
     private activity: Activity = { kind: 'idle', targetId: null, detail: '', since: Date.now() };
@@ -249,7 +252,7 @@ export class MemberAgent<S = any> {
             for (const m of fresh) countCombatMessage(m.text, this.combat, own);
         }
         this.lastMessageId = state.gameMessages.at(-1)?.id ?? this.lastMessageId;
-        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat }, this.options.sightRadius);
+        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat, mezzedAt: this.mezzedAt }, this.options.sightRadius);
         if (obs) this.board.publish(obs);
     }
 

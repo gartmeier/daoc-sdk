@@ -247,6 +247,11 @@ export class Spellbook {
             .sort((a, b) => b.range - a.range || b.spell.level - a.spell.level);
     }
 
+    /** A cure for a mezz on someone else. */
+    cureMezz(): SpellPick | null {
+        return best(this.all().filter(s => s.type === 'CureMezz' && this.ready(s)));
+    }
+
     /** A Confusion spell: it interrupts on landing, and being timed, also when resisted (ConfusionSpellHandler.cs:46, SpellHandler.StartSpellNegatedInterruptTimer). */
     confuse(): SpellPick | null {
         return best(this.all().filter(s => s.type === 'Confusion' && s.target === 'Enemy' && s.range > 0 && s.radius === 0 && this.ready(s)));

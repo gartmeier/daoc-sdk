@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from 'bun:test';
-import { areaMezzCatch, backupHealWanted, confuse, interrupt, rest, SAVING_POWER, standStepTo } from './behaviors';
+import { areaMezzCatch, backupHealWanted, confuse, interrupt, rest, SAVING_POWER, standStepTo, memberMezzed } from './behaviors';
 import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
 import { enemy, obs, picture, report, sighting } from './fixtures';
@@ -555,6 +555,18 @@ describe('areaMezzCatch', () => {
     test('nothing when the focus would be caught', () => {
         expect(areaMezzCatch(t, [t, n, far], 350, 2)).toEqual([]);
         expect(areaMezzCatch(t, [t, n, far], 350, 3).length).toBe(2);
+    });
+});
+
+describe('memberMezzed', () => {
+    const now = 100_000;
+    test('from the server\'s answer, for a few seconds; from a displayed effect; never dead', () => {
+        expect(memberMezzed({ effects: [], isDead: false, mezzedAt: now - 3000 }, now)).toBe(true);
+        expect(memberMezzed({ effects: [], isDead: false, mezzedAt: now - 5000 }, now)).toBe(false);
+        expect(memberMezzed({ effects: [], isDead: false }, now)).toBe(false);
+        expect(memberMezzed({ effects: ['Mesmerizing Hymn'], isDead: false }, now)).toBe(true);
+        expect(memberMezzed({ effects: ['Holding Vines'], isDead: false }, now)).toBe(false);
+        expect(memberMezzed({ effects: ['Mesmerizing Hymn'], isDead: true }, now)).toBe(false);
     });
 });
 
