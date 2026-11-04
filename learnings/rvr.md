@@ -147,6 +147,20 @@ Two groups of five in Thidranki, starter gear, 5 minutes each, counted by each b
 - **The real rounds can't show this:** before this change a cast answered "immune" counted as a success, so round 9's reports (20261103-2038xx) have 116 `cc: ok` and no way to tell how many were wasted. Reports now keep them apart: `actions.cc` is what landed, and `failures` has `cc:immune`, `cc:already_on`, `cc:resisted` and `cc:no_effect`.
 - **33 "broke" lines in round 9, 25 of them about roots,** most of them false: a rooted player swings and casts as before. Each freed its target for another root, which then got "already has that effect". Only walking off counts as a root breaking now.
 
+## Three routine gaps, closed on 2026-11-04
+
+From the analysis of rounds 9-11 (`groups/midgard/lab_log.md`). Checked with `sdk/test/live/rvr-routines-live.ts` on a throwaway stack: Albion against Midgard, five each at level 24, starter gear, three runs of 4-7 minutes. It shows the code does what it says. No round against the real groups has run on it, so what it does to kills and deaths isn't known.
+
+- **A Paladin plays his chants in RvR:** `song()` is in the tank list, for anyone who knows one. Galahad's kit already had it, since after round 11, and a second `song()` sends nothing twice. New in the choice: armor in a fight, endurance while he is below 30 %. In the two 7-minute runs he had Crusader's Defense on for 307 and 131 s and Persistence for 95 and 135 s, with 7 and 4 chant casts, and landed 36 and 18 styles. How many he can run, and the swing: [classes/paladin.md](classes/paladin.md).
+- **`0 song actions` undercounts:** a chant sent raw while swinging logs no action. Read his effects instead.
+- **An idle healer nukes on spare power (`spareNuke`):** below every heal and `position` in the healer list, above 75 % power only (so a heal or the rez at 75 % stays affordable), for whoever knows a nuke. That includes a Druid, in the pack's lists too. A member with no nuke is untouched, and a Shaman's kit keeps its own `assist`.
+  - **Live:** the Cleric cast 7 and 4 Minor Judgements for 307 and 151 damage, against about 7 and 14 heals. Her power fell to 12 and 1 % from healing, so the nukes stopped long before that: "saving power" was her last skip in about 90 s of each run.
+  - **The step:** with no step at all, "focus out of reach" was her last skip in 187 of 374 s. With a step of up to 400 it was 5 of 256 s. That's one run each, and the run with the step had fewer nukes because she healed twice as much.
+  - **What it's worth:** little damage, as the analysis expected. The other four of her group dealt 404-1454 each in the same runs. Whether it costs a heal hasn't been measured: a 3 s cast can't be stopped for one, and "heal: not enough power" was her last skip for 2 s in one run.
+- **No crowd-control orders for a member who can't carry them out:** a member reports `cc` only with `crowdControl` in its list, as `rez` already did. This also leaves a Skald's power out of `ready` and the songs' `powerBelow` unless it heals or nukes.
+  - **Why it mattered:** an assignment is kept (`assignCc`) and the other mezzers stay off its target until the 8 s stall. In round 11 (20261103-211703) Bragi held a target for 191 s over 65 of 185 order lines, and for 178 s of those another of the three mezzers had no assignment. That's an upper bound, since the log doesn't show who was dead or away.
+  - **Live:** the Skald reported `cc=false` and got none of the orders in 371 order lines. The Healer, Shaman and Spiritmaster got them all.
+
 ## Unverified / next
 
 - **Resurrection:** only a short run with one enemy so far (below), not yet a round against the other groups.
