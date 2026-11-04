@@ -279,6 +279,8 @@ Alternating, 10 minutes each. The Hero's damage rose in two of three pairs (he r
 
 **The ring the other way,** four rounds each: reversed 16 kills, 13 deaths, 180 RP, 8 Midgard kills; as it was 44, 15, 292, 23. Tried because Hibernia and Albion go round the same way, and kills follow contact. The reversed rounds did walk the other way, and met no more enemies. Taken out.
 
+**Pack against roaming again, on the tougher field** (roaming with softFocus, batch stopped early): roaming 4 rounds, 28 kills, 50 deaths, 440 RP; pack 3 full rounds, 24 kills, 17 deaths, 384 RP. Per round about the same kills and half the deaths or better for the pack. The pack is down to about 8 kills and 6 deaths a round from 15 and 0 last night.
+
 **Within the noise so far:** Brigid's acuity and giving up a healed focus. Before the give-up the pack went 17/0, 16/0, 21/0 and 6/5; with it 8/2, 17/0, 13/1, 19/1, 18/1. It did stop the 5 minutes on one Troll, but single deaths now show up where the rounds before it had none. The early comparison (63/0 in 45 minutes against 20/10 in 22) overstated the gain: opponents get absent or farmed, and s17 and s18 (18/0, 11/1, 0 RP) had no Midgard at all, so count those out. c3, 12/0, was also the pack and no control.
 
 **Not done:** Oisin's mezz cure (Clarifying Harmonies): a member's report doesn't say it's mezzed. The Hero's post-block stuns. A member rezzed in the field isn't told apart from a released one for the rebuff.
