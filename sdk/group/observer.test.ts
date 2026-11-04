@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { findingsFor, formatReport, GroupObserver, saveReport, stampOf, type RunReport } from './observer';
-import { contact, picture, report } from './fixtures';
+import { contact, enemy, picture, report } from './fixtures';
 import type { Capabilities, GroupEvent, MemberReport, PetReport } from './types';
 
 const T0 = 1_800_000_000_000;
@@ -83,6 +83,18 @@ describe('GroupObserver', () => {
     const act = (kind: string, since = 0) => ({ activity: { kind, targetId: kind === 'idle' ? null : 7, detail: '', since } });
     const wolf = contact(7, { target: 'Tank', threat: true, x: 0 });
     const calm = (o: GroupObserver, from: number) => { for (let i = 0; i < 3; i++) o.sample(picture(members(), [], { seq: 9, phase: 'recover' }, T0 + (from + i) * 1000)); };
+
+    test('a walk to a crowd-control target is no positioning: combatRange has nothing to say about it', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 });
+        for (let i = 1; i <= 10; i++) {
+            const Menta = i <= 3 ? { activity: { kind: 'move', targetId: 8, detail: 'cc: into range for Hold Spirit', since: T0 + i * 1000 } } : act('nuke', T0 + 3700);
+            o.sample(picture(members({ Menta }), [wolf], { seq: 2, phase: 'engage', focus: 7 }, T0 + i * 1000));
+        }
+        calm(o, 11);
+        const r = o.report();
+        expect(r.members.Menta!.movingInFights).toBe(0);
+        expect(r.findings.filter(f => f.topic === 'positioning' && f.member === 'Menta')).toEqual([]);
+    });
 
     test('a nuker moving in 30% of engaged time gets a positioning finding; openerMs is its first nuke after the engage', () => {
         const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 });
@@ -499,8 +511,20 @@ describe('GroupObserver: pets', () => {
         for (let i = 4; i <= 6; i++) o.sample(picture(members(), [], { seq: 2, phase: 'recover' }, T0 + i * 1000));
         const r = o.report();
         expect(r.totals.kills).toBe(0);
-        expect(r.fights[0]).toMatchObject({ kills: ['earthen spirit'], outcome: 'won' });
+        expect(r.fights[0]).toMatchObject({ kills: [], outcome: 'won' });
         expect(r.timeline.join('\n')).toContain('earthen spirit (L20) died');
+    });
+
+    test('a fight\'s kills are the real ones: "00:31 Briton: won in 74 s, kills 5" under a header of 4, with an emerald simulacrum in them', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        for (let i = 1; i <= 3; i++) o.sample(picture(members(), [contact(700, { name: 'emerald simulacrum', realm: 'midgard', isPet: true, target: 'Druid', threat: true }), enemy(701, 'midgard', { target: 'Tank', threat: true })], { seq: 1, phase: 'engage', focus: 701 }, T0 + i * 1000));
+        o.handle({ at: T0 + 3400, kind: 'kill', member: 'Tank', targetId: 701, text: 'Briton (L20) died', data: { name: 'Briton', level: 20, kind: 'player', realm: 'midgard' } });
+        o.handle({ at: T0 + 3500, kind: 'kill', member: 'Tank', targetId: 700, text: 'emerald simulacrum (L21) died', data: { name: 'emerald simulacrum', level: 21, kind: 'npc', realm: 'midgard', pet: true } });
+        for (let i = 4; i <= 6; i++) o.sample(picture(members(), [], { seq: 2, phase: 'recover' }, T0 + i * 1000));
+        const r = o.report();
+        expect(r.totals.kills).toBe(1);
+        expect(r.fights[0]).toMatchObject({ kills: ['Briton'], outcome: 'won' });
+        expect(formatReport(r)).toContain('kills 1,');
     });
 
     test('Drew the focus reads - with no hold samples, as On focus does: "tank held \'-%\', table \'Drew the focus 0%\'" (20261103-154125)', () => {

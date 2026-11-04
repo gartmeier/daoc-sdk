@@ -5,15 +5,15 @@ import { join } from 'path';
 import { BotSDK } from '../index';
 import { BotActions, castFailureReason, tradeSlotWait, getNavmeshStore, type KillResult, type NavMesh, type NavmeshStore, type PetCommandResult } from '../actions';
 import { ActionHelpers, PVP_IMMUNE_RETRY_MS, resurrectCost } from '../actions-helpers';
-import { ChatHistory } from '../chat-history';
 import { setDefaultPathProvider, StraightLinePathProvider, type PathProvider } from '../pathfinding';
-import { executionContext, throwIfExecutionAborted } from '../execution-context';
+import { executionContext } from '../execution-context';
 import { ObjectType } from '../types';
 import type { Build } from '../../data/builds/types';
 import { getSpells } from '../../data/index';
 import { specKey } from '../../data/spec-names';
 import type { ActionResult, BotAction, BotWorldState, GameMessage, InventoryItem, NearbyNpc, NearbyPlayer, PetCommand, PetState, PlayerState, Spell } from '../types';
-import { makeMessage, makeNpc, makeObject, makePlayer, makePlayerObj, makeState } from './fixtures';
+import { makeNpc, makeObject, makePlayer, makePlayerObj, makeState } from './fixtures';
+import { defaultHandlers, FakeWorld, type Handler } from './fake-world';
 
 // Fixed straight-line paths: a locally built server/navmesh/zone000.nav would otherwise route every walk here.
 // No mesh under these worlds, built on this machine or not: a test that wants one says what it answers.
@@ -26,143 +26,6 @@ afterAll(() => {
     setDefaultPathProvider(null);
     navmeshAt.mockRestore();
 });
-
-// ── A tiny simulated world behind a stubbed BotSDK ─────────────────────────
-
-type Handler = (action: BotAction, world: FakeWorld) => ActionResult | void;
-
-class FakeWorld {
-    state: BotWorldState;
-    sent: BotAction[] = [];
-    handlers: Partial<Record<BotAction['type'], Handler>> = {};
-    /** Units per tick the mover advances. */
-    stepSize = 200;
-    /** Called every tick before publishing. */
-    onTick: ((world: FakeWorld) => void) | null = null;
-    private nextMsgId = 100;
-    private nextCombatId = 1;
-    private timer: ReturnType<typeof setInterval>;
-    readonly sdk: BotSDK;
-
-    constructor(overrides: Partial<BotWorldState> = {}) {
-        this.state = makeState({ gameMessages: [], ...overrides });
-        const sdk = Object.create(BotSDK.prototype) as BotSDK;
-        (sdk as any).config = { actionTimeout: 5000, botUsername: 'tester', connectionMode: 'control', showChat: true };
-        (sdk as any).connectionState = 'connected';
-        (sdk as any).pendingActions = new Map();
-        (sdk as any).stateListeners = new Set();
-        (sdk as any).chatHistory = new ChatHistory();
-        (sdk as any).chatReadCursor = 0;
-        (sdk as any).serverMaxMessageLength = 200;
-        (sdk as any).ws = { readyState: WebSocket.OPEN };
-        sdk.sendAction = async (action: BotAction) => {
-            throwIfExecutionAborted(); // like BotSDK.sendAction: an aborted execution cannot dispatch
-            this.sent.push(action);
-            const handler = this.handlers[action.type] ?? defaultHandlers[action.type];
-            const r = handler?.(action, this);
-            return r ?? { success: true, message: 'ok', phase: 'dispatch' };
-        };
-        this.sdk = sdk;
-        this.publish();
-        this.timer = setInterval(() => this.tick(), 10);
-    }
-
-    get player() { return this.state.player!; }
-
-    sentOf<T extends BotAction['type']>(type: T): Extract<BotAction, { type: T }>[] {
-        return this.sent.filter(a => a.type === type) as Extract<BotAction, { type: T }>[];
-    }
-
-    message(text: string, overrides: Partial<GameMessage> = {}): void {
-        this.state.gameMessages = [...this.state.gameMessages, makeMessage(this.nextMsgId++, text, { receivedAt: Date.now(), ...overrides })].slice(-100);
-    }
-
-    combat(e: Omit<BotWorldState['combatEvents'][number], 'id' | 'receivedAt'>): void {
-        this.state.combatEvents = [...this.state.combatEvents, { ...e, id: this.nextCombatId++, receivedAt: Date.now() }];
-    }
-
-    npc(id: number): NearbyNpc | undefined {
-        return this.state.nearbyNpcs.find(n => n.objectId === id);
-    }
-
-    removeNpc(id: number): void {
-        this.state.nearbyNpcs = this.state.nearbyNpcs.filter(n => n.objectId !== id);
-    }
-
-    tick(): void {
-        const mv = this.state.movement;
-        if (mv.moving && mv.destination) {
-            const wp = mv.waypoints[0] ?? mv.destination;
-            const p = this.player;
-            const d = Math.hypot(wp.x - p.x, wp.y - p.y);
-            const tol = mv.waypoints.length <= 1 ? (this.tolerance ?? 16) : 1;
-            if (d <= Math.max(tol, this.stepSize)) {
-                p.x = Math.round(wp.x); p.y = Math.round(wp.y); p.z = wp.z;
-                mv.waypoints = mv.waypoints.slice(1);
-                if (mv.waypoints.length === 0) this.state.movement = { ...mv, moving: false, destination: null, waypoints: [], lastStopReason: 'arrived' };
-            } else {
-                p.x = Math.round(p.x + (wp.x - p.x) * this.stepSize / d);
-                p.y = Math.round(p.y + (wp.y - p.y) * this.stepSize / d);
-            }
-        }
-        this.onTick?.(this);
-        this.publish();
-    }
-
-    tolerance: number | null = null;
-
-    publish(): void {
-        const p = this.state.player;
-        const fix = <T extends { x: number; y: number; z: number; distance: number; distance2d: number }>(o: T): T => {
-            if (!p) return o;
-            return { ...o, distance: Math.round(Math.hypot(o.x - p.x, o.y - p.y, o.z - p.z)), distance2d: Math.round(Math.hypot(o.x - p.x, o.y - p.y)) };
-        };
-        this.state = {
-            ...this.state,
-            tick: this.state.tick + 1,
-            nearbyNpcs: this.state.nearbyNpcs.map(fix),
-            nearbyPlayers: this.state.nearbyPlayers.map(fix),
-            nearbyObjects: this.state.nearbyObjects.map(fix),
-            player: p ? { ...p, money: { ...p.money } } : null,
-        };
-        (this.sdk as any).handleMessage(JSON.stringify({ type: 'sdk_state', state: this.state, stateReceivedAt: Date.now() }));
-    }
-
-    dispose(): void {
-        clearInterval(this.timer);
-    }
-}
-
-const defaultHandlers: Partial<Record<BotAction['type'], Handler>> = {
-    moveTo: (a, w) => {
-        if (a.type !== 'moveTo') return;
-        const dest = { x: a.x, y: a.y, z: a.z ?? w.player.z };
-        w.tolerance = a.tolerance ?? 16;
-        w.state.movement = { ...w.state.movement, moving: true, destination: dest, waypoints: [...(a.waypoints ?? []), dest], lastStopReason: null };
-    },
-    stop: (_a, w) => {
-        if (w.state.movement.moving) w.state.movement = { ...w.state.movement, moving: false, destination: null, waypoints: [], lastStopReason: 'stopped' };
-    },
-    setTarget: (a, w) => { if (a.type === 'setTarget') w.player.targetObjectId = a.objectId; },
-    face: (a, w) => { if (a.type === 'face') w.player.heading = a.heading; },
-    faceObject: (a, w) => {
-        if (a.type !== 'faceObject') return;
-        const o = w.sdk.getObject(a.objectId);
-        if (o) w.player.heading = headingTo(w.player, o);
-    },
-    sit: (a, w) => {
-        if (a.type !== 'sit') return;
-        w.player.isSitting = a.sit;
-        w.message(a.sit ? "You sit down.  Type '/stand' or move to stand up." : 'You stand up.');
-    },
-    attack: (a, w) => { if (a.type === 'attack') w.player.attacking = a.on; },
-};
-
-function headingTo(from: { x: number; y: number }, to: { x: number; y: number }): number {
-    let h = Math.atan2(-(to.x - from.x), to.y - from.y) * (2048 / Math.PI);
-    if (h < 0) h += 4096;
-    return Math.floor(h) % 4096;
-}
 
 let worlds: FakeWorld[] = [];
 function world(overrides: Partial<BotWorldState> = {}): { w: FakeWorld; bot: BotActions; sdk: BotSDK } {
@@ -4799,6 +4662,77 @@ describe('cancelTrade', () => {
             w.state.trade = null;
         };
         expect(await a.bot.cancelTrade()).toMatchObject({ success: false, reason: 'already_completed', message: 'Trade Completed. 1 items for 0 items.' });
+    });
+});
+
+describe('attack: a target that died as we came', () => {
+    // 20261104-044005: `You enter combat mode and target [Rethe]`, `Rethe is already dead!` +11.6, +13.4 and on, atk:true, 8 s with the pet's order held behind it.
+    const answering = (line: string, afterMs: number | null) => (a: BotAction, w: FakeWorld) => {
+        if (a.type !== 'attack') return;
+        w.player.attacking = a.on;
+        if (!a.on) return;
+        if (afterMs === null) w.message(line);
+        else setTimeout(() => w.message(line), afterMs);
+    };
+
+    test('a player: the line comes with the first swing round: already_dead, and attack mode goes off', async () => {
+        const { w, bot } = world({ nearbyNpcs: [], nearbyPlayers: [makePlayerObj({ objectId: 415, name: 'Briton', realm: 'hibernia', x: 560050, y: 511000, distance: 50, distance2d: 50 })] });
+        w.handlers.attack = answering('Rethe is already dead!', 15);
+        const r = await bot.attack(415);
+        expect(r).toMatchObject({ success: false, reason: 'already_dead', message: 'Rethe is already dead!' });
+        expect(w.sentOf('attack').map(a => a.on)).toEqual([true, false]);
+        expect(w.player.attacking).toBe(false);
+    });
+
+    test('a monster: the same, the line beside attack mode', async () => {
+        const { w, bot } = world({ nearbyNpcs: [makeNpc({ objectId: 700, name: 'young wolf', x: 560050, y: 511000, distance: 50, distance2d: 50 })], nearbyPlayers: [] });
+        w.handlers.attack = answering('The young wolf is already dead!', null);
+        expect(await bot.attack(700)).toMatchObject({ success: false, reason: 'already_dead' });
+        expect(w.sentOf('attack').map(a => a.on)).toEqual([true, false]);
+    });
+
+    describe('a swing standing on the last target says it of that one, until the select reaches the server (AttackComponent.cs:1712)', () => {
+        const carried = (o: Partial<BotWorldState>) => {
+            const made = world(o);
+            made.w.player.attacking = true;
+            made.w.player.targetObjectId = 900;
+            made.w.publish();
+            return made;
+        };
+
+        test('a living player beside us: no already_dead, and the good swing stays on', async () => {
+            const { w, bot } = carried({ nearbyNpcs: [], nearbyPlayers: [makePlayerObj({ objectId: 415, name: 'Briton', realm: 'hibernia', x: 560050, y: 511000, distance: 50, distance2d: 50 })] });
+            w.handlers.attack = answering('The young wolf is already dead!', 15);
+            expect(await bot.attack(415)).toMatchObject({ success: true });
+            expect(w.sentOf('attack').map(a => a.on)).toEqual([true]);
+            expect(w.player.attacking).toBe(true);
+        });
+
+        test('a living monster of the same name, the line beside attack mode: the same', async () => {
+            const { w, bot } = carried({ nearbyNpcs: [makeNpc({ objectId: 700, name: 'young wolf', x: 560050, y: 511000, distance: 50, distance2d: 50 })], nearbyPlayers: [] });
+            w.handlers.attack = answering('The young wolf is already dead!', null);
+            expect(await bot.attack(700)).toMatchObject({ success: true });
+            expect(w.sentOf('attack').map(a => a.on)).toEqual([true]);
+        });
+
+        test('this one seen dead in the same moment: its own, and the swing goes off', async () => {
+            const target = makePlayerObj({ objectId: 415, name: 'Briton', realm: 'hibernia', x: 560050, y: 511000, distance: 50, distance2d: 50 });
+            const { w, bot } = carried({ nearbyNpcs: [], nearbyPlayers: [target] });
+            w.handlers.attack = (a, world) => {
+                if (a.type !== 'attack') return;
+                world.player.attacking = a.on;
+                if (a.on) setTimeout(() => { world.state.nearbyPlayers = world.state.nearbyPlayers.map(p => ({ ...p, isDead: true, healthPercent: 0 })); world.message('Rethe is already dead!'); }, 15);
+            };
+            expect(await bot.attack(415)).toMatchObject({ success: false, reason: 'already_dead' });
+            expect(w.player.attacking).toBe(false);
+        });
+    });
+
+    test('another refusal stays as it was, attack mode and all', async () => {
+        const { w, bot } = world({ nearbyNpcs: [], nearbyPlayers: [makePlayerObj({ objectId: 415, name: 'Briton', realm: 'hibernia', x: 560050, y: 511000, distance: 50, distance2d: 50 })] });
+        w.handlers.attack = answering("You can't attack a member of your realm!", 15);
+        expect(await bot.attack(415)).toMatchObject({ success: false, reason: 'refused' });
+        expect(w.sentOf('attack').map(a => a.on)).toEqual([true]);
     });
 });
 
@@ -12408,6 +12342,263 @@ describe('pets', () => {
                     expect(r.message).toContain('pet: true');
                     expect(w.sentOf('petCommand')).toEqual([]);
                 });
+            });
+        });
+
+        describe('the cast the server goes on with after its target\'s death', () => {
+            // 20261104-045941: `You begin casting a Murk Blast spell!` +19.7, `Rethe was just killed by Rehun` +21.5, `You are already casting a spell! You prepare this spell as a follow up!` +21.7, `00:24 Rebon: summon: no_response`.
+            const FOLLOW_UP = 'You are already casting a spell! You prepare this spell as a follow up!';
+            const BLESS = spellOf('Blessed Strength', 1451, 1, 1);
+            const NOTE = spellOf('Dischordant Note', 1131, 1, 2);
+            const lands = (w: FakeWorld, sp: { name: string }) => { w.message(`You cast a ${sp.name} spell!`, { type: 'spell' }); };
+            /** A cast of `castMs` whose target dies 60 ms in, what comes after it landing at once. */
+            const diedUnder = async (castMs = 700) => {
+                const made = world({ pet: null, skills: skillsWith(earth, BLESS, NOTE), nearbyNpcs: [mob({ x: 560500 }), mob({ objectId: 701, x: 560500 })] });
+                made.w.handlers.castSpell = (a, w) => {
+                    if (a.type !== 'castSpell') return;
+                    if (a.spellIndex === 0) setTimeout(() => { w.message(`You begin casting a ${earth.name} spell!`, { type: 'spell' }); w.combat({ kind: 'spellCast', attackerObjectId: ME, targetObjectId: null, castTimeMs: castMs }); }, 5);
+                    else setTimeout(() => lands(w, a.spellIndex === 1 ? BLESS : NOTE), 5);
+                };
+                setTimeout(() => dies(made.w, 700), 60);
+                expect(await made.bot.castSpell(earth, 700)).toMatchObject({ success: false, reason: 'already_dead', targetDied: true });
+                return made;
+            };
+
+            test('the next cast waits for its end, and then goes', async () => {
+                const { w, bot } = await diedUnder();
+                const t0 = Date.now();
+                const next = bot.castSpell(BLESS);
+                await Bun.sleep(150);
+                expect(w.sentOf('castSpell').length).toBe(1);
+                expect(await next).toMatchObject({ success: true });
+                expect(w.sentOf('castSpell').length).toBe(2);
+                expect(Date.now() - t0).toBeGreaterThan(450);
+                // Its 640 ms and the margin, and castSpell's own 750 after a "You cast" line.
+                expect(Date.now() - t0).toBeLessThan(1900);
+            });
+
+            test('only that one: the next after it goes at once', async () => {
+                const { w, bot } = await diedUnder(1500);
+                await bot.castSpell(BLESS);
+                const t0 = Date.now();
+                await bot.castSpell(BLESS);
+                expect(w.sentOf('castSpell').length).toBe(3);
+                expect(Date.now() - t0).toBeLessThan(1200);
+            });
+
+            test('an instant isn\'t held: the server runs it beside a cast (CastingComponent.cs:376-377)', async () => {
+                const { w, bot } = await diedUnder();
+                const next = bot.castSpell(NOTE, 701);
+                await Bun.sleep(40);
+                expect(w.sentOf('castSpell').length).toBe(2);
+                await next;
+            });
+
+            test('an 0x0B has ended it: a walk or a hit. Nothing to wait for', async () => {
+                const { w, bot } = await diedUnder(5000);
+                w.combat({ kind: 'interrupt', attackerObjectId: ME, targetObjectId: null });
+                const t0 = Date.now();
+                await bot.castSpell(BLESS);
+                expect(Date.now() - t0).toBeLessThan(1200);
+            });
+
+            test('no cast seen begun: nothing to wait for either', async () => {
+                const { w, bot } = world({ pet: null, skills: skillsWith(earth, BLESS), nearbyNpcs: [mob({ x: 560500 })] });
+                w.handlers.castSpell = (a, world) => { if (a.type === 'castSpell' && a.spellIndex === 1) setTimeout(() => lands(world, BLESS), 5); };
+                setTimeout(() => dies(w, 700), 20);
+                expect(await bot.castSpell(earth, 700)).toMatchObject({ reason: 'already_dead', targetDied: true });
+                const t0 = Date.now();
+                await bot.castSpell(BLESS);
+                expect(Date.now() - t0).toBeLessThan(1200);
+            });
+
+            test('castHeldLeftMs says what the next cast would wait: none for an instant, none once an 0x0B ended it', async () => {
+                const { w, bot } = await diedUnder(1500);
+                expect(bot.castHeldLeftMs(BLESS)).toBeGreaterThan(500);
+                expect(bot.castHeldLeftMs(BLESS)).toBeLessThanOrEqual(1600);
+                expect(bot.castHeldLeftMs()).toBeGreaterThan(500);
+                expect(bot.castHeldLeftMs(NOTE)).toBe(0);
+                w.combat({ kind: 'interrupt', attackerObjectId: ME, targetObjectId: null });
+                await Bun.sleep(30);
+                expect(bot.castHeldLeftMs(BLESS)).toBe(0);
+            });
+
+            describe('its end line, read behind the next cast\'s send', () => {
+                // 20261104-050819: begun 05:09:11.629, 'You must select a target for this spell!' 05:09:14.658, 71 ms before the wait ended. A game line waits for the 250 ms publish (client.ts:163-168), and a Self or Pet spell sends nothing before its watch: 'Petcab: petBuff: no_target', 60 s of buffRetryMs, with the cast running.
+                const NO_TARGET = 'You must select a target for this spell!';
+                const trailing = async (sp: { name: string }, ago = 50) => {
+                    const made = await diedUnder();
+                    made.w.handlers.castSpell = (a, world) => {
+                        if (a.type !== 'castSpell') return;
+                        world.message(NO_TARGET, { type: 'resisted', receivedAt: Date.now() - ago });
+                        setTimeout(() => lands(world, sp), 5);
+                    };
+                    return made;
+                };
+
+                test('a Self spell: no answer to this one, and it goes on to land', async () => {
+                    const { bot } = await trailing(simulacrum);
+                    expect(await bot.castSpell(simulacrum)).toMatchObject({ success: true });
+                });
+
+                test('a Realm spell on ourselves: not sent twice, which the server would queue and charge again', async () => {
+                    const { w, bot } = await trailing(BLESS);
+                    expect(await bot.castSpell(BLESS)).toMatchObject({ success: true });
+                    expect(w.sentOf('castSpell').length).toBe(2);
+                });
+
+                test('the same line after our send is this one\'s refusal, as ever', async () => {
+                    const { bot } = await trailing(simulacrum, 0);
+                    expect(await bot.castSpell(simulacrum)).toMatchObject({ success: false, reason: 'no_target' });
+                });
+            });
+
+            test('a turn with something else to do isn\'t held: a walk goes at once', async () => {
+                const { w, bot } = await diedUnder();
+                const walk = bot.walkTo(560800, 511000);
+                await Bun.sleep(40);
+                expect(w.sentOf('moveTo').length).toBe(1);
+                await walk;
+            });
+
+            describe('already casting, as the answer to a cast', () => {
+                // 20261104-050819: '05:09:14.658 You are already casting a spell! You prepare this spell as a follow up!', '05:09:14.658 You must select a target for this spell!', 'Petcab: petBuff: no_target', and '05:09:15.665 You begin casting a Encourage Aggression spell!', and it landed.
+                const running = (castMs: number, line: string | string[] = FOLLOW_UP) => {
+                    const made = world({ pet: null, skills: skillsWith(earth, BLESS), nearbyNpcs: [mob({ x: 560500 })] });
+                    made.w.combat({ kind: 'spellCast', attackerObjectId: ME, targetObjectId: null, castTimeMs: castMs });
+                    made.w.handlers.castSpell = (_a, w) => { setTimeout(() => { for (const l of [line].flat()) w.message(l, { type: 'spell' }); }, 5); };
+                    return made;
+                };
+
+                test('it reads must_wait with what\'s left of the running cast, at once, and never no_response', async () => {
+                    const { bot } = running(2000);
+                    const t0 = Date.now();
+                    const r = await bot.castSpell(BLESS);
+                    expect(r).toMatchObject({ success: false, reason: 'must_wait', message: FOLLOW_UP, followUpMs: 3000 });
+                    expect(r.retryAfterMs).toBeGreaterThan(1500);
+                    expect(r.retryAfterMs).toBeLessThanOrEqual(2000);
+                    expect(Date.now() - t0).toBeLessThan(500);
+                });
+
+                test('the running cast\'s no-target line beside it is no answer of this one\'s', async () => {
+                    const { bot } = running(2000, [FOLLOW_UP, 'You must select a target for this spell!']);
+                    expect(await bot.castSpell(BLESS)).toMatchObject({ reason: 'must_wait' });
+                });
+
+                test('the next cast waits out what the server holds: it isn\'t queued behind that in turn, for good', async () => {
+                    const { w, bot } = running(100);
+                    expect(await bot.castSpell(BLESS)).toMatchObject({ reason: 'must_wait' });
+                    w.handlers.castSpell = (_a, world) => { setTimeout(() => lands(world, BLESS), 5); };
+                    const next = bot.castSpell(BLESS);
+                    await Bun.sleep(300);
+                    expect(w.sentOf('castSpell').length).toBe(1);
+                    w.combat({ kind: 'interrupt', attackerObjectId: ME, targetObjectId: null });
+                    expect(await next).toMatchObject({ success: true });
+                });
+
+                describe('what it holds is dropped if the running cast fails its end check', () => {
+                    // CheckEndCast false, Interrupted, ClearSpellHandlers, with no 0x0B as the cast is no longer casting (SpellHandler.cs:1091-1097, CastingComponent.cs:196, :224-228). 20261104-045941: 'no follow-up cast came'.
+                    test('with no begin by the time one is due, the next cast goes: nothing runs on the server', async () => {
+                        const { w, bot } = running(100);
+                        expect(await bot.castSpell(BLESS)).toMatchObject({ reason: 'must_wait', followUpMs: 3000 });
+                        const read = Date.now();
+                        let sentAt = 0;
+                        w.handlers.castSpell = (_a, world) => { sentAt = Date.now(); setTimeout(() => lands(world, BLESS), 5); };
+                        expect(await bot.castSpell(BLESS)).toMatchObject({ success: true });
+                        expect(sentAt - read).toBeLessThan(1500);
+                    });
+
+                    test('one that begins is waited out', async () => {
+                        const { w, bot } = running(100);
+                        expect(await bot.castSpell(BLESS)).toMatchObject({ reason: 'must_wait' });
+                        setTimeout(() => w.combat({ kind: 'spellCast', attackerObjectId: ME, targetObjectId: null, castTimeMs: 3000 }), 120);
+                        w.handlers.castSpell = (_a, world) => { setTimeout(() => lands(world, BLESS), 5); };
+                        const next = bot.castSpell(BLESS);
+                        await Bun.sleep(1200);
+                        expect(w.sentOf('castSpell').length).toBe(1);
+                        w.combat({ kind: 'interrupt', attackerObjectId: ME, targetObjectId: null });
+                        expect(await next).toMatchObject({ success: true });
+                    });
+                });
+
+                test('held, and going in the same snapshot: its own begin line says so, and it is watched as any cast', async () => {
+                    const { w, bot } = running(100);
+                    w.handlers.castSpell = (_a, world) => {
+                        setTimeout(() => { world.message(FOLLOW_UP, { type: 'spell' }); world.message(`You begin casting a ${BLESS.name} spell!`, { type: 'spell' }); world.combat({ kind: 'spellCast', attackerObjectId: ME, targetObjectId: null, castTimeMs: 100 }); }, 5);
+                        setTimeout(() => lands(world, BLESS), 120);
+                    };
+                    expect(await bot.castSpell(BLESS)).toMatchObject({ success: true });
+                });
+
+                test('with the spell queue off the plain line: must_wait, and nothing held', async () => {
+                    const { bot } = running(1000, 'You are already casting a spell!');
+                    const r = await bot.castSpell(BLESS);
+                    expect(r).toMatchObject({ reason: 'must_wait' });
+                    expect(r.followUpMs).toBeUndefined();
+                    expect(r.retryAfterMs).toBeLessThanOrEqual(1000);
+                });
+
+                test('a summon carries it, for its behaviour to read', async () => {
+                    const { w, bot } = running(1000);
+                    w.state.skills = skillsWith(simulacrum);
+                    w.publish();
+                    expect(await bot.summonPet(simulacrum)).toMatchObject({ success: false, reason: 'must_wait', followUpMs: 6000 });
+                });
+            });
+        });
+
+        describe('a refused pet order\'s line beside a cast that goes', () => {
+            // 20261104-045249: '05:53:02.413 You can't attack a member of your realm!' and '05:53:02.413 You begin casting a Minor Essence Consumption spell!' in one snapshot; '04:53:02 Petcab: nuke: refused', and '05:53:05.034 You cast a Minor Essence Consumption spell!'.
+            const NUKE = spellOf('Ice Cloud (Minor)', 151, 1, 3);
+            const REFUSED = "You can't attack a member of your realm!";
+            const begins = (w: FakeWorld) => { w.message(`You begin casting a ${NUKE.name} spell!`, { type: 'spell' }); w.combat({ kind: 'spellCast', attackerObjectId: ME, targetObjectId: null, castTimeMs: 100 }); };
+            const ends = (w: FakeWorld, after = 110) => setTimeout(() => w.message(`You cast a ${NUKE.name} spell!`, { type: 'spell' }), after);
+            /** `answer` plays the server's answer to the cast. An order at the mob's id went `orderAgo` ms before it, or none. */
+            const casting = async (answer: (w: FakeWorld) => void, orderAgo: number | null = 0, line = REFUSED) => {
+                const made = world({ pet: petWindow(), skills: skillsWith(NUKE), nearbyNpcs: [petNpc(), mob({ x: 560500 })] });
+                orders(made.w);
+                made.w.handlers.castSpell = () => { setTimeout(() => { made.w.message(line); answer(made.w); }, 5); };
+                if (orderAgo !== null) {
+                    await made.sdk.sendPetCommand('attack', 900);
+                    if (orderAgo) await Bun.sleep(orderAgo);
+                }
+                return { ...made, r: await made.bot.castSpell(NUKE, 700) };
+            };
+
+            test('in one snapshot: the order\'s, and the cast goes on to land', async () => {
+                const { r } = await casting(w => { begins(w); ends(w); });
+                expect(r).toMatchObject({ success: true });
+            });
+
+            test('its begin line a tick behind it: the same', async () => {
+                const { r } = await casting(w => { setTimeout(() => { begins(w); ends(w); }, 60); });
+                expect(r).toMatchObject({ success: true });
+            });
+
+            test('PvP immunity reads the same, shades and peace flags with it', async () => {
+                for (const line of ['Petani is temporarily immune to PvP attacks!', "You can't attack a shadowed necromancer!"]) {
+                    const { r } = await casting(w => { begins(w); ends(w); }, 0, line);
+                    expect(r).toMatchObject({ success: true });
+                }
+            });
+
+            test('no begin line by then: the cast\'s own refusal after all, at the same target', async () => {
+                const t0 = Date.now();
+                const { r } = await casting(() => {});
+                expect(r).toMatchObject({ success: false, reason: 'refused', message: REFUSED });
+                expect(Date.now() - t0).toBeLessThan(800);
+            });
+
+            test('without an order nearby nothing changes: refused, begin line or no, and at once', async () => {
+                const none = await casting(w => { begins(w); ends(w); }, null);
+                expect(none.r).toMatchObject({ success: false, reason: 'refused' });
+                const old = await casting(w => { begins(w); ends(w); }, 550);
+                expect(old.r).toMatchObject({ success: false, reason: 'refused' });
+            });
+
+            test('a line that names no attack is the cast\'s, order or none', async () => {
+                const { r } = await casting(w => { begins(w); }, 0, 'That target is too far away!');
+                expect(r).toMatchObject({ success: false, reason: 'out_of_range' });
             });
         });
 

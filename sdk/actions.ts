@@ -9,6 +9,7 @@ import { abortable, executionContext, throwIfExecutionAborted, withExecutionDead
 import {
     ABILITY_REFUSALS,
     ActionHelpers,
+    ALREADY_CASTING,
     ATTACK_REFUSALS,
     BUY_REFUSALS,
     CAST_REFUSALS,
@@ -24,6 +25,7 @@ import {
     isKillable,
     isPvpImmunity,
     ENRAGED_REFUSAL,
+    FOLLOW_UP,
     isResistOf,
     isServantCast,
     isServantQueued,
@@ -150,6 +152,18 @@ const WHISPER_SPACING_MS = 1600;
 /** Gap between bot.say calls (the server drops says < 500 ms apart, say.cs:49-53). */
 const SAY_SPACING_MS = 600;
 const DEFAULT_SPELL_RANGE = 1500;
+/** The server's next ticks past a cast's end, before a new cast is no follow-up any more. Its 0x72 reaches us after it starts, so the end we work out is on the late side of the tick already. */
+const CAST_END_MARGIN_MS = 100;
+/** "Already casting" with no running cast of ours to read (a 0x72 gone from the list): what to go by. */
+const ALREADY_CASTING_UNREAD_MS = 1000;
+/** What the server holds begins a tick or two past the running cast's end, and that shows a snapshot later. With no begin by then, it went with a running cast that failed its end check: no line and no 0x0B (SpellHandler.cs:1091-1097, CastingComponent.cs:196, :224-228). */
+const FOLLOW_UP_BEGINS_MS = 500;
+/** A refused attack order's line comes a snapshot or two behind the order. */
+const PET_ORDER_ANSWER_MS = 500;
+/** A cast's begin line can trail another line by a snapshot. */
+const BEGIN_LINE_TICK_MS = 250;
+/** GamePlayer.Attack.AlreadyDead, at a swing (AttackComponent.cs:1712). */
+const ALREADY_DEAD = 'is already dead';
 /** A 0xDD to an object has toSlot = 1000 + objectId (PlayerMoveItemRequestHandler.cs:20-23). */
 const GIVE_TO_OBJECT = 1000;
 /** No target has this many lines: a trainBuild past it isn't getting anywhere. */
@@ -491,6 +505,8 @@ export interface CastResult extends ActionResult {
     effectImmune?: boolean;
     /** With reason already_dead: our target died during this cast. Nothing landed and nothing was paid, and it says nothing against the caster: it is the fight's end. */
     targetDied?: true;
+    /** With reason must_wait: the server holds this spell as the follow-up of the cast still running ("You prepare this spell as a follow up!"), and starts it by itself after retryAfterMs, unless another replaces it or that cast fails at its end (its target gone, say), which drops it without a word. This long is its own cast time. */
+    followUpMs?: number;
     /**
      * The cast went off but the server refused the effect: "{0} already has that effect. Wait until it expires. Spell
      * failed." The same spell is still on a player (EffectListComponent.cs:689), as for a second root while one holds.
@@ -1242,6 +1258,16 @@ export function castFailureReason(text: string, fallback: string = 'refused'): s
     return fallback;
 }
 
+/** A cast the server is still busy with and castSpell no longer watches, for the next one to wait out: until then, and events after `seen` can end it, or no begin by `beginBy` for a follow-up (castHeldLeft). */
+type CastHeld = { until: number; seen: number; beginBy?: number };
+
+/** What's left of our own cast with a cast time: its 0x72 and that time, unless an 0x0B ended it. */
+function ownCastLeftMs(s: BotWorldState, me: number): number {
+    const cast = s.combatEvents.findLast(e => e.kind === 'spellCast' && e.attackerObjectId === me && (e.castTimeMs ?? 0) > 0);
+    if (!cast || s.combatEvents.some(e => e.id > cast.id && e.kind === 'interrupt' && e.attackerObjectId === me)) return 0;
+    return Math.max(0, cast.receivedAt + cast.castTimeMs! - Date.now());
+}
+
 function retryAfter(text: string): number | undefined {
     if (isPvpImmunity(text)) return PVP_IMMUNE_RETRY_MS;
     if (isCrowdControlled(text)) return CROWD_CONTROLLED_RETRY_MS;
@@ -1272,6 +1298,7 @@ export class BotActions {
     private restingPet: number | null = null;
     /** The melee slot we last took in hand. */
     private lastMeleeSlot: number | null = null;
+    private castHeld: CastHeld | null = null;
 
     constructor(public sdk: BotSDK) {
         this.helpers = new ActionHelpers(sdk);
@@ -1586,8 +1613,8 @@ export class BotActions {
     /**
      * Approach, target, face and switch melee on against an NPC or a player (enemy players are
      * named by race: pass the objectId); observed via attack mode or a swing. Reason 'immune'
-     * (with retryAfterMs) when PvP immunity, ours or the target's, refuses the swing, and
-     * 'crowd_controlled' (with retryAfterMs) when we are mezzed or stunned. In shade: reason 'refused', with no walk; with no melee weapon in slots 10 or 12 too (a shield, a left-hand weapon alone and a bow are none). With a bow
+     * (with retryAfterMs) when PvP immunity, ours or the target's, refuses the swing,
+     * 'crowd_controlled' (with retryAfterMs) when we are mezzed or stunned, and 'already_dead' when it died as we came, with attack mode switched off again (attack mode carried over from another target says that line of that one, so then only with this one dead or gone in our view). In shade: reason 'refused', with no walk; with no melee weapon in slots 10 or 12 too (a shield, a left-hand weapon alone and a bow are none). With a bow
      * in hand the server's line comes once in range: this takes a melee slot in hand once, as killNpc does (takeMeleeSlot), and tries again; if the line stays, reason 'refused' with it.
      */
     async attack(target: LivingTarget, options: { timeout?: number } = {}): Promise<AttackResult> {
@@ -1615,6 +1642,8 @@ export class BotActions {
     /** attack's approach and its swing. */
     private async swingAt(t: NearbyNpc | NearbyPlayer, options: { timeout?: number }): Promise<AttackResult> {
         const targets = (o: NearbyNpc | NearbyPlayer) => ({ npc: o.kind === 'npc' ? o : null, target: o });
+        const p0 = this.helpers.player();
+        const carried = !!p0?.attacking && p0.targetObjectId !== t.objectId;
         const engaged = await this.engage(t);
         if (!engaged.success) return { ...engaged, ...targets(t) };
         const watch = this.helpers.watch();
@@ -1624,8 +1653,14 @@ export class BotActions {
             if (!r.success) return { ...r, ...targets(t) };
             const me = this.helpers.player()?.objectId;
             const swung = (s: BotWorldState) => s.combatEvents.some(e => e.id > baseline && e.kind === 'melee' && e.attackerObjectId === me && e.targetObjectId === t.objectId);
+            // Attack mode came from another target, with a round at it due: until the select reaches the server its "X is already dead!" is that one's (a corpse's, as the swing stood on it), and says nothing of this one while it stands alive for us. Names don't tell: an enemy player's entry has none, and mobs share theirs.
+            const heard = (m: GameMessage): boolean => {
+                if (!carried || !m.text.toLowerCase().includes(ALREADY_DEAD)) return true;
+                const now = this.helpers.resolveLiving(t.objectId);
+                return !now || this.isDeadTarget(now);
+            };
             let evidence = await this.helpers.waitFor(s => {
-                if (watch.find(ATTACK_REFUSALS)) return 'refused';
+                if (watch.find(ATTACK_REFUSALS, heard)) return 'refused';
                 if (swung(s)) return 'swing';
                 if (s.player?.attacking) return 'attacking';
                 return null;
@@ -1634,14 +1669,19 @@ export class BotActions {
             // first swing round right after it (AttackComponent.cs:710, WeaponAction.cs:411). That round
             // also says "too far away" / "not in view" when the target stepped off (AttackComponent.cs:1725-1737):
             // retryable, so attack mode stands and fight() re-approaches.
-            const fatal = () => watch.messages().find(m => isFatalAttackRefusal(m.text));
+            const fatal = () => watch.messages().find(m => heard(m) && isFatalAttackRefusal(m.text));
             if (evidence === 'attacking' && t.kind === 'player') {
                 evidence = await this.helpers.waitFor(s => fatal() ? 'refused' : swung(s) ? 'swing' : null, 1000) ?? 'attacking';
             }
             if (evidence === 'refused') {
-                const text = watch.findText(PVP_IMMUNE_REFUSALS) ?? watch.findText(CROWD_CONTROL_REFUSALS) ?? fatal()?.text ?? watch.findText(ATTACK_REFUSALS)!;
+                const text = watch.findText(PVP_IMMUNE_REFUSALS) ?? watch.findText(CROWD_CONTROL_REFUSALS) ?? fatal()?.text ?? watch.findText(ATTACK_REFUSALS, heard)!;
                 if (isPvpImmunity(text)) return fail(text, 'immune', { ...targets(t), retryAfterMs: PVP_IMMUNE_RETRY_MS });
                 if (isCrowdControlled(text)) return fail(text, 'crowd_controlled', { ...targets(t), retryAfterMs: CROWD_CONTROLLED_RETRY_MS });
+                // Attack mode stands on the corpse, the line again each round (AttackComponent.cs:1712): 8 s live with the pet's order held behind it.
+                if (text.toLowerCase().includes(ALREADY_DEAD)) {
+                    await this.sdk.sendAttack(false);
+                    return fail(text, 'already_dead', targets(t));
+                }
                 return fail(text, 'refused', targets(t));
             }
             if (!evidence) return fail(`No attack observed on ${t.name}`, 'timeout', targets(t));
@@ -1963,7 +2003,7 @@ export class BotActions {
                             lastStyleAt = 0;
                         }
                     }
-                    if (text.includes('is already dead')) return lastHp <= 30 ? 'killed' : failWith(m.text, 'already_dead');
+                    if (text.includes(ALREADY_DEAD)) return lastHp <= 30 ? 'killed' : failWith(m.text, 'already_dead');
                     // Before the fatal refusals: ours reads "You can't attack players until ...", and
                     // a mezz or stun "You can't attack when you are ...": both wear off by themselves.
                     if (isPvpImmunity(text)) return { message: m.text, reason: 'immune', retryAfterMs: PVP_IMMUNE_RETRY_MS };
@@ -2057,7 +2097,9 @@ export class BotActions {
      * Reason already_dead: a player the model knows is dead, before anything is sent, or the server's answer (SpellHandler.cs:783), not for a Corpse spell, nor for a Group spell, which has no such
      * check and lands on the living with a corpse named (HealSpellHandler.cs:76-78): its message names nobody, and `target` is only what was selected. An NPC's 0 % is no such knowledge: it is truncated (GameLiving.cs:2621).
      * A Corpse spell at a player the model holds alive, with health to show for it, at any NPC or at our own id: reason invalid_target before any walk, in the server's words (SpellHandler.cs:759-766), and its answer for what the model hasn't seen has the same reason.
-     * A target that dies during the cast ends the wait at its death: reason already_dead, with targetDied, also with "You must select a target for this spell!" beside it, which is all a cast gets as it ends with its target gone. The server says nothing to a cast at the dead (SpellHandler.cs:852-1007, AbstractServerRules.cs:337) and goes on until the cast's end, so a cast sent in that time is held as a follow-up, and a walk breaks it. Not for what lands on ourselves, on the pet or on a group, nor for a Corpse spell, and not for what doesn't hang on the mob selected: an Area spell, a Cone or an Enemy spell with range 0 goes on and lands on what is there (SpellHandler.cs:908-918).
+     * A target that dies during the cast ends the wait at its death: reason already_dead, with targetDied, also with "You must select a target for this spell!" beside it, which is all a cast gets as it ends with its target gone. The server says nothing to a cast at the dead (SpellHandler.cs:852-1007, AbstractServerRules.cs:337) and goes on until the cast's end, so a cast sent in that time is held as a follow-up, and a walk breaks it. The next castSpell with a cast time therefore waits for that end, at most what the cast had left, unless an 0x0B ended it; an instant goes beside it (CastingComponent.cs:376-377), and nothing else is held. Not for what lands on ourselves, on the pet or on a group, nor for a Corpse spell, and not for what doesn't hang on the mob selected: an Area spell, a Cone or an Enemy spell with range 0 goes on and lands on what is there (SpellHandler.cs:908-918).
+     * A cast sent during one that is still running (a raw send's, say) reads must_wait, at once, with retryAfterMs what's left of that one: never no_response, and the running cast's own lines are no answer to it. With "You prepare this spell as a follow up!" the server holds this spell and starts it by itself, so the result has followUpMs, and the next castSpell waits that out as well; unless that cast fails at its end (its target gone, say): the server then drops what it holds without a word, and the next castSpell goes once no begin has come 500 ms past that end.
+     * A pet's attack order refused just before ("You can't attack ...", PvP immunity) answers on the same stream: within 500 ms of sdk.sendPetCommand('attack'), and with this cast's begin line there or in the same tick, that line is the order's. With no begin line by then it is this cast's too.
      * Release Clump (TurretsRelease) needs a turret of ours selected where other Pet spells go to the pet by themselves (TurretSpellHandler.cs:20-41): with no target given this selects the window pet or a summon, unless one of ours is selected; its refusal is invalid_target.
      */
     async castSpell(spell: NamePattern | Spell, target?: ObjectTarget | null, options: CastOptions = {}): Promise<CastResult> {
@@ -2126,6 +2168,7 @@ export class BotActions {
             }
             if (obj.objectId !== player.objectId) targetId = obj.objectId;
         }
+        if (info?.castTime !== 0) await this.castHeldOver();
         const baseline = maxCombatEventId(this.helpers.state());
         if (targetId !== null) await this.sdk.sendSetTarget(targetId);
         const p = this.helpers.player()!;
@@ -2167,6 +2210,33 @@ export class BotActions {
         // The mirror of the friendly spell on an enemy above. The server's answer is "You can't attack a member of your realm!" once in range (NormalServerRules.cs:47-67).
         if (obj.realm !== 'none' && obj.realm === player.realm) return { message: `${sp.name} needs an enemy, and ${nameOf(obj)} is of our realm`, reason: 'invalid_target' };
         return null;
+    }
+
+    /**
+     * How long the next castSpell of `spell` would wait for a cast the server runs on and castSpell no longer watches (see castSpell), in ms: 0 with none, and for an instant, which goes beside it. Without `spell`, for one with a cast time.
+     * For a caller whose reasons for a cast can go stale in that wait: it can come back after it and look again.
+     */
+    castHeldLeftMs(spell?: Spell): number {
+        if (spell && this.getSpellInfo(spell)?.castTime === 0) return 0;
+        const s = this.helpers.state();
+        return this.castHeld && s ? this.castHeldLeft(this.castHeld, s) : 0;
+    }
+
+    /** What's left of that cast: to its end, unless we died, an 0x0B ended it, or a follow-up's begin is overdue. */
+    private castHeldLeft(held: CastHeld, s: BotWorldState): number {
+        const now = Date.now();
+        const me = s.player?.objectId;
+        const ours = (kind: string) => s.combatEvents.some(e => e.id > held.seen && e.kind === kind && e.attackerObjectId === me);
+        if (s.player?.isDead || ours('interrupt') || (held.beginBy !== undefined && now >= held.beginBy && !ours('spellCast'))) return 0;
+        return Math.max(0, held.until - now);
+    }
+
+    /** Wait out castHeld, if any. */
+    private async castHeldOver(): Promise<void> {
+        const held = this.castHeld;
+        this.castHeld = null;
+        if (!held || held.until <= Date.now()) return;
+        await this.helpers.waitFor(s => this.castHeldLeft(held, s) === 0, held.until - Date.now());
     }
 
     /** The walk castSpell does, well within the range. */
@@ -2276,14 +2346,43 @@ export class BotActions {
             // What the rest of the group's fight earns on this stream: the side tick's attack order answers beside any cast, and only an Enemy spell can earn these itself (ATTACK_ONLY_REFUSALS). A servant's spell goes by its own rules.
             const earnsNoAttackLine = !!info && !servantSpell && info.target.toLowerCase() !== 'enemy';
             const notOurAttack = (m: GameMessage): boolean => earnsNoAttackLine && ATTACK_ONLY_REFUSALS.some(r => m.text.toLowerCase().includes(r));
+            // A line only an attack earns, just after our pet was ordered to one: the side tick's order goes between turns, so its refusal lands in this cast's first tick (20261104-045249, one snapshot with "You begin casting", and the cast landed).
+            const answersOrder = (m: GameMessage): boolean => {
+                if (!ATTACK_ONLY_REFUSALS.some(r => m.text.toLowerCase().includes(r))) return false;
+                const order = this.sdk.getPetAttackSentAt();
+                return order !== null && m.receivedAt >= order && m.receivedAt - order <= PET_ORDER_ANSWER_MS;
+            };
+            // With this cast's begin there or due in this tick. By then with none, an attack this cast earned as well: a shade, say, for both.
+            const orderNotCast = (m: GameMessage, s: BotWorldState): boolean => answersOrder(m) && (begun(s) || Date.now() - m.receivedAt < BEGIN_LINE_TICK_MS);
+            // A line from before our send answers something else. A game line waits for the client's next publish, up to 250 ms (client.ts:163-168), and the watch goes by id, so the last cast's end line can come in here, the wait for that cast over, with nothing else sent yet (20261104-050819: 'Petcab: petBuff: no_target', 60 s of buffRetryMs, the cast running).
             const refusal = (s: BotWorldState): string | null =>
-                watch.findText(CAST_ANSWERS, m => !petLostTarget(m, s) && !spotDroppedInCast(m, s) && !lineOfTheDeath(m, s) && !notOurAttack(m) && (!TARGET_IS_DEAD.test(m.text) || deadOfOurs(m))) ?? (interruptEvent(s) ? 'Your spell is interrupted.' : null);
+                watch.findText(CAST_ANSWERS, m => m.receivedAt >= castStart && !petLostTarget(m, s) && !spotDroppedInCast(m, s) && !lineOfTheDeath(m, s) && !notOurAttack(m) && !orderNotCast(m, s) && (!TARGET_IS_DEAD.test(m.text) || deadOfOurs(m))) ?? (interruptEvent(s) ? 'Your spell is interrupted.' : null);
+            // Sent during a cast that runs on: that cast's own lines are no answer to this one (20261104-050819: the line and "You must select a target for this spell!" in one snapshot), nor what it lands as, under the same name. Until this one's own begin line: it was held, and now it goes.
+            const heldBehind = (): GameMessage | null => (watch.messages().some(m => /^you begin casting/i.test(m.text) && m.text.toLowerCase().includes(spellName)) ? null : watch.find([ALREADY_CASTING]));
             const msgs = () => watch.messages().slice();
             const diedResult = (castTimeMs: number | null) => fail(`Died while casting ${sp.name}`, 'died', { ...base, castTimeMs, messages: msgs() });
-            const aimDiedResult = (castTimeMs: number | null) => fail(`${nameOf(obj!)} died before ${sp.name} could land`, 'already_dead', { ...base, castTimeMs, messages: msgs(), targetDied: true as const });
+            const ownCastMs = () => (info ? info.castTime * 1000 : 3000);
+            const aimDiedResult = (castTimeMs: number | null) => {
+                const s = this.helpers.state()!;
+                const ev = castEvent(s);
+                // The server goes on to the cast's end (see castSpell): the next cast is told when that is. With no sign it began, it can't have gone far enough to hold anything.
+                if (ev || watch.find(['you begin casting'])) this.castHeld = { until: (ev?.receivedAt ?? castStart) + (ev?.castTimeMs ?? castTimeMs ?? ownCastMs()) + CAST_END_MARGIN_MS, seen: baseline };
+                return fail(`${nameOf(obj!)} died before ${sp.name} could land`, 'already_dead', { ...base, castTimeMs, messages: msgs(), targetDied: true as const });
+            };
 
-            const started = await this.helpers.waitFor<'died' | 'refused' | 'cast' | 'hit' | 'started' | 'aimDied'>(s => {
+            const heldResult = () => {
+                const line = heldBehind()!;
+                const s = this.helpers.state()!;
+                const left = ownCastLeftMs(s, me) || ALREADY_CASTING_UNREAD_MS;
+                const queued = line.text.toLowerCase().includes(FOLLOW_UP);
+                // What it holds runs after that: the next cast sent during it would be queued in turn, and read must_wait with its own spell landing, for as long as the turns go on casting. If it begins: the server drops it with a running cast that fails at its end.
+                if (queued) this.castHeld = { until: Date.now() + left + ownCastMs() + CAST_END_MARGIN_MS, seen: maxCombatEventId(s), beginBy: Date.now() + left + FOLLOW_UP_BEGINS_MS };
+                return { ...fail(line.text, 'must_wait', base), messages: msgs(), retryAfterMs: left, ...(queued ? { followUpMs: ownCastMs() } : {}) };
+            };
+
+            const started = await this.helpers.waitFor<'died' | 'held' | 'refused' | 'cast' | 'hit' | 'started' | 'aimDied'>(s => {
                 if (died(s)) return 'died';
+                if (heldBehind()) return 'held';
                 if (refusal(s)) return 'refused';
                 const e = evidence(s);
                 if (e) return e;
@@ -2293,6 +2392,7 @@ export class BotActions {
             }, 3000);
             if (started === 'died') return diedResult(null);
             if (started === 'aimDied') return aimDiedResult(castEvent(this.helpers.state()!)?.castTimeMs ?? null);
+            if (started === 'held') return heldResult();
             if (started === 'refused') {
                 const text = refusal(this.helpers.state()!)!;
                 return { ...fail(text, castFailureReason(text), base), messages: msgs(), retryAfterMs: retryAfter(text) };
@@ -2301,14 +2401,17 @@ export class BotActions {
             let castTimeMs = castEvent(this.helpers.state()!)?.castTimeMs ?? null;
             let done: 'cast' | 'hit' | null = started === 'started' ? null : started;
             if (!done) {
-                const end = await this.helpers.waitFor<'died' | 'refused' | 'cast' | 'hit' | 'aimDied'>(s => {
+                const end = await this.helpers.waitFor<'died' | 'held' | 'refused' | 'cast' | 'hit' | 'aimDied'>(s => {
                     if (died(s)) return 'died';
+                    // The running cast's 0x72 can come in after we sent this one, and read as its start.
+                    if (heldBehind()) return 'held';
                     if (refusal(s)) return 'refused';
                     return evidence(s) ?? (aimDied(s) ? 'aimDied' : null);
                 }, (castTimeMs ?? (info ? info.castTime * 1000 : 3000)) + (options.timeout ?? 2500));
                 // The 0x72 can come after what told us the cast began.
                 castTimeMs = castEvent(this.helpers.state()!)?.castTimeMs ?? castTimeMs;
                 if (end === 'died') return diedResult(castTimeMs);
+                if (end === 'held') return heldResult();
                 if (end === 'aimDied') return aimDiedResult(castTimeMs);
                 if (end === 'refused') {
                     const text = refusal(this.helpers.state()!)!;
