@@ -650,14 +650,29 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         const mine = assigned.filter(takes), others = extra.filter(takes);
         // Others see some, we don't (an assignment while we walk back from a release): the first we can cast on.
         const visible = (c: Contact) => !!foeInView(ctx, c.objectId);
-        const target = mine.find(visible) ?? others.find(visible);
-        if (!target) return mine.length || others.length ? ctx.skip('cc: target not in view') : false;
-        const caught = area && !mezzRefuses(target) && !immuneKinds(target).includes('mezz') ? areaMezzCatch(target, ctx.picture().contacts, area.radius, o.focus) : [];
-        const useArea = area && caught.length >= ctx.settings.areaMezzMin! ? { ...area, kind: 'mezz' as const } : null;
-        const sp = useArea ?? spellFor(target);
-        if (!sp) return ctx.skip('cc: no mezz or root ready');
         const stand = !!ctx.settings.standGround;
-        if (stand && (foeInView(ctx, target.objectId)?.distance ?? Infinity) > sp.range) return ctx.skip('cc: out of reach, holding ground');
+        const catches = (c: Contact) => area && !mezzRefuses(c) && !immuneKinds(c).includes('mezz') ? areaMezzCatch(c, ctx.picture().contacts, area.radius, o.focus) : [];
+        const usesArea = (c: Contact) => !!area && catches(c).length >= ctx.settings.areaMezzMin!;
+        const spellOn = (c: Contact) => usesArea(c) ? { ...area!, kind: 'mezz' as const } : spellFor(c);
+        const distanceTo = (c: Contact) => foeInView(ctx, c.objectId)?.distance ?? Infinity;
+        const seen = [...mine, ...others].filter(visible);
+        // Holding its ground, a member mezzes what it can reach: the farthest enemy, assigned first, can be out of it for a whole raid.
+        const inReach = (c: Contact) => { const sp = spellOn(c); return !!sp && distanceTo(c) <= sp.range; };
+        const target = (stand ? seen.find(inReach) : undefined) ?? seen[0];
+        if (!target) return mine.length || others.length ? ctx.skip('cc: target not in view') : false;
+        const caught = catches(target);
+        const useArea = usesArea(target);
+        const sp = spellOn(target);
+        if (!sp) return ctx.skip('cc: no mezz or root ready');
+        if (stand && distanceTo(target) > sp.range) {
+            // The Bard leads the pack to mezz: a short step like a caster's, the others hold.
+            const view = foeInView(ctx, target.objectId);
+            const step = ctx.role === 'support' && view ? standStepTo(ctx.me(), view, sp.range, ctx.settings.standStep ?? 0, ctx.picture().contacts) : null;
+            if (!step) return ctx.skip('cc: out of reach, holding ground');
+            ctx.doing('move', target.objectId, 'step in range');
+            await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 });
+            return true;
+        }
         // A root that lands on a mezzed enemy wakes it (GameLiving.cs:1716-1727): not while a mezz is on its way there.
         if (stand && sp.kind === 'root' && mezzComing(ctx, target)) return ctx.skip('cc: a mezz is on its way there');
         await stopSwinging(ctx);

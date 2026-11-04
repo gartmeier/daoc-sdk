@@ -92,7 +92,7 @@ function stub(o: StubOptions) {
     };
     const ctx = {
         name: o.name, role: o.role, settings: o.settings ?? LEASHED, memory: new Map<string, any>(), sdk, bot,
-        spells: { cc: (opts: { except?: string[] } = {}) => (opts.except?.includes('mezz') ? null : { spell: { name: 'Mesmerize' }, kind: 'mezz', duration: 30 }), heal: () => o.healSpell ?? null, nuke: () => ({ spell: { name: 'Moon Blast' }, type: 'DirectDamage' }), capabilities: () => ({ ccKinds: ['mezz'], heal: o.canHeal ?? true }) },
+        spells: { cc: (opts: { except?: string[] } = {}) => (opts.except?.includes('mezz') ? null : { spell: { name: 'Mesmerize' }, kind: 'mezz', duration: 30, range: 1500 }), heal: () => o.healSpell ?? null, nuke: () => ({ spell: { name: 'Moon Blast' }, type: 'DirectDamage' }), capabilities: () => ({ ccKinds: ['mezz'], heal: o.canHeal ?? true }) },
         me, picture: () => pic, orders: () => pic.orders, members: () => pic.members,
         member: (n: string) => pic.members.find(m => m.name === n),
         tank: () => pic.members.find(m => m.role === 'tank' && !m.isDead),
@@ -475,6 +475,33 @@ describe('crowdControl: what an add can take, by immunity and by its health', ()
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
         expect(sequence).toEqual(['follow', 'cast']);
         expect(s.marks.map(m => m.targetId)).toEqual([52, 53]);
+    });
+});
+
+describe('crowdControl: holding ground', () => {
+    const at = { x: 10_000, y: 10_000 };
+    const run = async (role: Role, contacts: Contact[], assignedId: number) => {
+        const s = stub({ name: 'Bard', role, at, contacts, orders: { focus: 51, cc: [{ targetId: assignedId, by: 'Bard' }] }, settings: { ...LEASHED, standGround: true, standStep: 500 }, castSpell: async () => ({ success: true, message: 'Cast' }) });
+        const acted = await crowdControl().run(s.ctx);
+        return { acted, cast: s.calls.castSpell, walks: s.calls.walkTo };
+    };
+    const focus = foe(51, 9000, 10_000);
+
+    test('assigned the far one, it mezzes the one in reach instead of standing idle', async () => {
+        const r = await run('support', [focus, foe(52, 11_800, 10_000), foe(53, 11_000, 10_000)], 52);
+        expect(r).toMatchObject({ acted: true, cast: [53], walks: [] });
+    });
+
+    test('nothing in reach: the Bard steps just far enough', async () => {
+        const r = await run('support', [focus, foe(52, 11_700, 10_000)], 52);
+        expect(r.cast).toEqual([]);
+        expect(r.walks.length).toBe(1);
+        expect(r.walks[0]!.x).toBeCloseTo(10_300);
+    });
+
+    test('a target too far for a step, or another member: holds', async () => {
+        expect((await run('support', [focus, foe(52, 12_400, 10_000)], 52)).walks).toEqual([]);
+        expect((await run('healer', [focus, foe(52, 11_700, 10_000)], 52)).walks).toEqual([]);
     });
 });
 
