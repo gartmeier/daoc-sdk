@@ -3,13 +3,16 @@
 // show at once when he changes chant? Then an Albion and a Midgard group of five fight in Thidranki on the real lists.
 // Needs an account with PrivLevel 3 (it levels and moves the others), so run it on a throwaway stack, as in cc-group-live.ts:
 //
-//   LIVE_SERVER=127.0.0.1:<port> bun sdk/test/live/rvr-routines-live.ts <gmAccount> [seconds]
+//   LIVE_SERVER=127.0.0.1:<port> [TWIST=damage,combatHeal [TWIST_MS=6100]] bun sdk/test/live/rvr-routines-live.ts <gmAccount> [seconds]
 
 import { getBuild, getClassBuilds } from '../../../data/builds';
+import { paladin as paladinKit } from '../../classes/paladin';
 import { Blackboard } from '../../group/blackboard';
+import { withCharacter } from '../../group/character';
 import { MemberAgent, type Member } from '../../group/member';
 import { formGroup } from '../../group/roster';
 import { rvrRoaming, type RvrSettings } from '../../group/rvr';
+import type { SongKind } from '../../group/songs';
 import { Spellbook } from '../../group/spells';
 import { Coordinator } from '../../group/strategy';
 import { log, startGateway, startLiveBots, withBots, type LiveBot, type LiveBotOptions } from './harness';
@@ -148,7 +151,9 @@ await withBots([gm, ...bots], gw, async () => {
         boards.push(board);
         board.onOrders(next => { orderLines++; for (const a of next.cc) ordersBy[a.by] = (ordersBy[a.by] ?? 0) + 1; });
         for (const s of side.seats) {
-            const agent = new MemberAgent(asMember(seat(s.name), s), board, rvrRoaming.behaviors[s.role]!, settings, rvrRoaming.agent);
+            // TWIST names the kinds his kit twists; without it he plays his list's song().
+            const list = s.name === 'ap' && process.env.TWIST ? withCharacter(rvrRoaming.behaviors.tank!, paladinKit({ twist: { order: process.env.TWIST.split(',') as SongKind[], everyMs: Number(process.env.TWIST_MS ?? 6100) } })) : rvrRoaming.behaviors[s.role]!;
+            const agent = new MemberAgent(asMember(seat(s.name), s), board, list, settings, rvrRoaming.agent);
             agents.set(s.name, agent);
             loops.push(agent.run(stop.signal).catch(e => log(`agent ${s.name}: ${e}`)));
         }
