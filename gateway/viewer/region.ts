@@ -10,7 +10,7 @@
 // Bot and group names link to their own pages.
 
 import { phaseClass } from './group-logic';
-import { authHeaders, shouldLoadRegion } from './logic';
+import { authHeaders, enemyAims, enemyHeading, enemyWord, shouldLoadRegion } from './logic';
 import { headingVec, MapView, type Pt, type RegionData } from './map-view';
 import { arr, clamp, drawPass, dur, esc, miniBar, num, REALM_HEX, safely, sections } from './ui-kit';
 import type { RegionBot, RegionEnemy, RegionFrame, RegionKeep, RegionRun } from '../regions';
@@ -416,6 +416,12 @@ function drawTargets(v: MapView<MapItem>, f: RegionFrame) {
         ctx.strokeStyle = realmHex(b.realm);
         ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
     }
+    for (const { from: e, to: t } of enemyAims(f.enemies, id => positionOf(f, id))) {
+        const from = v.toScreen(e.x, e.y);
+        const to = v.toScreen(t.x, t.y);
+        ctx.strokeStyle = realmHex(e.realm);
+        ctx.beginPath(); ctx.moveTo(from.x, from.y); ctx.lineTo(to.x, to.y); ctx.stroke();
+    }
 }
 
 function drawEnemies(v: MapView<MapItem>, f: RegionFrame) {
@@ -425,7 +431,7 @@ function drawEnemies(v: MapView<MapItem>, f: RegionFrame) {
         if (!v.onScreen(s)) continue;
         const key = `e:${e.objectId}`;
         const sel = selected === key, hov = v.hoverKey === key;
-        const r = 5;
+        const r = e.isPet ? 3.5 : 5;
         ctx.beginPath();
         ctx.moveTo(s.x, s.y - r); ctx.lineTo(s.x + r, s.y); ctx.lineTo(s.x, s.y + r); ctx.lineTo(s.x - r, s.y);
         ctx.closePath();
@@ -508,7 +514,7 @@ function drawHud(v: MapView<MapItem>, f: RegionFrame | null, step: number) {
         if (b) parts.push(`${Math.round(Math.hypot(w.x - b.x, w.y - b.y))} u to ${b.name}`);
     }
     parts.push(`grid ${step} u`);
-    if (f) parts.push(`${f.bots.length} bots · ${f.enemies.length} enemy players · region ${f.regionId}`);
+    if (f) parts.push(`${f.bots.length} bots · ${enemyHeading(f.enemies)} · region ${f.regionId}`);
     $('hud').textContent = parts.join(' · ');
 }
 
@@ -527,7 +533,7 @@ function showTooltip(hit: MapItem | null, sx: number, sy: number) {
     } else if (hit.kind === 'enemy') {
         const e = hit.e;
         rows.push(`<div class="tname">${esc(e.name)}</div>`);
-        rows.push(`<div>Enemy player, none of our bots · level ${esc(e.level)} · ${esc(e.realm)}</div>`);
+        rows.push(`<div>${enemyWord(e)}, ${e.isPet ? 'of none of our bots' : 'none of our bots'} · level ${esc(e.level)} · ${esc(e.realm)}${e.targetId != null ? ` · on ${esc(nameOf(e.targetId))}` : ''}</div>`);
         rows.push(`<div>HP ${esc(Math.round(e.hp))}%${e.inCombat ? ' · <span class="bad">in combat</span>' : ''}${e.isDead ? ' · dead' : ''}</div>`);
         rows.push(`<div class="muted">seen by ${esc(e.seenBy.join(', '))} · #${esc(e.objectId)} · ${Math.round(e.x)}, ${Math.round(e.y)}</div>`);
     } else if (hit.kind === 'keep') {
@@ -624,7 +630,7 @@ for (const name of Object.keys(layer) as (keyof typeof layer)[]) {
 
 $('legend').innerHTML = [
     ...(['albion', 'midgard', 'hibernia'] as const).map(r => `<span><i class="swatch" style="background:${REALM_HEX[r]}"></i>${r}</span>`),
-    '<span><i class="swatch" style="background:#9aa4ae;border-radius:0;transform:rotate(45deg)"></i>enemy player</span>',
+    '<span><i class="swatch" style="background:#9aa4ae;border-radius:0;transform:rotate(45deg)"></i>enemy player, smaller its pet</span>',
     '<span><i class="swatch" style="background:#8593a3;border-radius:0"></i>keep</span>',
     '<span><i class="swatch" style="border:2px dashed #d6dde6;background:none"></i>focus</span>',
     '<span><i class="swatch" style="background:#d96cff;border-radius:0;transform:rotate(45deg)"></i>zone exit</span>',
@@ -769,10 +775,10 @@ function renderEnemies() {
     const items = f.enemies.slice(0, 40).map(e => {
         const key = `e:${e.objectId}`;
         return `<li class="${selected === key ? 'sel' : ''}" data-act="select" data-key="${esc(key)}">
-            <span><span style="color:${realmHex(e.realm)}">${esc(e.name)}</span> <span class="muted">L${esc(e.level)} ${esc(e.realm)}</span> ${esc(Math.round(e.hp))}%${e.isDead ? ' <span class="muted">dead</span>' : ''}</span>
+            <span><span style="color:${realmHex(e.realm)}">${esc(e.name)}</span> <span class="muted">L${esc(e.level)} ${esc(e.realm)}</span>${e.isPet ? ' <span class="chip">pet</span>' : ''} ${esc(Math.round(e.hp))}%${e.isDead ? ' <span class="muted">dead</span>' : ''}</span>
             <span class="r" title="${esc(e.seenBy.join(', '))}">seen by ${esc(e.seenBy.length)}</span></li>`;
     }).join('');
-    setSection('r-enemies', `<h3>Enemy players <span title="players of other realms that are none of our bots">${f.enemies.length}</span></h3>
+    setSection('r-enemies', `<h3>Enemies <span title="${esc(enemyHeading(f.enemies))} of other realms, none of them our bots or their pets">${f.enemies.length}</span></h3>
         <ul class="list scroll" data-scroll="enemies">${items}</ul>${f.enemies.length > 40 ? `<div class="muted">40 of ${f.enemies.length} shown</div>` : ''}`);
 }
 

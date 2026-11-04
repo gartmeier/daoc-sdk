@@ -10,14 +10,14 @@
 // that (petControl: it only sends) is marked `side` and runs on a clock of its own beside the turns, and once at the end of
 // each turn that acted, with no turn announced: a healer's casts can follow each other in one macrotask.
 
-import type { CcKind } from './cc';
+import { isMezzEffect, MEZZED, type CcKind } from './cc';
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import type { PlayerState } from '../types';
 import { abortable, executionContext } from '../execution-context';
 import { type Blackboard, observeState, SHADE_REFUSED, steppedInFront, UNATTACKABLE_MS } from './blackboard';
 import type { Character } from './character';
-import { petsAllowed } from './pets';
+import { petOrderedOn, petsAllowed } from './pets';
 import { Spellbook } from './spells';
 import type { Activity, Capabilities, Contact, GroupPicture, MemberCombat, MemberReport, Orders, Role } from './types';
 
@@ -97,6 +97,12 @@ export function countCombatMessage(text: string, combat: MemberCombat, own?: Own
 const SIDE_SLOT_MS = 50;
 /** An error in a side behaviour: no tick for this long. */
 const SIDE_ERROR_PAUSE_MS = 1000;
+/** A mezz's own end, to its target: the spell's Message3, two wordings in spell.sql. */
+const MEZZ_OVER = /^You (?:are no longer entranced|recover from the mesmerize)\b/;
+/** How often a mezzed member looks up. */
+const MEZZ_LOOK_MS = 100;
+/** A mezz that reads no time left is waited for this long at most. */
+const MEZZ_WAIT_MAX_MS = 90_000;
 
 class Interrupted extends Error {
     constructor(reason: string) { super(`interrupted: ${reason}`); this.name = 'Interrupted'; }
@@ -157,6 +163,7 @@ export class MemberContext<S = any> {
     result(kind: string, r: { success: boolean; reason?: string; message?: string; targetDied?: true }, targetId: number | null = null): void {
         if (r.targetDied) return;
         if (!r.success && !this.onSide) this.agent.stepFailed = true;
+        if (r.reason === 'crowd_controlled' && !this.onSide) this.agent.noteHeld();
         // For the whole group, whatever the client knows of models: the order, the cast or the swing was at a shade.
         const region = this.sdk.getPlayer()?.regionId;
         if (targetId !== null && region !== undefined && r.message?.includes(SHADE_REFUSED)) this.agent.board.markUnattackable(targetId, region, UNATTACKABLE_MS);
@@ -213,6 +220,8 @@ export class MemberAgent<S = any> {
     /** The side tick now running: the clock's or a turn's end's, one at a time. */
     private sideTick: Promise<void> | null = null;
     private sidePausedUntil = 0;
+    /** A mezz a turn was refused for, until the loop has waited it out: the last line then, and when its time is up. */
+    private mezzed: { lastLine: number; until: number } | null = null;
 
     constructor(readonly member: Member, readonly board: Blackboard, readonly behaviors: Behavior<S>[], settings: S, private readonly options: MemberAgentOptions = {}) {
         this.sideBehaviors = behaviors.filter(b => b.side);
@@ -249,7 +258,8 @@ export class MemberAgent<S = any> {
             for (const m of fresh) countCombatMessage(m.text, this.combat, own);
         }
         this.lastMessageId = state.gameMessages.at(-1)?.id ?? this.lastMessageId;
-        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat }, this.options.sightRadius);
+        const petRecast = state.pet === null && this.capabilities.pet === 'main' && (this.spells.summon()?.spell.cooldownRemaining ?? 0) > 0;
+        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat, petRecast, petOrderedOn: petOrderedOn(this.ctx) }, this.options.sightRadius);
         if (obs) this.board.publish(obs);
     }
 
@@ -300,9 +310,15 @@ export class MemberAgent<S = any> {
                     this.stepFailed = false;
                     if (await this.step(b, signal)) { acted = true; break; }
                 }
-                const spent = Date.now() - turn;
+                let spent = Date.now() - turn;
                 // "petControl runs only between a member's turns" was the list's: with the turn on its clock, another cast in the same macrotask would leave a pet with no order until a healer's chain stops (selectFree).
                 if (acted && !signal.aborted) await this.sideSlot(sideSignal);
+                if (this.mezzed && !signal.aborted) {
+                    // That was the pause: a refused turn's second, on the clock from before the wait, would come after the mezz has ended.
+                    await this.waitOutMezz(signal);
+                    spent = Date.now() - turn;
+                    this.stepFailed = false;
+                }
                 const paced = acted ? (this.options.minTurnMs ?? 250) - spent : this.options.idleMs ?? 300;
                 const pause = this.stepFailed ? Math.max(paced, (this.options.failedTurnMs ?? 1000) - spent) : paced;
                 if (!acted && !signal.aborted) this.setActivity('idle', null, this.lastSkip);
@@ -313,6 +329,28 @@ export class MemberAgent<S = any> {
             ended.abort(new Error('member stopped'));
             await side;
         }
+    }
+
+    /** A turn was refused for crowd control: if that's a mezz on us, the loop waits it out. A stun is short, and keeps its own retry. */
+    noteHeld(): void {
+        const state = this.member.sdk.getState();
+        const mezz = state?.effects.find(e => isMezzEffect(e.name));
+        if (!state || !mezz) return;
+        this.mezzed = { lastLine: state.gameMessages.at(-1)?.id ?? -1, until: Date.now() + (mezz.remainingSeconds > 0 ? mezz.remainingSeconds * 1000 + 1000 : MEZZ_WAIT_MAX_MS) };
+    }
+
+    /**
+     * Nothing on the list can go while mezzed, so no turn until "You are no longer entranced.", the effect gone, or its time up: every behaviour tried again every 2 s, one failure each (20261104-050645: heal:crowd_controlled (15) for one 42 s mezz). A death or a relog ends it, and the side tick goes on.
+     */
+    private async waitOutMezz(signal: AbortSignal): Promise<void> {
+        const { lastLine, until } = this.mezzed!;
+        this.mezzed = null;
+        this.setActivity('idle', null, MEZZED);
+        const over = () => {
+            const state = this.member.sdk.getState();
+            return !state?.player || state.player.isDead || Date.now() >= until || !state.effects.some(e => isMezzEffect(e.name)) || state.gameMessages.some(m => m.id > lastLine && MEZZ_OVER.test(m.text));
+        };
+        while (!signal.aborted && !over()) await abortable(Bun.sleep(MEZZ_LOOK_MS), signal).catch(() => {});
     }
 
     /** The behaviours marked `side`, every sideTickMs, between and during turns. No player (a relog): no tick. Ends with no tick running. */

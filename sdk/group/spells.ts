@@ -127,6 +127,8 @@ export interface NukeOptions {
     byDamage?: boolean;
     /** Castable now (power, cooldown); default: every spell. */
     ready?: (s: SpellPick) => boolean;
+    /** Only spells with no cast time. */
+    instant?: boolean;
 }
 
 /**
@@ -140,7 +142,7 @@ export interface NukeOptions {
  */
 export function pickNuke(picks: SpellPick[], opts: NukeOptions = {}): SpellPick | null {
     const ready = opts.ready ?? (() => true);
-    const ok = picks.filter(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type) && s.range > 0 && (opts.aoe || s.radius === 0));
+    const ok = picks.filter(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type) && s.range > 0 && (opts.aoe || s.radius === 0) && (!opts.instant || s.castTime === 0));
     const isDot = (s: SpellPick) => s.type === 'DamageOverTime';
     const top = best(ok.filter(s => !isDot(s)));
     const dot = best(ok.filter(s => isDot(s) && ready(s) && !opts.dotted?.has(dotFamily(s)) && (!top || s.damage >= DOT_MIN_SHARE * top.damage)));

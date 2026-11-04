@@ -242,3 +242,55 @@ describe('regionLayout', () => {
         expect(await regionLayout(1)).toBeNull();
     });
 });
+
+describe('enemy pets in the region frame', () => {
+    // R9-region: GET /regions/252/live during a fight: enemies [] and 'spirit warrior' once, as a Midgard bot's pet. A non-bot enemy's pet would not show.
+    const PET_OF_THORGRIM = 600, STRANGERS = 601, CASTER = 602, SAME_REALM = 603;
+    const window = (objectId: number): PetState => ({ objectId, name: 'spirit warrior', aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null });
+    const frame = () => {
+        const s = new Map<string, ViewerBotSession>([
+            ['galahad', session({ name: 'Galahad', objectId: 11, realm: 'albion', x: 30000, y: 40000 }, {
+                nearbyNpcs: [
+                    makeNpc({ objectId: PET_OF_THORGRIM, name: 'spirit warrior', realm: 'midgard', isPet: true, x: 30500, y: 40000 }),
+                    makeNpc({ objectId: STRANGERS, name: 'emerald simulacrum', level: 21, realm: 'midgard', isPet: true, x: 31000, y: 40000, healthPercent: 60, targetObjectId: 11 }),
+                    makeNpc({ objectId: CASTER, name: 'ice spirit', realm: 'hibernia', isPet: true, x: 32000, y: 40000 }),
+                    makeNpc({ objectId: SAME_REALM, name: 'ruby simulacrum', realm: 'albion', isPet: true, x: 30100, y: 40000 }),
+                    makeNpc({ objectId: 604, name: 'wolf', realm: 'none', x: 30100, y: 40100 }),
+                    makeNpc({ objectId: 605, name: 'keep guard', realm: 'midgard', x: 30100, y: 40200 }),
+                ],
+                // A caster pet's entry names its target only on its victim's client, for moments (live): the fight says it, and that reaches every client.
+                combatEvents: [{ id: 1, kind: 'spellEffect', attackerObjectId: CASTER, targetObjectId: 21, receivedAt: NOW - 500 }], timestamp: NOW,
+            }, NOW - 100)],
+            ['thorgrim', session({ name: 'Thorgrim', objectId: 21, realm: 'midgard', x: 30500, y: 40000 }, { pet: window(PET_OF_THORGRIM) })],
+        ]);
+        return composeRegion(BG, sources({ sessions: s }), NOW);
+    };
+    const pets = () => frame().enemies.filter(e => e.isPet);
+
+    test('from nearbyNpcs with isPet, of another realm than the one who sees it, and none of our bots\'', () => {
+        expect(pets().map(e => e.objectId).sort()).toEqual([STRANGERS, CASTER].sort());
+    });
+
+    test('as a marker, with its aim: its entry\'s target, else its last blow', () => {
+        expect(frame().enemies.find(e => e.objectId === STRANGERS)).toMatchObject({ name: 'emerald simulacrum', level: 21, realm: 'midgard', x: 31000, y: 40000, hp: 60, isPet: true, targetId: 11, seenBy: ['Galahad'] });
+        expect(frame().enemies.find(e => e.objectId === CASTER)).toMatchObject({ isPet: true, targetId: 21 });
+    });
+
+    test('a player has neither key: the frame reads as it did', () => {
+        const players = composeRegion(BG, sources(), NOW).enemies;
+        expect(players.length).toBeGreaterThan(0);
+        for (const p of players) {
+            expect(p).not.toHaveProperty('isPet');
+            expect(p).not.toHaveProperty('targetId');
+        }
+    });
+
+    test('players come first when the list is full: a pet never takes a player\'s place', () => {
+        // MAX_ENEMIES is 300, and a bot's list runs to 500.
+        const many = Array.from({ length: 300 }, (_, i) => makePlayerObj({ objectId: 1000 + i, name: 'Troll', realm: 'midgard', x: 30000 + i, y: 40000 }));
+        const s = new Map<string, ViewerBotSession>([['galahad', session({ name: 'Galahad', objectId: 11, realm: 'albion', x: 30000, y: 40000 }, { nearbyPlayers: many, nearbyNpcs: [makeNpc({ objectId: 700, realm: 'midgard', isPet: true })] }, NOW - 100)]]);
+        const list = composeRegion(BG, sources({ sessions: s }), NOW).enemies;
+        expect(list.length).toBe(300);
+        expect(list.filter(e => e.isPet)).toEqual([]);
+    });
+});

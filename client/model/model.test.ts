@@ -133,6 +133,16 @@ describe('WorldModel', () => {
         expect(m.nearbyPlayers(ME)[0]).toMatchObject({ name: 'Bob', sessionId: 9, realm: 'albion' });
     });
 
+    test('our health reads 0 at the death, not the last it read: nothing else sets it until the next status packet', () => {
+        // out6/vn3-115112: 'end 16 50 dead true', 'hp 16'. qa3-110639's state: 'HP 18/102 | ... | DEAD'.
+        const m = new WorldModel();
+        m.self.objectId = 123;
+        m.self.health = 16;
+        m.self.healthPercent = 16;
+        m.handle(ServerOp.PlayerDeath, W().u16(123).u16(500).fill(0, 4).toBytes());
+        expect(m.self).toMatchObject({ isDead: true, health: 0, healthPercent: 0 });
+    });
+
     test('self death via 0xAE counts once and 0x89 revives', () => {
         let died = 0;
         const m = new WorldModel({ onSelfDeath: () => died++ });

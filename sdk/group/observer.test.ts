@@ -947,3 +947,186 @@ describe('GroupObserver: pets', () => {
         });
     });
 });
+
+describe('what a report says of a run a round would read wrong', () => {
+    const caps = (pet: Capabilities['pet']): Capabilities => ({ heal: false, cc: false, nuke: true, buffs: [], buffSpells: [], pet });
+    const petOf = (over: Partial<PetReport> = {}): PetReport => ({ objectId: 500, name: 'spirit soldier', level: 17, x: 1000, y: 1000, z: 0, hp: 84, targetId: null, inCombat: false, aggression: 'defensive', walk: 'follow', icons: [], ...over });
+    const observer = (routines?: Record<string, { from: 'role'; behaviors: string[] }>) => new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0, routines });
+    const quiet = { seq: 1, phase: 'recover' as const };
+    const engage = { seq: 2, phase: 'engage' as const, focus: 7 };
+    const wolf = (over: Parameters<typeof contact>[1] = {}) => contact(7, { name: 'wolf', target: 'Tank', threat: true, x: 0, ...over });
+    const of = (r: RunReport, topic: string) => r.findings.find(f => f.topic === topic);
+
+    describe('pet-down says why', () => {
+        const run = (seconds: number, m: (i: number) => { over: Partial<MemberReport>; orders?: object }) => {
+            const o = observer();
+            for (let i = 1; i <= seconds; i++) {
+                const s = m(i);
+                o.sample(picture(members({ Menta: { capabilities: caps('main'), ...s.over } }), [], s.orders ?? quiet, T0 + i * 1000));
+            }
+            return o.report();
+        };
+
+        test('on recast: "Pethun had no pet 37% of the run ... Try: Lower pet.summonMana", with mana at 100 % and a summon with 18 s on its clock', () => {
+            const r = run(100, i => ({ over: i <= 40 ? { pet: null, petRecast: true } : { pet: petOf() } }));
+            expect(r.members.Menta!.pet).toMatchObject({ up: 60, onRecast: 40 });
+            const f = of(r, 'pet-down')!;
+            expect(f.evidence).toContain('on recast 40% of the run');
+            expect(f.suggestion).toContain('recast');
+            expect(f.suggestion).not.toContain('pet.summonMana');
+        });
+
+        test('its owner pulling: a summon stands him still, so his own pull waits for none', () => {
+            const r = run(100, i => ({ over: { pet: i <= 40 ? null : petOf() }, orders: i <= 40 ? { seq: 1, phase: 'pull' as const, focus: 7, puller: 'Menta' } : quiet }));
+            expect(r.members.Menta!.pet).toMatchObject({ up: 60, ownerPulling: 40 });
+            const f = of(r, 'pet-down')!;
+            expect(f.evidence).toContain('its owner pulling 40% of the run');
+            expect(f.suggestion).toContain('pet.waitForSummon');
+            expect(f.suggestion).not.toContain('pet.summonMana');
+        });
+
+        test('someone else\'s pull is no reason', () => {
+            const r = run(100, i => ({ over: { pet: i <= 40 ? null : petOf() }, orders: i <= 40 ? { seq: 1, phase: 'pull' as const, focus: 7, puller: 'Tank' } : quiet }));
+            expect(r.members.Menta!.pet).not.toHaveProperty('ownerPulling');
+            expect(of(r, 'pet-down')!.suggestion).toContain('pet.summonMana');
+        });
+
+        test('owner dead most of the run: "Petcab had no pet 28% of the run" of 30 s alive in 133 s, the first summon\'s 12 s, with mana at 100 %', () => {
+            const r = run(133, i => ({ over: i <= 30 ? { pet: i <= 8 ? null : petOf() } : { pet: null, isDead: true, hp: 0 } }));
+            expect(r.members.Menta!.pet).toMatchObject({ ownerDead: 77 });
+            const f = of(r, 'pet-down')!;
+            expect(f.suggestion).toContain('dead 77% of the run');
+            expect(f.suggestion).toContain('deaths finding');
+            expect(f.suggestion).not.toContain('pet.summonMana');
+        });
+
+        test('none of these: as it read, and no key in the stats', () => {
+            const r = run(100, i => ({ over: { pet: i <= 40 ? null : petOf() } }));
+            for (const k of ['onRecast', 'ownerPulling', 'ownerDead']) expect(r.members.Menta!.pet).not.toHaveProperty(k);
+            expect(of(r, 'pet-down')!.evidence).toBe('summoned 0×, it died 0×');
+            expect(of(r, 'pet-down')!.suggestion).toContain('pet.summonMana');
+        });
+    });
+
+    describe('a fight\'s outcome and name', () => {
+        const fight = (o: { kill?: GroupEvent; death?: boolean; contacts?: boolean } = {}) => {
+            const g = observer();
+            for (let i = 1; i <= 5; i++) g.sample(picture(members(), o.contacts === false ? [] : [wolf()], o.contacts === false ? { seq: 2, phase: 'engage' as const } : engage, T0 + i * 1000));
+            if (o.kill) g.handle(o.kill);
+            if (o.death) g.handle({ at: T0 + 5500, kind: 'death', member: 'Menta', text: 'Menta died' });
+            for (let i = 6; i <= 9; i++) g.sample(picture(members(), [], quiet, T0 + i * 1000));
+            return g.report();
+        };
+
+        test('"grove\'s agent: lost in 34 s, kills 0" with Rehea alive and the turret called off: it stopped', () => {
+            expect(fight().fights[0]!.outcome).toBe('stopped');
+            expect(formatReport(fight())).toContain('wolf: stopped in');
+        });
+
+        test('with a member dead and nothing to show for it: lost', () => {
+            expect(fight({ death: true }).fights[0]!.outcome).toBe('lost');
+        });
+
+        test('"00:01 ?: won in 18 s, kills 1": a run that left the engage within a tick has its kill to go by', () => {
+            const r = fight({ contacts: false, kill: { at: T0 + 5500, kind: 'kill', member: 'Tank', targetId: 7, text: 'water beetle died', data: { name: 'water beetle' } } });
+            expect(r.fights[0]).toMatchObject({ focus: ['water beetle'], outcome: 'won' });
+            expect(formatReport(r)).toContain('water beetle: won in');
+        });
+
+        test('or an enemy pet\'s, which is no kill in its line', () => {
+            const r = fight({ contacts: false, kill: { at: T0 + 5500, kind: 'kill', member: 'Tank', targetId: 7, text: 'necroservant died', data: { name: 'necroservant', pet: true } } });
+            expect(r.fights[0]).toMatchObject({ focus: ['necroservant'], kills: [], outcome: 'won' });
+        });
+
+        test('a focus seen stays the name', () => {
+            const r = fight({ kill: { at: T0 + 5500, kind: 'kill', member: 'Tank', targetId: 8, text: 'add died', data: { name: 'add' } } });
+            expect(r.fights[0]!.focus).toEqual(['wolf']);
+        });
+    });
+
+    describe('pet-aggro: ordered, per fight and per target', () => {
+        const ROUTINE = { menta: { from: 'role' as const, behaviors: ['release', 'petControl', 'assist'] }, tank: { from: 'role' as const, behaviors: ['release', 'petControl', 'tank'] } };
+        const accepted = (member: string, targetId: number, at: number): GroupEvent => ({ at, kind: 'result', member, targetId, text: 'petAttack: ok', data: { action: 'petAttack', success: true, reason: null } });
+        const onPet = (id: number, owner: string, over: Parameters<typeof contact>[1] = {}) => contact(id, { name: 'lake serpent', target: null, targetPet: owner, targetId: 500, threat: true, x: 0, ...over });
+        const withPet = { Menta: { pet: petOf() } };
+        /** A fight on `id`, 12 s, with the focus on `owner`'s pet for all of it. */
+        const fight = (o: GroupObserver, id: number, owner: string, from: number, ordered: boolean) => {
+            const ms = owner === 'Tank' ? { Tank: { pet: petOf() } } : withPet;
+            if (ordered) o.sample(picture(members(ms), [onPet(id, owner, { target: 'Tank', targetPet: null })], { seq: 2, phase: 'engage', focus: id }, T0 + from * 1000));
+            if (ordered) o.handle(accepted(owner, id, T0 + from * 1000 + 100));
+            for (let i = 1; i <= 12; i++) o.sample(picture(members(ms), [onPet(id, owner)], { seq: 2, phase: 'engage', focus: id }, T0 + (from + i) * 1000));
+            for (let i = 13; i <= 16; i++) o.sample(picture(members(ms), [], quiet, T0 + (from + i) * 1000));
+        };
+
+        test('c1: "on Petspi\'s pet 23%, on Petbon\'s pet 46%. Try: Raise pet.holdMs", the 46 % a mezz-woken mob that went for Commander with no order in that fight', () => {
+            const o = observer(ROUTINE);
+            // An order that went, in an earlier fight on another mob: run-wide that read as ordered.
+            fight(o, 7, 'Tank', 0, true);
+            o.handle(accepted('Menta', 7, T0 + 100));
+            fight(o, 8, 'Menta', 20, false);
+            const r = o.report();
+            expect(r.members.Menta!.actions.petAttack).toBe(1);
+            const f = of(r, 'pet-aggro')!;
+            expect(f.evidence).toContain('on Menta\'s pet');
+            expect(f.evidence).toContain('(no order)');
+        });
+
+        test('after its order, on that target, in that fight: the hold it is', () => {
+            const o = observer(ROUTINE);
+            fight(o, 8, 'Menta', 0, true);
+            const f = of(o.report(), 'pet-aggro')!;
+            expect(f.evidence).not.toContain('no order');
+            expect(f.suggestion).toContain('Raise pet.holdMs');
+        });
+
+        test('20261104-043654: a tank\'s own pet, ordered at the first swing, turned the mob by damage: the hold, not the stance petControl just kept', () => {
+            const o = observer(ROUTINE);
+            fight(o, 8, 'Tank', 0, true);
+            const f = of(o.report(), 'pet-aggro')!;
+            expect(f.evidence).toContain('(the tank\'s own)');
+            expect(f.suggestion).toContain('Raise pet.holdMs');
+            expect(f.suggestion).not.toContain('passive');
+        });
+
+        test('a tank\'s own with no order that went: the stance', () => {
+            const o = observer(ROUTINE);
+            fight(o, 8, 'Tank', 0, false);
+            const f = of(o.report(), 'pet-aggro')!;
+            expect(f.suggestion).toContain('passive');
+            expect(f.suggestion).not.toContain('Raise pet.holdMs');
+        });
+
+        test('the same id in the next fight is another mob: an order in the last one is none here', () => {
+            const o = observer(ROUTINE);
+            o.sample(picture(members(withPet), [wolf({ objectId: 8 })], { seq: 2, phase: 'engage', focus: 8 }, T0 + 1000));
+            o.handle(accepted('Menta', 8, T0 + 1100));
+            for (let i = 2; i <= 6; i++) o.sample(picture(members(withPet), [], quiet, T0 + i * 1000));
+            fight(o, 8, 'Menta', 10, false);
+            expect(of(o.report(), 'pet-aggro')!.evidence).toContain('(no order)');
+        });
+    });
+
+    describe('interrupts: the advice with no tank', () => {
+        const interrupted = (ms: MemberReport[]) => {
+            const o = observer();
+            o.sample(picture(ms, [wolf({ target: 'Menta', x: 1000 })], engage, T0 + 1000));
+            for (let i = 0; i < 2; i++) o.handle({ at: T0 + 1200 + i, kind: 'result', member: 'Menta', text: 'nuke: interrupted', data: { action: 'nuke', success: false, reason: 'interrupted' } });
+            return of(o.report(), 'interrupts')!;
+        };
+
+        test('"Finding says let flee() run before casting, and flee is on its list": with none in the group it has nowhere to run, and holdMs nothing to wait for', () => {
+            const f = interrupted([report('Druid', { role: 'healer', objectId: 2 }), report('Menta', { role: 'nuker', objectId: 4, x: 1000 })]);
+            expect(f.suggestion).not.toContain('flee()');
+            expect(f.suggestion).not.toContain('holdMs');
+            expect(f.suggestion).toContain('no tank');
+        });
+
+        test('with one, as it was', () => {
+            expect(interrupted(members()).suggestion).toContain('let flee() run before casting');
+        });
+
+        test('and for the stretch its tank is out of flee\'s reach, released or over 5000 off, what it does then', () => {
+            expect(interrupted(members()).suggestion).toMatch(/flee stands aside.*instant spell/);
+        });
+    });
+});

@@ -12,7 +12,7 @@ import { withCharacter } from './character';
 import { contact, enemy, picture, report } from './fixtures';
 import { MemberAgent, type Behavior, type MemberContext } from './member';
 import { formatReport, GroupObserver } from './observer';
-import { castRunning, fnfPet, leftPassive, memberPetKit, PET_SETTINGS, petAfterRun, petBuff, petControl, petHeal, petKit, petMaxHp, petsAllowed, summonPet, waitsForPet, withPets, type PetKit } from './pets';
+import { castRunning, fnfPet, leftPassive, memberPetKit, PET_SETTINGS, petAfterRun, petBuff, petBuffAtStart, petControl, petHeal, petKit, petMaxHp, petsAllowed, summonPet, waitsForPet, withPets, type PetKit } from './pets';
 import { PACK_SETTINGS } from './pack';
 import { theurgist } from '../classes/theurgist';
 import { decidePve, PVE_SETTINGS } from './pve';
@@ -102,7 +102,7 @@ function world(o: WorldOptions = {}) {
     };
     const spells = {
         knowsTurret: () => o.turret ?? false,
-        summon: () => o.summon ?? null, fnf: () => o.fnf ?? null, petHeal: (missing?: number) => { calls.petHealNeed.push(missing); return o.petHeal ?? null; }, petBuffs: () => o.petBuffs ?? [], root: () => null,
+        summon: () => o.summon ?? null, fnf: () => o.fnf ?? null, petHeal: (missing?: number) => { calls.petHealNeed.push(missing); return o.petHeal ?? null; }, petBuffs: () => o.petBuffs ?? [], root: () => null, cc: () => null,
         capabilities: () => ({ ccKinds: ['mezz', 'root'] }),
         powerOf: (s: { power: number }) => (s.power < 0 ? Math.floor(mana.maxMana * -s.power / 100) : s.power),
     };
@@ -356,6 +356,9 @@ describe('petControl: throttled', () => {
 
     test('a stance and a walk order each at most once in 1.5 s', async () => {
         const w = world({ orders: { phase: 'retreat', focus: null }, pet: { targetObjectId: FOCUS } });
+        // Far off, so its walk order goes again: beside us it wouldn't.
+        const entry = w.ctx.sdk.getPet()!;
+        Object.assign(w.ctx.sdk, { getPet: () => ({ ...entry, distance: 900 }) });
         await petControl().run(w.ctx);
         await petControl().run(w.ctx);
         expect(w.sent).toEqual([{ command: 'passive' }, { command: 'follow' }]);
@@ -471,6 +474,26 @@ describe('petControl: a pet on stay is the character\'s own', () => {
             w.pic.orders.phase = 'retreat';
             await petControl().run(w.ctx);
             expect(w.sent).toEqual([{ command: 'passive' }, { command: 'follow' }]);
+        });
+
+        test('a retreat with the pet beside us and a target still in its entry: no more follows, and one far off gets them', async () => {
+            // r20on Rbcab: 5 in 16 s, 3 of them with the pet at about 110.
+            const w = await sentIn();
+            w.pic.orders.phase = 'retreat';
+            await petControl().run(w.ctx);
+            expect(w.sent).toEqual([{ command: 'passive' }, { command: 'follow' }]);
+            w.sent.length = 0;
+            const stance = w.ctx.sdk.getPetState()!;
+            Object.assign(w.ctx.sdk, { getPetState: () => ({ ...stance, aggression: 'passive', walk: 'follow' }) });
+            const pet = w.ctx.sdk.getPet()!;
+            Object.assign(w.ctx.sdk, { getPet: () => ({ ...pet, distance: 110 }) });
+            w.ctx.memory.delete('petOrder:walk');
+            await petControl().run(w.ctx);
+            expect(w.sent).toEqual([]);
+            Object.assign(w.ctx.sdk, { getPet: () => ({ ...pet, distance: 900 }) });
+            w.ctx.memory.delete('petOrder:walk');
+            await petControl().run(w.ctx);
+            expect(w.sent).toEqual([{ command: 'follow' }]);
         });
 
         test('between fights it comes off, and stays parked', async () => {
@@ -1138,16 +1161,16 @@ describe('withPets: where they go', () => {
     });
 
     test('a main pet on each role\'s list', () => {
-        expect(names(withPets(pve.tank, MAIN))).toEqual(['release', 'hand', 'healer', 'sprint', 'petControl', 'retreat', 'rez', 'pull', 'petHeal', 'summonPet', 'tank', 'guard', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(pve.healer, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'emergencyHeal', 'flee', 'rez', 'heal', 'crowdControl', 'summonPet', 'position', 'petHeal', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(pve.support, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'emergencyHeal', 'flee', 'rez', 'crowdControl', 'heal', 'song', 'summonPet', 'position', 'petHeal', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(pve.nuker, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'flee', 'rez', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'petHeal', 'assist', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(pve.melee, MAIN))).toEqual(['release', 'hand', 'healer', 'sprint', 'petControl', 'retreat', 'rez', 'song', 'petHeal', 'summonPet', 'assistMelee', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(pve.tank, MAIN))).toEqual(['release', 'hand', 'healer', 'sprint', 'petControl', 'retreat', 'rez', 'pull', 'petHeal', 'summonPet', 'tank', 'guard', 'shedLoad', 'petBuffAtStart', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(pve.healer, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'emergencyHeal', 'flee', 'rez', 'heal', 'petHealUrgent', 'crowdControl', 'summonPet', 'position', 'petHeal', 'shedLoad', 'petBuffAtStart', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(pve.support, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'emergencyHeal', 'flee', 'rez', 'petHealUrgent', 'crowdControl', 'heal', 'song', 'summonPet', 'position', 'petHeal', 'shedLoad', 'petBuffAtStart', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(pve.nuker, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'flee', 'rez', 'petHealUrgent', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'petHeal', 'assist', 'shedLoad', 'petBuffAtStart', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(pve.melee, MAIN))).toEqual(['release', 'hand', 'healer', 'sprint', 'petControl', 'retreat', 'rez', 'song', 'petHeal', 'summonPet', 'assistMelee', 'shedLoad', 'petBuffAtStart', 'holdFormation', 'petBuff', 'buff', 'rest']);
     });
 
     test('the RvR lists the same way', () => {
-        expect(names(withPets(rvr.nuker, MAIN))).toEqual(['release', 'sprint', 'petControl', 'retreat', 'summonOnTheWayBack', 'rejoinFight', 'flee', 'rez', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'petHeal', 'assist', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(rvr.tank, MAIN))).toEqual(['release', 'hand', 'sprint', 'petControl', 'retreat', 'summonOnTheWayBack', 'rejoinFight', 'rez', 'song', 'petHeal', 'summonPet', 'tank', 'guard', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(rvr.nuker, MAIN))).toEqual(['release', 'sprint', 'petControl', 'retreat', 'summonOnTheWayBack', 'rejoinFight', 'flee', 'rez', 'petHealUrgent', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'petHeal', 'assist', 'shedLoad', 'petBuffAtStart', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(rvr.tank, MAIN))).toEqual(['release', 'hand', 'sprint', 'petControl', 'retreat', 'summonOnTheWayBack', 'rejoinFight', 'rez', 'song', 'petHeal', 'summonPet', 'tank', 'guard', 'shedLoad', 'petBuffAtStart', 'holdFormation', 'petBuff', 'buff', 'rest']);
     });
 
     test('a Theurgist: fnfPet before the fight and nothing else, as there is no window pet to look after', () => {
@@ -1160,7 +1183,7 @@ describe('withPets: where they go', () => {
 
     test('a strategy\'s memberBehaviors, literal lists without some of the names', () => {
         const ciaran = [release(), retreat(), flee(), position(), assist({ holdMs: 4000 }), holdFormation(), rest()];
-        expect(names(withPets(ciaran, MAIN))).toEqual(['release', 'petControl', 'retreat', 'flee', 'summonPet', 'position', 'petHeal', 'assist', 'holdFormation', 'petBuff', 'rest']);
+        expect(names(withPets(ciaran, MAIN))).toEqual(['release', 'petControl', 'retreat', 'flee', 'summonPet', 'position', 'petHeal', 'assist', 'petBuffAtStart', 'holdFormation', 'petBuff', 'rest']);
         const bare = [assist()];
         expect(names(withPets(bare, MAIN))).toEqual(['petControl', 'petHeal', 'summonPet', 'assist', 'petBuff']);
         const noFight = [release(), rest()];
@@ -1182,7 +1205,7 @@ describe('withPets: where they go', () => {
     test('with a character in the list before it: its routine stays, and a fight with a name of its own counts as none', () => {
         const own = (name: string): Behavior => ({ name, run: () => false });
         const list = withCharacter(pve.nuker as Behavior[], { react: [own('myHeal')], fight: [own('myFight')], chores: [own('myChore')] });
-        expect(names(withPets(list, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'flee', 'rez', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'myHeal', 'myFight', 'myChore', 'petHeal', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(list, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'flee', 'rez', 'petHealUrgent', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'myHeal', 'myFight', 'myChore', 'petHeal', 'shedLoad', 'petBuffAtStart', 'holdFormation', 'petBuff', 'buff', 'rest']);
     });
 
     describe('petKit: from the spell list and the window', () => {
@@ -1201,9 +1224,10 @@ describe('withPets: where they go', () => {
         };
 
         test('a window pet the group summons by itself, each type', () => {
-            for (const type of ['SummonSimulacrum', 'SummonSpiritFighter', 'SummonUnderhill', 'SummonDruidPet', 'SummonHunterPet', 'SummonCommander']) {
+            for (const type of ['SummonSimulacrum', 'SummonSpiritFighter', 'SummonUnderhill', 'SummonDruidPet', 'SummonCommander']) {
                 expect(kit([ofType(type)])).toEqual({ main: true, fnf: false, window: false });
             }
+            expect(kit([ofType('SummonHunterPet')])).toEqual({ main: true, instantSummon: true, fnf: false, window: false });
         });
 
         test('a Theurgist\'s', () => {
@@ -1912,6 +1936,20 @@ describe('petBuff: during another member\'s pull', () => {
     });
 });
 
+describe('petBuffAtStart: one while the group walks', () => {
+    const buffs = ['Strengthen Spirit', 'Quicken Spirit', 'Toughen Spirit'].map((name, i) => ({ ...pick({ name, type: 'StrengthBuff', power: 2, range: 1000, duration: 1200, icon: 811 + i }), slot: name }));
+
+    // r19on-r21on Rbcab: four at +13, +16, +19, +22 s, 900 behind the group at the first engage, its first order 4.5 s later, no gain seen.
+    test('in travel the first goes and the next waits; in a quiet phase the rest go', async () => {
+        const w = world({ orders: { phase: 'travel', focus: null }, petBuffs: buffs });
+        const b = petBuffAtStart();
+        expect(await b.run(w.ctx)).toBe(true);
+        expect(await b.run(w.ctx)).toBe(false);
+        w.pic.orders.phase = 'gather';
+        expect(await b.run(w.ctx)).toBe(true);
+    });
+});
+
 describe('petAfterRun: a turret and a shade\'s pet are left alone', () => {
     test('"You command the forest\'s servant to follow you!" at the run\'s end: not any more', async () => {
         const sent: PetCommand[] = [];
@@ -2277,5 +2315,29 @@ describe('settings', () => {
         expect(PVE_SETTINGS.pet).toEqual(PET_SETTINGS);
         expect(RVR_SETTINGS.pet).toEqual(PET_SETTINGS);
         expect(PET_SETTINGS).toEqual({ enabled: true, summonMana: 30, healBelow: 50, fnfFloor: 20, fnfLifeMs: 10_000, waitForSummon: false });
+    });
+});
+
+describe('a long pull-back ends where it stands once the puller\'s pet has gone in', () => {
+    // a2: 'pull lake serpent L11 (con 1) 1354 away' at Pethun hp69, hits 04:36:12.869 37, 15.885 40, 18.898 35, 21.913 40, 'Pethun: walk: died (Died en route to (718359, 778447))'. The nukers waited on phase pull.
+    const base = { x: 10_000, y: 10_000, z: 0 };
+    const pulling = { seq: 1, phase: 'pull' as const, focus: 7, puller: 'Tank', anchor: base, facing: null, reason: 'pull' };
+    const decide = (pet: Partial<NonNullable<MemberReport['pet']>> | null, now = Date.now()) => {
+        const tank = report('Tank', { role: 'tank', regionId: R, objectId: 3, x: 11_300, y: 10_000, pet: pet && { objectId: PET, name: 'hunter\'s pet', level: 7, x: 11_300, y: 10_000, z: 0, hp: 90, targetId: null, inCombat: false, aggression: 'defensive', walk: 'follow', icons: [], ...pet } });
+        const p = picture([tank, report('Nuke', { regionId: R, objectId: 4, x: base.x, y: base.y })], [contact(7, { regionId: R, x: 11_350, y: 10_000, threat: true, target: 'Tank', targetSince: now - 3000, hostileSince: now - 3000 })], pulling, now);
+        return decidePve({ picture: p, orders: p.orders, memory: { camp: { ...base, zone: '', count: 0, names: 'x' }, campLevel: 6, base, pullStart: now - 3000 }, settings: PVE_SETTINGS, now, windingDown: false });
+    };
+
+    test('no pet, or one that hasn\'t gone: he brings it home', () => {
+        expect(decide(null).phase).toBe('pull');
+        expect(decide({ targetId: null, aggression: 'passive' }).phase).toBe('pull');
+    });
+
+    test('his pet on it: the fight starts here, for the nukers too', () => {
+        expect(decide({ targetId: 7 })).toMatchObject({ phase: 'engage', focus: 7, puller: null });
+    });
+
+    test('a pet parked on stay that answered a blow is left to petControl\'s call-off: that\'s no going in', () => {
+        expect(decide({ targetId: 7, walk: 'stay' }).phase).toBe('pull');
     });
 });

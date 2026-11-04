@@ -12,11 +12,20 @@ import type { Contact } from './types';
 /** 'root' also stands for a snare: the same immunity. */
 export type CcKind = 'mezz' | 'root' | 'stun';
 
+let mezzNames: Set<string> | undefined;
+/** What a mezz is called in a member's effects: the server sends the spell's name, so every Mesmerize spell of any realm. */
+export function isMezzEffect(name: string): boolean {
+    mezzNames ??= new Set(getSpells().filter(s => s.type === 'Mesmerize').map(s => s.name));
+    return mezzNames.has(name);
+}
+
 /**
  * A player's immunity after a kind ends. A root's is the effect's default (ECSGameEffect.cs ImmunityDuration); a mezz's
  * and a stun's are the server property immunity_timer_flat_length, 60 by default, which reaches no client. An "immune"
  * answer is all a client hears of it, so a server with another length shows up as casts answered that way.
  */
+/** The detail of a member's idle activity while it waits out a mezz on itself (MemberAgent.waitOutMezz). For the report: that's no idleness of its list. */
+export const MEZZED = 'mezzed';
 /** How a crowd-control walk announces itself: `${CC_WALK}${spell}`. For the report, which counts other walks in a fight as positioning. */
 export const CC_WALK = 'cc: into range for ';
 export const CC_IMMUNE_MS = 60_000;
