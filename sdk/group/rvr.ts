@@ -196,29 +196,6 @@ export function defaultPatrol(regionId: number, realm: Realm, level: number, set
 }
 
 /**
- * The ring with a detour after its nearest waypoint toward each enemy home, `spokeAt` from the meeting point: two groups
- * fighting each other near a home stay out of sight of the ring for a whole round. A spot in danger moves in toward the ring.
- */
-export function spokedPatrol(regionId: number, realm: Realm, level: number, spokeAt: number, settings: Partial<KeepSettings> = {}): Point3[] {
-    const bg = BATTLEGROUND_LAYOUTS[regionId];
-    const out = defaultPatrol(regionId, realm, level, settings);
-    if (!bg || !out.length) return out;
-    const blocked = [...aggroZones(regionId, level), ...keepDangers(regionId, realm, settings)];
-    const { meet } = bg;
-    for (const r of (['albion', 'midgard', 'hibernia'] as const).filter(r => r !== realm)) {
-        const home = homeOf(regionId, r);
-        if (!home) continue;
-        const d = dist(meet, home.arrival);
-        const along = (at: number) => ({ x: Math.round(meet.x + (home.arrival.x - meet.x) * at / d), y: Math.round(meet.y + (home.arrival.y - meet.y) * at / d) });
-        const spot = [0, 500, 1000, 1500, 2000].map(back => along(Math.min(spokeAt, d) - back)).find(p => clearOf(p, blocked, PATROL_MARGIN));
-        if (!spot) continue;
-        const after = out.reduce((best, p, i) => (dist(p, spot) < dist(out[best]!, spot) ? i : best), 0);
-        out.splice(after + 1, 0, { ...spot, z: estimateZ(regionId, spot.x, spot.y, meet.z, { radius: 8000 }) }, out[after]!);
-    }
-    return out;
-}
-
-/**
  * Who to focus among the candidates, free (not crowd-controlled) ones first. Score: a healer
  * +60, a caster +30, on one of our healers or casters +20, missing health up to +30 and below
  * switchBelow +40 more (nearly dead goes first), within our tank's and melee's reach (`reach`:

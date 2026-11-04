@@ -318,13 +318,19 @@ Alternating, 10 minutes each. The Hero's damage rose in two of three pairs (he r
 
 **A phantom focus:** two whole rounds (0 and 4 kills) went round hunt, kill and pull back on Briton#468, frozen at 33 %, in nobody's view and never hit. Why the board kept it fresh isn't known. A focus whose health stands still for 20 s is now left alone for 2 minutes (`noticePhantom`, `frozenMs`, `phantomMs`). No such loop in the six rounds since, but it was rare before too. The Hero's "ran beyond 3800 units" looks like the same kind, at 100 %.
 
-**Patrol detours toward the enemy homes** (`pack.spokeAt`, off): a round of 0 kills walked the ring for 9.5 minutes while the other two groups fought each other out of its sight. Three rounds each: with detours 28 kills, 6 deaths, 315 RP, without 33, 8, 345; no less travel. Not what fixes that round.
+**Patrol detours toward the enemy homes** (tried, taken out): a round of 0 kills walked the ring for 9.5 minutes while the other two groups fought each other out of its sight. Three rounds each: with detours 28 kills, 6 deaths, 315 RP, without 33, 8, 345; no less travel. Not what fixes that round.
 
 **A mezz cure for the pack:** tried and taken out. Oisin cured 1-24 times a round, and six rounds each came to 47 kills, 14 deaths with it, 68 and 12 without, phantom rounds included; 27 / 6 against 34 / 8 without them. Lines about acting while mezzed fell in the first three rounds (0, 1, 1 against 35, 26, 13) and not in the next three (11, 23, 0 against 0, 13, 28). Oisin is often mezzed himself. Main's `cureMezz` stays available for a list that wants it.
 
 **Harder since the night:** the pack went from 15 kills, 0 deaths a round to about 10 and 2 once Midgard and Camelot had their fixes, and Ciaran had his pet and kit. Those arrived together, so this doesn't say which.
 
 **Ciaran's pet,** three rounds each, alternating: with it 27 kills, 10 deaths, 240 RP, 18 Midgard kills; without 7, 9, 84, 2. It doesn't hurt the raid. That's as far as this goes: the rounds without it also met far fewer enemies (travel 75, 89, 58 % against 54, 41, 55; one had no fight at all), which a pet shouldn't cause, so the gap in kills overstates it.
+
+**Bolting** (`pack.boltRun`, off): run 4000 from everyone when a member is dead and we're outnumbered, or a second realm arrives with us three short. Four rounds each: on 41 kills, 6 deaths, 396 RP, 21 Midgard kills; off 46, 5, 339, 31. It fired once in eight rounds, and no round had a wipe, so this says nothing yet about the wipes it's meant for. Kills follow contact: 86 % travel gave 4 kills, 38-49 % gave 11-16.
+
+**The ring the other way,** four rounds each: reversed 16 kills, 13 deaths, 180 RP, 8 Midgard kills; as it was 44, 15, 292, 23. Tried because Hibernia and Albion go round the same way, and kills follow contact. The reversed rounds did walk the other way, and met no more enemies. Taken out.
+
+**Pack against roaming again, on the tougher field** (roaming with softFocus, batch stopped early): roaming 4 rounds, 28 kills, 50 deaths, 440 RP; pack 3 full rounds, 24 kills, 17 deaths, 384 RP. Per round about the same kills and half the deaths or better for the pack. The pack is down to about 8 kills and 6 deaths a round from 15 and 0 last night.
 
 **Within the noise so far:** Brigid's acuity and giving up a healed focus. Before the give-up the pack went 17/0, 16/0, 21/0 and 6/5; with it 8/2, 17/0, 13/1, 19/1, 18/1. It did stop the 5 minutes on one Troll, but single deaths now show up where the rounds before it had none. The early comparison (63/0 in 45 minutes against 20/10 in 22) overstated the gain: opponents get absent or farmed, and s17 and s18 (18/0, 11/1, 0 RP) had no Midgard at all, so count those out. c3, 12/0, was also the pack and no control.
 

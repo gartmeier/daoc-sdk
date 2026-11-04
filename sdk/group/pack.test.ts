@@ -3,8 +3,8 @@ import { areaMezzCatch, backupHealWanted, confuse, interrupt, rest, SAVING_POWER
 import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
 import { enemy, obs, picture, report, sighting } from './fixtures';
-import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings, noticePhantom } from './pack';
-import { RVR_SETTINGS, rvrBehaviors, rvrRoaming, defaultPatrol, spokedPatrol } from './rvr';
+import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings, noticePhantom, shouldBolt } from './pack';
+import { RVR_SETTINGS, rvrBehaviors, rvrRoaming } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { pickNuke, type SpellPick } from './spells';
 import type { Contact, GroupPicture, MemberReport, Orders, Point } from './types';
@@ -558,6 +558,38 @@ describe('areaMezzCatch', () => {
     });
 });
 
+describe('bolting', () => {
+    const near = (...realms: string[]) => realms.map(realm => ({ realm })) as any[];
+    test('shouldBolt: a death with as many enemies as we have left, or a second realm with us three short', () => {
+        expect(shouldBolt(near('midgard', 'midgard', 'midgard', 'midgard'), 4, 1)).toBe(true);
+        expect(shouldBolt(near('midgard', 'midgard', 'midgard'), 4, 1)).toBe(false);
+        expect(shouldBolt(near('midgard', 'midgard', 'midgard', 'midgard', 'midgard', 'midgard', 'midgard', 'midgard'), 5, 0)).toBe(false);
+        expect(shouldBolt(near('midgard', 'midgard', 'midgard', 'midgard', 'albion', 'albion', 'albion', 'albion'), 5, 0)).toBe(true);
+        expect(shouldBolt(near('midgard', 'albion', 'albion', 'albion'), 5, 0)).toBe(false);
+    });
+    const dead = () => team({ Menta: { isDead: true, hp: 0 } });
+    test('off by default: a pack in a raid fights on', () => {
+        const u = decidePack(ctx(picture(dead(), fiveAt(11_000)), { memory: { pack: 'raid', raidAt: 1000, packAnchor: { x: 10_000, y: 10_000, z: 0 } }, now: 2000 }));
+        expect(u.phase).toBe('engage');
+    });
+    const on = { pack: { ...PACK_SETTINGS.pack, boltRun: 4000 } };
+    test('on: it runs away from them, far, then fights again once the clock is up', () => {
+        const m: any = { pack: 'raid', raidAt: 1000, packAnchor: { x: 10_000, y: 10_000, z: 0 } };
+        const u = decidePack(ctx(picture(dead(), fiveAt(11_000)), { memory: m, settings: on, now: 2000 }));
+        expect(u.phase).toBe('retreat');
+        expect(u.retreatTo!.x).toBeLessThan(8000);
+        expect(m.pack).toBe('bolt');
+        expect(decidePack(ctx(picture(dead(), fiveAt(11_000)), { memory: m, settings: on, now: 5000 })).phase).toBe('retreat');
+        decidePack(ctx(picture(dead(), fiveAt(11_000)), { memory: m, settings: on, now: 2000 + PACK_SETTINGS.pack.boltMs }));
+        expect(m.pack).not.toBe('bolt');
+    });
+    test('on: no second bolt while cooling', () => {
+        const m: any = { pack: 'kill', killAt: 1000, boltCool: 50_000 };
+        decidePack(ctx(picture(dead(), fiveAt(11_000)), { memory: m, settings: on, now: 2000 }));
+        expect(m.pack).not.toBe('bolt');
+    });
+});
+
 describe('a phantom focus', () => {
     const k = { frozenMs: 20_000, phantomMs: 120_000 };
     test('health standing still for frozenMs: left alone, and it comes back after phantomMs', () => {
@@ -581,26 +613,6 @@ describe('a phantom focus', () => {
         const u = decidePack(ctx(picture(team(), [foe(101, 11_000, 10_000, { hp: 33 })]), { memory: { pack: 'stalk', phantoms: { 101: 500_000 } }, now: 1000 }));
         expect(u.focus ?? null).toBeNull();
         expect(u.phase).not.toBe('engage');
-    });
-});
-
-describe('spokedPatrol', () => {
-    const T = 252, meet = { x: 34_000, y: 32_000 };
-    const ring = defaultPatrol(T, 'hibernia', 24);
-    const loop = spokedPatrol(T, 'hibernia', 24, 11_000);
-
-    test('adds one detour per enemy realm and comes back to the waypoint it left', () => {
-        expect(loop.length).toBe(ring.length + 4);
-        const far = loop.map((w, i) => ({ w, i })).filter(({ w }) => distTo(w, meet) > 7000);
-        expect(far.length).toBe(2);
-        for (const { i } of far) expect(loop[i - 1]).toEqual(loop[i + 1]!);
-    });
-
-    test('heads for the enemy homes, not its own', () => {
-        const far = loop.filter(w => distTo(w, meet) > 7000);
-        expect(far.some(w => w.y > 40_000)).toBe(true);
-        expect(far.some(w => w.x > 42_000)).toBe(true);
-        expect(far.some(w => w.x < 28_000 && w.y < 26_000)).toBe(false);
     });
 });
 
