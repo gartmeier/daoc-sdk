@@ -167,6 +167,42 @@ describe('Blackboard: shared awareness', () => {
         expect(events.filter(e => e.kind === 'kill').map(e => e.text)).toEqual(['wolf (L6) died']);
     });
 
+    test('a mob under the id of something that was no contact, a pet say, stays on the board', () => {
+        const b = new Blackboard();
+        const events: GroupEvent[] = [];
+        b.onEvent(e => events.push(e));
+        const t0 = Date.now();
+        const contacts = (at: number) => b.picture(at).contacts.map(c => c.name);
+        // The Tank's pet goes (0xA2 type 0); every member in view reports its death for 5 s.
+        b.publish(obs(report('Tank', { at: t0, objectId: 11 }), [], [700]), t0);
+        b.publish(obs(report('Healer', { at: t0 + 100, objectId: 22 }), [], [700]), t0 + 100);
+        // A respawn takes the freed id (Region.cs:955, :779), and the death still comes with its sightings ...
+        b.publish(obs(report('Tank', { at: t0 + 2000, objectId: 11 }), [sighting(700, { name: 'wolf' })], [700]), t0 + 2000);
+        expect(contacts(t0 + 2000)).toEqual(['wolf']);
+        // ... and from a member that hasn't seen it yet.
+        b.publish(obs(report('Healer', { at: t0 + 2100, objectId: 22 }), [], [700]), t0 + 2100);
+        expect(contacts(t0 + 2100)).toEqual(['wolf']);
+        // Its own death, later, counts.
+        b.publish(obs(report('Tank', { at: t0 + 8000, objectId: 11 }), [], [700]), t0 + 8000);
+        expect(contacts(t0 + 8000)).toEqual([]);
+    });
+
+    test('so does one that came in the very snapshot that first reports the death', () => {
+        const b = new Blackboard();
+        const t0 = Date.now();
+        b.publish(obs(report('Tank', { at: t0, objectId: 11 }), [sighting(700, { name: 'wolf' })], [700]), t0);
+        expect(b.picture(t0).contacts.map(c => c.name)).toEqual(['wolf']);
+    });
+
+    test('an old death under an id arms nothing: a mob there dies like any', () => {
+        const b = new Blackboard();
+        const t0 = Date.now();
+        b.publish(obs(report('Tank', { at: t0, objectId: 11 }), [], [700]), t0);
+        b.publish(obs(report('Tank', { at: t0 + 7000, objectId: 11 }), [sighting(700, { name: 'wolf' })]), t0 + 7000);
+        b.publish(obs(report('Tank', { at: t0 + 7100, objectId: 11 }), [], [700]), t0 + 7100);
+        expect(b.picture(t0 + 7100).contacts).toEqual([]);
+    });
+
     test('a member attacking a mob makes it a threat even before it turns', () => {
         const b = new Blackboard();
         const t0 = Date.now();

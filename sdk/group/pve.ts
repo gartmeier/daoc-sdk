@@ -8,9 +8,12 @@
 import { canControl } from './cc';
 import { conLevel } from '../actions-helpers';
 import { planBase, planRejects, segDist, type BasePlan } from './baseplan';
-import { defaultBehaviors, type TacticsSettings } from './behaviors';
+import { defaultBehaviors, mezzRefuses, SAVING_POWER, type TacticsSettings } from './behaviors';
+import { readsOnPet } from './blackboard';
+import type { Finding, RunReport } from './observer';
+import { PET_SETTINGS, waitsForPet } from './pets';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
-import { aggroAt, chooseBase, dangerNear, findCamp, safePath, type Camp } from './terrain';
+import { aggroAt, chooseBase, dangerNear, findCamp, keepOnMap, safePath, type Camp } from './terrain';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3 } from './types';
 
 export interface PveSettings extends TacticsSettings {
@@ -118,6 +121,7 @@ export const PVE_SETTINGS: PveSettings = {
     tauntOpenMs: 6000,
     peelAfterMs: 4000,
     guard: { guard: 'healer', protect: 'nuker' },
+    pet: PET_SETTINGS,
     minCon: -1,
     maxCon: 1,
     maxLevelAbove: 99,
@@ -145,7 +149,12 @@ export const PVE_SETTINGS: PveSettings = {
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 const centroid = (ps: Point[]): Point => ({ x: ps.reduce((a, p) => a + p.x, 0) / Math.max(1, ps.length), y: ps.reduce((a, p) => a + p.y, 0) / Math.max(1, ps.length) });
-const usesMana = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc;
+/** The middle of each coordinate: one member 25000 off doesn't move it. */
+const median = (ps: Point[]): Point => {
+    const mid = (vs: number[]) => { const s = [...vs].sort((a, b) => a - b); const i = s.length >> 1; return s.length % 2 ? s[i]! : (s[i - 1]! + s[i]!) / 2; };
+    return { x: mid(ps.map(p => p.x)), y: mid(ps.map(p => p.y)) };
+};
+const usesMana = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc || !!m.capabilities.pet;
 const names = (ms: { name: string }[]) => ms.map(m => m.name).join(', ');
 /** The highest aggressive mob level we pull or welcome: con up to aggroTolerance with pullAggressive, else none. */
 const tolerated = (level: number, s: PveSettings) => {
@@ -155,12 +164,30 @@ const tolerated = (level: number, s: PveSettings) => {
     return max;
 };
 
+/** A member this many gather radii from the group is one it could never wait for: a release far off, 25000 and 180000 live. */
+const FAR_GATHER_RADII = 4;
+
+/**
+ * Who of `here` stands that far from the group's middle and from the tank. They don't steer the group or hold its gather, as a member in another region doesn't; holdFormation walks them back
+ * all the same, and the reason names them. Never the tank, as nothing is pulled without him; and if it would leave nobody, there is no group to be far from.
+ */
+function farMembers(here: MemberReport[], tank: MemberReport | undefined, s: Pick<PveSettings, 'gatherRadius'>): MemberReport[] {
+    const limit = s.gatherRadius * FAR_GATHER_RADII;
+    const middle = median(here);
+    const far = here.filter(m => m !== tank && dist(m, middle) > limit && (!tank || dist(m, tank) > limit));
+    return far.length < here.length ? far : [];
+}
+
+const FAR_NOTE = /; [^;]* far off, not waited for$/;
+
 /** Why a contact is not worth pulling, or null when it is. */
 export function rejectPull(c: Contact, live: Contact[], opts: { base: Point; regionId: number; level: number; exclude: Set<number>; settings: PveSettings; plan?: BasePlan | null }): string | null {
     const s = opts.settings;
     if (c.kind !== 'npc' || c.stale || c.hp <= 0 || c.regionId !== opts.regionId) return 'gone';
+    if (c.isPet) return 'pet';
     if (opts.exclude.has(c.objectId)) return 'failed pull';
-    if (c.targetId !== null && c.target === null) return 'fighting someone else';
+    // On a member's pet it fights us, not someone else.
+    if (c.targetId !== null && c.target === null && !c.targetPet) return 'fighting someone else';
     const con = conLevel(opts.level, c.level);
     if (con < s.minCon || con > s.maxCon) return `con ${con}`;
     if (c.level - opts.level > s.maxLevelAbove) return `${c.level - opts.level} levels above`;
@@ -192,7 +219,8 @@ export function rejectPull(c: Contact, live: Contact[], opts: { base: Point; reg
 
 /** The best monster to pull: in the con window, near the base, not fighting someone else, away from aggressive mobs. */
 export function pickPullTarget(contacts: Contact[], opts: { base: Point; regionId: number; level: number; exclude: Set<number>; settings: PveSettings; plan?: BasePlan | null }): { target: Contact | null; rejected: Record<string, number> } {
-    const live = contacts.filter(c => c.kind === 'npc' && !c.stale && c.hp > 0 && c.regionId === opts.regionId);
+    // An enemy pet is no pull target or aggressive neighbour, and not worth a line in the reason.
+    const live = contacts.filter(c => c.kind === 'npc' && !c.isPet && !c.stale && c.hp > 0 && c.regionId === opts.regionId);
     const rejected: Record<string, number> = {};
     const pool: Contact[] = [];
     for (const c of live) {
@@ -206,21 +234,27 @@ export function pickPullTarget(contacts: Contact[], opts: { base: Point; regionI
     return { target, rejected };
 }
 
-/** Who to focus among the attackers: what the tank is hitting, else whoever is on a non-tank, else the weakest. */
+/**
+ * Who to focus among the attackers: what the tank is hitting, else whoever is on a non-tank, else the weakest.
+ * An enemy pet only when nothing else is free to hit: killing it is worth nothing (GameNPC.cs:2731-2732).
+ */
 export function pickFocus(threats: Contact[], tank: MemberReport | undefined): Contact | null {
     const free = threats.filter(t => !t.cc);
-    const pool = free.length ? free : threats;
+    const mobs = free.filter(t => !t.isPet);
+    const pool = mobs.length ? mobs : free.length ? free : threats;
     return (tank ? pool.find(t => t.objectId === tank.targetId) : undefined)
         ?? pool.filter(t => t.target !== tank?.name).sort((a, b) => a.hp - b.hp)[0]
         ?? [...pool].sort((a, b) => a.hp - b.hp)[0] ?? null;
 }
 
-/** One mezzer per add, keeping assignments that still hold; supports first, then nukers, then healers. */
+/**
+ * One mezzer per add, keeping assignments that still hold; supports first, then nukers, then healers. An NPC a mezz can't take (mezzRefuses) goes only to a member with a root (Capabilities.root), and crowdControl casts that at it.
+ */
 export function assignCc(adds: Contact[], members: MemberReport[], current: { targetId: number; by: string }[], now = Date.now()): { targetId: number; by: string }[] {
     const order = ['support', 'nuker', 'healer', 'melee', 'tank'];
     const free = members.filter(m => !m.isDead && m.capabilities.cc).sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
     // Nobody is sent at a target immune to everything it casts: a root still holds what is immune to a mezz.
-    const able = (m: MemberReport, t: Contact) => canControl(t, m.capabilities.ccKinds, now);
+    const able = (m: MemberReport, t: Contact) => (mezzRefuses(t) ? !!m.capabilities.root && canControl(t, ['root'], now) : canControl(t, m.capabilities.ccKinds, now));
     const out: { targetId: number; by: string }[] = [];
     for (const a of current) {
         const t = adds.find(x => x.objectId === a.targetId);
@@ -237,7 +271,18 @@ export function assignCc(adds: Contact[], members: MemberReport[], current: { ta
     return out;
 }
 
+/** decide, with the far members in the reason (a reason carried over has them already). */
 export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
+    const u = decide(ctx);
+    const alive = ctx.picture.members.filter(m => !m.isDead);
+    const tank = alive.find(m => m.role === 'tank');
+    const regionId = (tank ?? alive[0])?.regionId;
+    const far = farMembers(alive.filter(m => m.regionId === regionId), tank, ctx.settings);
+    const reason = u.reason.replace(FAR_NOTE, '');
+    return { ...u, reason: far.length ? `${reason}; ${names(far)} far off, not waited for` : reason };
+}
+
+function decide(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     const { picture: p, orders: o, memory: mem, settings: s, now } = ctx;
     if (!p.members.length) return { phase: 'idle', reason: 'no member reports yet' };
     const alive = p.members.filter(m => !m.isDead);
@@ -247,7 +292,9 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     const regionId = leader.regionId;
     const level = Math.min(...alive.map(m => m.level));
     const here = alive.filter(m => m.regionId === regionId);
-    const centre = centroid(here);
+    const far = farMembers(here, tank, s);
+    const near = here.filter(m => !far.includes(m));
+    const centre = centroid(near);
     mem.exclude ??= new Set<number>();
     const threats = p.contacts.filter(c => c.threat && c.regionId === regionId);
 
@@ -263,7 +310,8 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
         const kept = threats.find(t => t.objectId === o.focus && !t.cc);
         const focus = kept ?? pickFocus(threats, tank)!;
         // A body pull in progress: the puller brings the focus home before the fight starts.
-        if (o.phase === 'pull' && o.anchor && kept && threats.length === 1 && (focus.target === o.puller || focus.target === null)
+        // On a member's pet it isn't coming: the fight starts where it stands. No branch comes back from that, so not on a reading a snapshot could still correct (readsOnPet).
+        if (o.phase === 'pull' && o.anchor && kept && threats.length === 1 && (focus.target === o.puller || focus.target === null) && !readsOnPet(focus, now)
             && dist(focus, o.anchor) > s.engageRadius && now - (mem.pullStart ?? now) < s.pullTimeoutMs) {
             return { phase: 'pull', reason: `${o.puller} brings ${focus.name} to the base (${Math.round(dist(focus, o.anchor))} away)` };
         }
@@ -282,12 +330,12 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
             let dx = centre.x - from.x, dy = centre.y - from.y;
             const len = Math.hypot(dx, dy);
             if (len < 1) { dx = 1; dy = 0; } else { dx /= len; dy /= len; }
-            const to = { x: Math.round(centre.x + dx * s.retreat.distance), y: Math.round(centre.y + dy * s.retreat.distance), z: leader.z };
+            const to = { ...keepOnMap(regionId, centre, { x: Math.round(centre.x + dx * s.retreat.distance), y: Math.round(centre.y + dy * s.retreat.distance) }), z: leader.z };
             return { phase: 'retreat', focus: null, cc: [], puller: null, retreatTo: to, reason: `retreat: ${lost}` };
         }
         if (lost && o.phase === 'retreat') return { phase: 'retreat', reason: o.reason };
-        const cc = assignCc(threats.filter(t => t.objectId !== focus.objectId && !t.cc), alive, o.cc, now);
-        const why = kept ? `fighting ${focus.name} (${focus.hp}%)` : `${focus.name} L${focus.level} attacks ${focus.target ?? 'the group'}`;
+        const cc = assignCc(threats.filter(t => t.objectId !== focus.objectId && !t.cc && !t.isPet), alive, o.cc, now);
+        const why = kept ? `fighting ${focus.name} (${focus.hp}%)` : `${focus.name} L${focus.level} attacks ${focus.target ?? (focus.targetPet ? `${focus.targetPet}'s pet` : 'the group')}`;
         return { phase: 'engage', focus: focus.objectId, puller: null, cc, retreatTo: null, reason: threats.length > 1 ? `${why}, ${threats.length - 1} more attacking` : why };
     }
 
@@ -332,8 +380,8 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     const camp: Camp = mem.camp;
     // Roaming: once they have reached a new camp, the base is where the leader stands, as long as they are together.
     if (s.roam) {
-        if (here.every(m => dist(m, mem.base) < s.gatherRadius)) mem.heading = false;
-        if (!mem.heading && here.every(m => dist(m, leader) < s.gatherRadius)) mem.base = { x: Math.round(leader.x), y: Math.round(leader.y), z: Math.round(leader.z) };
+        if (near.every(m => dist(m, mem.base) < s.gatherRadius)) mem.heading = false;
+        if (!mem.heading && near.every(m => dist(m, leader) < s.gatherRadius)) mem.base = { x: Math.round(leader.x), y: Math.round(leader.y), z: Math.round(leader.z) };
     }
     const base: Point3 = mem.base;
     const plan: BasePlan | null = mem.plan ?? null;
@@ -352,23 +400,24 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     if (ctx.windingDown) return { ...calm, phase: 'recover', anchor: base, facing, reason: 'time is up: no more pulls' };
 
     // ── Travel: most of the group is far from the base. Legs of travelLeg, regrouping at each (or after 30 s). ──
-    const away = here.filter(m => dist(m, base) > s.gatherRadius);
-    if (away.length * 2 > here.length) {
-        if (!mem.route) mem.route = safePath(regionId, level, centroid(away), base);
+    const away = near.filter(m => dist(m, base) > s.gatherRadius);
+    if (away.length * 2 > near.length) {
+        const start = median(away);
+        if (!mem.route) mem.route = safePath(regionId, level, start, base);
         // Arrived: everyone within the formation's depth of the leg (casters stand ~900 behind it).
-        const legDone = !mem.leg || here.every(m => dist(m, mem.leg) < 1200) || now - mem.legAt > 30_000;
+        const legDone = !mem.leg || near.every(m => dist(m, mem.leg) < 1200) || now - mem.legAt > 30_000;
         if (legDone) {
             mem.legAt = now;
             // Chain legs from the last one (where the tank stands), not from the group's
             // centre: that trails the anchor by the formation's depth and never reaches a waypoint.
-            const from: Point = mem.leg ?? centroid(away);
+            const from: Point = mem.leg ?? start;
             while (mem.route.length > 1 && dist(from, mem.route[0]) < 300) mem.route.shift();
             const next: Point = mem.route[0] ?? base;
             const f = Math.min(1, s.travelLeg / Math.max(1, dist(from, next)));
-            mem.leg = { x: Math.round(from.x + (next.x - from.x) * f), y: Math.round(from.y + (next.y - from.y) * f), z: base.z };
+            mem.leg = { ...keepOnMap(regionId, from, { x: Math.round(from.x + (next.x - from.x) * f), y: Math.round(from.y + (next.y - from.y) * f) }), z: base.z };
             mem.legFacing = next;
         }
-        const journey = Math.round(dist(centroid(away), base));
+        const journey = Math.round(dist(start, base));
         return { ...calm, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, journey, reason: `to the base, ${journey} away` };
     }
     mem.route = null;
@@ -380,7 +429,8 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     if (deadMembers.length) return { ...calm, phase: 'recover', anchor: base, facing, waiting: deadMembers.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadMembers)}: a rez, or a release and the way back` };
     const waiting = alive.flatMap(m => [
         ...(m.hp < s.ready.hp ? [{ name: m.name, why: 'health' }] : []),
-        ...(usesMana(m) && m.mana < s.ready.mana ? [{ name: m.name, why: 'power' }] : []),
+        ...(usesMana(m) && m.mana < s.ready.mana ? [{ name: m.name, why: m.activity.detail === SAVING_POWER ? 'pet power' : 'power' }] : []),
+        ...(waitsForPet(m, s.pet) ? [{ name: m.name, why: 'pet' }] : []),
     ]);
     if (waiting.length) return { ...calm, phase: 'recover', anchor: base, facing, waiting, reason: `waiting for ${waiting.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)` };
 
@@ -410,11 +460,26 @@ export function decidePve(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
         const a = Math.random() * Math.PI * 2;
         // Farther than gatherRadius when roaming, or the base would come straight back to the leader.
         const out = s.roam ? s.gatherRadius + 800 : 900;
-        mem.base = { x: Math.round(camp.x + Math.cos(a) * out), y: Math.round(camp.y + Math.sin(a) * out), z: camp.z };
+        mem.base = { ...keepOnMap(regionId, camp, { x: Math.round(camp.x + Math.cos(a) * out), y: Math.round(camp.y + Math.sin(a) * out) }), z: camp.z };
         mem.heading = true;
     }
     const seen = Object.entries(rejected).map(([k, v]) => `${v} ${k}`).join(', ');
     return { ...calm, phase: 'idle', anchor: mem.base, facing, reason: `no target in reach${seen ? ` (${seen})` : ''}` };
+}
+
+/**
+ * decidePve pulls with a tank only, and no fallback puller stands in: that is a strategy's to decide. A group with no member in the role sits in recover ("no living tank to pull") with nothing else to say why,
+ * and no Midgard pet class is a tank by its class (CLASS_ROLES). A dead tank is another matter, and so is a strategy of its own that pulled with someone else.
+ */
+function pveFindings(r: RunReport): Finding[] {
+    const ms = Object.entries(r.members);
+    if (!ms.length || ms.some(([, m]) => m.role === 'tank') || r.phases.pull) return [];
+    const [, first] = ms.find(([, m]) => m.role === 'melee') ?? ms[0]!;
+    return [{
+        severity: 'high', topic: 'no-tank', issue: 'The group has no tank, so nothing is pulled',
+        evidence: `${ms.map(([n, m]) => `${n} ${m.role}`).join(', ')}; phases ${Object.entries(r.phases).map(([k, v]) => `${k} ${v}%`).join(', ')}`,
+        suggestion: `Give a member the role: "role": "tank" on its entry in group.json, or --role=${first.bot ?? '<bot>'}:tank when creating the group (bun groups/create-group.ts).`,
+    }];
 }
 
 export const pveLeveling: GroupStrategy<PveSettings> = {
@@ -423,4 +488,5 @@ export const pveLeveling: GroupStrategy<PveSettings> = {
     settings: PVE_SETTINGS,
     behaviors: defaultBehaviors(),
     decide: decidePve,
+    findings: pveFindings,
 };

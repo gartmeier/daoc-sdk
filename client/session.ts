@@ -6,7 +6,7 @@
 //   10 → 0x2A + 0x28 (session id, optional)
 //   D4(charIndex) → 0x20 | BF(0) → 0x2D, then immediately the first 0xA9 | E8 → 0x2B ⇒ playing
 // In world: 0xA9 stream (Mover), 0xA3 ping every 30 s, answer every 0xD0 with "clear",
-// 0xD5 for unknown sessions, snap on 0x04/0x20, region change on 0xB7 (D4 → 0x20 → BF → E8),
+// 0xD5 for unknown sessions, 0xBE for unknown objects, snap on 0x04/0x20, region change on 0xB7 (D4 → 0x20 → BF → E8),
 // clean quit via '&quit' → 0xA4.
 
 import type { ClientPhase } from '../sdk/types';
@@ -17,9 +17,11 @@ import * as out from './protocol/outgoing';
 import { decodeCharacterOverview, decodeCryptKey, decodeDupNameCheckReply, decodeLoginDenied, decodeLoginGranted, decodeSessionId, type CharacterOverview, type OverviewCharacter } from './protocol/incoming/login';
 import { hasNoLook, lookFor } from './model/look';
 import { decodeCharacterJump, decodeLosRequest, decodeMaxSpeed, decodePositionAndObjectId, decodeQuit, decodeRegionChanged, decodeRiding } from './protocol/incoming/world';
-import { decodeSpellCastAnimation } from './protocol/incoming/combat';
+import { decodeInterrupt, decodeSpellCastAnimation } from './protocol/incoming/combat';
+import { decodeObjectUpdate, decodeRemoveObject, type ObjectUpdate } from './protocol/incoming/objects';
 import { decodeStatusUpdate } from './protocol/incoming/player';
-import { WorldModel } from './model/world-model';
+import { getZone } from '../data/zones';
+import { VISIBILITY_DISTANCE, WorldModel } from './model/world-model';
 import { Mover, type MoverDeps } from './movement';
 import { className as classNameById, planCharacter, raceNameById, realmNumber } from './model/classes';
 
@@ -79,6 +81,9 @@ interface Waiter {
 
 const PING_INTERVAL_MS = 30_000;
 const DECODE_ERROR_BURST = 50;
+const OBJECT_REQUEST_THROTTLE_MS = 2000;
+/** More than ever fit in view: the 0xBE throttle only needs ids asked for in the last 2 s. */
+const MAX_OBJECT_REQUESTS = 512;
 
 export class DaocSession {
     phase: ClientPhase = 'disconnected';
@@ -103,6 +108,8 @@ export class DaocSession {
     private waiters: Waiter[] = [];
     private pingTimer: ReturnType<typeof setInterval> | null = null;
     private requestedSessions = new Map<number, number>();
+    /** Object id → when we last sent 0xBE for it. */
+    private requestedObjects = new Map<number, number>();
     private endListeners: Array<(reason: SessionEndReason, message: string) => void> = [];
     private packetListeners: Array<(p: ServerPacket) => void> = [];
     private phaseListeners: Array<(phase: ClientPhase) => void> = [];
@@ -121,10 +128,11 @@ export class DaocSession {
                 this.mover.stop('died');
                 this.mover.sendUpdate();
             },
+            selfPosition: () => this.mover.position,
         });
         // self.isDead, not a health of 0 %: that is also a living character with a few hit points
         // (GameLiving.cs:2621), and the server wouldn't strip DEAD from it.
-        this.mover = new Mover({ send: (c, p) => this.send(c, p), log: opts.trace ? this.log : undefined, ground: opts.ground, isDead: () => this.model.self.isDead });
+        this.mover = new Mover({ send: (c, p) => this.send(c, p), log: opts.trace ? this.log : undefined, ground: opts.ground, isDead: () => this.model.self.isDead, hasGroundTarget: () => this.model.groundTarget !== null });
     }
 
     // ── events ────────────────────────────────────────────────────────────
@@ -354,6 +362,31 @@ export class DaocSession {
         this.send(ClientOp.CreatePlayerRequest, out.encodeCreatePlayerRequest(sessionId));
     }
 
+    /**
+     * An 0xA1 for an object we have no entry for. The server won't send its 0xDA by itself: a plain 0xA1 put the NPC in
+     * its cache for us (ClientService.cs:598, :659, :665-668) or a same-region jump left it there after its 0xA2 type 1
+     * (GameNPC.cs:2044), and UpdateNpcs only creates on a cache miss (ClientService.cs:816-821). So ask, as a real client
+     * does (CreateObjectRequestHandler.cs). Not beyond the model's cull: it would drop the 0xDA at once, and we would ask
+     * again every 2 s. Not in a zone we can't place either: the model couldn't keep that entry fresh. Nor for one just dead:
+     * an 0xA1 built before its 0xA2 lands after it (PacketProcessor.cs:273-274), and the server has nothing to answer with.
+     */
+    private requestUnknownObject(d: ObjectUpdate): void {
+        if (!this.inGame || !d.objectId || d.objectId === this.objectId || this.model.hasObject(d.objectId) || this.model.diedRecently(d.objectId)) return;
+        const zone = getZone(d.zoneSkinId);
+        if (!zone) return;
+        const pos = this.mover.position;
+        if (Math.hypot(zone.xOffset + d.xOffset - pos.x, zone.yOffset + d.yOffset - pos.y) > VISIBILITY_DISTANCE) return;
+        const now = Date.now();
+        const last = this.requestedObjects.get(d.objectId);
+        if (last !== undefined && now - last < OBJECT_REQUEST_THROTTLE_MS) return;
+        if (this.requestedObjects.size >= MAX_OBJECT_REQUESTS) {
+            for (const [id, at] of this.requestedObjects) if (now - at >= OBJECT_REQUEST_THROTTLE_MS) this.requestedObjects.delete(id);
+            if (this.requestedObjects.size >= MAX_OBJECT_REQUESTS) this.requestedObjects.clear();
+        }
+        this.requestedObjects.set(d.objectId, now);
+        this.send(ClientOp.CreateObjectRequest, out.encodeCreateObjectRequest(d.objectId));
+    }
+
     // ── packet handling ───────────────────────────────────────────────────
 
     private handlePacket(p: ServerPacket): void {
@@ -452,12 +485,25 @@ export class DaocSession {
                 this.mover.sitting = (d.sittingFlag & 0x02) !== 0;
                 break;
             }
+            case ServerOp.ObjectUpdate:
+                this.requestUnknownObject(decodeObjectUpdate(p.payload));
+                break;
+            case ServerOp.RemoveObject: {
+                // The model drops our selection on this (and hasn't yet, here); the server's TargetObject stays on the deleted NPC. A Pet spell with no target would land
+                // on a dead pet of ours, paid (SpellHandler.cs:463-473, :648-658), and a quit release that one and not the live pet (GamePlayer.cs:927-928, CharacterClassBase.cs:332-341).
+                // A target moved on before this came stays: then the model's isn't this one.
+                const d = decodeRemoveObject(p.payload);
+                if (d.type === 0 && d.objectId === this.model.self.targetObjectId) this.send(ClientOp.PlayerTarget, out.encodeTarget(0));
+                break;
+            }
             case ServerOp.SpellCastAnimation: {
                 const d = decodeSpellCastAnimation(p.payload);
                 if (d.casterId === this.objectId && d.castTimeMs > 0) this.mover.holdPosition(d.castTimeMs + 250);
                 break;
             }
             case ServerOp.InterruptSpellCast:
+                // Every break in the casting phase says so, whatever the line that goes with it, "You move and interrupt your focus!" too (CastingComponent.cs:189-207). With none the cast is over anyway: the hold ran for its time.
+                if (decodeInterrupt(p.payload).objectId === this.objectId) this.mover.releaseHold();
                 break;
             case ServerOp.LoginDenied: {
                 const code = decodeLoginDenied(p.payload).code;
@@ -485,6 +531,7 @@ export class DaocSession {
         this.mover.pause();
         this.mover.stop('regionChange');
         this.model.clearWorld();
+        this.requestedObjects.clear(); // object ids are per region
         this.model.self.isSitting = false; // MoveTo to another region stands us up too (GamePlayer.cs:7900-7906)
         try {
             await this.enterWorld(false);

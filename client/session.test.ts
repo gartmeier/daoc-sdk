@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { PacketWriter } from './protocol/buffer';
 import { ClientOp, ServerOp } from './protocol/opcodes';
 import { DaocSession } from './session';
@@ -271,5 +271,235 @@ describe('DaocSession sitting after a server move', () => {
         feed(ServerOp.CharacterJump, jump(574_797, 530_161, 2896));
         expect(s.mover.sitting).toBe(false);
         expect(s.model.self.isSitting).toBe(false);
+    });
+});
+
+describe('DaocSession unknown objects', () => {
+    const OID = 0x0A0B;
+    /** 0xA1 in zone 0 (Camelot Hills): its XOffset is 548864, its YOffset 483328 (PacketLib168.cs:724-862). */
+    const update = (oid: number, x: number, y: number, zone = 0) =>
+        W().u16(0).u16(0).u16(x - 548864).u16(0).u16(y - 483328).u16(0).u16(2896).u16(0).u16(oid).u16(0).u8(100).u8(0).u8(zone).u8(0).toBytes();
+    const ME = { x: 574797, y: 530161, z: 2896 };
+    /** A session playing on a fake socket; `asked` holds the bytes of every 0xBE sent. */
+    function playing() {
+        const { s, feed } = session();
+        const asked: number[][] = [];
+        (s as unknown as { connection: unknown }).connection = {
+            isOpen: true,
+            send: (code: number, payload: Uint8Array) => { if (code === ClientOp.CreateObjectRequest) asked.push([...payload]); return true; },
+            close: () => {},
+        };
+        s.phase = 'playing';
+        s.objectId = 1;
+        s.model.self.objectId = 1;
+        s.mover.snap(1, ME.x, ME.y, ME.z, 0, null);
+        return { s, feed, asked };
+    }
+    const npcCreate = (oid: number, name: string) =>
+        W().u16(oid).u16(0).u16(0).u16(ME.z).u32(ME.x + 50).u32(ME.y).u16(0).u16(100).u8(50).u8(5).u8(0).u8(0).u8(0).u8(0).u16(0).pascal(name).pascal('').toBytes();
+
+    afterEach(() => setSystemTime());
+
+    test('a mob handed over at a pet\'s death holds for its run from where the mover stands: the model has no position of its own', () => {
+        const { s, feed } = playing();
+        const PET = 600;
+        const reading = (targetId: number) => W().u16(0).u16(0).u16(ME.x - 548864).u16(0).u16(ME.y - 483328).u16(0).u16(2896).u16(0).u16(OID).u16(targetId).u8(100).u8(0).u8(0).u8(0).toBytes();
+        const targetOf = () => s.model.nearbyNpcs(ME).find(n => n.objectId === OID)?.targetObjectId;
+        setSystemTime(new Date(1_000_000));
+        feed(ServerOp.NPCCreate, npcCreate(PET, 'wolf'));
+        feed(ServerOp.NPCCreate, npcCreate(OID, 'bear'));
+        feed(ServerOp.PetWindow, W().u16(PET).u8(0).u8(0).u8(2).u8(2).u8(1).u8(0).u8(0).toBytes()); // PacketLib181.cs:102-176
+        feed(ServerOp.CombatAnimation, W().u16(PET).u16(OID).u16(3).u16(0).u16le(0).u8(0).u8(10).u8(90).u8(0).toBytes());
+        feed(ServerOp.CombatAnimation, W().u16(OID).u16(PET).u16(3).u16(0).u16le(0).u8(0).u8(10).u8(90).u8(0).toBytes());
+        s.mover.snap(1, ME.x + 50 + 1800, ME.y, ME.z, 0, null);
+        feed(ServerOp.RemoveObject, W().u16(PET).u16(0).toBytes());
+        expect(targetOf()).toBe(1);
+        setSystemTime(new Date(1_014_000)); // 1800 / 150 + 2 s
+        feed(ServerOp.ObjectUpdate, reading(0xFFFF));
+        expect(targetOf()).toBe(1);
+        setSystemTime(new Date(1_014_001));
+        feed(ServerOp.ObjectUpdate, reading(0xFFFF));
+        expect(targetOf()).toBeNull();
+    });
+
+    test('0xA1 for an unknown NPC asks for it once per 2 s, and its 0xDA ends that', () => {
+        const { s, feed, asked } = playing();
+        setSystemTime(new Date(1_000_000));
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        expect(asked).toEqual([[0x0B, 0x0A]]); // u16 LE, CreateObjectRequestHandler.cs:18-21
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        setSystemTime(new Date(1_001_999));
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        expect(asked.length).toBe(1);
+        setSystemTime(new Date(1_002_000));
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        expect(asked.length).toBe(2);
+        feed(ServerOp.NPCCreate, npcCreate(OID, 'ruby simulacrum'));
+        expect(s.model.npcs.has(OID)).toBe(true);
+        setSystemTime(new Date(1_010_000));
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        expect(asked.length).toBe(2);
+    });
+
+    test('the throttle is per id', () => {
+        const { feed, asked } = playing();
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        feed(ServerOp.ObjectUpdate, update(OID + 1, ME.x + 100, ME.y));
+        expect(asked.length).toBe(2);
+    });
+
+    test('nothing for what we know: an NPC, an object, a player, ourselves, or no id', () => {
+        const { s, feed, asked } = playing();
+        s.model.npcs.set(10, {} as never);
+        s.model.objects.set(11, {} as never);
+        s.model.players.set(12, {} as never);
+        for (const oid of [10, 11, 12, 1, 0]) feed(ServerOp.ObjectUpdate, update(oid, ME.x + 100, ME.y));
+        expect(asked).toEqual([]);
+    });
+
+    test('nothing beyond the model\'s cull, which would drop its 0xDA at once', () => {
+        const { feed, asked } = playing();
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 6001, ME.y));
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x, ME.y + 6001));
+        expect(asked).toEqual([]);
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 6000, ME.y));
+        expect(asked.length).toBe(1);
+    });
+
+    test('nothing for a zone we can\'t place, or outside the playing phase', () => {
+        const { s, feed, asked } = playing();
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y, 0xFE));
+        expect(asked).toEqual([]);
+        s.phase = 'regionChange';
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        expect(asked).toEqual([]);
+    });
+
+    test('a region change forgets what was asked: ids mean something else there', () => {
+        const { s, feed, asked } = playing();
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        expect(asked.length).toBe(1);
+        feed(ServerOp.RegionChanged, W().u16(2).toBytes());
+        s.phase = 'playing';
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        expect(asked.length).toBe(2);
+        s.close();
+    });
+
+    test('nothing for one just dead: its 0xA1 lands after its 0xA2 (PacketProcessor.cs:273-274), and the server has no answer', () => {
+        const { s, feed, asked } = playing();
+        setSystemTime(new Date(1_000_000));
+        feed(ServerOp.NPCCreate, npcCreate(OID, 'bear'));
+        feed(ServerOp.RemoveObject, W().u16(OID).u16(0).toBytes());
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        setSystemTime(new Date(1_002_000));
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        expect(asked).toEqual([]);
+        // The id on somebody new, by then.
+        setSystemTime(new Date(1_002_001));
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        expect(asked.length).toBe(1);
+        expect(s.model.hasObject(OID)).toBe(false);
+    });
+
+    test('a jump is no death: its 0xA1 asks at once (GameNPC.cs:2044)', () => {
+        const { feed, asked } = playing();
+        feed(ServerOp.NPCCreate, npcCreate(OID, 'bear'));
+        feed(ServerOp.RemoveObject, W().u16(OID).u16(1).toBytes());
+        feed(ServerOp.ObjectUpdate, update(OID, ME.x + 100, ME.y));
+        expect(asked.length).toBe(1);
+    });
+
+    test('the throttle map stays bounded, however many ids pass by', () => {
+        const { s, feed, asked } = playing();
+        for (let oid = 1000; oid < 4000; oid++) feed(ServerOp.ObjectUpdate, update(oid, ME.x + 100, ME.y));
+        expect(asked.length).toBe(3000);
+        expect((s as unknown as { requestedObjects: Map<number, number> }).requestedObjects.size).toBeLessThanOrEqual(512);
+    });
+});
+
+describe('DaocSession and the server\'s target when our selection dies', () => {
+    const ME = { x: 574797, y: 530161, z: 2896 };
+    const MOB = 0x0A0B;
+    const OTHER = 0x0A0C;
+    const npcCreate = (oid: number, name: string) =>
+        W().u16(oid).u16(0).u16(0).u16(ME.z).u32(ME.x + 50).u32(ME.y).u16(0).u16(100).u8(50).u8(5).u8(0).u8(0).u8(0).u8(0).u16(0).pascal(name).pascal('').toBytes();
+    const remove = (oid: number, type: number) => W().u16(oid).u16(type).toBytes();
+    /** A session playing on a fake socket, a mob and another NPC in view; `targets` holds the bytes of every 0xB0 sent, `sent` every opcode. */
+    function selecting() {
+        const { s, feed } = session();
+        const targets: number[][] = [];
+        const sent: number[] = [];
+        (s as unknown as { connection: unknown }).connection = {
+            isOpen: true,
+            send: (code: number, payload: Uint8Array) => { sent.push(code); if (code === ClientOp.PlayerTarget) targets.push([...payload]); return true; },
+            close: () => {},
+        };
+        s.phase = 'playing';
+        s.objectId = 1;
+        s.model.self.objectId = 1;
+        s.mover.snap(1, ME.x, ME.y, ME.z, 0, null);
+        feed(ServerOp.NPCCreate, npcCreate(MOB, 'bear'));
+        feed(ServerOp.NPCCreate, npcCreate(OTHER, 'wolf'));
+        return { s, feed, targets, sent };
+    }
+
+    test('its 0xA2 type 0 clears the server\'s too, right away: one 0xB0 naming nobody, and nothing else (PlayerTargetHandler.cs:15-18, :38)', () => {
+        const { s, feed, targets, sent } = selecting();
+        s.model.setSelfTarget(MOB);
+        feed(ServerOp.RemoveObject, remove(MOB, 0));
+        expect(targets).toEqual([[0x00, 0x00, 0x60, 0x00]]); // u16 id, u16 flags
+        expect(sent).toEqual([ClientOp.PlayerTarget]);
+        expect(s.model.self.targetObjectId).toBeNull();
+    });
+
+    test('nothing when something else is selected: a target of a new mob sent just before the 0xA2 stays', () => {
+        const { s, feed, targets, sent } = selecting();
+        s.model.setSelfTarget(MOB);
+        s.model.setSelfTarget(OTHER);
+        feed(ServerOp.RemoveObject, remove(MOB, 0));
+        expect(targets).toEqual([]);
+        expect(sent).toEqual([]);
+        expect(s.model.self.targetObjectId).toBe(OTHER);
+    });
+
+    test('nothing with no selection, for a jump (0xA2 type 1: it lives on), or the second time', () => {
+        const { s, feed, targets } = selecting();
+        feed(ServerOp.RemoveObject, remove(MOB, 0));
+        expect(targets).toEqual([]);
+
+        s.model.setSelfTarget(OTHER);
+        feed(ServerOp.RemoveObject, remove(OTHER, 1));
+        expect(targets).toEqual([]);
+
+        feed(ServerOp.NPCCreate, npcCreate(MOB, 'bear'));
+        s.model.setSelfTarget(MOB);
+        feed(ServerOp.RemoveObject, remove(MOB, 0));
+        feed(ServerOp.RemoveObject, remove(MOB, 0));
+        expect(targets.length).toBe(1);
+    });
+
+    describe('a cast holds the mover for its time, and a break ends that (CastingComponent.cs:196-199 says so to all in view, itself too)', () => {
+        const casting = () => {
+            const c = session();
+            c.s.objectId = 1;
+            c.s.model.self.objectId = 1;
+            c.feed(ServerOp.SpellCastAnimation, W().u16(1).u16(5208).u16(60).u16(0).toBytes());
+            expect(c.s.mover.holding).toBe(true);
+            return c;
+        };
+
+        test('our own 0x73 lets us walk at once', () => {
+            // hold: "You move and interrupt your focus!", then walkTo at cast+1852: "no step in 13 s", 'No progress for 8000ms at (774583, 757279)'.
+            const { s, feed } = casting();
+            feed(ServerOp.InterruptSpellCast, W().u16(1).u16(1).toBytes());
+            expect(s.mover.holding).toBe(false);
+        });
+
+        test('somebody else\'s doesn\'t', () => {
+            const { s, feed } = casting();
+            feed(ServerOp.InterruptSpellCast, W().u16(2).u16(1).toBytes());
+            expect(s.mover.holding).toBe(true);
+        });
     });
 });

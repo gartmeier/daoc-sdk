@@ -19,14 +19,16 @@
 import { estimateZ } from '../../data/index';
 import type { Realm } from '../types';
 import type { Behavior } from './member';
-import { backupHeal, confuse, crowdControl, flee, interrupt, rest, rez, release, retreat, shedLoad, song, sprint, holdFormation, buff } from './behaviors';
-import { isAlive } from './blackboard';
+import { backupHeal, confuse, crowdControl, flee, interrupt, rest, rez, release, retreat, SAVING_POWER, shedLoad, song, sprint, holdFormation, buff } from './behaviors';
+import { isAlive, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
-import { decideRvr, groupRegion, homeOf, keepDangers, mainBody, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, onWhom, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
+
+export { focusHealed, pickPackFocus } from './rvr';
 
 export interface PackOptions {
     /** Stop this far from the nearest enemy of a group we mean to raid. */
@@ -116,24 +118,18 @@ export const PACK_SETTINGS: PackSettings = {
     ready: { hp: 70, mana: 50 },
     // Only between raids, from a corpse close by: a corpse the pack has left releases and is picked up.
     rez: { holdMs: 20_000, radius: 2000, sit: false, reserve: 25, inFight: false },
+    // These orders walk off and rest with an enemy in sight, so a pet's fight has to come off by itself (petControl).
+    pet: { ...RVR_SETTINGS.pet!, strayFightsOff: true },
     pack: PACK_OPTIONS,
 };
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 const centroid = (ps: readonly Point[]): Point => ({ x: ps.reduce((a, p) => a + p.x, 0) / Math.max(1, ps.length), y: ps.reduce((a, p) => a + p.y, 0) / Math.max(1, ps.length) });
-const usesMana = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc;
+const usesMana = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc || !!m.capabilities.pet;
+/** What a member short of power waits on: its summon's, shown as SAVING_POWER, as decideRvr and decidePve say, or its own. */
+const powerWhy = (m: MemberReport) => (m.activity?.detail === SAVING_POWER ? 'pet power' : 'power');
 const soft = (m: MemberReport) => m.role === 'healer' || m.role === 'support' || m.role === 'nuker';
 const tag = (c: Contact) => `${c.name}#${c.objectId} (${c.hp}%${c.healer ? ' healer' : c.caster ? ' caster' : ''})`;
-
-/**
- * Who the damage goes on: the nearest free enemy, a known caster ahead of a fighter, nearly dead ones first. A known
- * healer only when nothing else is in reach: healers wear chain and heal themselves, and in round 9 Troll#438 stayed
- * the focus for 5 minutes while its health went back up. They get the mezz instead (packCc).
- */
-export function pickPackFocus(pool: readonly Contact[], centre: Point, reach: number): Contact | null {
-    const score = (c: Contact) => (c.healer ? -200 : 0) + (c.caster ? 30 : 0) + (100 - c.hp) * 0.3 + (c.hp < 25 ? 40 : 0) + Math.max(0, 1 - dist(c, centre) / reach) * 40;
-    return [...pool].sort((a, b) => score(b) - score(a))[0] ?? null;
-}
 
 /**
  * Who gets mezzed, by whom; nothing but a mezz may hit a mezzed enemy, and two never go on one. The Bard takes the biggest cluster an area mezz would catch without the focus, else a
@@ -160,16 +156,6 @@ export function packCc(foes: readonly Contact[], members: readonly MemberReport[
     });
 }
 
-/**
- * Whether to give up the focus: its health climbed this much above the lowest we had it at, so a healer is out-healing
- * us. s11: Troll#437 went 36, 11, 46, 92, while five members died round it. Remembers the lowest per target in `seen`.
- */
-export function focusHealed(seen: Record<number, number>, focus: Pick<Contact, 'objectId' | 'hp'>, healedBy: number): boolean {
-    const low = Math.min(seen[focus.objectId] ?? 100, focus.hp);
-    seen[focus.objectId] = low;
-    return focus.hp - low >= healedBy;
-}
-
 export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     const { picture: p, orders: o, memory: mem, settings: s, now } = ctx;
     const k = s.pack;
@@ -190,11 +176,13 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, leader.z, { radius: 8000 });
     const trip: Trip = { mem, now, regionId, level, avoid: keeps, travelLeg: s.travelLeg, zAt };
     const ours = new Set(p.members.map(m => m.name));
-    const onUs = (c: Contact) => c.target !== null && ours.has(c.target);
-    const attacked = new Set(p.contacts.filter(c => !c.stale && isAlive(c) && onUs(c)).map(c => c.target!));
+    // A member whose pet is attacked counts as attacked, as in decideRvr.
+    const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
+    const attacked = new Set(p.contacts.filter(c => !c.stale && isAlive(c) && onUs(c)).map(c => onWhom(c)!));
     const { main, far } = mainBody(here, s.gatherRadius, mem, attacked);
     const centre = centroid(main);
-    const foes = p.contacts.filter(c => players(c) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !inKeep(c)));
+    // A shade is no foe, as in decideRvr: no focus, no mezz, nobody to count (AbstractServerRules.cs:449-455).
+    const foes = p.contacts.filter(c => players(c) && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !inKeep(c)));
     const free = foes.filter(c => !c.cc).sort((a, b) => dist(a, centre) - dist(b, centre));
     const stay: Point3 = { x: Math.round(centre.x), y: Math.round(centre.y), z: zAt(centre) };
     const facing = free[0] ? { x: free[0].x, y: free[0].y } : undefined;
@@ -339,7 +327,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             if (pickups.length || far.length || dead.length) { mem.pack = 'home'; mem.legKind = null; return say({ ...none, phase: 'recover', anchor: stay, reason: 'regrouping: someone is missing again' }); }
             const low = here.flatMap(m => [
                 ...(m.hp < k.rebuffReady.hp ? [{ name: m.name, why: 'health' }] : []),
-                ...(usesMana(m) && m.mana < k.rebuffReady.mana ? [{ name: m.name, why: 'power' }] : []),
+                ...(usesMana(m) && m.mana < k.rebuffReady.mana ? [{ name: m.name, why: powerWhy(m) }] : []),
             ]);
             const buffing = here.filter(m => m.activity?.kind === 'buff');
             if (now - mem.rebuffAt < k.rebuffMs || low.length || buffing.length) {
@@ -380,7 +368,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'keep away while resting', reason: `resting: ${who.map(m => m.name).join(', ')}, moving off (nearest ${Math.round(d)} away)` });
         }
         mem.movingOff = false;
-        return say({ ...none, phase: 'recover', anchor: stay, objective: 'rest', waiting: who.map(m => ({ name: m.name, why: 'power' })), reason: `resting: ${who.map(m => m.name).join(', ')} (nearest enemy ${Math.round(d)} away)` });
+        return say({ ...none, phase: 'recover', anchor: stay, objective: 'rest', waiting: who.map(m => ({ name: m.name, why: powerWhy(m) })), reason: `resting: ${who.map(m => m.name).join(', ')} (nearest enemy ${Math.round(d)} away)` });
     }
     // Prey: all that is in sight is a couple of stragglers and we clearly outnumber them. No cooldown, no stand-off and no
     // raid clock for those: turn round and kill them, the Hero too. Live, 5 v 2 at the end of a round was refused as "still cooling down".

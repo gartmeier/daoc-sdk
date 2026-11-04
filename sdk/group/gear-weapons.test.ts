@@ -48,6 +48,24 @@ describe('weaponNeeds', () => {
     });
 });
 
+describe('a Savage: Hand to Hand is a weapon line (SkillBase.cs:968, SkillConstants.cs:572)', () => {
+    const SAVAGE = specs([['Hand to Hand', 24], ['Savagery', 16], ['Parry', 2]]);
+    const needs = weaponNeeds(SAVAGE)!;
+
+    test('its needs: claws in both hands, as the first build in data/builds/savage.ts has it', () => {
+        expect(needs).toEqual({ line: 'Hand to Hand', level: 24, left: true, twoHanded: false });
+        expect(weaponSlots({ objectType: ObjectType.HandToHand, hand: ItemHand.FitsLeft }, needs)).toEqual([10, 11]);
+    });
+
+    test('another line at 2 or more doesn\'t take over from it', () => {
+        expect(weaponNeeds(specs([['Hand to Hand', 24], ['Sword', 10], ['Savagery', 16]]))).toMatchObject({ line: 'Hand to Hand' });
+    });
+
+    test('the shops of Midgard sell it', () => {
+        expect(weaponSellers({ regionId: 101, x: 31000, y: 32000, realm: 'Midgard', level: 24 } as never, { line: 'Hand to Hand', level: 24, left: true, twoHanded: false }, 100_000, { overLevel: false }).length).toBeGreaterThan(0);
+    });
+});
+
 describe('weaponSlots', () => {
     const warrior = weaponNeeds(specs(WARRIOR))!, skald = weaponNeeds(specs(SKALD))!, berserker = weaponNeeds(specs([['Axe', 18], ['Left Axe', 14]]))!;
 

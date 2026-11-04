@@ -2,7 +2,7 @@ import type { ClassBuilds } from './types';
 
 export default {
     className: 'Hunter',
-    notes: 'Multiplier 20 (ClassHunter.cs:15): 584 at 24, 2979 at 50. No autotrain on this server: ClassHunter.cs:9 declares the list but the override is commented out (:23-26). Starts as Rogue, which trains only Stealth and Sword. Spear uses (STR+DEX)/2 (GamePlayer.cs:5505-5509) while Sword uses STR, so with DEX primary Spear is the default melee line. Bots cannot use the bow yet: sdk/index.ts and sdk/actions.ts have no ranged attack, no bot stealths (learnings/rvr.md:120), and there are no pet commands (learnings/rvr.md:119). Beastcraft self-buffs still work as spells. Role: melee.',
+    notes: 'Multiplier 20 (ClassHunter.cs:15): 584 at 24, 2979 at 50. No autotrain on this server: ClassHunter.cs:9 declares the list but the override is commented out (:23-26). Starts as Rogue, which trains only Stealth and Sword. Spear uses (STR+DEX)/2 (GamePlayer.cs:5505-5509) while Sword uses STR, so with DEX primary Spear is the default melee line. Bots cannot use the bow yet: sdk/index.ts and sdk/actions.ts have no ranged attack, no bot stealths (learnings/rvr.md:120). Bots keep a pet up and send it at the focus by themselves (learnings/group-coordination.md), except one capped below half their level: Beastcraft 1 stays at L7, so the stealth build has none in a group from level 15. Beastcraft self-buffs still work as spells. Role: melee.',
     builds: [
         {
             name: 'Spear and Beastcraft',

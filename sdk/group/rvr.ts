@@ -31,14 +31,15 @@
 
 import { estimateZ, getClass, realmName } from '../../data/index';
 import type { Realm } from '../types';
-import { assist, buff, crowdControl, flee, guard, heal, holdFormation, meleeFight, position, rejoinFight, release, rest, retreat, rez, shedLoad, song, spareNuke, sprint, tank, type TacticsSettings } from './behaviors';
+import { assist, buff, crowdControl, flee, guard, hand, heal, holdFormation, meleeFight, position, rejoinFight, release, rest, retreat, rez, SAVING_POWER, shedLoad, song, spareNuke, sprint, tank, type TacticsSettings } from './behaviors';
 import type { Behavior } from './member';
 import type { Finding, RunReport } from './observer';
-import { isAlive } from './blackboard';
+import { isAlive, untouchable } from './blackboard';
+import { PET_SETTINGS, waitsForPet } from './pets';
 import { assignCc } from './pve';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, THIDRANKI, type KeepSettings, type PlayerRealm } from './keeps';
-import { aggroZones, safePath, type Danger } from './terrain';
+import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
 export { BATTLEGROUND_LAYOUTS, homeOf, keepDangers, KEEP_CLEARANCE, THIDRANKI, type BattlegroundLayout, type Keep, type KeepSettings, type PlayerRealm } from './keeps';
@@ -80,6 +81,17 @@ export interface RvrSettings extends TacticsSettings, KeepSettings {
     travelLeg: number;
     /** Patrol this loop instead of defaultPatrol (a ring round the battleground's meeting point). */
     patrol: Point3[] | null;
+    /** Choose the focus as the pack does (pickPackFocus: near, soft, a known healer last) and give up one a healer is winning. Off: pickRvrFocus. */
+    softFocus?: SoftFocus;
+}
+
+export interface SoftFocus {
+    /** What a cast reaches: the nearer an enemy within it, the better. */
+    reach: number;
+    /** Give up a focus whose health climbs this much above the lowest we had it at ... */
+    healedBy: number;
+    /** ... and leave it alone for this long. */
+    droppedMs: number;
 }
 
 export const RVR_SETTINGS: RvrSettings = {
@@ -105,6 +117,7 @@ export const RVR_SETTINGS: RvrSettings = {
     tauntOpenMs: 6000,
     peelAfterMs: 4000,
     guard: { guard: 'healer', protect: 'nuker' },
+    pet: PET_SETTINGS,
     // Round 2 (20261101-085134): tanks chased fleeing players 3000+ away from their group. Measured from
     // the fight's anchor, which decideRvr moves toward a focus beyond it: with FIGHT_DRIFT this covers every
     // focus within engageRadius + FOCUS_SLACK of the centre (2000 + 1500 ≥ 2500 + 1000).
@@ -125,7 +138,9 @@ export const RVR_SETTINGS: RvrSettings = {
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 const centroid = (ps: Point[]): Point => ({ x: ps.reduce((a, p) => a + p.x, 0) / Math.max(1, ps.length), y: ps.reduce((a, p) => a + p.y, 0) / Math.max(1, ps.length) });
-const usesMana = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc;
+const usesMana = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc || !!m.capabilities.pet;
+/** The member a contact is on: itself, or its pet. */
+export const onWhom = (c: Contact): string | null => c.target ?? c.targetPet ?? null;
 const names = (ms: { name: string }[]) => ms.map(m => m.name).join(', ');
 const enemiesText = (n: number) => `${n} ${n === 1 ? 'enemy' : 'enemies'}`;
 const at = (p: Point) => `(${Math.round(p.x)}, ${Math.round(p.y)})`;
@@ -185,7 +200,8 @@ export function defaultPatrol(regionId: number, realm: Realm, level: number, set
  * +60, a caster +30, on one of our healers or casters +20, missing health up to +30 and below
  * switchBelow +40 more (nearly dead goes first), within our tank's and melee's reach (`reach`:
  * the chase leash) +15, near our centre up to +10. A healer beyond the leash still goes before a
- * fighter in it: the fight's anchor moves toward it (decideRvr).
+ * fighter in it: the fight's anchor moves toward it (decideRvr). decideRvr's pool has what isn't a player
+ * only with every player crowd-controlled: so what's free and on us comes before a mezzed or rooted player.
  */
 export function pickRvrFocus(pool: readonly Contact[], opts: { centre: Point; members: readonly MemberReport[]; settings: Pick<RvrSettings, 'switchBelow' | 'engageRadius'>; reach?: (c: Contact) => boolean }): Contact | null {
     const soft = new Set(opts.members.filter(m => m.role === 'healer' || m.role === 'support' || m.role === 'nuker').map(m => m.name));
@@ -194,6 +210,26 @@ export function pickRvrFocus(pool: readonly Contact[], opts: { centre: Point; me
         + (100 - c.hp) * 0.3 + (c.hp < s.switchBelow ? 40 : 0) + (opts.reach?.(c) ? 15 : 0) + Math.max(0, 1 - dist(c, opts.centre) / s.engageRadius) * 10;
     const free = pool.filter(c => !c.cc);
     return [...(free.length ? free : pool)].sort((a, b) => score(b) - score(a))[0] ?? null;
+}
+
+/**
+ * Who the damage goes on: the nearest free enemy, a known caster ahead of a fighter, nearly dead ones first. A known
+ * healer only when nothing else is in reach: healers wear chain and heal themselves, and in round 9 Troll#438 stayed
+ * the focus for 5 minutes while its health went back up. They get the mezz instead (packCc).
+ */
+export function pickPackFocus(pool: readonly Contact[], centre: Point, reach: number): Contact | null {
+    const score = (c: Contact) => (c.healer ? -200 : 0) + (c.caster ? 30 : 0) + (100 - c.hp) * 0.3 + (c.hp < 25 ? 40 : 0) + Math.max(0, 1 - dist(c, centre) / reach) * 40;
+    return [...pool].sort((a, b) => score(b) - score(a))[0] ?? null;
+}
+
+/**
+ * Whether to give up the focus: its health climbed this much above the lowest we had it at, so a healer is out-healing
+ * us. s11: Troll#437 went 36, 11, 46, 92, while five members died round it. Remembers the lowest per target in `seen`.
+ */
+export function focusHealed(seen: Record<number, number>, focus: Pick<Contact, 'objectId' | 'hp'>, healedBy: number): boolean {
+    const low = Math.min(seen[focus.objectId] ?? 100, focus.hp);
+    seen[focus.objectId] = low;
+    return focus.hp - low >= healedBy;
 }
 
 /** The focus stays a candidate this much beyond engageRadius (it runs; we don't drop it at the line). */
@@ -257,7 +293,7 @@ export function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; mo
     const next: Point = mem.route[0] ?? goal;
     const len = o.meet ? Math.min(t.travelLeg, Math.max(300, dist(from, goal) / 2)) : t.travelLeg;
     const f = Math.min(1, len / Math.max(1, dist(from, next)));
-    const x = Math.round(from.x + (next.x - from.x) * f), y = Math.round(from.y + (next.y - from.y) * f);
+    const { x, y } = keepOnMap(t.regionId, from, { x: Math.round(from.x + (next.x - from.x) * f), y: Math.round(from.y + (next.y - from.y) * f) });
     mem.leg = { x, y, z: t.zAt({ x, y }) };
     mem.legAt = t.now;
     mem.legFacing = { x: next.x, y: next.y };
@@ -272,7 +308,7 @@ export function runWay(from: Point, enemies: readonly Point[], home: Point | nul
     return toHome && -(toHome.x * away.x + toHome.y * away.y) < 0.5 ? { ...toHome, home: true } : { ...away, home: false };
 }
 
-/** The spot `distance` from `from` along the unit vector `way`, turned by up to 40° to stay out of aggro zones and keep circles. */
+/** The spot `distance` from `from` along the unit vector `way`, turned by up to 40° to stay out of aggro zones and keep circles, and on the map as a PvE retreat (keepOnMap). */
 export function spotAlong(t: Trip, from: Point, way: Point, distance: number): Point3 {
     const blocked = [...aggroZones(t.regionId, t.level), ...t.avoid];
     const base = Math.atan2(way.y, way.x);
@@ -280,8 +316,8 @@ export function spotAlong(t: Trip, from: Point, way: Point, distance: number): P
     // The whole way there clear first: round 7 (20261101-104807) ran Hibernia "toward our portal keep" straight
     // through the perturbed bwca camp between the middle and its keep, and the bwca killed five of its eight dead.
     const pathClear = (p: Point) => { for (let i = 1; i <= 10; i++) if (!clearOf({ x: from.x + (p.x - from.x) * i / 10, y: from.y + (p.y - from.y) * i / 10 }, blocked)) return false; return true; };
-    const spot = spots.slice(0, 5).find(pathClear) ?? spots.find(p => clearOf(p, blocked)) ?? spots[0]!;
-    return { ...spot, z: t.zAt(spot) };
+    const spot = keepOnMap(t.regionId, from, spots.slice(0, 5).find(pathClear) ?? spots.find(p => clearOf(p, blocked)) ?? spots[0]!);
+    return { x: spot.x, y: spot.y, z: t.zAt(spot) };
 }
 
 /**
@@ -313,6 +349,8 @@ export function groupRegion(alive: readonly MemberReport[]): number {
 export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const { picture: p, orders: o, memory: mem, settings: s, now } = ctx;
     if (!p.members.length) return { phase: 'idle', reason: 'no member reports yet' };
+    // A shade is nobody here: no focus, no cc, no enemy to count or hunt (AbstractServerRules.cs:449-455). Its servant is a candidate like any enemy pet, and a focus that turns out to be one moves at once.
+    const contacts = p.contacts.filter(c => !untouchable(c, now));
     const alive = p.members.filter(m => !m.isDead);
     if (!alive.length) return { phase: 'recover', focus: null, cc: [], puller: null, retreatTo: null, reason: 'everyone is dead: releasing' };
     const regionId = groupRegion(alive);
@@ -322,7 +360,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const level = Math.min(...here.map(m => m.level));
     // Everything is measured from the main body: a member walking back from the portal keep is no part of a fight.
     const names0 = new Set(p.members.map(m => m.name));
-    const attacked = new Set(p.contacts.filter(c => !c.stale && isAlive(c) && c.target !== null && names0.has(c.target)).map(c => c.target!));
+    // A member whose pet is attacked counts as attacked: the fight is as far off as the pet.
+    const attacked = new Set(contacts.filter(c => !c.stale && isAlive(c)).map(onWhom).filter((n): n is string => n !== null && names0.has(n)));
     const { main, far } = mainBody(here, s.gatherRadius, mem, attacked);
     const centre = centroid(main);
     if (!mem.realm || mem.realm === 'none') mem.realm = realmOfGroup(p.members);
@@ -334,9 +373,9 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, leader.z, { radius: 8000 });
     const trip: Trip = { mem, now, regionId, level, avoid: keeps, travelLeg: s.travelLeg, zAt };
     const ours = new Set(p.members.map(m => m.name));
-    const onUs = (c: Contact) => c.target !== null && ours.has(c.target);
+    const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
     const inKeep = (c: Point) => !clearOf(c, keeps);
-    const enemies = p.contacts.filter(c => c.kind === 'player' && !c.stale && c.regionId === regionId);
+    const enemies = contacts.filter(c => c.kind === 'player' && !c.stale && c.regionId === regionId);
     // The enemy players against us (retreat.margin): two other realms fighting each other are two groups, not one.
     const byId = new Map(enemies.map(c => [c.objectId, c]));
     const busy = (c: Contact) => !onUs(c) && c.targetId !== null && (byId.get(c.targetId)?.realm ?? c.realm) !== c.realm;
@@ -355,12 +394,14 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // An enemy attacking a member away from the main body (walking back from the portal keep) counts only
     // near it, like any other: the group comes to meet that member (gather, hunt) instead of sending its
     // casters 15k off after it. Winding down, only enemies already fighting us count. Enemies under enemy
-    // keep guards are left alone unless they attack us.
+    // keep guards are left alone unless they attack us, which lasts as long as its aim (6 s), and not as long as it is a threat: our own landed nukes keep it that (blackboard.ts hitByUs), and the fight would feed itself.
+    // petControl holds the stance through that lapse (underGuards). An enemy pet that is a threat near us is in it whoever it aims at: a caster's target is on nobody's client for stretches.
     const inMain = new Set(main.map(m => m.name));
     const inFight = (c: Contact) => {
         if (c.stale || !isAlive(c) || c.regionId !== regionId) return false;
         const near = dist(c, centre) <= s.engageRadius + (c.threat || c.objectId === o.focus ? FOCUS_SLACK : 0);
-        if (onUs(c)) return inMain.has(c.target!) || near;
+        if (onUs(c)) return inMain.has(onWhom(c)!) || near;
+        if (c.isPet && c.threat) return near;
         if (c.kind !== 'player' || inKeep(c) || (ctx.windingDown && !c.threat && c.objectId !== o.focus)) return false;
         return near;
     };
@@ -377,13 +418,21 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     }
 
     // ── Fighting: enemy players near us or on us; monsters only when they attack us and no player is about ──
-    const candidates = p.contacts.filter(inFight);
+    const candidates = contacts.filter(inFight);
     const players = candidates.filter(c => c.kind === 'player');
-    const pool = players.length ? players : candidates;
+    // Players first, while one is free: with all of them crowd-controlled, a pet on us is what's left to hit (pickRvrFocus takes the free first).
+    const pool = players.some(c => !c.cc) ? players : candidates;
     if (pool.length) {
         // The trip is interrupted: it is planned again from wherever the fight ends.
         mem.legKind = null;
-        const current = pool.find(c => c.objectId === o.focus && !c.cc) ?? null;
+        const soft = s.softFocus;
+        // A healer winning: give the focus up, and leave that target alone a while.
+        const lowHp: Record<number, number> = mem.lowHp ??= {};
+        const dropped: Record<number, number> = mem.dropped ??= {};
+        for (const [id, until] of Object.entries(dropped)) if (until <= now) { delete dropped[+id]; delete lowHp[+id]; }
+        const held = pool.find(c => c.objectId === o.focus && !c.cc) ?? null;
+        if (soft && held && focusHealed(lowHp, held, soft.healedBy)) dropped[held.objectId] = now + soft.droppedMs;
+        const current = held && !dropped[held.objectId] ? held : null;
         const big = against(players);
         // Caught (retreat.maxMs): fight it out while they outnumber us. Once they don't, the next outnumbering is a new retreat.
         if (!outnumbered(big.length)) mem.stand = false;
@@ -404,7 +453,10 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         // running off is let go for one standing by the group. Switch to one in reach that is nearly dead while it isn't.
         const kept = current && (reach(current) || !inReach.length) ? current : null;
         const weaker = kept && kept.hp > s.switchBelow + 20 ? inReach.filter(c => c !== kept && c.hp < s.switchBelow).sort((a, b) => a.hp - b.hp)[0] : undefined;
-        const focus = weaker ?? kept ?? pickRvrFocus(pool.filter(c => c !== current), { centre, members: here, settings: s, reach })!;
+        const others = pool.filter(c => c !== current);
+        const open = others.filter(c => !c.cc);
+        const fresh = open.filter(c => !dropped[c.objectId]);
+        const focus = weaker ?? kept ?? (soft ? pickPackFocus(fresh.length ? fresh : open.length ? open : others, centre, soft.reach) : pickRvrFocus(others, { centre, members: here, settings: s, reach }))!;
         // A focus beyond the leash moves the anchor toward it, at most FIGHT_DRIFT from the centre (so the next
         // tick keeps it), leaving it LEASH_FIT of the leash away; else tank and melee would stand idle.
         // Never toward one under keep guards, and never into a keep circle.
@@ -422,7 +474,9 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const ccKey = (a: { targetId: number; by: string }) => `${a.targetId}:${a.by}`;
         for (const a of o.cc) if (now - (since[ccKey(a)] ?? now) > CC_STALL_MS) bench[a.by] = now + CC_BENCH_MS;
         const mezzers = main.filter(m => !((bench[m.name] ?? 0) > now));
-        const cc = assignCc(players.filter(c => c.objectId !== focus.objectId && !c.cc), mezzers, o.cc, now);
+        // With softFocus healers aren't damaged, so they get the mezz first, then known casters.
+        const ccRank = (c: Contact) => (soft ? (c.healer ? 0 : c.caster ? 1 : 2) : 0);
+        const cc = assignCc(players.filter(c => c.objectId !== focus.objectId && !c.cc).sort((x, y) => ccRank(x) - ccRank(y)), mezzers, o.cc, now);
         mem.ccSince = Object.fromEntries(cc.map(a => [ccKey(a), since[ccKey(a)] ?? now]));
         mem.ccBench = Object.fromEntries(Object.entries(bench).filter(([, until]) => until > now));
         return {
@@ -438,7 +492,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const deadHere = p.members.filter(m => m.isDead && m.regionId === regionId);
     const low = here.flatMap(m => [
         ...(m.hp < s.ready.hp ? [{ name: m.name, why: 'health' }] : []),
-        ...(usesMana(m) && m.mana < s.ready.mana ? [{ name: m.name, why: 'power' }] : []),
+        ...(usesMana(m) && m.mana < s.ready.mana ? [{ name: m.name, why: m.activity.detail === SAVING_POWER ? 'pet power' : 'power' }] : []),
+        ...(waitsForPet(m, s.pet) ? [{ name: m.name, why: 'pet' }] : []),
     ]);
 
     // ── Hunting: enemy players in sight beyond engageRadius. Too many: fall back (toward home unless they stand that way) ──
@@ -498,11 +553,11 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 /** Behaviour lists by role. No healer() visit: battlegrounds have no town healer, and RvR deaths cost no constitution. */
 export function rvrBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
-        tank: [release(), sprint(), retreat(), rejoinFight(), rez(), song(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
+        tank: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
         healer: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), spareNuke(), shedLoad(), holdFormation(), buff(), rest()],
         support: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
         nuker: [release(), sprint(), retreat(), rejoinFight(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
-        melee: [release(), sprint(), retreat(), rejoinFight(), rez(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
+        melee: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
     };
 }
 

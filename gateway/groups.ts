@@ -31,7 +31,7 @@
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { BotWorldState, GatewayAuthHook, NearbyNpc, NearbyPlayer, PlayerState, Realm } from './types';
+import type { BotWorldState, GatewayAuthHook, NearbyNpc, NearbyPlayer, PetAggression, PetWalk, PlayerState, Realm } from './types';
 import type { ViewerBotSession } from './viewer/routes';
 import type {
     ClientStatus, ControlAnswer, ControlView, GroupBadge, GroupFrame, GroupListEntry, GroupMemberView, GroupRuns,
@@ -39,7 +39,7 @@ import type {
 } from './group-types';
 import { WIRE_VERSION } from '../sdk/group/wire';
 import type { CoordinatorView, GroupPublish, LiveReport, PlanView, PublishAck, RunMeta, RunPhase, RunResultView, WireEvent } from '../sdk/group/wire';
-import type { Contact, GroupPicture, MemberReport, Orders, Phase, Point, Point3, Role } from '../sdk/group/types';
+import type { Contact, GroupPicture, MemberReport, Orders, PetReport, Phase, Point, Point3, Role } from '../sdk/group/types';
 import { roleForClass } from '../sdk/group/strategy';
 import { botIdentity, checkControlPassword, isJsonRequest } from './security';
 
@@ -61,6 +61,10 @@ const PHASES: readonly string[] = ['idle', 'gather', 'travel', 'recover', 'pull'
 const RUN_PHASES: readonly string[] = ['starting', 'running', 'ending', 'ended'] satisfies RunPhase[];
 const EVENT_KINDS: readonly string[] = ['orders', 'activity', 'result', 'death', 'kill', 'level', 'note'];
 const REALMS: readonly string[] = ['none', 'albion', 'midgard', 'hibernia'] satisfies Realm[];
+const PET_AGGRESSION: readonly string[] = ['aggressive', 'defensive', 'passive'] satisfies PetAggression[];
+const PET_WALK: readonly string[] = ['follow', 'stay', 'goTarget', 'comeHere'] satisfies PetWalk[];
+/** Object ids of pets with no window read per member. */
+const MAX_SUMMONS = 32;
 /** A contact's optional player flags (Sighting.casting/helped, Contact.healer/caster). */
 const PLAYER_SIGNS = ['casting', 'helped', 'healer', 'caster'] as const satisfies readonly (keyof Contact)[];
 /** RunReport.totals' optional RvR numbers, also in runs/history.jsonl. */
@@ -73,6 +77,8 @@ const MAX_GROUP_JSON_BYTES = 64 * 1024;
 const MAX_CONTROL_BYTES = 16 * 1024;
 /** Nearby objects read per member state (a client reports far fewer). */
 const MAX_NEARBY = 500;
+/** An NPC's death event counts this long: ids are reused after a mob is removed (sdk/group/blackboard.ts keeps the same). */
+const DEATH_EVENT_MS = 5000;
 const HISTORY_TAIL_BYTES = 256 * 1024;
 const CAMPAIGN_TAIL_BYTES = 64 * 1024;
 const CAMPAIGN_LINES = 30;
@@ -449,6 +455,31 @@ function memberPlayer(p: PlayerState): MemberPlayer {
     };
 }
 
+/** A PetReport from anything: null for no usable pet. What doesn't parse reads as what a pet starts on (PetState). */
+function petOf(x: unknown): PetReport | null {
+    if (!isObj(x) || !Number.isFinite(x.objectId)) return null;
+    return {
+        objectId: x.objectId, name: str(x.name, 64), level: numOrNull(x.level), x: numOrNull(x.x), y: numOrNull(x.y), z: numOrNull(x.z), hp: numOrNull(x.hp),
+        targetId: numOrNull(x.targetId), inCombat: bool(x.inCombat),
+        aggression: (PET_AGGRESSION.includes(x.aggression) ? x.aggression : 'defensive') as PetAggression,
+        walk: (PET_WALK.includes(x.walk) ? x.walk : 'follow') as PetWalk,
+        icons: list(x.icons, 8, numOrNull),
+    };
+}
+
+/** A member's window pet as its own state has it: the window says what it does, its entry where it is. Undefined from an older client. */
+function statePet(state: BotWorldState): PetReport | null | undefined {
+    const pet: unknown = state.pet;
+    if (pet === undefined) return undefined;
+    if (!isObj(pet)) return null;
+    const n = arr(state.nearbyNpcs).find(o => isObj(o) && o.objectId === pet.objectId);
+    return petOf({
+        objectId: pet.objectId, name: n?.name ?? pet.name, level: n?.level, x: n?.x, y: n?.y, z: n?.z, hp: n?.healthPercent,
+        // From the window: a caster pet's entry reads 0 while it casts and 65535 while it walks.
+        targetId: pet.targetObjectId, inCombat: n?.inCombat, aggression: pet.aggression, walk: pet.walk, icons: pet.icons,
+    });
+}
+
 /**
  * The group as its members' own states show it, with no run: every member in
  * roster order (the last known player stays after its client left), and the
@@ -469,6 +500,8 @@ export function composePassive(group: DiskGroup, src: SessionSources, now: numbe
         const counts = sdks.get(found?.key ?? m.username);
         const live = (status === 'active' || status === 'stale') && !!p;
         const mv = state?.movement;
+        const pet = live ? statePet(state!) : undefined;
+        const summons = live ? list(state!.summons, MAX_SUMMONS, numOrNull) : [];
         members.push({
             bot: m.bot, username: m.username, charName: m.charName,
             role: m.role ?? (p ? roleForClass(p.className) : null),
@@ -489,6 +522,8 @@ export function composePassive(group: DiskGroup, src: SessionSources, now: numbe
             } : null,
             inGameGroup: list(state?.group, 16, g => (isObj(g) && typeof g.name === 'string' && g.name ? g.name.slice(0, 64) : null)),
             run: null,
+            ...(pet !== undefined ? { pet } : {}),
+            ...(summons.length ? { summons } : {}),
         });
         if (live) usable.push({ name: str(p!.name, 64), player: p!, state: state!, at: session!.lastStateReceivedAt });
     }
@@ -511,6 +546,15 @@ export function composePassive(group: DiskGroup, src: SessionSources, now: numbe
             if (name) memberAt.set(`${region}:${o.objectId}`, name);
         }
     }
+    // Whose pet an object is, the same way and from the same live states. Apart, as a window names its pet outright (a charm can
+    // stay a mob for the others), while an id in summons can be old: it lingers up to 30 s and the server hands it on (BotWorldState.summons).
+    const windowPets = new Map<string, string>();
+    const summoned = new Map<string, string>();
+    for (const u of usable) {
+        const region = num(u.player.regionId);
+        for (const id of list(u.state.summons, MAX_SUMMONS, numOrNull)) summoned.set(`${region}:${id}`, u.name);
+        if (isObj(u.state.pet) && Number.isFinite(u.state.pet.objectId)) windowPets.set(`${region}:${u.state.pet.objectId}`, u.name);
+    }
     const world = new Map<string, WorldContact>();
     // Freshest state first, so the first sighting of an object is the newest.
     for (const u of [...usable].sort((a, b) => b.at - a.at)) {
@@ -527,16 +571,23 @@ export function composePassive(group: DiskGroup, src: SessionSources, now: numbe
             const npc = kind === 'npc' ? o as NearbyNpc : null;
             const pc = kind === 'player' ? o as NearbyPlayer : null;
             const targetObjectId = npc ? numOrNull(npc.targetObjectId) : null;
+            // The server rounds health down, so a living one can read 0 % (GameLiving.cs:2621). A player dies by its dead flag only, an NPC
+            // by a fresh death event; without one it is floored at 1, as the board does it (observeState): the viewers read hp 0 as dead.
+            const npcAtZero = !!npc && num(o.healthPercent, 100) <= 0;
+            const npcDied = npcAtZero && arr(u.state.combatEvents).some(e => isObj(e) && e.kind === 'death' && e.targetObjectId === o.objectId && num(u.state.timestamp) - num(e.receivedAt) < DEATH_EVENT_MS);
+            const owner = npc ? windowPets.get(key) ?? (npc.isPet ? summoned.get(key) : undefined) : undefined;
+            const targetKey = `${region}:${targetObjectId}`;
+            const targetPet = targetObjectId === null || memberAt.has(targetKey) ? undefined : windowPets.get(targetKey) ?? summoned.get(targetKey);
             world.set(key, {
                 key, objectId: o.objectId, regionId: region, kind,
                 name: str(o.name, 64), level: num(o.level), realm: str(o.realm, 16, 'none'),
                 x: o.x, y: o.y, z: num(o.z), heading: num(o.heading), speed: num(npc?.speed),
-                hp: num(o.healthPercent), inCombat: bool(o.inCombat),
-                // A player dies by its dead flag only: the server rounds health down, so a living one can read 0 %.
-                isDead: pc ? bool(pc.isDead) : num(o.healthPercent, 100) <= 0,
+                hp: npcAtZero && !npcDied ? 1 : num(o.healthPercent), inCombat: bool(o.inCombat),
+                isDead: pc ? bool(pc.isDead) : npcDied,
                 targetObjectId,
-                target: targetObjectId === null ? null : memberAt.get(`${region}:${targetObjectId}`) ?? null,
-                npc: npc ? { isPeaceful: bool(npc.isPeaceful), isTargetable: npc.isTargetable !== false, isPet: bool(npc.isPet), role: strOrNull(npc.role, 32) } : null,
+                target: targetObjectId === null ? null : memberAt.get(targetKey) ?? null,
+                ...(targetPet ? { targetPet } : {}),
+                npc: npc ? { isPeaceful: bool(npc.isPeaceful), isTargetable: npc.isTargetable !== false, isPet: bool(npc.isPet) || !!owner, role: strOrNull(npc.role, 32), ...(owner ? { owner } : {}) } : null,
                 enemy: !!pc && pc.realm !== u.player.realm && pc.realm !== 'none',
                 seenBy: [u.name],
                 nearest: Infinity,
@@ -646,11 +697,12 @@ function memberReport(x: any): MemberReport | null {
     return {
         name: str(x.name, 64), bot: x.bot.slice(0, 64), role: roleOf(x.role) ?? 'melee', className: str(x.className, 32),
         level: num(x.level), experience: num(x.experience), ...present(x, ['realmPoints'], 'number'), objectId: num(x.objectId), regionId: num(x.regionId),
+        ...(x.pet === undefined ? {} : { pet: petOf(x.pet) }), ...(Array.isArray(x.summons) ? { summons: list(x.summons, MAX_SUMMONS, numOrNull) } : {}),
         x: num(x.x), y: num(x.y), z: num(x.z), hp: num(x.hp), mana: num(x.mana), endurance: num(x.endurance), load: num(x.load),
         isDead: bool(x.isDead), isSitting: bool(x.isSitting), inCombat: bool(x.inCombat), attacking: bool(x.attacking),
         targetId: numOrNull(x.targetId), effects: strings(x.effects, 64, 64),
         // buffSpells stay with the runner (it strips them too): nothing here draws them.
-        capabilities: { heal: bool(caps.heal), cc: bool(caps.cc), nuke: bool(caps.nuke), ...present(caps, ['rez'], 'boolean'), buffs: strings(caps.buffs, 32, 64), buffSpells: [] },
+        capabilities: { heal: bool(caps.heal), cc: bool(caps.cc), nuke: bool(caps.nuke), ...present(caps, ['rez'], 'boolean'), buffs: strings(caps.buffs, 32, 64), buffSpells: [], ...(caps.pet === 'main' || caps.pet === 'fnf' || caps.pet === null ? { pet: caps.pet } : {}) },
         activity: { kind: str(act.kind, 32, 'unknown'), targetId: numOrNull(act.targetId), detail: str(act.detail, 200), since: num(act.since) },
         at: num(x.at),
     };
@@ -662,7 +714,8 @@ function contactOf(x: any): Contact | null {
         objectId: x.objectId, kind: x.kind === 'player' ? 'player' : 'npc', name: str(x.name, 64), level: num(x.level),
         realm: (REALMS.includes(x.realm) ? x.realm : 'none') as Realm,
         x: num(x.x), y: num(x.y), z: num(x.z), hp: num(x.hp), targetId: numOrNull(x.targetId),
-        inCombat: bool(x.inCombat), swinging: bool(x.swinging), ...present(x, PLAYER_SIGNS, 'boolean'), regionId: num(x.regionId), target: strOrNull(x.target, 64),
+        inCombat: bool(x.inCombat), swinging: bool(x.swinging), ...present(x, PLAYER_SIGNS, 'boolean'), ...present(x, ['isPet'], 'boolean'), regionId: num(x.regionId), target: strOrNull(x.target, 64),
+        ...(x.targetPet === undefined ? {} : { targetPet: strOrNull(x.targetPet, 64) }),
         targetSince: num(x.targetSince), engagedAt: num(x.engagedAt), movedAt: num(x.movedAt), seenBy: strings(x.seenBy, 16, 64),
         firstSeen: num(x.firstSeen), lastSeen: num(x.lastSeen), stale: bool(x.stale), threat: bool(x.threat),
         hostileSince: num(x.hostileSince),
@@ -853,6 +906,10 @@ const newTrack = (): Track => ({
  * newest foe that hit it, else null. A friend's heal or buff is a spellEffect on
  * it too, so a hitter counts only when it is of another realm: monsters are
  * 'none', and group members always share the victim's realm.
+ *
+ * For a pet's kill the server names the owner (GameLiving.cs:1299-1300), so as sdk/group/blackboard.ts
+ * killerOf: the pet, when the newest blow before the death is a pet's of the named player's realm and
+ * the named player has no blow of its own in the window.
  */
 function killerOf(state: BotWorldState, p: PlayerState, track: Track): string | null {
     const me = p.objectId;
@@ -878,7 +935,12 @@ function killerOf(state: BotWorldState, p: PlayerState, track: Track): string | 
     // PlayerDeath's killer (client/model/world-model.ts) is the death event's attacker: the server named it.
     const death = hits.find(e => e.kind === 'death');
     const killer = death ? find(death.attackerObjectId!) : null;
-    if (killer && label(killer.o)) return label(killer.o);
+    if (killer && label(killer.o)) {
+        const blows = hits.slice(hits.indexOf(death!) + 1).filter(e => e.kind === 'melee' || e.kind === 'spellEffect');
+        const last = blows.map(e => find(e.attackerObjectId!)).find(h => h && foe(h))?.o;
+        const petsKill = !killer.npc && !!last && (last as NearbyNpc).isPet === true && last.realm === killer.o.realm && !blows.some(e => e.attackerObjectId === death!.attackerObjectId);
+        return label(petsKill ? last! : killer.o) ?? label(killer.o);
+    }
     const tried = new Set<number>();
     for (const e of hits) {
         if ((e.kind !== 'melee' && e.kind !== 'spellEffect') || tried.has(e.attackerObjectId!)) continue;
@@ -1125,14 +1187,14 @@ export function createGroupStore(opts: GroupStoreOptions): GroupStore {
             const metaRoles = new Map(run.meta.members.map(m => [lower(m.bot), m.role]));
             view.members.forEach((v, i) => {
                 const r = reports.get(lower(v.bot));
-                if (r) v.run = { name: r.name, role: r.role, activity: { ...r.activity }, effects: [...r.effects], can: { heal: r.capabilities.heal, cc: r.capabilities.cc, nuke: r.capabilities.nuke, ...present(r.capabilities, ['rez'], 'boolean') }, ...present(r, ['realmPoints'], 'number'), at: r.at };
+                if (r) v.run = { name: r.name, role: r.role, activity: { ...r.activity }, effects: [...r.effects], can: { heal: r.capabilities.heal, cc: r.capabilities.cc, nuke: r.capabilities.nuke, ...present(r.capabilities, ['rez'], 'boolean'), ...(r.capabilities.pet !== undefined ? { pet: r.capabilities.pet } : {}) }, ...present(r, ['realmPoints'], 'number'), at: r.at };
                 const runRole = r?.role ?? metaRoles.get(lower(v.bot));
                 if (!group.members[i]?.role && runRole) v.role = runRole;
             });
             const contacts = new Map(run.picture.contacts.map(c => [`${c.regionId}:${c.objectId}`, c]));
             for (const w of view.world) {
                 const c = contacts.get(w.key);
-                if (c) w.board = { threat: c.threat, stale: c.stale, cc: c.cc ? { ...c.cc } : null, engagedAt: c.engagedAt, hostileSince: c.hostileSince, seenBy: [...c.seenBy], lastSeen: c.lastSeen, ...present(c, PLAYER_SIGNS, 'boolean') };
+                if (c) w.board = { threat: c.threat, stale: c.stale, cc: c.cc ? { ...c.cc } : null, engagedAt: c.engagedAt, hostileSince: c.hostileSince, seenBy: [...c.seenBy], lastSeen: c.lastSeen, ...present(c, PLAYER_SIGNS, 'boolean'), ...(c.targetPet ? { targetPet: c.targetPet } : {}) };
             }
         }
         const ring = passive.get(group.id);

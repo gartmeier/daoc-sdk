@@ -39,6 +39,14 @@ export interface Reach {
     buffs: (SpellPick & { slot: string })[];
     /** What `song` plays. */
     songs: (SpellPick & { kind: string })[];
+    /** What `summonPet` keeps up: none for a pet capped far below this level (Spellbook.summon), which then stays in `unused`. */
+    summon: SpellPick | null;
+    /** What `fnfPet` casts at the focus. */
+    fnf: SpellPick | null;
+    /** What `petHeal` casts when the pet misses more than it restores: with no Pet-target heal, one of `heals` at the pet's id. */
+    petHeal: SpellPick | null;
+    /** What `petBuff` keeps up. */
+    petBuffs: (SpellPick & { slot: string })[];
     /** The best rank of each kind of spell no behaviour casts. */
     unused: Known[];
     /** The styles its lines reach. */
@@ -47,10 +55,10 @@ export interface Reach {
     abilities: string[];
 }
 
-/** A Spellbook on a character knowing `known`, with all the power in the world and nothing on a timer. */
-function bookOf(known: Known[], maxHealth: number): Spellbook {
+/** A Spellbook on a character of `level` knowing `known`, with all the power in the world and nothing on a timer. */
+function bookOf(known: Known[], maxHealth: number, level: number): Spellbook {
     const spells = known.map(k => ({ name: k.name, level: k.level, internalId: k.info.id, lineName: k.line, lineIndex: 0, spellIndex: 0, cooldownRemaining: 0 }));
-    const sdk = { getSkills: () => ({ spells }), getPlayer: () => ({ mana: Infinity, maxHealth }) } as unknown as BotSDK;
+    const sdk = { getSkills: () => ({ spells }), getPlayer: () => ({ mana: Infinity, maxHealth, level }) } as unknown as BotSDK;
     const bot = { getSpellInfo: (s: { internalId: number }) => getSpell(s.internalId) ?? null } as unknown as BotActions;
     return new Spellbook(sdk, bot);
 }
@@ -70,7 +78,7 @@ export function reach(className: string, level: number, specs: Record<string, nu
         const info = s.dataId !== undefined && s.kind !== 'style' ? getSpell(s.dataId) : undefined;
         if (info && s.specLevel <= specOf(line.specKey)) known.push({ name: s.name, level: s.specLevel, line: line.displayName, baseline: false, info });
     }
-    const book = bookOf(known, maxHealth);
+    const book = bookOf(known, maxHealth, level);
     const heals: SpellPick[] = [];
     for (let missing = 0; missing <= 2000; missing += 5) {
         const h = book.heal(missing);
@@ -90,7 +98,11 @@ export function reach(className: string, level: number, specs: Record<string, nu
     const rez = book.rez();
     const buffs = book.buffs();
     const songs = book.songs();
-    const used = [...heals, ...nukes, ...buffs, ...songs, ...(cc ? [cc] : []), ...(areaMezz ? [areaMezz] : []), ...(rez ? [rez] : [])];
+    const summon = book.summon();
+    const fnf = book.fnf();
+    const petHeal = summon ? book.petHeal() : null;
+    const petBuffs = summon ? book.petBuffs() : [];
+    const used = [...heals, ...nukes, ...buffs, ...songs, ...(cc ? [cc] : []), ...(areaMezz ? [areaMezz] : []), ...(rez ? [rez] : []), ...(summon ? [summon] : []), ...(fnf ? [fnf] : []), ...(petHeal ? [petHeal] : []), ...petBuffs];
     const usedKinds = new Set(used.map(kindOf));
     const bestOfKind = new Map<string, Known>();
     for (const k of known) {
@@ -100,7 +112,7 @@ export function reach(className: string, level: number, specs: Record<string, nu
     }
     const styles = getStylesFor(getClass(className)!.id).filter(s => s.specLevelRequirement <= specOf(s.specKeyName));
     const abilities = [...new Set(windows.flatMap(l => l.skills.filter(s => s.kind === 'ability' && s.specLevel <= specOf(l.specKey)).map(s => s.name)))];
-    return { className, level, specs, known, heals, cc, areaMezz, nukes, rez, buffs, songs, unused: [...bestOfKind.values()].sort((a, b) => a.info.type.localeCompare(b.info.type)), styles, abilities };
+    return { className, level, specs, known, heals, cc, areaMezz, nukes, rez, buffs, songs, summon, fnf, petHeal, petBuffs, unused: [...bestOfKind.values()].sort((a, b) => a.info.type.localeCompare(b.info.type)), styles, abilities };
 }
 
 /** What a build has bought by `level`, reached. */
@@ -128,6 +140,10 @@ export function reachSheet(r: Reach): string {
         list('rez', r.rez ? [row(r.rez)] : []),
         list('buff', r.buffs.map(s => `${s.slot}, ${s.target}: ${row(s)}`)),
         list('song', r.songs.map(s => `${s.kind}: ${row(s)}`)),
+        list('summonPet', r.summon ? [row(r.summon)] : []),
+        list('fnfPet', r.fnf ? [row(r.fnf)] : []),
+        list('petHeal', r.petHeal ? [row(r.petHeal)] : []),
+        list('petBuff', r.petBuffs.map(s => `${s.slot}: ${row(s)}`)),
         list('Reached, no behaviour casts it', r.unused.map(k => `${k.name} (${k.line}, ${k.info.type}, ${k.info.target}${[amount(k.info), k.info.radius ? `radius ${k.info.radius}` : '', k.info.range ? `range ${k.info.range}` : '', `${k.info.castTime} s`, `${k.info.power} power`, k.info.duration ? `${k.info.duration} s` : '', k.info.recastDelay ? `recast ${k.info.recastDelay}` : ''].filter(Boolean).map(x => `, ${x}`).join('')})`)),
         list('Styles', r.styles.map(s => `${s.specKeyName} ${s.specLevelRequirement} ${s.name} (${openingOf(s)}, ${s.enduranceCost} end${procOf(s) ? `, ${procOf(s)}` : ''})`)),
         list('Abilities', r.abilities),

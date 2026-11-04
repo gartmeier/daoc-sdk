@@ -3,10 +3,11 @@
 // that scores each run. See learnings/group-coordination.md.
 
 export * from './types';
-export { Blackboard, observeState, emptyOrders, isMaterialChange, isAlive, type BlackboardOptions, type Observation } from './blackboard';
-export { MemberAgent, MemberContext, countCombatMessage, type Behavior, type Member } from './member';
+export { Blackboard, observeState, emptyOrders, isMaterialChange, isAlive, diedLately, type BlackboardOptions, type Observation } from './blackboard';
+export { MemberAgent, MemberContext, countCombatMessage, type Behavior, type Member, type OwnNames } from './member';
 export { loadCharacter, withCharacter, type Character } from './character';
 export * from './behaviors';
+export * from './pets';
 export { resistDebuff, matchingDebuff, debuffPays } from './debuff';
 export * from './styles';
 export { Coordinator, defineStrategy, roleForClass, type CoordinatorContext, type GroupStrategy } from './strategy';
@@ -22,7 +23,7 @@ export { statScore, statWeight, bonusCap, armorValue, armorGain, armorSwing, wea
 export { CC_IMMUNE_MS, canControl, ccImmuneTo, immuneKinds, type CcImmunity, type CcKind } from './cc';
 export { rvrRoaming, decideRvr, rvrBehaviors, rvrFindings, pickRvrFocus, homeOf, keepDangers, defaultPatrol, realmOfGroup, BATTLEGROUND_LAYOUTS, THIDRANKI, RVR_SETTINGS, type RvrSettings, type BattlegroundLayout, type Keep, type PlayerRealm } from './rvr';
 export { rvrPack, decidePack, packBehaviors, packCc, pickPackFocus, PACK_SETTINGS, PACK_OPTIONS, type PackSettings, type PackOptions } from './pack';
-export { GroupObserver, findingsFor, formatReport, saveReport, stampOf, inferPhase, type Finding, type FightSummary, type MemberStats, type RunReport } from './observer';
+export { GroupObserver, findingsFor, formatReport, saveReport, stampOf, inferPhase, type Finding, type FightSummary, type MemberStats, type PetStats, type RunReport } from './observer';
 export { loadGroup, connectBot, connectGroup, formGroup } from './roster';
 export { runGroup, runGroupScript, groupArgs, type GroupRunOptions, type GroupRunResult } from './runner';
 export { GroupPublisher, EventOutbox, windDownClock, memoryView, planView, jsonSafe, type GroupPublishOptions, type PublisherDeps } from './publish';

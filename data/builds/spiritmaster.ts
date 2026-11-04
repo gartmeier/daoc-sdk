@@ -2,7 +2,7 @@ import type { ClassBuilds } from './types';
 
 export default {
     className: 'Spiritmaster',
-    notes: 'Multiplier 10 (ClassSpiritmaster.cs:31): 299 at 24, 1494 at 50. Starts as Mystic (Darkness, Suppression only). Blackthorn says 48 Suppression gives the best area damage; on this table the last tier is Suppression 49 (Soul Annihilation), so the bomb build uses 49, as Uthgard and Phoenix posts do according to search summaries only. Bots have no pet commands (learnings/rvr.md:119) and pet play is unverified (learnings/spells.md:74); pets follow their default behaviour. Role: nuker.',
+    notes: 'Multiplier 10 (ClassSpiritmaster.cs:31): 299 at 24, 1494 at 50. Starts as Mystic (Darkness, Suppression only). Blackthorn says 48 Suppression gives the best area damage; on this table the last tier is Suppression 49 (Soul Annihilation), so the bomb build uses 49, as Uthgard and Phoenix posts do according to search summaries only. Bots keep the pet up and send it at the focus by themselves (learnings/group-coordination.md), at 25 % of the pool a summon; nothing here has been run with one in a round. Role: nuker.',
     builds: [
         {
             name: 'Darkness caster',
@@ -83,7 +83,7 @@ export default {
         {
             name: 'Summoning pet',
             role: 'Solo PvE with a strong pet. Not for battlegrounds.',
-            why: 'Uthgard says it levels cheaply and safely with pet pulls and a damage shield, and forum posters confirm it. They give no numbers, so these are ours: Summoning at level to Summoning 24 (Vitality of Valhalla), spending all 299. A Uthgard post calls it unplayable in battlegrounds, so a respec is needed for Thidranki or RvR. It also leans on pet control the bots do not have.',
+            why: 'Uthgard says it levels cheaply and safely with pet pulls and a damage shield, and forum posters confirm it. They give no numbers, so these are ours: Summoning at level to Summoning 24 (Vitality of Valhalla), spending all 299. A Uthgard post calls it unplayable in battlegrounds, so a respec is needed for Thidranki or RvR. Bots send the pet at the focus and keep it up (sdk/group/pets.ts); pet pulls and its damage shield are not played.',
             order: "Levels 2-4 bank the points: the target at 24 lists only Summoning, which a Mystic doesn't have. Summoning 5 (Valkyrie's Nimbleness) at 5 and at level from then on: Summoning 12 (Zest of Valhalla) at 12, Summoning 19 (Valkyrie's Spirit) at 19, Summoning 21 (Spirit of Combat) at 21, Summoning 24 (Vitality of Valhalla) at 24, Summoning 50 (Spirit's Justification) at 50. That takes every point until the half levels start at 40.5, so Suppression stays at 1 until 40. Then Suppression 8 (Soul Dissipation) at 42, Suppression 20 (Soul Blast) at 50, with Darkness 4 at 50.",
             basis: 'derived',
             targets: [

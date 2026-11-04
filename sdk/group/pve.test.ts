@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import type { BasePlan } from './baseplan';
-import { assignCc, decidePve, pickFocus, PVE_SETTINGS, rejectPull, type PveSettings } from './pve';
-import { mergeSettings, type CoordinatorContext } from './strategy';
+import { GroupObserver } from './observer';
+import { assignCc, decidePve, pickFocus, pickPullTarget, PVE_SETTINGS, pveLeveling, rejectPull, type PveSettings } from './pve';
+import { defineStrategy, mergeSettings, type CoordinatorContext } from './strategy';
 import { contact, picture, report } from './fixtures';
-import type { GroupPicture, MemberReport, Orders } from './types';
+import type { Contact, GroupPicture, MemberReport, Orders } from './types';
 
 // Region 9999 has no spawns: no danger zones or aggro data get in the way.
 const R = 9999;
@@ -183,6 +184,110 @@ describe('decidePve', () => {
         expect(d.reason).toContain('Menta');
     });
 
+    describe('a far member doesn\'t steer the group', () => {
+        // a4: Petcab released to his bind, '16:08:00 » travel: to the base, 10098 away', Pettan 7700 north of the base, toward him. 20261103-161617: 42998 away.
+        const released = { x: BASE.x, y: BASE.y - 25_000 };
+        const nearBy = (dx: number) => ({ x: BASE.x + dx, y: BASE.y });
+
+        test('three of four beyond gatherRadius after a fight and one of them 25000 off: the legs go home from the two, not toward him', () => {
+            const d = decidePve(ctx(picture(team({ Tank: nearBy(1500), Druid: nearBy(1600), Bard: nearBy(0), Menta: released }))));
+            expect(d.phase).toBe('travel');
+            expect(d.anchor).toMatchObject({ x: BASE.x + 50, y: BASE.y });
+            expect(d.journey).toBe(1550);
+            expect(d.reason).toBe('to the base, 1550 away; Menta far off, not waited for');
+        });
+
+        test('one of them beside the base and the far one left out: a gather for the one, as before', () => {
+            const d = decidePve(ctx(picture(team({ Tank: nearBy(1500), Menta: released }))));
+            expect(d.phase).toBe('gather');
+            expect(d.waiting).toEqual([{ name: 'Tank', why: 'away' }]);
+        });
+
+        test('it holds no gather: "gather: waiting for Pethun" 82 % of the run, 180000 away. It holds the ready gate as a member in another region does: by its health and power, and the pull goes on', () => {
+            const far = { x: BASE.x + 180_000, y: BASE.y };
+            const mob = contact(51, { regionId: R, level: 7, x: BASE.x + 800, y: BASE.y });
+            const d = decidePve(ctx(picture(team({ Menta: far }), [mob])));
+            expect(d.phase).toBe('pull');
+            expect(d.reason).toContain('Menta far off');
+            const low = decidePve(ctx(picture(team({ Menta: { ...far, mana: 10 } }), [mob])));
+            expect(low.phase).toBe('recover');
+            expect(low.waiting).toEqual([{ name: 'Menta', why: 'power' }]);
+            const elsewhere = decidePve(ctx(picture(team({ Menta: { regionId: 1, mana: 10 } }), [mob])));
+            expect(elsewhere.waiting).toEqual(low.waiting);
+        });
+
+        test('a leg starts from the group, never the centroid of something with him in it', () => {
+            const group = { x: BASE.x + 9000, y: BASE.y };
+            const members = team({ Tank: group, Druid: { ...group, x: group.x + 100 }, Bard: { ...group, x: group.x - 100 }, Menta: released });
+            const d = decidePve(ctx(picture(members)));
+            expect(d.phase).toBe('travel');
+            expect(Math.hypot(d.anchor!.x - group.x, d.anchor!.y - group.y)).toBeLessThanOrEqual(PVE_SETTINGS.travelLeg + 1);
+            expect(d.journey).toBe(9000);
+            expect(d.reason).toContain('Menta far off');
+        });
+
+        test('the tank is never left out: nothing can be pulled without him, and the others wait at the base', () => {
+            const d = decidePve(ctx(picture(team({ Tank: released }))));
+            expect(d.phase).toBe('gather');
+            expect(d.waiting).toEqual([{ name: 'Tank', why: 'away' }]);
+        });
+
+        test('nobody far: the reason says nothing', () => {
+            const mob = contact(51, { regionId: R, level: 7, x: BASE.x + 800, y: BASE.y });
+            expect(decidePve(ctx(picture(team(), [mob]))).reason).not.toContain('far off');
+        });
+
+        test('the note doesn\'t pile up on a reason carried over', () => {
+            const far = { x: BASE.x + 180_000, y: BASE.y };
+            const mob = contact(51, { regionId: R, level: 7, x: BASE.x + 800, y: BASE.y });
+            const memory: Record<string, any> = { camp: { ...BASE, zone: '', count: 0, names: '' }, campLevel: 6, base: BASE };
+            const first = decidePve(ctx(picture(team({ Menta: far }), [mob]), { memory }));
+            const next = decidePve(ctx(picture(team({ Menta: far }), [mob], { phase: 'pull', focus: 51, reason: first.reason }), { memory }));
+            expect(next.reason.match(/far off/g)?.length).toBe(1);
+        });
+
+        test('a retreat runs from those near, with him out of the centre', () => {
+            const now = Date.now();
+            const threat = contact(51, { regionId: R, target: 'Tank', targetId: 1, threat: true, hostileSince: now - 9000, hp: 90, x: BASE.x + 200, y: BASE.y });
+            const settings = { retreat: { ...PVE_SETTINGS.retreat, enabled: true, tankHp: 90 } };
+            const d = decidePve(ctx(picture(team({ Tank: { hp: 50 }, Menta: released }), [threat], { phase: 'engage', focus: 51 }, now), { settings }));
+            expect(d.phase).toBe('retreat');
+            // Straight away from the mob, along x: nothing of the 25000 in y.
+            expect(Math.abs(d.retreatTo!.y - BASE.y)).toBeLessThan(10);
+        });
+    });
+
+    test('"pet power" where the ready gate waits on the power for a summon, and "power" otherwise', () => {
+        const saving = { activity: { kind: 'rest', targetId: null, detail: 'pet: saving power', since: 0 }, mana: 10 };
+        const d = decidePve(ctx(picture(team({ Druid: saving }))));
+        expect(d.phase).toBe('recover');
+        expect(d.waiting).toEqual([{ name: 'Druid', why: 'pet power' }]);
+        expect(d.reason).toContain("Druid's pet power");
+        expect(decidePve(ctx(picture(team({ Druid: { mana: 10 } })))).waiting).toEqual([{ name: 'Druid', why: 'power' }]);
+    });
+
+    describe('a pull and the tank\'s own pet', () => {
+        const now = Date.now();
+        const memory = () => ({ camp: { ...BASE, zone: '', count: 0, names: '' }, campLevel: 6, base: BASE, pullStart: now });
+        const carried = (over: Partial<Contact>) => contact(51, { regionId: R, level: 7, x: BASE.x + 1500, y: BASE.y, threat: true, hostileSince: now - 2000, ...over });
+        const orders = { phase: 'pull' as const, focus: 51, puller: 'Tank', anchor: BASE };
+
+        test('passive doing its work, the mob on the tank: the pull goes on home', () => {
+            const d = decidePve(ctx(picture(team({ Tank: { x: BASE.x + 1400 } }), [carried({ target: 'Tank', targetId: 1 })], orders, now), { memory: memory(), now }));
+            expect(d.phase).toBe('pull');
+        });
+
+        test('a mob on the pet all the same (it took it before the passive, or aggro on a pet): the fight starts where it stands', () => {
+            const d = decidePve(ctx(picture(team({ Tank: { x: BASE.x + 1400 } }), [carried({ target: null, targetPet: 'Tank', targetId: 900, targetSince: now - 1000 })], orders, now), { memory: memory(), now }));
+            expect(d.phase).toBe('engage');
+        });
+
+        test('a reading on the pet not yet a snapshot old: the pull goes on. It may be a groupmate\'s client naming the pet for a blow it took, with the owner\'s line a snapshot behind; one coordinator tick on that would end the pull for good', () => {
+            const d = decidePve(ctx(picture(team({ Tank: { x: BASE.x + 1400 } }), [carried({ target: null, targetPet: 'Tank', targetId: 900, targetSince: now - 100 })], orders, now), { memory: memory(), now }));
+            expect(d.phase).toBe('pull');
+        });
+    });
+
     test('waits for dead members and starts nothing new when winding down', () => {
         let d = decidePve(ctx(picture(team({ Bard: { isDead: true } }))));
         expect(d.phase).toBe('recover');
@@ -214,6 +319,49 @@ describe('decidePve', () => {
         expect(d.facing).toEqual(plan.facing);
         expect(d.objective).toContain('1 targets 800-800 away');
         expect(d.reason).toContain('800 away');
+    });
+});
+
+describe('a group with no tank', () => {
+    // bun groups/create-group.ts mid petbon petspi pethun gives nuker, nuker, melee. Run 20261103-154125: "» recover: no living tank to pull" for all 30 s, Downtime 100 %, and the only finding was the wait for Pethun's power.
+    const T0 = 1_800_000_000_000;
+    const noTank = () => [report('Petbon', { role: 'nuker', bot: 'petbon', regionId: R, ...BASE }), report('Petspi', { role: 'nuker', bot: 'petspi', regionId: R, ...BASE }), report('Pethun', { role: 'melee', bot: 'pethun', regionId: R, ...BASE })];
+    const run = (ms: MemberReport[], phase: Orders['phase'] = 'recover') => {
+        const o = new GroupObserver(null, { group: 'mid', strategy: 'mid-pve', startedAt: T0, findings: r => pveLeveling.findings!(r, PVE_SETTINGS) });
+        for (let i = 1; i <= 30; i++) o.sample(picture(ms, [], { seq: 1, phase, reason: 'no living tank to pull' }, T0 + i * 1000));
+        return o.report().findings.filter(f => f.topic === 'no-tank');
+    };
+
+    test('the coordinator\'s reason stays, and no one else pulls: a fallback puller is a strategy\'s to decide', () => {
+        const u = decidePve(ctx(picture(noTank(), [], {})));
+        expect(u).toMatchObject({ phase: 'recover', reason: 'no living tank to pull' });
+        expect(u.puller ?? null).toBeNull();
+    });
+
+    test('a finding with --role=<bot>:tank as the advice: the melee member first', () => {
+        const [f] = run(noTank());
+        expect(f).toMatchObject({ severity: 'high', topic: 'no-tank' });
+        expect(f!.issue).toContain('no tank');
+        expect(f!.evidence).toContain('Petbon nuker, Petspi nuker, Pethun melee');
+        expect(f!.suggestion).toContain('--role=pethun:tank');
+        expect(f!.suggestion).toContain('group.json');
+    });
+
+    test('with no melee member, whoever comes first', () => {
+        expect(run([report('Petbon', { role: 'nuker', bot: 'petbon' })])[0]!.suggestion).toContain('--role=petbon:tank');
+    });
+
+    test('a member with the role: none, also when it is dead', () => {
+        expect(run(team())).toEqual([]);
+        expect(run(team({ Tank: { isDead: true, hp: 0 } }))).toEqual([]);
+    });
+
+    test('a strategy of its own that pulls with someone else: none', () => {
+        expect(run(noTank(), 'pull')).toEqual([]);
+    });
+
+    test('a strategy from defineStrategy keeps the rule', () => {
+        expect(defineStrategy(pveLeveling, { name: 'mid-pve' }).findings).toBe(pveLeveling.findings);
     });
 });
 
@@ -285,5 +433,103 @@ describe('focus and crowd control', () => {
         ];
         const adds = [contact(7), contact(8), contact(9)];
         expect(assignCc(adds, members, [{ targetId: 8, by: 'Menta' }])).toEqual([{ targetId: 8, by: 'Menta' }, { targetId: 7, by: 'Bard' }]);
+    });
+
+    test('a root has no floor, so an NPC under 75 % goes to a member who holds one: the Midgard group\'s only cc is the Bonedancer\'s root (MesmerizeSpellHandler alone checks, CCSpellHandler.cs:174)', () => {
+        const mezzer = report('Bard', { role: 'support', capabilities: caps(true, true, true) });
+        const rooter = report('Bone', { role: 'nuker', capabilities: { ...caps(false, true, true), root: true } });
+        const hurt = contact(7, { hp: 70 }), whole = contact(8, { hp: 90 });
+        expect(assignCc([hurt], [rooter], [])).toEqual([{ targetId: 7, by: 'Bone' }]);
+        // The mezzer comes first by role, and takes what it can take.
+        expect(assignCc([hurt, whole], [mezzer, rooter], [])).toEqual([{ targetId: 7, by: 'Bone' }, { targetId: 8, by: 'Bard' }]);
+        // An assignment stands while its member can carry it out.
+        expect(assignCc([hurt], [mezzer, rooter], [{ targetId: 7, by: 'Bone' }])).toEqual([{ targetId: 7, by: 'Bone' }]);
+        expect(assignCc([hurt], [mezzer, rooter], [{ targetId: 7, by: 'Bard' }])).toEqual([{ targetId: 7, by: 'Bone' }]);
+    });
+
+    test('so it is under control for retreat.maxAdds, as a root would hold it', () => {
+        const members = team({ Menta: { capabilities: { ...caps(false, true, true), root: true } }, Bard: { capabilities: caps(false, false, false) } });
+        const d = decidePve(ctx(picture(members, [contact(51, { regionId: R, threat: true, target: 'Tank', x: BASE.x, y: BASE.y }), contact(52, { regionId: R, threat: true, target: 'Tank', hp: 70, x: BASE.x, y: BASE.y })], { phase: 'engage', focus: 51 })));
+        expect(d.cc).toEqual([{ targetId: 52, by: 'Menta' }]);
+    });
+
+    test('assignCc leaves an NPC under 75 % alone: a mezz can\'t take it (CCSpellHandler.cs:174-178), "Your target is enraged and resists the spell!" six times at 68-63 %', () => {
+        const members = [report('Bard', { role: 'support', capabilities: caps(true, true, true) }), report('Menta', { role: 'nuker', capabilities: caps(true, true, true) })];
+        const hurt = contact(7, { hp: 74 }), whole = contact(8, { hp: 75 });
+        expect(assignCc([hurt, whole], members, [])).toEqual([{ targetId: 8, by: 'Bard' }]);
+        // An assignment that stands goes with it, and leaves its mezzer free.
+        expect(assignCc([hurt, whole], members, [{ targetId: 7, by: 'Bard' }])).toEqual([{ targetId: 8, by: 'Bard' }]);
+        // Only an NPC: a player has no such floor.
+        expect(assignCc([contact(9, { kind: 'player', hp: 20 })], members, [])).toEqual([{ targetId: 9, by: 'Bard' }]);
+    });
+});
+
+describe('pets', () => {
+    const near = { regionId: R, level: 6, x: BASE.x + 800, y: BASE.y };
+    const opts = () => ({ base: BASE, regionId: R, level: 6, exclude: new Set<number>(), settings: mergeSettings(PVE_SETTINGS, { avoidAggressive: false } as any) });
+    const enemyPet = (id: number, over: Partial<Contact> = {}) => contact(id, { ...near, realm: 'midgard', isPet: true, ...over });
+
+    test('an enemy pet is never pulled, and isn\'t even a rejection', () => {
+        const { target, rejected } = pickPullTarget([enemyPet(50), contact(51, near)], opts());
+        expect(target?.objectId).toBe(51);
+        expect(rejected).toEqual({});
+        expect(pickPullTarget([enemyPet(50)], opts())).toEqual({ target: null, rejected: {} });
+        expect(rejectPull(enemyPet(50), [], opts())).toBe('pet');
+    });
+
+    test('a mob on a member\'s pet is no one else\'s; a mob on a stranger still is', () => {
+        expect(rejectPull(contact(50, { ...near, targetId: 500, target: null, targetPet: 'Hrafna' }), [], opts())).toBeNull();
+        expect(rejectPull(contact(50, { ...near, targetId: 500, target: null, targetPet: null }), [], opts())).toBe('fighting someone else');
+        expect(rejectPull(contact(50, { ...near, targetId: 500, target: null }), [], opts())).toBe('fighting someone else');
+    });
+
+    test('pickFocus: an enemy pet only when nothing else fights us, whoever it stands on', () => {
+        const mob = contact(1, { target: 'Druid', hp: 90, threat: true });
+        const pet = enemyPet(2, { target: 'Druid', hp: 10, threat: true });
+        const tank = report('Tank', { role: 'tank', targetId: 2 });
+        expect(pickFocus([pet, mob], tank)?.objectId).toBe(1);
+        expect(pickFocus([pet, mob], report('Tank', { role: 'tank' }))?.objectId).toBe(1);
+        expect(pickFocus([pet], tank)?.objectId).toBe(2);
+        // A mezzed mob and a free pet: the mezz holds, so the pet.
+        const mezzed = contact(3, { target: 'Druid', hp: 50, threat: true, cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 5000 } });
+        expect(pickFocus([mezzed, pet], tank)?.objectId).toBe(2);
+    });
+
+    test('decidePve: nobody is assigned to mezz an enemy pet', () => {
+        const now = Date.now();
+        const mob = contact(1, { regionId: R, x: BASE.x, y: BASE.y, target: 'Tank', hp: 90, threat: true });
+        const pet = enemyPet(2, { x: BASE.x, y: BASE.y, target: 'Menta', threat: true });
+        const add = contact(3, { regionId: R, x: BASE.x, y: BASE.y, target: 'Menta', threat: true });
+        const d = decidePve(ctx(picture(team({ Tank: { targetId: 1 } }), [mob, pet, add], { phase: 'engage', focus: 1 }, now)));
+        expect(d.cc).toEqual([{ targetId: 3, by: 'Bard' }]);
+    });
+
+    test('a pull goes on while the mob comes for the puller or nobody, not once it turns on a pet', () => {
+        const now = Date.now();
+        const memory = () => ({ camp: { ...BASE, zone: '', count: 0, names: 'test camp' }, campLevel: 6, base: BASE, pullStart: now });
+        const orders = { phase: 'pull' as const, focus: 50, puller: 'Tank', anchor: BASE };
+        const far = { regionId: R, x: BASE.x + 1500, y: BASE.y, threat: true };
+        const pulled = decidePve(ctx(picture(team(), [contact(50, { ...far, target: 'Tank' })], orders, now), { memory: memory() }));
+        expect(pulled.phase).toBe('pull');
+        const noTarget = decidePve(ctx(picture(team(), [contact(50, { ...far, target: null })], orders, now), { memory: memory() }));
+        expect(noTarget.phase).toBe('pull');
+        const onPet = decidePve(ctx(picture(team(), [contact(50, { ...far, target: null, targetId: 500, targetPet: 'Menta', targetSince: now - 1000 })], orders, now), { memory: memory() }));
+        expect(onPet).toMatchObject({ phase: 'engage', focus: 50 });
+    });
+
+    test('the group waits for the power of a member whose only spell is its pet', () => {
+        const d = decidePve(ctx(picture(team({ Tank: { capabilities: { ...caps(false, false, false), pet: 'main' }, mana: 30 } }))));
+        expect(d).toMatchObject({ phase: 'recover', waiting: [{ name: 'Tank', why: 'power' }] });
+    });
+
+    test('a member with no pet waits as before', () => {
+        const d = decidePve(ctx(picture(team({ Tank: { capabilities: { ...caps(false, false, false), pet: null }, mana: 30 } }))));
+        expect(d.phase).not.toBe('recover');
+    });
+
+    test('the reason names a pet as what the focus attacks', () => {
+        const now = Date.now();
+        const d = decidePve(ctx(picture(team(), [contact(50, { regionId: R, x: BASE.x, y: BASE.y, target: null, targetPet: 'Menta', threat: true })], {}, now)));
+        expect(d.reason).toContain('attacks Menta\'s pet');
     });
 });

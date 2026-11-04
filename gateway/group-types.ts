@@ -8,7 +8,7 @@
 // (sdk/group/wire.ts: orders, activities, the board's contacts, events, the
 // observer's score so far), when one is running.
 
-import type { Activity, Contact, Orders, Phase, Role } from '../sdk/group/types';
+import type { Activity, Capabilities, Contact, Orders, PetReport, Phase, Role } from '../sdk/group/types';
 import type { ControlRequest, CoordinatorView, LiveReport, PlanView, RunMeta, RunResultView, WireEvent } from '../sdk/group/wire';
 import type { Vec3 } from '../sdk/types';
 
@@ -102,7 +102,8 @@ export interface RunMemberView {
     role: Role;
     activity: Activity;
     effects: string[];
-    can: { heal: boolean; cc: boolean; nuke: boolean; rez?: boolean };
+    /** `rez`: Capabilities.rez. `pet`: what the group keeps up for it (Capabilities.pet). Each is absent from a runner before it. */
+    can: { heal: boolean; cc: boolean; nuke: boolean; rez?: boolean; pet?: Capabilities['pet'] };
     /** Cumulative realm points (MemberReport.realmPoints), when the runner reports them. */
     realmPoints?: number;
     /** Runner clock. */
@@ -135,6 +136,13 @@ export interface GroupMemberView {
     inGameGroup: string[];
     /** From the current run while it is starting, live, stale or ending; else null. */
     run: RunMemberView | null;
+    /**
+     * Its window pet, from its own state, run or no run: null without one; absent from an older client or a client
+     * that left (the server hands a pet's id on fast). Level, place and health are null while its entry is out of view.
+     */
+    pet?: PetReport | null;
+    /** Object ids of its pets with no window (state.summons); absent without any. */
+    summons?: number[];
 }
 
 /** An NPC or player some member sees, merged over the members by region and object id. */
@@ -158,7 +166,13 @@ export interface WorldContact {
     targetObjectId: number | null;
     /** Character name of the member it targets, else null. */
     target: string | null;
-    npc: { isPeaceful: boolean; isTargetable: boolean; isPet: boolean; role: string | null } | null;
+    /** Character name of the member whose pet it targets; absent otherwise. */
+    targetPet?: string;
+    /**
+     * `owner`: character name of the member whose pet it is, by its window or its summons; absent otherwise, and always
+     * for an enemy's, as the server sends every client the flag and the realm but never who (PacketLib1124.cs:186-187).
+     */
+    npc: { isPeaceful: boolean; isTargetable: boolean; isPet: boolean; role: string | null; owner?: string } | null;
     /** A player of another realm. */
     enemy: boolean;
     /** Character names of the members whose last state shows it, freshest first. */
@@ -175,6 +189,8 @@ export interface WorldContact {
         seenBy: string[];
         /** Runner clock. */
         lastSeen: number;
+        /** The owner's name while it is on a member's pet (Contact.targetPet). */
+        targetPet?: string;
         /** Players: casting or helping its own realm in the last few seconds, and ever seen doing so (Contact.caster, Contact.healer). */
         casting?: boolean;
         helped?: boolean;

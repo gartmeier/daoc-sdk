@@ -1,6 +1,55 @@
 import { describe, expect, test } from 'bun:test';
 import { findNpcSpawns } from '../../data/index';
-import { aggroAt, aggroZones, chooseBase, safePath } from './terrain';
+import { aggroAt, aggroZones, chooseBase, keepOnMap, onMap, safePath } from './terrain';
+
+describe('the map: Region.GetZone is null outside every zone, and the server dereferences that (NpcMovementComponent.cs:662, SummonSpellHandler.cs:77)', () => {
+    // Run 160842: 'Calling RemoveFromWorld with (entityOwner: GameSummonedPet name=underhill companion oid=21205 loc=287881,650172,4617)' on a retreat toward
+    // 'Calling KickPlayerToCharScreen with (... name=Petenc ... loc=286364,648697,4854 ...)'. Shannon Estuary's xOffset is 286720; west of it region 200 has no zone at that y.
+    const EDGE_X = 286_720, Y = 648_697;
+
+    test('onMap: in a zone, with a margin from its edge; a region with no zone data has nothing to go by', () => {
+        expect(onMap(200, { x: EDGE_X + 1, y: Y })).toBe(true);
+        expect(onMap(200, { x: EDGE_X - 1, y: Y })).toBe(false);
+        expect(onMap(200, { x: EDGE_X + 50, y: Y }, 100)).toBe(false);
+        expect(onMap(200, { x: EDGE_X + 150, y: Y }, 100)).toBe(true);
+        expect(onMap(9999, { x: 1, y: 1 }, 100)).toBe(true);
+    });
+
+    test('a spot on the map stays what it was, to the unit', () => {
+        const from = { x: 300_000, y: Y };
+        expect(keepOnMap(200, from, { x: 297_500, y: Y })).toEqual({ x: 297_500, y: Y });
+    });
+
+    test('a retreat off the map turns or shortens until it holds: 2500 west from 800 inside the edge', () => {
+        const from = { x: EDGE_X + 800, y: Y };
+        const to = keepOnMap(200, from, { x: from.x - 2500, y: Y });
+        expect(onMap(200, to, 300)).toBe(true);
+        expect(Math.hypot(to.x - from.x, to.y - from.y)).toBeGreaterThan(1800);
+        // The whole way there, not only its end.
+        for (let i = 0; i <= 20; i++) expect(onMap(200, { x: from.x + (to.x - from.x) * i / 20, y: from.y + (to.y - from.y) * i / 20 })).toBe(true);
+        // A second retreat chains from the first, and the check applies again.
+        const second = keepOnMap(200, to, { x: to.x - 2500, y: to.y });
+        expect(onMap(200, second, 300)).toBe(true);
+    });
+
+    test('a route goes round what is off the map too: the straight line along the edge dips out of it, the route doesn\'t', () => {
+        // Silvermine Mts. is x 319488-385024, y 548864-614400, and Shannon Estuary x 286720-352256 from y 614400: below that, west of 319488, there is no zone.
+        const from = { x: 321_000, y: 612_000 }, to = { x: 300_000, y: 616_000 };
+        expect(onMap(200, { x: 315_000, y: 613_000 })).toBe(false);
+        const route = safePath(200, 50, from, to);
+        expect(route.length).toBeGreaterThan(1);
+        let a = from;
+        for (const p of route) {
+            for (let i = 1; i <= 20; i++) expect(onMap(200, { x: a.x + (p.x - a.x) * i / 20, y: a.y + (p.y - a.y) * i / 20 })).toBe(true);
+            a = p;
+        }
+    });
+
+    test('from off the map or in a region with no zones: as given, there is nothing to go by', () => {
+        expect(keepOnMap(200, { x: 1000, y: 1000 }, { x: 3000, y: 1000 })).toEqual({ x: 3000, y: 1000 });
+        expect(keepOnMap(9999, { x: 1000, y: 1000 }, { x: 3000, y: 1000 })).toEqual({ x: 3000, y: 1000 });
+    });
+});
 
 describe('terrain (static data, Shannon Estuary)', () => {
     test('aggro comes from the nearest spawn: the same name is aggressive in one camp and passive in another', () => {

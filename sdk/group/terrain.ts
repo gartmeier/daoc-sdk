@@ -2,7 +2,7 @@
 // a home base next to a camp, aggressive mobs to avoid, and routes around them.
 // Ported from the Hibernian group's verified scripts (Shannon Estuary, levels 1-6).
 
-import { findNpcSpawns, getZoneAt } from '../../data/index';
+import { findNpcSpawns, getZoneAt, getZonesInRegion } from '../../data/index';
 import { conLevel } from '../actions-helpers';
 import type { Point, Point3 } from './types';
 
@@ -14,6 +14,54 @@ export interface Camp extends Point3 {
     count: number;
     /** "name level, ..." of what spawns there. */
     names: string;
+}
+
+/**
+ * Whether `p` stands in a zone of the region, and `margin` in from any edge with no zone beyond it. Region.GetZone is null outside every zone (Region.cs:977-985), and the
+ * server dereferences that: a pet walking there is removed with no 0xA2 (NpcMovementComponent.cs:662, run 160842), and a summon there kicks the caster to the character screen (SummonSpellHandler.cs:77).
+ * A region with no zone data has nothing to go by: true.
+ */
+export function onMap(regionId: number, p: Point, margin = 0): boolean {
+    if (!getZonesInRegion(regionId).length) return true;
+    if (!getZoneAt(regionId, p.x, p.y)) return false;
+    return margin <= 0 || [[1, 1], [1, -1], [-1, 1], [-1, -1]].every(([dx, dy]) => !!getZoneAt(regionId, p.x + dx! * margin, p.y + dy! * margin));
+}
+
+/** How far in from the map's edge a computed spot stays: members stand round it, and a pet follows a little off its owner. */
+const MAP_MARGIN = 300;
+/** The steps a way is checked in. */
+const MAP_STEP = 100;
+/** The ways keepOnMap tries, turned off the wanted one by this (radians), most alike first. */
+const MAP_TURNS = [0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05, 1.4, -1.4, 1.75, -1.75, 2.1, -2.1, 2.8, -2.8];
+
+/** The farthest point of the straight way that stays on the map: `to` itself if all of it does. Standing inside the margin it may walk in from there, not on out. */
+function reachOnMap(regionId: number, from: Point, to: Point): Point {
+    const n = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / MAP_STEP));
+    let end = from;
+    for (let i = 1; i <= n; i++) {
+        const p = i === n ? to : { x: from.x + (to.x - from.x) * i / n, y: from.y + (to.y - from.y) * i / n };
+        if (onMap(regionId, p, MAP_MARGIN)) end = p;
+        else if (end !== from || !onMap(regionId, p)) break;
+    }
+    return end;
+}
+
+/**
+ * A computed spot we walk the group to, kept on the map: `to` itself while the whole way there is. Else turned until three quarters of the way holds, else the longest way that does; nothing
+ * holds, and it is `from`. Every retreat goes through this, so a second one, which chains from the first, too. From a spot off the map, or in a region with no zone data, there is nothing to go by: `to`.
+ */
+export function keepOnMap(regionId: number, from: Point, to: Point): Point {
+    if (!getZonesInRegion(regionId).length || !onMap(regionId, from) || reachOnMap(regionId, from, to) === to) return to;
+    const d = Math.hypot(to.x - from.x, to.y - from.y);
+    const way = Math.atan2(to.y - from.y, to.x - from.x);
+    let best = from, longest = 0;
+    for (const turn of MAP_TURNS) {
+        const end = reachOnMap(regionId, from, { x: from.x + Math.cos(way + turn) * d, y: from.y + Math.sin(way + turn) * d });
+        const len = Math.hypot(end.x - from.x, end.y - from.y);
+        if (len > longest) { best = end; longest = len; }
+        if (len >= d * 0.75) break;
+    }
+    return { x: Math.round(best.x), y: Math.round(best.y) };
 }
 
 const dangerCache = new Map<string, Danger[]>();
@@ -129,11 +177,13 @@ export function chooseBase(regionId: number, level: number, camp: Point3, from: 
     const aggressive = spawns.filter(s => s.aggroLevel > 0 && s.aggroRange > 0 && !(s.flags & 0x10) && s.level >= level - 1);
     // Every spot once: its distance from the camp, its score, and its distance to the nearest spawn (and aggressive spawn).
     const spots: { p: Point3; r: number; score: number; clear: number; aggClear: number }[] = [];
+    const mapped = onMap(regionId, camp);
     for (let r = 600; r <= maxR; r += 250) {
         for (let a = 0; a < 24; a++) {
             const ang = (a / 24) * Math.PI * 2;
             const x = camp.x + Math.cos(ang) * r, y = camp.y + Math.sin(ang) * r;
             if (dangerNear(regionId, level, { x, y }, 600)) continue;
+            if (mapped && !onMap(regionId, { x, y }, MAP_MARGIN)) continue;
             let clear = Infinity, aggClear = Infinity;
             for (const s of spawns) clear = Math.min(clear, Math.hypot(s.x - x, s.y - y));
             for (const s of aggressive) aggClear = Math.min(aggClear, Math.hypot(s.x - x, s.y - y));
@@ -203,6 +253,8 @@ function avoidIndex(regionId: number, level: number, extra: readonly Danger[]): 
 
 /** Extra cost per unit walked inside an aggro zone: a route crosses one only when going around is 30x longer. */
 const INSIDE_COST = 30;
+/** ... and off the map: only when there is no other way, from a spot off it say. */
+const OFF_MAP_COST = 1000;
 
 /**
  * Waypoints from `from` to `to` around every mob that would attack a group of `level`
@@ -214,9 +266,15 @@ const INSIDE_COST = 30;
  */
 export function safePath(regionId: number, level: number, from: Point, to: Point, avoid: readonly Danger[] = []): Point[] {
     const idx = avoidIndex(regionId, level, avoid);
+    // Off the map is no way at all (onMap), as far as there is one to go by from here.
+    const mapped = onMap(regionId, from);
+    const off = (x: number, y: number) => mapped && !onMap(regionId, { x, y });
     const clear = (a: Point, b: Point) => {
         const n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 100);
-        for (let i = 1; i < n; i++) if (idx.inside(a.x + (b.x - a.x) * i / n, a.y + (b.y - a.y) * i / n)) return false;
+        for (let i = 1; i < n; i++) {
+            const x = a.x + (b.x - a.x) * i / n, y = a.y + (b.y - a.y) * i / n;
+            if (idx.inside(x, y) || off(x, y)) return false;
+        }
         return true;
     };
     if (clear(from, to)) return [to];
@@ -229,7 +287,8 @@ export function safePath(regionId: number, level: number, from: Point, to: Point
     const ti = Math.round((to.x - x0) / cell), tj = Math.round((to.y - y0) / cell);
     const start = at(si, sj), goal = at(ti, tj);
     const penalty = new Float32Array(w * h);
-    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) penalty[at(i, j)] = idx.inside(cx(i), cy(j)) ? INSIDE_COST : 0;
+    // With the margin: a diagonal step between two cells can't cut a corner of the map then.
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) penalty[at(i, j)] = mapped && !onMap(regionId, { x: cx(i), y: cy(j) }, MAP_MARGIN) ? OFF_MAP_COST : idx.inside(cx(i), cy(j)) ? INSIDE_COST : 0;
     const g = new Float64Array(w * h).fill(Infinity), prev = new Int32Array(w * h).fill(-1);
     const done = new Uint8Array(w * h);
     const hfn = (k: number) => Math.hypot((k % w) - ti, Math.floor(k / w) - tj);
