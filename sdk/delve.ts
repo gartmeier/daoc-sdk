@@ -11,7 +11,8 @@
 // Names are the English ones of SkillBase.RegisterPropertyNames (language/EN/SkillHandler.txt). A
 // name or unit not listed here goes to `unknown`, never into a nearby category.
 
-import type { ItemBonus, ParsedDelve, SkillGroup } from './types';
+import { specKey } from '../data/spec-names';
+import type { ItemBonus, ParsedDelve, SkillGroup, WeaponDelve } from './types';
 
 const STATS: Record<string, NonNullable<ItemBonus['stat']>> = {
     Strength: 'STR', Dexterity: 'DEX', Constitution: 'CON', Quickness: 'QUI', Intelligence: 'INT',
@@ -40,16 +41,10 @@ export const SKILLS: Record<SkillGroup, readonly string[]> = {
 };
 const SKILL_GROUP = new Map<string, SkillGroup>(Object.entries(SKILLS).flatMap(([group, names]) => names.map(n => [n, group as SkillGroup] as const)));
 
-/** The bonus's name where classes.json calls the specialization something else (SkillBase m_specToSkill, m_specToFocus). */
-const SPEC_NAMES: Record<string, string> = {
-    Crossbow: 'Crossbows', Longbow: 'Longbows', 'Recurved Bow': 'Recurve Bow', Throwing: 'Thrown Weapons', Smiting: 'Smite',
-    Enchantment: 'Enchantments', 'Light Magic': 'Light', 'Void Magic': 'Void', 'Mana Magic': 'Mana', 'Cave Magic': 'Subterranean',
-    Arboreal: 'Arboreal Path', Verdant: 'Verdant Path',
-};
 /** Named skills no class in classes.json trains. */
 const NO_SPEC = new Set(['Archery', 'Short Bow', 'Spectral Force']);
 /** The specialization a skill or focus name belongs to. */
-export const specOf = (name: string): string | null => NO_SPEC.has(name) ? null : SPEC_NAMES[name] ?? name;
+export const specOf = (name: string): string | null => NO_SPEC.has(name) ? null : specKey(name);
 
 const SKILL_GROUPS: Record<string, SkillGroup | null> = {
     'ALL Magic Skills': 'magic', 'ALL Melee Weapon Skills': 'melee', 'ALL Dual Wielding Skills': 'dual', 'ALL Archery Skills': 'archery', 'All Skills': null,
@@ -147,6 +142,23 @@ export function parseDelve(lines: readonly string[]): ParsedDelve {
         out.unknown.push(line);
     }
     return out;
+}
+
+/**
+ * A weapon's damage lines (GameInventoryItem.cs:1156-1197, also through a shop's delve). The clamped
+ * figure is the item's DPS at this character's level; a shield's lines have a "Shield Speed" and no
+ * quality, so they are null here, as is anything with parts missing. The exception is condition: the
+ * server leaves its line out at 0 (:1182), which here reads 0.
+ */
+export function parseWeaponDelve(lines: readonly string[]): WeaponDelve | null {
+    const figure = (what: string) => {
+        const hit = lines.map(l => new RegExp(`^- ([\\d.,]+)%? ${what}$`).exec(l.trim())).find(Boolean);
+        return hit ? Number(hit[1]!.replace(',', '.')) : null;
+    };
+    const baseDps = figure('Base DPS'), clampedDps = figure('Clamped DPS'), speed = figure('Weapon Speed');
+    const quality = figure('Quality');
+    if (baseDps === null || clampedDps === null || speed === null || quality === null) return null;
+    return { baseDps, clampedDps, speed, quality, condition: figure('Condition') ?? 0 };
 }
 
 /**

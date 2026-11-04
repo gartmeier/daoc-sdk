@@ -261,6 +261,7 @@ export class DaocClient {
             inventory: m.inventoryList(40, 79),
             equipment: m.inventoryList(10, 37),
             vault: m.inventoryList(110, 149),
+            vaultOpenedAt: m.vaultOpenedAt,
             skills: m.skills(),
             effects: m.effectList(),
             group: m.group.map(g => ({ ...g })),

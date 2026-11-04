@@ -3,7 +3,7 @@
 	url = https://github.com/OpenDAoC/OpenDAoC-Core.git
 [submodule "server/db"]
 	path = server/db
-	url = https://github.com/OpenDAoC/OpenDAoC-Database.git
+	url = https://github.com/gartmeier/OpenDAoC-Database.git
 [submodule "server/buildnav"]
 	path = server/buildnav
 	url = https://github.com/OpenDAoC/OpenDAoC-BuildNav.git

@@ -8,14 +8,18 @@ Notes from live runs against the local OpenDAoC server. Each topic file says wha
 | [combat.md](combat.md) | finding targets, con colours, killNpc, grind, styles |
 | [spells.md](spells.md) | castSpell, buffs, interrupts, caster tactics |
 | [npc-dialog.md](npc-dialog.md) | talkTo, [keywords], whisper, trainers, promotion, teleporters |
-| [merchants.md](merchants.md) | open, buy, sell, merchant data offline |
+| [builds.md](builds.md) | a character's own build: the buying rule, choosing, writing and adding one, points and costs, respec, static data against the trainer window |
+| [merchants.md](merchants.md) | open, buy, sell, better weapons, merchant data offline |
 | [looting.md](looting.md) | autoloot, lootNearby, inventory deltas, cloaks and jewellery, delve and gear scoring per class |
+| [gear-care.md](gear-care.md) | what wears and how fast by level, repairs at a smith, the vault, the level limit on gear |
+| [gear-template.md](gear-template.md) | the item caps by level, a full template at them from custom rows, a GM's /item loadpackage and trade |
 | [trading.md](trading.md) | trade, offerTrade, acceptTrade: range, stacks, 10 per side, who accepts, what resets an accept, failure reasons (not yet verified live) |
 | [death-and-rest.md](death-and-rest.md) | rest, death, release, quitting |
 | [grouping-and-chat.md](grouping-and-chat.md) | invite/accept, shared XP, follow, chat helpers, chat CLI, untrusted chat |
 | [group-coordination.md](group-coordination.md) | groups of bots: shared picture, coordinator, role behaviours, strategies, observer reports |
 | [rvr.md](rvr.md) | battlegrounds: getting in and out, PvP rules, killPlayer, the rvr-roam strategy, three groups fighting each other |
 | [classes-and-races.md](classes-and-races.md) | what can be created, start points per class |
+| [classes/](classes/mentalist.md) | one class at a time: role, spec builds, how to play it, what has been tested. `bun data/class-sheet.ts <class>` gives the facts for any class, `bun sdk/classes/reach.ts <class> "<build>"` what a build reaches and which behaviour casts it |
 | [regions-and-zones.md](regions-and-zones.md) | coordinates, regions, zones, teleporters, zone points, static data |
 
 ## Two environments
@@ -72,9 +76,10 @@ if (import.meta.main) await runScript(main, { args: { pattern: scriptArgs()[0] }
 - `data/index.ts` (import from `../../data/index` in scripts): static world data parsed from the DB dump.
   - Spawns: `findNpcSpawns({ name, guild, classType, regionId, near, radius, levelRange, realm })`.
   - Items and merchants: `getMerchantItems(listId)`, `findItemTemplates`.
-  - Skills: `getSpell`, `getStylesFor(classId)`.
+  - Skills: `getClassSkills(class)` (what each line gives, trained or not: [builds.md](builds.md)), `getSpell`, `getStylesFor(classId, spec?)`, `getSpecialization(spec)`, `specKey(name)`, `specDisplayName(name)` (a line's names: [npc-dialog.md](npc-dialog.md)).
   - Places: `getZoneAt(region, x, y)`, `nearestBindpoint`, `getZonePointsFrom(region)`.
   - Height: `estimateZ(region, x, y)`.
+  - Classes: `classSheet`, `classSpecs`, `classSpellLines` from `data/class-sheet.ts`. Spec points: `earnedSpecPoints`, `specCost`, `buildPath` from `data/builds` ([builds.md](builds.md)).
   - Characters: `validateCharacter`, `getStartingClasses`, `getPlayableRacesForClass`, `getStarterArmour` (what a new character really gets).
   - The data says where things spawn; `sdk.getNearbyNpcs()` says what is actually there now.
 - `bots/examples/` holds working scripts for grinding, selling, casting, exploring and grouping.

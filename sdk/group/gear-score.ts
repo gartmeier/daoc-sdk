@@ -8,9 +8,10 @@
 // (GeneratedUniqueItem.cs:4665-4705), a class's main stat beats a resist of the same roll: at level
 // 20 the top rolls are +7 = 7, 3 % = 6 and 20 hits = 5.
 
-import { getClass, type ClassInfo, type StatName } from '../../data/index';
+import { getClass, specKey, type ClassInfo, type StatName } from '../../data/index';
+import { conLevel } from '../actions-helpers';
 import { ALL_FOCUS, SKILLS, specOf } from '../delve';
-import { ObjectType, type InventoryItem, type ItemBonus, type SkillGroup } from '../types';
+import { ObjectType, type InventoryItem, type ItemBonus, type SkillGroup, type Specialization, type WeaponDelve } from '../types';
 
 /** Per stat point, by the class's data (classes.json): the higher applies when one stat holds two roles. */
 export const STAT_WEIGHTS = { primary: 1, secondary: 0.6, tertiary: 0.3, mana: 0.8 };
@@ -33,7 +34,7 @@ export const BONUS_WEIGHTS = {
 const NO_ACUITY = new Set(['Scout', 'Hunter', 'Ranger', 'Nightshade']);
 /** IsFocusCaster: these base classes and their subclasses (playerclasses/base/*.cs), but not the Valewalker (ClassValewalker.cs:24). Nothing else gets anything from a focus (FocusLevelCalculator.cs:28, SpellHandler.cs:1204). */
 const FOCUS_CASTERS = new Set(['Disciple', 'Elementalist', 'Forester', 'Mage', 'Magician', 'Mystic']);
-const isFocusCaster = (c: ClassInfo) => c.name !== 'Valewalker' && FOCUS_CASTERS.has(c.baseClassName);
+export const isFocusCaster = (c: ClassInfo) => c.name !== 'Valewalker' && FOCUS_CASTERS.has(c.baseClassName);
 /** Whether the class fights in melee. The server's ListCaster flag says no, also for two that do: ClassForester.cs:41-44 for the Valewalker, ClassVampiir.cs:42-45. */
 const swings = (c: ClassInfo) => c.classType !== 'ListCaster' || c.name === 'Valewalker' || c.name === 'Vampiir';
 
@@ -129,6 +130,60 @@ export function statScore(bonuses: readonly ItemBonus[], classInfo: ClassInfo, l
     return bonuses.reduce((sum, b) => sum + Math.min(b.value, bonusCap(b, level)) * bonusWeight(b, classInfo, level), 0);
 }
 
+const MAGIC_SPECS = new Set(SKILLS.magic.map(specOf));
+
+/**
+ * How much of a focus caster's training a staff's focus reaches, 0 to 1: line by line, up to the
+ * line's spec, which is as high as its spells go. A spell costs 120 % of base with no focus and 80 %
+ * at a focus as high as its level (SpellHandler.cs:1204-1222). A line's own focus and ALL Spell
+ * Lines don't add up: the higher counts (FocusLevelCalculator.cs:30-31). `specs` is the skill list,
+ * which calls a line by its display name where a bonus uses the key: specKey joins them.
+ */
+export function focusCover(bonuses: readonly ItemBonus[], specs: readonly Pick<Specialization, 'name' | 'level'>[]): number {
+    const focus = (line: string) => Math.max(0, ...bonuses.filter(b => b.category === 'focus' && (b.name === ALL_FOCUS || b.spec === specKey(line))).map(b => b.value));
+    const lines = specs.filter(s => MAGIC_SPECS.has(specKey(s.name)));
+    const total = lines.reduce((sum, s) => sum + s.level, 0);
+    return total ? lines.reduce((sum, s) => sum + Math.min(focus(s.name), s.level), 0) / total : 0;
+}
+
+// ── Wear ────────────────────────────────────────────────────────────────────
+//
+// Use lowers an item's condition, never its quality. See learnings/gear-care.md.
+
+/**
+ * Condition points one landed wear event takes, by the item's con to the character: 1 grey to 7
+ * purple, twice that at a reading under 91 (GameInventoryItem.cs:262-267). So however far above the
+ * character, an item wears at most 1.75x a same-level one, and generated loot's condition pool
+ * (level x 2000, GeneratedUniqueItem.cs:153) cancels much of that.
+ */
+export const wearPerEvent = (level: number, itemLevel: number): number => conLevel(level, itemLevel) + 4;
+
+/** The highest con worth wearing: orange, 1.25x a same-level item's wear. Red and purple are 1.5x and 1.75x, and past the DPS and AF caps they add little else. A judgement. */
+export const GEAR_MAX_CON = 1;
+/** And never less than this far above the character: at level 7 a level 9 item is already red, and the character is level 9 within the hour. A judgement. */
+export const GEAR_MIN_GAP = 4;
+
+/** Whether an item is well above the level this character should wear, by the same table wear uses. Accessories don't wear at all: for them this only says when to keep one for later. */
+export const tooHighLevel = (item: Pick<InventoryItem, 'level'>, level: number, maxCon: number = GEAR_MAX_CON): boolean =>
+    item.level - level >= GEAR_MIN_GAP && conLevel(level, item.level) > maxCon;
+
+/** Worth repairing below this reading: wear doubles under 91, and it gets there slowly enough that a town visit comes first. */
+export const REPAIR_BELOW = 93;
+
+/**
+ * Worn enough for a smith, by what the item says: wear only reaches items that can be repaired, so
+ * no type list is needed. A reading of durability 0 can't be repaired again, and an item with no
+ * condition pool at all (7 templates) reads 0 on both.
+ */
+export const wornDown = (i: Pick<InventoryItem, 'condition' | 'durability'>, below: number = REPAIR_BELOW): boolean => i.condition < below && i.durability > 0;
+
+// ── Template ────────────────────────────────────────────────────────────────
+
+/** What every piece of a gear template is called (gear-template.ts). No DB template starts with it. */
+export const TEMPLATE_PREFIX = 'Thidranki ';
+/** A piece of a gear template: chosen on purpose and at the caps, so no gear pass replaces, sells or stashes it. */
+export const isTemplatePiece = (i: Pick<InventoryItem, 'name'>): boolean => i.name.startsWith(TEMPLATE_PREFIX);
+
 // ── Armour ──────────────────────────────────────────────────────────────────
 
 /**
@@ -136,10 +191,13 @@ export function statScore(bonuses: readonly ItemBonus[], classInfo: ClassInfo, l
  * base of 10 AF stands for the rest. Without it, Galahad (L4) swapped bronze studded arms (AF 4,
  * 19 % absorb, 85 %) for cloth sleeves (AF 5, 0 %, 95 %): 4.05 vs 4.75. Caps as
  * GamePlayer.GetArmorFactorCap (GameInventoryItem.cs:1204-1214): item AF at level (cloth) or 2x
- * level, applied before quality.
+ * level, applied before quality and condition (GamePlayer.cs:5549). Condition counts only when a smith
+ * can't restore it: a repair costs far less than a replacement, and a worn piece that lost on points
+ * would be swapped out and sold, or a shop copy bought, for what a few silver would fix. A shop item has neither: whole.
  */
-export function armorValue(i: Pick<InventoryItem, 'objectType' | 'value1' | 'value2' | 'quality'>, level: number): number {
-    return (Math.min(i.value1, i.objectType === ObjectType.Cloth ? level : level * 2) * (i.quality / 100) + 10) * (1 + i.value2 / 100);
+export function armorValue(i: Pick<InventoryItem, 'objectType' | 'value1' | 'value2' | 'quality'> & Partial<Pick<InventoryItem, 'condition' | 'durability'>>, level: number): number {
+    const condition = i.durability === 0 ? i.condition ?? 100 : 100;
+    return (Math.min(i.value1, i.objectType === ObjectType.Cloth ? level : level * 2) * (i.quality / 100) * (condition / 100) + 10) * (1 + i.value2 / 100);
 }
 
 /**
@@ -161,4 +219,39 @@ export function armorGain(candidate: number, current: number, candidateStat: num
     if (candidateStat === null || currentStat === null) return base;
     const swing = armorSwing(candidate, current);
     return base + Math.max(-swing, Math.min(swing, (candidateStat - currentStat) * ARMOR_STAT_RATE));
+}
+
+// ── Weapons ─────────────────────────────────────────────────────────────────
+
+/**
+ * A weapon's unstyled damage per second: the delve's clamped DPS, quality and condition, with the
+ * slow weapon bonus (AttackComponent.cs:2133-2137, 0.3 % per 0.1 s over 2.0 s). A swing's damage is
+ * DPS x speed and swings come at that speed, so speed adds nothing else. A two-hander also gets
+ * 1.1 + 0.5 % per spec level (:2139-2142): pass that line's level as `twoHandedSpec`.
+ *
+ * A style's growth doesn't scale with DPS (StyleProcessor.cs:360-364: unstyled damage over its cap,
+ * and the cap is that damage before quality), so this ranks weapons rather than predicting a fight.
+ */
+export function weaponValue(w: Pick<WeaponDelve, 'clampedDps' | 'speed' | 'quality' | 'condition'>, twoHandedSpec: number | null = null): number {
+    const slow = 1 + (w.speed * 10 - 20) * 0.003;
+    const twoHanded = twoHandedSpec === null ? 1 : 1.1 + twoHandedSpec * 0.005;
+    return w.clampedDps * slow * twoHanded * (w.quality / 100) * (w.condition / 100);
+}
+
+/**
+ * A held or backpack weapon's delve as a comparison should count it: condition only when a smith
+ * can't restore it, as armorValue. A level 19 sword from 80 % costs 9,504c to repair and 47,520c new,
+ * and at about 90 % its own shop copy would clear WEAPON_STEP. A delve doesn't say Durability; the
+ * inventory row does. A shop item has none, and goes by its delve.
+ */
+export const asRepaired = (w: WeaponDelve, item: Pick<InventoryItem, 'durability'>): WeaponDelve => (item.durability === 0 ? w : { ...w, condition: 100 });
+
+/** One stat score point moves a weapon's score this much: a point of weapon stat is 0.5 % of weapon skill (GamePlayer.cs:5476). */
+export const WEAPON_STAT_RATE = 0.005;
+/** However good the bonuses, they move a weapon's score by at most this share, as ARMOR_STAT_SWING does. */
+export const WEAPON_STAT_SWING = 0.1;
+
+/** A weapon's value with its delved bonuses. A stat score of null (no delve) leaves the value alone. */
+export function weaponScore(value: number, stat: number | null): number {
+    return value * (1 + Math.max(-WEAPON_STAT_SWING, Math.min(WEAPON_STAT_SWING, (stat ?? 0) * WEAPON_STAT_RATE)));
 }

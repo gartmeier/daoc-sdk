@@ -16,6 +16,12 @@
 // on a member, fights us, or swings or casts within hostileRadius of a member:
 // in a three-realm battleground the other two fighting each other are not.
 //
+// A monster's target comes from the server, but only while it is in attack state and
+// within its attack range (PacketLib168.cs): one starting a timed cast leaves attack
+// state, so a caster nuking a member from range reports none. Its hostile spell effects
+// stand in for that target. Spell effects only: a swing would keep a mob's old target
+// after a reset, and the server keeps naming the target of a mob that swings.
+//
 // Nothing dies by 0 % health alone: the server rounds health down (GameLiving.cs:2621),
 // so a living player or monster with a few hit points reads 0. A player dies by its
 // death event or isDead, a monster by its death event (0xA2).
@@ -35,6 +41,7 @@
 import type { BotWorldState, CombatEvent, PetLoss, PlayerState, Realm } from '../types';
 import { isKillable, PLAYER_AIM_MS } from '../actions-helpers';
 import { isAttackable } from '../index';
+import { CC_IMMUNE_MS, npcCcLanded, readCcEnds, serverNameKey, type CcEnd, type CcImmunity, type CcKind, type NpcCcRun } from './cc';
 import type { Activity, Capabilities, MemberCombat, Contact, GroupEvent, GroupPicture, MemberReport, Orders, OrdersUpdate, PetReport, Point, Role, Sighting } from './types';
 
 export interface BlackboardOptions {
@@ -97,13 +104,19 @@ export interface Observation {
     ownSwings?: { targetId: number; at: number }[];
     /** Mobs whose blow at this member its window pet took lately (INTERCEPT_HOLDS_MS), and when. Absent with none. */
     intercepts?: { mobId: number; at: number }[];
+    /** Crowd control the server told this member has ended, from the last CC_END_MS of messages. */
+    ccEnds?: CcEnd[];
 }
 
 const SWING_WINDOW_MS = 2000;
 /** A death event counts this long: object ids are reused after a mob is removed, so an older one is an earlier holder's. */
 const DEATH_EVENT_MS = 5000;
+/** A message about crowd control ending is reported this long: the board goes by its time, so repeats change nothing. */
+const CC_END_MS = 3000;
 /** An enemy player's target: its latest swing or hostile spell this recent (longer than a slow weapon's swing). */
 const PLAYER_TARGET_MS = PLAYER_AIM_MS;
+/** A monster the server names no target for: its latest hostile spell effect this recent. */
+const SPELL_TARGET_MS = PLAYER_AIM_MS;
 /**
  * A dead player's model entry counts as a death only this fresh. A release moves the player within
  * the region without telling those who saw it die (GamePlayer.MoveTo), so its entry stays dead at the
@@ -190,10 +203,12 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     for (const n of state.nearbyNpcs) realmOf.set(n.objectId, n.realm);
     for (const o of state.nearbyPlayers) realmOf.set(o.objectId, o.realm);
     const isPlayer = new Set(state.nearbyPlayers.map(o => o.objectId));
+    const isPet = new Set(state.nearbyNpcs.filter(n => n.isPet).map(n => n.objectId));
     const lastSwing = new Set<number>();
     // Hostile spell effects and cast starts in the swing window: a player's swing (see its sighting).
     const lastSpell = new Set<number>();
     const aim = new Map<number, { targetId: number; at: number }>();
+    const spellAim = new Map<number, { targetId: number; at: number }>();
     const casting = new Set<number>();
     const helped = new Set<number>();
     const deaths: number[] = [];
@@ -216,6 +231,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         if (e.kind === 'melee' && age < SWING_WINDOW_MS) lastSwing.add(by);
         if (hostile && e.kind === 'spellEffect' && age < SWING_WINDOW_MS) lastSpell.add(by);
         if (hostile && on !== null && age < PLAYER_TARGET_MS && e.receivedAt >= (aim.get(by)?.at ?? -Infinity)) aim.set(by, { targetId: on, at: e.receivedAt });
+        if (hostile && e.kind === 'spellEffect' && age < SPELL_TARGET_MS && e.receivedAt >= (spellAim.get(by)?.at ?? -Infinity)) spellAim.set(by, { targetId: on!, at: e.receivedAt });
         // Any swing shows its aim, only one that landed did damage.
         const landed = e.kind !== 'melee' || e.result === undefined || e.result === 'hit' || e.result === 'styledHit';
         // A pet's damage credits its owner (GameLiving.cs:1299-1300).
@@ -230,6 +246,9 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     }
     const sightings: Sighting[] = [];
     for (const n of state.nearbyNpcs) {
+        const spell = spellAim.get(n.objectId);
+        const aimed = aim.get(n.objectId)?.targetId;
+        const spellLanded = spell !== undefined && now - spell.at < SWING_WINDOW_MS;
         if (n.distance2d > sightRadius) continue;
         // Under 1 % reads 0 alive, for seconds (4 of 52 live kills, 2.3-5.5 s), and it can regenerate. So 0 % is dead only with its
         // death event, already in `deaths`. Without one it is floored at 1: every reader of hp > 0 then means alive.
@@ -240,11 +259,20 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         if (!enemyPet && !isKillable(n, p)) continue;
         // A caster pet's entry names its target only on its victim's client, for moments (live): as for a player, the fight says it, and that reaches every client.
         // Not a monster's: its entry is the word, as a 0 says it let go (a reset, a leash), and a pet killer's run-in reads that (PET_KILLER_RUN_IN_MS).
-        const targetId = n.targetObjectId ?? (enemyPet ? aim.get(n.objectId)?.targetId ?? null : null);
+        // On its victim's client a caster stays named through the server's 0 (NearbyNpc.targetBySpell): to the group that's the spell the other clients read, by the board's rules for one (a mezz, a dead member).
+        const heldBySpell = !enemyPet && !!n.targetBySpell && n.targetObjectId !== null;
+        const targetId = heldBySpell ? null : n.targetObjectId ?? (enemyPet ? aim.get(n.objectId)?.targetId ?? null : null);
         sightings.push({
             objectId: n.objectId, kind: 'npc', name: n.name, level: n.level, realm: n.realm,
-            x: n.x, y: n.y, z: n.z, hp: Math.max(1, n.healthPercent), targetId, inCombat: n.inCombat, speed: n.speed,
-            swinging: lastSwing.has(n.objectId),
+            x: n.x, y: n.y, z: n.z, hp: Math.max(1, n.healthPercent), targetId, inCombat: heldBySpell ? false : n.inCombat, speed: n.speed,
+            spellTargetId: spell?.targetId ?? (heldBySpell ? n.targetObjectId : null),
+            // A spell that landed counts, not a cast start, which may be a self-buff. Like a swing it ends a mezz:
+            // a mezz stops the cast under way and any new one (CrowdControlECSEffect.cs OnHardCCStart,
+            // CastingComponent.cs CanCastSpell), a bolt shows at launch, and DoT ticks show nothing (DoTSpellHandler.cs).
+            swinging: lastSwing.has(n.objectId) || spellLanded,
+            spellLanded,
+            aimedAtPlayer: aimed !== undefined && isPlayer.has(aimed) ? aimed : null,
+            ...(aimed !== undefined && isPet.has(aimed) && !ownPets.has(aimed) ? { aimedAtPet: aimed } : {}),
             ...(enemyPet ? { isPet: true } : {}),
         });
     }
@@ -276,7 +304,8 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     };
     if (state.summons?.length) report.summons = [...state.summons];
     const intercepts = interceptsOf(state);
-    return { report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(intercepts.length ? { intercepts } : {}) };
+    const ccEnds = readCcEnds(state.gameMessages ?? [], state.timestamp - CC_END_MS);
+    return { report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(intercepts.length ? { intercepts } : {}), ...(ccEnds.length ? { ccEnds } : {}) };
 }
 
 const isBlow = (e: CombatEvent) => e.kind === 'melee' || e.kind === 'spellEffect';
@@ -357,9 +386,10 @@ const PET_KILLER_RUN_IN_MS = 15_000;
 const CC_SETTLE_MS = 500;
 /**
  * A rooted mob this far from where it stood once the mark settled is free: a root's end says nothing, as every root in spell.sql has an empty Message3 and Message4. `can move normally again` is a snare's
- * (DamageSpeedDecrease, StyleSpeedDecrease), and comes as a root replaces one (live: `can move normally again` and `feet are frozen` at 16:36:00.306, in that order), so that line doesn't end a root.
+ * (DamageSpeedDecrease, StyleSpeedDecrease), and comes as a root replaces one (live: `can move normally again` and `feet are frozen` at 16:36:00.306, in that order), so that line doesn't end a root: it is before the mark, and ccEnded takes it for its predecessor's.
+ * A rooted player creeps at 1 % speed, about 2 units/s, which stays well inside this.
  */
-const ROOT_MOVED = 100;
+const ROOT_MOVED = 120;
 /** An enemy pet gone this soon after a player of its realm died went with it, as a release is a death to the client (GamePlayer.cs:5988-5989, world-model.ts RemoveObject): same tick, a snapshot or two apart ... */
 const WITH_OWNER_MS = 1000;
 /** ... and with this much health left: one we killed reads near 0. */
@@ -373,7 +403,7 @@ const WITH_OWNER_HP = 10;
  * `petKillerUntil`: it fought a pet of ours that went; until then its run-in counts (PET_KILLER_RUN_IN_MS).
  * `ccAt`: where it stood once a root's mark settled (ROOT_MOVED).
  */
-type InternalContact = Contact & { engaged: boolean; hit: boolean; ccSince: number; ccAt: Point | null; lastHostile: number; deathEchoUntil: number; petKillerUntil: number };
+type InternalContact = Contact & { engaged: boolean; hit: boolean; ccSince: number; ccAt: Point | null; ccRuns?: Partial<Record<CcKind, NpcCcRun>>; lastHostile: number; deathEchoUntil: number; petKillerUntil: number };
 
 export class Blackboard {
     private readonly reports = new Map<string, MemberReport>();
@@ -389,6 +419,8 @@ export class Blackboard {
     private readonly playerDiedAt = new Map<Realm, number>();
     /** By a mob's key: whose pet took a blow of its lately, and until when a sighting naming that pet reads on its owner (INTERCEPT_HOLDS_MS). */
     private readonly intercepted = new Map<string, { owner: string; until: number }>();
+    /** What we knew about crowd control on a contact gone from view: it outlasts forgetAfterMs, so it comes back with it. Not after a death. */
+    private readonly ccMemory = new Map<string, Pick<InternalContact, 'ccImmune' | 'serverName' | 'ccRuns'>>();
     private orders: Orders = emptyOrders();
     private readonly eventLog: GroupEvent[] = [];
     private readonly eventListeners = new Set<(e: GroupEvent) => void>();
@@ -432,6 +464,7 @@ export class Blackboard {
         const hitByUs = new Set(obs.hits);
         const living = [...this.reports.values()].filter(m => m.regionId === r.regionId && !m.isDead);
         const nearUs = (s: Sighting) => living.some(m => Math.hypot(m.x - s.x, m.y - s.y) < this.hostileRadius);
+        const deadIds = new Set([...this.reports.values()].filter(m => m.isDead).map(m => m.objectId));
 
         // Before the sightings: the mob's answer can come in the same tick (live), and would read as a mezz broken by nobody.
         for (const swing of obs.petSwings ?? []) this.petSwung(r, swing, now);
@@ -454,10 +487,17 @@ export class Blackboard {
         const seen = new Set<string>();
         for (const sighted of obs.sightings) {
             const key = `${r.regionId}:${sighted.objectId}`;
-            const s = this.pastThePet(sighted, key);
+            const named = this.pastThePet(sighted, key);
             // A groupmate's window pet, whatever this client's entry says: a mob a charm just took may stay a mob for the others. Not by summons:
             // one that ends out of view lingers there up to 30 s (BotWorldState.summons), and the server hands its id to the next object it adds.
-            if (s.kind === 'npc' && windowPets.has(s.objectId)) { this.contacts.delete(key); continue; }
+            if (named.kind === 'npc' && windowPets.has(named.objectId)) { this.contacts.delete(key); continue; }
+            // Its spell names the target the server doesn't, a member's or a member's pet's. Not while it is crowd-controlled: that spell is from
+            // before, and it would hold a mezzed add as a threat for the whole aim window (behaviors.ts position()
+            // counts on them dropping out). Not on a dead member either: nothing else would end it.
+            // In combat with no target it is running (the 65535 below), so it isn't standing to cast.
+            const spellTarget = named.spellTargetId ?? null;
+            const bySpell = named.targetId === null && !named.inCombat && spellTarget !== null && !this.contacts.get(key)?.cc && !deadIds.has(spellTarget);
+            const s = bySpell ? { ...named, targetId: spellTarget } : named;
             const dead = this.killed.get(key);
             const unseenDeath = this.unseenDeaths.get(key);
             let deathEchoUntil = unseenDeath !== undefined ? unseenDeath + DEATH_ECHO_MS : 0;
@@ -475,8 +515,10 @@ export class Blackboard {
             let c = this.contacts.get(key);
             let cantSay = false;
             if (!c) {
-                c = { ...s, regionId: r.regionId, target, targetPet, targetSince: now, engagedAt: 0, movedAt: 0, seenBy: [], firstSeen: now, lastSeen: r.at, stale: false, threat: false, hostileSince: 0, cc: null, engaged: false, hit: false, ccSince: 0, ccAt: null, lastHostile: 0, deathEchoUntil, petKillerUntil: 0 };
+                c = { ...s, targetBySpell: bySpell, regionId: r.regionId, target, targetPet, targetSince: now, engagedAt: 0, movedAt: 0, seenBy: [], firstSeen: now, lastSeen: r.at, stale: false, threat: false, hostileSince: 0, cc: null, engaged: false, hit: false, ccSince: 0, ccAt: null, lastHostile: 0, deathEchoUntil, petKillerUntil: 0 };
                 if (s.kind === 'player') Object.assign(c, { healer: false, caster: false });
+                Object.assign(c, this.ccMemory.get(key));
+                this.ccMemory.delete(key);
                 this.contacts.set(key, c);
             } else if (r.at >= c.lastSeen) {
                 // A mob in combat with no target: the server sends none (65535) while it runs or its
@@ -490,13 +532,13 @@ export class Blackboard {
                 if (s.hp >= 100) { delete c.lossSince; delete c.lossFromHp; }
                 else if (c.engagedAt > 0 && c.lossSince === undefined && s.hp < c.hp) { c.lossSince = now; c.lossFromHp = c.hp; }
                 if ((unknown || cantSay) && c.targetId !== null) {
-                    Object.assign(c, s, { targetId: c.targetId, target: c.target, lastSeen: r.at });
+                    Object.assign(c, s, { targetId: c.targetId, target: c.target, targetBySpell: false, lastSeen: r.at });
                     // Running before the engage order: a carried pull (its hold counts from engagedAt).
                     if (unknown && c.engagedAt === 0) c.movedAt = now;
                 } else {
                     // A new target, or none after a reset or leash (no longer in combat).
                     if (c.targetId !== s.targetId) c.targetSince = now;
-                    Object.assign(c, s, { target, targetPet, lastSeen: r.at });
+                    Object.assign(c, s, { target, targetPet, targetBySpell: bySpell, lastSeen: r.at });
                 }
                 // Object.assign leaves what a sighting doesn't say: a mob that inherited an enemy pet's id.
                 if (!s.isPet) delete c.isPet;
@@ -509,7 +551,7 @@ export class Blackboard {
             if (!c.seenBy.includes(r.name)) c.seenBy.push(r.name);
             // Sticky, from any member's sighting, fresh or late: one heal on its own realm makes a healer.
             if (s.helped) c.healer = true;
-            if (s.casting) c.caster = true;
+            if (s.casting) { c.caster = true; c.castingAt = now; }
             // The contact's target, which is kept while it runs at a member; an older report's own as a fallback.
             const onMember = cantSay ? target : c.target ?? target;
             // The same for one on a member's pet, or one a pet fights that hasn't turned on it yet: a pet's fight can be silent to all of us but for that.
@@ -517,7 +559,9 @@ export class Blackboard {
             if (onMember || onPet || targetedByUs.has(s.objectId) || petsOn.has(s.objectId)) c.engaged = true;
             // A player's or an enemy pet's swing or cast start on someone we can't name is hostile only near us: its
             // combat reaches every client within 6000, so far off it is two other realms' fight.
-            const fighting = s.swinging && ((s.kind === 'npc' && !s.isPet) || nearUs(s));
+            // A monster's hit or spell on a player outside the group isn't our fight (pve.ts rejectPull: 'fighting someone else'), nor on a pet no member owns: a stranger's, an enemy's, or one that stepped in front of its owner (AttackComponent.cs:1492-1498). An enemy pet goes by the first rule, as its owner does.
+            const onStranger = s.kind === 'npc' && !s.isPet && ((s.aimedAtPlayer != null && !memberById.has(s.aimedAtPlayer)) || (s.aimedAtPet != null && !petOwner.has(s.aimedAtPet)));
+            const fighting = s.swinging && !onStranger && ((s.kind === 'npc' && !s.isPet) || nearUs(s));
             if (onMember || onPet || fighting || attackedByUs.has(s.objectId) || hitByUs.has(s.objectId)) {
                 if (now - c.lastHostile > this.hostileMs) c.hostileSince = now;
                 c.lastHostile = now;
@@ -526,13 +570,16 @@ export class Blackboard {
                 // Threat lasts hostileMs from lastHostile, so this ends with petKillerUntil at the latest.
                 c.lastHostile = Math.max(c.lastHostile, Math.min(now, c.petKillerUntil - this.hostileMs));
             }
-            // A mezzed mob does not swing: a swing after the cc landed means it broke. A root leaves melee on anyone in reach (live: `The water beetle hits your hand for 25 damage!`, feet frozen):
-            // it ends on its expiry, on a landed hit (petSwung, ownSwings), or with the mob moving.
+            // A mezzed or stunned mob neither swings nor casts: either after the cc landed means it broke. A rooted one can still do both, and its root ends on its expiry, on a landed hit (petSwung, ownSwings;
+            // GameLiving.HandleCrowdControlOnAttacked), or with the mob moving. A monster's swing is at what stands in its reach (live: `The water beetle hits your hand for 25 damage!`, feet frozen), so it stays controlled.
+            // A landed spell has no such reach, and a player can't be rooted again for the immunity (cc.ts), so those aren't controlled any more and the group must be free to kill them, but the root is still on them: no note.
             if (c.cc?.kind === 'root') {
                 if (!c.ccAt || now - c.ccSince <= CC_SETTLE_MS) c.ccAt = { x: c.x, y: c.y };
-                else if (Math.hypot(c.x - c.ccAt.x, c.y - c.ccAt.y) > ROOT_MOVED) this.ccBroke(c, now);
+                if (Math.hypot(c.x - c.ccAt.x, c.y - c.ccAt.y) > ROOT_MOVED) this.ccBroke(c, now);
+                else if (s.swinging && (s.kind === 'player' || s.spellLanded) && now - c.ccSince > SWING_WINDOW_MS) c.cc = null;
             } else if (c.cc && s.swinging && now - c.ccSince > SWING_WINDOW_MS) this.ccBroke(c, now);
         }
+        for (const e of obs.ccEnds ?? []) this.ccEndedNamed(r.regionId, e);
         for (const id of obs.hits ?? []) {
             const c = this.contacts.get(`${r.regionId}:${id}`);
             if (c) c.hit = c.engaged = true;
@@ -546,7 +593,7 @@ export class Blackboard {
             if (seen.has(key) || c.regionId !== r.regionId) continue;
             const i = c.seenBy.indexOf(r.name);
             if (i >= 0) c.seenBy.splice(i, 1);
-            if (!r.isDead && Math.hypot(c.x - r.x, c.y - r.y) < this.viewRadius && r.at - c.lastSeen > 1500) this.contacts.delete(key);
+            if (!r.isDead && Math.hypot(c.x - r.x, c.y - r.y) < this.viewRadius && r.at - c.lastSeen > 1500) this.forget(key, c);
         }
     }
 
@@ -579,13 +626,13 @@ export class Blackboard {
         const c = this.contacts.get(`${r.regionId}:${swing.targetId}`);
         if (!c?.cc || swing.at - c.ccSince <= CC_SETTLE_MS || !(swing.landed || c.cc.kind === 'mezz')) return;
         this.emit({ at: now, kind: 'note', member: r.name, targetId: c.objectId, text: `${r.name}'s pet broke the ${c.cc.kind} on ${c.name}`, data: { petBrokeCc: true, kind: c.cc.kind, by: c.cc.by } });
-        c.cc = null;
+        this.ccEnded(c, c.cc.kind as CcKind, now);
     }
 
     /** Crowd control it no longer has, by what we saw of it: a note for the observer. */
     private ccBroke(c: InternalContact, now: number): void {
         this.emit({ at: now, kind: 'note', member: c.cc!.by, targetId: c.objectId, text: `${c.cc!.kind} on ${c.name} broke` });
-        c.cc = null;
+        this.ccEnded(c, c.cc!.kind as CcKind, now);
     }
 
     /**
@@ -597,6 +644,7 @@ export class Blackboard {
         // A mob that just inherited the id: the death members still report is its predecessor's.
         if (!c || now < c.deathEchoUntil) return;
         this.contacts.delete(key);
+        this.ccMemory.delete(key);
         for (const [k, d] of this.killed) if (now - d.at >= KILLED_MS) this.killed.delete(k);
         this.killed.set(key, { at: now, name: c.name, x: c.x, y: c.y, hp: c.hp, player: c.kind === 'player' });
         if (c.kind === 'player') this.playerDiedAt.set(c.realm, now);
@@ -609,19 +657,53 @@ export class Blackboard {
         else this.emit({ at: now, kind: 'kill', member: by, targetId: c.objectId, text: `${c.name} (L${c.level}) died`, data: { name: c.name, level: c.level, kind: c.kind, realm: c.realm, ...(c.isPet ? { pet: true } : {}) } });
     }
 
-    /** Record crowd control a member landed, so nobody hits or re-mezzes it. */
-    markCc(targetId: number, regionId: number, by: string, kind: string, durationMs: number, now = Date.now()): void {
+    /**
+     * Record crowd control a member landed, so nobody hits it or casts that kind at it. `durationMs` is the spell's
+     * full length: the server's own line ends it sooner (ccEnded). A root holds for half of that, then wears off
+     * (ECSGameSpellEffect.cs, EffectService.cs), and a monster's repeats are shorter (npcCcLanded).
+     */
+    markCc(targetId: number, regionId: number, by: string, kind: string, durationMs: number, now = Date.now(), serverName?: string): void {
         const c = this.contacts.get(`${regionId}:${targetId}`);
         if (!c) return;
-        c.cc = { by, kind, until: now + durationMs };
+        const k = kind as CcKind;
+        let lastsMs = durationMs;
+        if (c.kind === 'player') (c.ccImmune ??= {})[k] = now + durationMs + CC_IMMUNE_MS;
+        // A monster has no limit on roots (TryApplyImmunity is for players, and NpcImmunityEffect for mezz and stun).
+        else if (k !== 'root') {
+            const landed = npcCcLanded(c.ccRuns?.[k], durationMs, now);
+            lastsMs = landed.durationMs;
+            (c.ccRuns ??= {})[k] = landed.run;
+            if (landed.immuneUntil) (c.ccImmune ??= {})[k] = landed.immuneUntil;
+        }
+        c.cc = { by, kind, until: now + (k === 'root' ? lastsMs / 2 : lastsMs) };
         c.ccSince = now;
         c.ccAt = null;
+        if (serverName) c.serverName = serverName;
     }
 
-    /** Record that crowd control can't land on it for `durationMs` (it answered "immune"), so nobody is assigned it. */
-    markCcImmune(targetId: number, regionId: number, durationMs: number, now = Date.now()): void {
+    /** Record that this kind can't land on it for up to `durationMs` (the server answered so), unless we already know until when. */
+    markCcImmune(targetId: number, regionId: number, kind: CcKind, durationMs: number, now = Date.now()): void {
         const c = this.contacts.get(`${regionId}:${targetId}`);
-        if (c) c.ccImmuneUntil = now + durationMs;
+        if (c && (c.ccImmune?.[kind] ?? 0) <= now) (c.ccImmune ??= {})[kind] = now + durationMs;
+    }
+
+    /** It ended at `at`: on a player the immunity runs from then (EffectListComponent.cs TryApplyImmunity). */
+    private ccEnded(c: InternalContact, kind: CcKind, at: number): void {
+        if (at < c.ccSince) return; // Its predecessor's.
+        if (c.cc?.kind === kind) c.cc = null;
+        if (c.kind === 'player') (c.ccImmune ??= {})[kind] = at + CC_IMMUNE_MS;
+    }
+
+    /** The server said so by name. A monster's isn't unique: only the one contact of that name under this kind. */
+    private ccEndedNamed(regionId: number, e: CcEnd): void {
+        const key = serverNameKey(e.name);
+        const named = [...this.contacts.values()].filter(c => c.regionId === regionId && (c.kind === 'player' ? c.serverName && serverNameKey(c.serverName) === key : c.cc?.kind === e.kind && serverNameKey(c.name) === key));
+        if (named.length === 1) this.ccEnded(named[0]!, e.kind, e.at);
+    }
+
+    private forget(key: string, c: InternalContact): void {
+        this.contacts.delete(key);
+        if (c.ccImmune || c.serverName || c.ccRuns) this.ccMemory.set(key, { ccImmune: c.ccImmune, serverName: c.serverName, ccRuns: c.ccRuns });
     }
 
     /** Record that no attack lands on it for `durationMs`: a member's got `You can't attack a shadowed necromancer!` (SHADE_REFUSED). The coordinator's next tick moves the focus off it. */
@@ -634,15 +716,15 @@ export class Blackboard {
     picture(now = Date.now()): GroupPicture {
         const contacts: Contact[] = [];
         for (const [key, c] of this.contacts) {
-            if (now - c.lastSeen > this.forgetAfterMs) { this.contacts.delete(key); continue; }
+            if (now - c.lastSeen > this.forgetAfterMs) { this.forget(key, c); continue; }
             if (c.cc && c.cc.until <= now) c.cc = null;
-            if (c.ccImmuneUntil !== undefined && c.ccImmuneUntil <= now) delete c.ccImmuneUntil;
+            for (const k of Object.keys(c.ccImmune ?? {}) as CcKind[]) if (c.ccImmune![k]! <= now) delete c.ccImmune![k];
             if (c.unattackableUntil !== undefined && c.unattackableUntil <= now) delete c.unattackableUntil;
-            const { engaged: _e, hit: _h, ccSince: _s, ccAt: _a, deathEchoUntil: _d, petKillerUntil: _k, lastHostile, ...pub } = c;
+            const { engaged: _e, hit: _h, ccSince: _s, ccAt: _a, ccRuns: _r, deathEchoUntil: _d, petKillerUntil: _k, lastHostile, ...pub } = c;
             const stale = now - c.lastSeen > this.staleAfterMs;
             // A player contact at 0 % is alive (a dead one is no contact): it still fights.
             const threat = !stale && (c.kind === 'player' || c.hp > 0) && now - lastHostile < this.hostileMs && !untouchable(c, now);
-            contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null });
+            contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null, ...(c.ccImmune ? { ccImmune: { ...c.ccImmune } } : {}) });
         }
         return { at: now, members: [...this.reports.values()].map(m => ({ ...m })), contacts, orders: this.getOrders() };
     }

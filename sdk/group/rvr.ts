@@ -31,7 +31,7 @@
 
 import { estimateZ, getClass, realmName } from '../../data/index';
 import type { Realm } from '../types';
-import { assist, buff, crowdControl, flee, guard, hand, heal, holdFormation, meleeFight, position, release, rest, retreat, SAVING_POWER, shedLoad, song, sprint, tank, type TacticsSettings } from './behaviors';
+import { assist, buff, crowdControl, flee, guard, hand, heal, holdFormation, meleeFight, position, rejoinFight, release, rest, retreat, rez, SAVING_POWER, shedLoad, song, sprint, tank, type TacticsSettings } from './behaviors';
 import type { Behavior } from './member';
 import type { Finding, RunReport } from './observer';
 import { isAlive, untouchable } from './blackboard';
@@ -89,6 +89,9 @@ export const RVR_SETTINGS: RvrSettings = {
     assistAfterMs: 6000,
     // Players hit harder and in bursts: heal earlier than in PvE.
     heal: { tank: 75, other: 70, emergency: 40, outOfCombat: 90 },
+    // An RvR death costs no XP or constitution, and a release gives full health and power: a rez saves only the walk
+    // back, about 100 s. So the rezzer pays only from what it has, keeping a reserve, and may do it mid-fight when the group can spare it.
+    rez: { holdMs: 60_000, sit: false, reserve: 25, inFight: true },
     rest: { hp: 90, mana: 80 },
     combatRange: { healer: [500, 1600], support: [500, 1600], nuker: [700, 1400] },
     slotSlack: 350,
@@ -126,7 +129,7 @@ const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 const centroid = (ps: Point[]): Point => ({ x: ps.reduce((a, p) => a + p.x, 0) / Math.max(1, ps.length), y: ps.reduce((a, p) => a + p.y, 0) / Math.max(1, ps.length) });
 const usesMana = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc || !!m.capabilities.pet;
 /** The member a contact is on: itself, or its pet. */
-const onWhom = (c: Contact): string | null => c.target ?? c.targetPet ?? null;
+export const onWhom = (c: Contact): string | null => c.target ?? c.targetPet ?? null;
 const names = (ms: { name: string }[]) => ms.map(m => m.name).join(', ');
 const enemiesText = (n: number) => `${n} ${n === 1 ? 'enemy' : 'enemies'}`;
 const at = (p: Point) => `(${Math.round(p.x)}, ${Math.round(p.y)})`;
@@ -220,7 +223,7 @@ const LEG_REACHED = 1200;
 /** After this long, a leg counts as reached with one member still short of it (stuck or lagging). */
 const LEG_TIMEOUT_MS = 30_000;
 
-interface Trip {
+export interface Trip {
     mem: Record<string, any>;
     now: number;
     regionId: number;
@@ -242,7 +245,7 @@ function reachedBy(leg: Point, movers: readonly Point[], ageMs: number): boolean
  * that moved more than `replan`, starts over from `from`. With `meet`, a leg covers at most half
  * the gap (the other side walks toward us). Writes memory.leg, legFacing and route (the viewer draws them).
  */
-function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; movers: readonly Point[]; replan: number; meet?: boolean; force?: boolean }): void {
+export function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; movers: readonly Point[]; replan: number; meet?: boolean; force?: boolean }): void {
     const { mem } = t;
     if (mem.legKind !== kind || !mem.goal || dist(mem.goal, goal) > o.replan) {
         mem.legKind = kind;
@@ -266,7 +269,7 @@ function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; movers: r
 }
 
 /** Which way to run from `enemies`: toward home, unless they stand that way (within 60° of it), then straight away from them. */
-function runWay(from: Point, enemies: readonly Point[], home: Point | null): Point & { home: boolean } {
+export function runWay(from: Point, enemies: readonly Point[], home: Point | null): Point & { home: boolean } {
     const unit = (dx: number, dy: number) => { const l = Math.hypot(dx, dy); return l < 1 ? null : { x: dx / l, y: dy / l }; };
     const e = centroid([...enemies]);
     const away = unit(from.x - e.x, from.y - e.y) ?? { x: 1, y: 0 };
@@ -275,7 +278,7 @@ function runWay(from: Point, enemies: readonly Point[], home: Point | null): Poi
 }
 
 /** The spot `distance` from `from` along the unit vector `way`, turned by up to 40° to stay out of aggro zones and keep circles, and on the map as a PvE retreat (keepOnMap). */
-function spotAlong(t: Trip, from: Point, way: Point, distance: number): Point3 {
+export function spotAlong(t: Trip, from: Point, way: Point, distance: number): Point3 {
     const blocked = [...aggroZones(t.regionId, t.level), ...t.avoid];
     const base = Math.atan2(way.y, way.x);
     const spots = [0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05].map(turn => ({ x: Math.round(from.x + Math.cos(base + turn) * distance), y: Math.round(from.y + Math.sin(base + turn) * distance) }));
@@ -294,7 +297,7 @@ function spotAlong(t: Trip, from: Point, way: Point, distance: number): Point3 {
  * cluster under attack needs 2 members, or half of those here: one attacked on its way back from
  * the portal keep fights or flees by itself, and the others stay the main body.
  */
-function mainBody(here: readonly MemberReport[], radius: number, mem: Record<string, any>, attacked: ReadonlySet<string> = new Set()): { main: MemberReport[]; far: MemberReport[] } {
+export function mainBody(here: readonly MemberReport[], radius: number, mem: Record<string, any>, attacked: ReadonlySet<string> = new Set()): { main: MemberReport[]; far: MemberReport[] } {
     const size = (m: MemberReport) => here.filter(o => dist(m, o) <= radius).length;
     const hot = (m: MemberReport) => (size(m) >= 2 || size(m) * 2 >= here.length) && here.some(o => attacked.has(o.name) && dist(m, o) <= radius);
     const rank = (m: MemberReport) => (hot(m) ? 100 : 0) + size(m) * 4 + (m.name === mem.gatherLead ? 2 : 0) + (m.role === 'tank' ? 1 : 0);
@@ -305,7 +308,7 @@ function mainBody(here: readonly MemberReport[], radius: number, mem: Record<str
 }
 
 /** The region most living members are in (ties: the tank's). Members elsewhere were released to their bind point. */
-function groupRegion(alive: readonly MemberReport[]): number {
+export function groupRegion(alive: readonly MemberReport[]): number {
     const n = new Map<number, number>();
     for (const m of alive) n.set(m.regionId, (n.get(m.regionId) ?? 0) + 1);
     const tankRegion = alive.find(m => m.role === 'tank')?.regionId;
@@ -430,7 +433,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const ccKey = (a: { targetId: number; by: string }) => `${a.targetId}:${a.by}`;
         for (const a of o.cc) if (now - (since[ccKey(a)] ?? now) > CC_STALL_MS) bench[a.by] = now + CC_BENCH_MS;
         const mezzers = main.filter(m => !((bench[m.name] ?? 0) > now));
-        const cc = assignCc(players.filter(c => c.objectId !== focus.objectId && !c.cc && (c.ccImmuneUntil ?? 0) <= now), mezzers, o.cc);
+        const cc = assignCc(players.filter(c => c.objectId !== focus.objectId && !c.cc), mezzers, o.cc, now);
         mem.ccSince = Object.fromEntries(cc.map(a => [ccKey(a), since[ccKey(a)] ?? now]));
         mem.ccBench = Object.fromEntries(Object.entries(bench).filter(([, until]) => until > now));
         return {
@@ -470,8 +473,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         }
     }
 
-    // ── Regroup: wait for the dead to release, then meet those walking back from the portal keep ──
-    if (deadHere.length) return { ...calm, phase: 'recover', anchor: stay, waiting: deadHere.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadHere)} to release${gone}` };
+    // ── Regroup: wait for the dead to be rezzed or release, then meet those walking back from the portal keep ──
+    if (deadHere.length) return { ...calm, phase: 'recover', anchor: stay, waiting: deadHere.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadHere)}: a rez or a release${gone}` };
     if (far.length) {
         const them = centroid(far);
         stepLeg(trip, 'gather', them, { from: centre, movers: main, replan: Infinity, meet: true });
@@ -507,11 +510,11 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 /** Behaviour lists by role. No healer() visit: battlegrounds have no town healer, and RvR deaths cost no constitution. */
 export function rvrBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
-        tank: [release(), hand(), sprint(), retreat(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
-        healer: [release(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
-        support: [release(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
-        nuker: [release(), sprint(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
-        melee: [release(), hand(), sprint(), retreat(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
+        tank: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
+        healer: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
+        support: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
+        nuker: [release(), sprint(), retreat(), rejoinFight(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
+        melee: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
     };
 }
 

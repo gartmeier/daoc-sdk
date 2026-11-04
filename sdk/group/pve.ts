@@ -5,6 +5,7 @@
 // decide() runs every coordinator tick on the shared picture. It only writes
 // orders; members carry them out with their behaviour lists.
 
+import { canControl } from './cc';
 import { conLevel } from '../actions-helpers';
 import { planBase, planRejects, segDist, type BasePlan } from './baseplan';
 import { defaultBehaviors, mezzRefuses, SAVING_POWER, type TacticsSettings } from './behaviors';
@@ -249,23 +250,23 @@ export function pickFocus(threats: Contact[], tank: MemberReport | undefined): C
 /**
  * One mezzer per add, keeping assignments that still hold; supports first, then nukers, then healers. An NPC a mezz can't take (mezzRefuses) goes only to a member with a root (Capabilities.root), and crowdControl casts that at it.
  */
-export function assignCc(adds: Contact[], members: MemberReport[], current: { targetId: number; by: string }[]): { targetId: number; by: string }[] {
+export function assignCc(adds: Contact[], members: MemberReport[], current: { targetId: number; by: string }[], now = Date.now()): { targetId: number; by: string }[] {
     const order = ['support', 'nuker', 'healer', 'melee', 'tank'];
-    const ccers = members.filter(m => !m.isDead && m.capabilities.cc).sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
-    const free = ccers.map(m => m.name);
-    const rooters = new Set(ccers.filter(m => m.capabilities.root).map(m => m.name));
-    const can = (t: Contact, name: string) => !mezzRefuses(t) || rooters.has(name);
+    const free = members.filter(m => !m.isDead && m.capabilities.cc).sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
+    // Nobody is sent at a target immune to everything it casts: a root still holds what is immune to a mezz.
+    const able = (m: MemberReport, t: Contact) => (mezzRefuses(t) ? !!m.capabilities.root && canControl(t, ['root'], now) : canControl(t, m.capabilities.ccKinds, now));
     const out: { targetId: number; by: string }[] = [];
     for (const a of current) {
-        const t = adds.find(c => c.objectId === a.targetId);
-        if (t && can(t, a.by) && free.includes(a.by)) { out.push(a); free.splice(free.indexOf(a.by), 1); }
+        const t = adds.find(x => x.objectId === a.targetId);
+        const i = free.findIndex(m => m.name === a.by);
+        if (t && i >= 0 && able(free[i]!, t)) { out.push(a); free.splice(i, 1); }
     }
     for (const t of adds) {
         if (out.some(a => a.targetId === t.objectId)) continue;
-        const by = free.find(name => can(t, name));
-        if (by === undefined) continue;
-        out.push({ targetId: t.objectId, by });
-        free.splice(free.indexOf(by), 1);
+        const i = free.findIndex(m => able(m, t));
+        if (i < 0) continue;
+        out.push({ targetId: t.objectId, by: free[i]!.name });
+        free.splice(i, 1);
     }
     return out;
 }
@@ -333,7 +334,7 @@ function decide(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
             return { phase: 'retreat', focus: null, cc: [], puller: null, retreatTo: to, reason: `retreat: ${lost}` };
         }
         if (lost && o.phase === 'retreat') return { phase: 'retreat', reason: o.reason };
-        const cc = assignCc(threats.filter(t => t.objectId !== focus.objectId && !t.cc && !t.isPet && (t.ccImmuneUntil ?? 0) <= now), alive, o.cc);
+        const cc = assignCc(threats.filter(t => t.objectId !== focus.objectId && !t.cc && !t.isPet), alive, o.cc, now);
         const why = kept ? `fighting ${focus.name} (${focus.hp}%)` : `${focus.name} L${focus.level} attacks ${focus.target ?? (focus.targetPet ? `${focus.targetPet}'s pet` : 'the group')}`;
         return { phase: 'engage', focus: focus.objectId, puller: null, cc, retreatTo: null, reason: threats.length > 1 ? `${why}, ${threats.length - 1} more attacking` : why };
     }
@@ -425,7 +426,7 @@ function decide(ctx: CoordinatorContext<PveSettings>): OrdersUpdate {
     // ── Gather and recover ──
     if (away.length) return { ...calm, phase: 'gather', anchor: base, facing, waiting: away.map(m => ({ name: m.name, why: 'away' })), reason: `waiting for ${names(away)}` };
     const deadMembers = p.members.filter(m => m.isDead);
-    if (deadMembers.length) return { ...calm, phase: 'recover', anchor: base, facing, waiting: deadMembers.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadMembers)} to release and come back` };
+    if (deadMembers.length) return { ...calm, phase: 'recover', anchor: base, facing, waiting: deadMembers.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadMembers)}: a rez, or a release and the way back` };
     const waiting = alive.flatMap(m => [
         ...(m.hp < s.ready.hp ? [{ name: m.name, why: 'health' }] : []),
         ...(usesMana(m) && m.mana < s.ready.mana ? [{ name: m.name, why: m.activity.detail === SAVING_POWER ? 'pet power' : 'power' }] : []),

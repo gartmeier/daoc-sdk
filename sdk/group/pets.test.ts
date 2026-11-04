@@ -12,7 +12,9 @@ import { withCharacter } from './character';
 import { contact, enemy, picture, report } from './fixtures';
 import { MemberAgent, type Behavior, type MemberContext } from './member';
 import { formatReport, GroupObserver } from './observer';
-import { castRunning, fnfPet, leftPassive, PET_SETTINGS, petAfterRun, petBuff, petControl, petHeal, petKit, petsAllowed, summonPet, waitsForPet, withPets, type PetKit } from './pets';
+import { castRunning, fnfPet, leftPassive, memberPetKit, PET_SETTINGS, petAfterRun, petBuff, petControl, petHeal, petKit, petMaxHp, petsAllowed, summonPet, waitsForPet, withPets, type PetKit } from './pets';
+import { PACK_SETTINGS } from './pack';
+import { theurgist } from '../classes/theurgist';
 import { decidePve, PVE_SETTINGS } from './pve';
 import { decideRvr, RVR_SETTINGS, rvrBehaviors } from './rvr';
 import { Spellbook, type SpellPick } from './spells';
@@ -36,7 +38,7 @@ interface WorldOptions {
     /** A client from before pets: state.pet undefined. */
     olderClient?: boolean;
     /** Its NPC entry; null: out of view. */
-    petEntry?: { healthPercent?: number; distance?: number; x?: number; y?: number; name?: string } | null;
+    petEntry?: { healthPercent?: number; distance?: number; x?: number; y?: number; name?: string; level?: number } | null;
     /** Contacts our own client sees (default: all). */
     inView?: number[];
     seen?: Record<number, { healthPercent: number }>;
@@ -65,7 +67,7 @@ function world(o: WorldOptions = {}) {
     const results: { kind: string; success: boolean; reason?: string; targetId: number | null }[] = [];
     const skips: string[] = [];
     const doing: { kind: string; targetId: number | null; detail: string }[] = [];
-    const calls = { summon: [] as { spell: unknown; opts: unknown }[], cast: [] as unknown[][], rest: [] as unknown[], walk: [] as unknown[][] };
+    const calls = { summon: [] as { spell: unknown; opts: unknown }[], cast: [] as unknown[][], rest: [] as unknown[], walk: [] as unknown[][], petHealNeed: [] as (number | undefined)[] };
     const at = o.at ?? OWNER_AT;
     const tankM = report('Tank', { role: 'tank', regionId: R, x: ANCHOR.x, y: ANCHOR.y, objectId: 3 });
     const pic = picture([report('Owner', { role: o.role ?? 'nuker', regionId: R, x: at.x, y: at.y, level: 20, objectId: ME }), tankM, ...(o.members ?? [])], o.contacts ?? [], { phase: 'engage', anchor: ANCHOR, ...o.orders });
@@ -99,7 +101,8 @@ function world(o: WorldOptions = {}) {
     };
     const spells = {
         knowsTurret: () => o.turret ?? false,
-        summon: () => o.summon ?? null, fnf: () => o.fnf ?? null, petHeal: () => o.petHeal ?? null, petBuffs: () => o.petBuffs ?? [], root: () => null,
+        summon: () => o.summon ?? null, fnf: () => o.fnf ?? null, petHeal: (missing?: number) => { calls.petHealNeed.push(missing); return o.petHeal ?? null; }, petBuffs: () => o.petBuffs ?? [], root: () => null,
+        capabilities: () => ({ ccKinds: ['mezz', 'root'] }),
         powerOf: (s: { power: number }) => (s.power < 0 ? Math.floor(mana.maxMana * -s.power / 100) : s.power),
     };
     const ctx = {
@@ -643,8 +646,53 @@ describe('petControl: outside a fight', () => {
 const onTimer = (p: SpellPick): SpellPick => ({ ...p, spell: { ...p.spell, cooldownRemaining: 40 } });
 const pick = (over: Partial<SpellPick> & { name?: string } = {}): SpellPick => {
     const { name = 'A Spell', ...rest } = over;
-    return { spell: { name, cooldownRemaining: 0 } as Spell, type: 'X', target: 'Pet', range: 2000, radius: 0, power: 10, castTime: 3, duration: 0, recast: 0, concentration: 0, pulse: false, value: 0, damage: 0, spellGroup: 0, effectGroup: 0, frequency: 0, icon: 0, ...rest };
+    return { spell: { name, cooldownRemaining: 0 } as Spell, type: 'X', target: 'Pet', range: 2000, radius: 0, power: 10, castTime: 3, duration: 0, recast: 0, concentration: 0, pulse: false, value: 0, damage: 0, spellGroup: 0, damageType: 0, effectGroup: 0, frequency: 0, icon: 0, ...rest };
 };
+
+describe('petControl: a strategy that doesn\'t turn a threat into a fight (pet.strayFightsOff: the wolf pack)', () => {
+    const PACK = { ...PVE_SETTINGS, pet: { ...PET_SETTINGS, strayFightsOff: true } };
+    const QUIET = ['recover', 'gather', 'idle', 'travel'] as const;
+
+    test('between fights a pet in a fight comes off, threat or no threat, passive so that the next hit on its owner doesn\'t send it back', async () => {
+        for (const phase of QUIET) {
+            const w = world({ contacts: [mob(77)], orders: { phase, focus: null }, pet: { targetObjectId: 77 }, settings: PACK });
+            await petControl().run(w.ctx);
+            expect(w.sent).toEqual([{ command: 'passive' }, { command: 'follow' }]);
+        }
+    });
+
+    test('with no fight it only stays out of one', async () => {
+        const w = world({ contacts: [mob(77)], orders: { phase: 'travel', focus: null }, settings: PACK });
+        await petControl().run(w.ctx);
+        expect(w.sent).toEqual([{ command: 'passive' }]);
+        const already = world({ contacts: [mob(77)], orders: { phase: 'travel', focus: null }, pet: { aggression: 'passive' }, settings: PACK });
+        await petControl().run(already.ctx);
+        expect(already.sent).toEqual([]);
+    });
+
+    test('the fight itself is as ever: the focus goes to the pet, and the next stance is defensive', async () => {
+        const w = world({ contacts: [held()], orders: { focus: FOCUS }, pet: { aggression: 'passive' }, settings: PACK });
+        await petControl().run(w.ctx);
+        expect(w.sent).toEqual([{ command: 'defensive' }, { command: 'attack', target: FOCUS }]);
+    });
+
+    test('a pet on stay is the character\'s, as ever', async () => {
+        const w = world({ contacts: [mob(77)], orders: { phase: 'travel', focus: null }, pet: { walk: 'stay', targetObjectId: 77 }, settings: PACK });
+        await petControl().run(w.ctx);
+        expect(w.sent).toEqual([]);
+    });
+
+    test('a flag\'s text counts (--pet.strayFightsOff=true)', async () => {
+        const w = world({ contacts: [mob(77)], orders: { phase: 'recover', focus: null }, pet: { targetObjectId: 77 }, settings: { ...PVE_SETTINGS, pet: { ...PET_SETTINGS, strayFightsOff: 'true' as unknown as boolean } } });
+        await petControl().run(w.ctx);
+        expect(w.sent).toEqual([{ command: 'passive' }, { command: 'follow' }]);
+    });
+
+    test('the pack has it on, what decides a threat into a fight has it off', () => {
+        expect(PACK_SETTINGS.pet?.strayFightsOff).toBe(true);
+        expect(PET_SETTINGS.strayFightsOff).toBeUndefined();
+    });
+});
 
 describe('summonPet: the gates', () => {
     const SUMMON = pick({ name: 'Summon Spirit Fighter', power: -25, target: 'Self', range: 0, castTime: 6 });
@@ -937,6 +985,47 @@ describe('petHeal: the thresholds', () => {
         expect(await heals({ petHeal: onTimer(MEND), petEntry: { healthPercent: 10 } })).toBe(0);
     });
 
+    describe('what it asks for: what this pet misses, not the biggest heal in the book', () => {
+        test('its full health by its level, as the server sets a summoned pet\'s (MaxHealthCalculator.cs:102, GameSummonedPet.cs SetStats)', () => {
+            expect(petMaxHp(7)).toBe(195);
+            expect(petMaxHp(18)).toBe(562);
+        });
+
+        test('a level-7 pet at 79 %: 41 missing, for a Druid\'s Greater Regrowth of 263 to be left in the book', async () => {
+            const w = world({ petHeal: MEND, petEntry: { healthPercent: 79, level: 7 }, orders: { phase: 'recover', focus: null }, contacts: [] });
+            await petHeal().run(w.ctx);
+            expect(w.calls.petHealNeed).toEqual([41]);
+        });
+
+        test('an entry with no level to go by asks for none: the one restoring most', async () => {
+            const w = world({ petHeal: MEND, petEntry: { healthPercent: 10 }, orders: { focus: FOCUS }, contacts: [held()] });
+            await petHeal().run(w.ctx);
+            expect(w.calls.petHealNeed).toEqual([undefined]);
+        });
+    });
+
+    describe('a heal on friends in a fight is the group\'s power: this much stays', () => {
+        const REALM = pick({ name: 'Greater Regeneration', type: 'Heal', target: 'Realm', power: 39, range: 2000 });
+        const inAFight = (mana: number, spell = REALM) => world({ petHeal: spell, petEntry: { healthPercent: 40 }, orders: { focus: FOCUS }, contacts: [held()], player: { mana, maxMana: 163, manaPercent: Math.round(100 * mana / 163) } });
+
+        test('32 % of her pool, 39 of it for the pet: no', async () => {
+            const w = inAFight(52);
+            expect(await petHeal().run(w.ctx)).toBe(false);
+            expect(w.calls.cast).toEqual([]);
+        });
+
+        test('with a quarter left after it: yes', async () => {
+            const w = inAFight(80);
+            expect(await petHeal().run(w.ctx)).toBe(true);
+            expect(w.calls.cast).toEqual([[REALM.spell, PET]]);
+        });
+
+        test('a Pet-target heal is no heal on a member: "in a fight: below pet.healBelow", at any power', async () => {
+            const w = inAFight(20, MEND);
+            expect(await petHeal().run(w.ctx)).toBe(true);
+        });
+    });
+
     test('a refusal: not again for a while', async () => {
         const w = world({ petHeal: MEND, petEntry: { healthPercent: 10 }, orders: { focus: FOCUS }, contacts: [held()], castSpell: () => ({ success: false, reason: 'no_pet', message: 'No pet to cast this on' }) });
         expect(await petHeal().run(w.ctx)).toBe(true);
@@ -1047,24 +1136,24 @@ describe('withPets: where they go', () => {
     });
 
     test('a main pet on each role\'s list', () => {
-        expect(names(withPets(pve.tank, MAIN))).toEqual(['release', 'hand', 'healer', 'sprint', 'petControl', 'retreat', 'pull', 'petHeal', 'summonPet', 'tank', 'guard', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(pve.healer, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'emergencyHeal', 'flee', 'heal', 'crowdControl', 'summonPet', 'position', 'petHeal', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(pve.support, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'emergencyHeal', 'flee', 'crowdControl', 'heal', 'song', 'summonPet', 'position', 'petHeal', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(pve.nuker, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'flee', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'petHeal', 'assist', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(pve.melee, MAIN))).toEqual(['release', 'hand', 'healer', 'sprint', 'petControl', 'retreat', 'song', 'petHeal', 'summonPet', 'assistMelee', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(pve.tank, MAIN))).toEqual(['release', 'hand', 'healer', 'sprint', 'petControl', 'retreat', 'rez', 'pull', 'petHeal', 'summonPet', 'tank', 'guard', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(pve.healer, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'emergencyHeal', 'flee', 'rez', 'heal', 'crowdControl', 'summonPet', 'position', 'petHeal', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(pve.support, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'emergencyHeal', 'flee', 'rez', 'crowdControl', 'heal', 'song', 'summonPet', 'position', 'petHeal', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(pve.nuker, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'flee', 'rez', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'petHeal', 'assist', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(pve.melee, MAIN))).toEqual(['release', 'hand', 'healer', 'sprint', 'petControl', 'retreat', 'rez', 'song', 'petHeal', 'summonPet', 'assistMelee', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
     });
 
     test('the RvR lists the same way', () => {
-        expect(names(withPets(rvr.nuker, MAIN))).toEqual(['release', 'sprint', 'petControl', 'retreat', 'flee', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'petHeal', 'assist', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
-        expect(names(withPets(rvr.tank, MAIN))).toEqual(['release', 'hand', 'sprint', 'petControl', 'retreat', 'petHeal', 'summonPet', 'tank', 'guard', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(rvr.nuker, MAIN))).toEqual(['release', 'sprint', 'petControl', 'retreat', 'summonOnTheWayBack', 'rejoinFight', 'flee', 'rez', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'petHeal', 'assist', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(rvr.tank, MAIN))).toEqual(['release', 'hand', 'sprint', 'petControl', 'retreat', 'summonOnTheWayBack', 'rejoinFight', 'rez', 'petHeal', 'summonPet', 'tank', 'guard', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
     });
 
     test('a Theurgist: fnfPet before the fight and nothing else, as there is no window pet to look after', () => {
-        expect(names(withPets(pve.nuker, FNF))).toEqual(['release', 'healer', 'sprint', 'retreat', 'flee', 'crowdControl', 'emergencyHeal', 'position', 'fnfPet', 'assist', 'shedLoad', 'holdFormation', 'buff', 'rest']);
+        expect(names(withPets(pve.nuker, FNF))).toEqual(['release', 'healer', 'sprint', 'retreat', 'flee', 'rez', 'crowdControl', 'emergencyHeal', 'position', 'fnfPet', 'assist', 'shedLoad', 'holdFormation', 'buff', 'rest']);
     });
 
     test('a window pet from an earlier script, with no summon of its own: petControl alone', () => {
-        expect(names(withPets(pve.nuker, WINDOW))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'flee', 'crowdControl', 'emergencyHeal', 'position', 'assist', 'shedLoad', 'holdFormation', 'buff', 'rest']);
+        expect(names(withPets(pve.nuker, WINDOW))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'flee', 'rez', 'crowdControl', 'emergencyHeal', 'position', 'assist', 'shedLoad', 'holdFormation', 'buff', 'rest']);
     });
 
     test('a strategy\'s memberBehaviors, literal lists without some of the names', () => {
@@ -1091,7 +1180,7 @@ describe('withPets: where they go', () => {
     test('with a character in the list before it: its routine stays, and a fight with a name of its own counts as none', () => {
         const own = (name: string): Behavior => ({ name, run: () => false });
         const list = withCharacter(pve.nuker as Behavior[], { react: [own('myHeal')], fight: [own('myFight')], chores: [own('myChore')] });
-        expect(names(withPets(list, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'flee', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'myHeal', 'myFight', 'myChore', 'petHeal', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
+        expect(names(withPets(list, MAIN))).toEqual(['release', 'healer', 'sprint', 'petControl', 'retreat', 'flee', 'rez', 'crowdControl', 'emergencyHeal', 'summonPet', 'position', 'myHeal', 'myFight', 'myChore', 'petHeal', 'shedLoad', 'holdFormation', 'petBuff', 'buff', 'rest']);
     });
 
     describe('petKit: from the spell list and the window', () => {
@@ -1132,6 +1221,71 @@ describe('withPets: where they go', () => {
             expect(kit([ofType('SummonNecroPet')], { pet: {}, isShade: true }).window).toBe(false);
             expect(kit([ofType('SummonAnimistPet')], { pet: {} }).window).toBe(false);
             expect(withPets(pve.nuker, kit([ofType('SummonAnimistPet')], { pet: {} }))).toBe(pve.nuker);
+        });
+    });
+});
+
+describe('a character\'s say in its pet (Character.pet)', () => {
+    const ofType = (type: string) => { for (let id = 1; id < 60_000; id++) if (getSpell(id)?.type === type) return id; throw new Error(`no spell of type ${type}`); };
+    const sdkKnowing = (type: string, pet: Partial<PetState> | null = null) => {
+        const id = ofType(type);
+        const spell = { name: getSpell(id)!.name, internalId: id, level: 20, lineName: '', lineIndex: 0, spellIndex: 0, cooldownRemaining: 0 } as Spell;
+        return { getSkills: () => ({ spells: [spell] }), getPlayer: () => ({ mana: 500 }), getPetState: () => pet } as unknown as BotSDK;
+    };
+    const bot = { getSpellInfo: (s: Spell) => getSpell(s.internalId) ?? null } as unknown as BotActions;
+    const nuker = () => defaultBehaviors().nuker;
+
+    test('pet: false, no kit: its list is the role\'s, whatever it knows, and an Enchanter beside it keeps hers', () => {
+        expect(memberPetKit(sdkKnowing('SummonDruidPet'), bot, { pet: false })).toBeNull();
+        const list = nuker();
+        expect(withPets(list, memberPetKit(sdkKnowing('SummonDruidPet'), bot, { pet: false }))).toBe(list);
+        expect(withPets(list, memberPetKit(sdkKnowing('SummonUnderhill'), bot, null)).map(b => b.name)).toContain('summonPet');
+        expect(withPets(list, memberPetKit(sdkKnowing('SummonUnderhill'), bot, {})).map(b => b.name)).toContain('summonPet');
+    });
+
+    test('nor a pet up from an earlier script: petControl leaves it, as with pet.enabled false', () => {
+        expect(memberPetKit(sdkKnowing('Charm', {}), bot, { pet: false })).toBeNull();
+    });
+
+    test('a kit with no floor is petKit\'s', () => {
+        expect(memberPetKit(sdkKnowing('SummonTheurgistPet'), bot, null)).toEqual({ main: false, fnf: true, window: false });
+    });
+
+    describe('fnfFloor: a Theurgist\'s kit binds his pets too (thrifty wraps only assist)', () => {
+        const AIR = pick({ name: 'Summon Aged Ice Spirit', type: 'SummonTheurgistPet', target: 'Enemy', power: -12, range: 2000 });
+        const casts = async (kit: PetKit | null, manaPercent: number, settings = PVE_SETTINGS) => {
+            const fnf = withPets(nuker(), kit).find(b => b.name === 'fnfPet')!;
+            const w = world({ pet: null, fnf: AIR, contacts: [held({ hp: 90, lossSince: Date.now() - 3000, lossFromHp: 100 })], orders: { focus: FOCUS }, player: { mana: manaPercent * 10, manaPercent }, settings });
+            await fnf.run(w.ctx);
+            return w.calls.summon.length;
+        };
+        const kit = (saveBelow?: number) => memberPetKit(sdkKnowing('SummonTheurgistPet'), bot, theurgist(saveBelow === undefined ? {} : { saveBelow }));
+
+        test('at 39 % with the kit on: no pet, as no nuke', async () => {
+            expect(await casts(kit(), 39)).toBe(0);
+            expect(await casts(kit(), 40)).toBe(1);
+        });
+
+        test('saveBelow moves it', async () => {
+            expect(await casts(kit(30), 29)).toBe(0);
+            expect(await casts(kit(30), 30)).toBe(1);
+        });
+
+        test('no kit: pet.fnfFloor alone, as ever', async () => {
+            expect(await casts(memberPetKit(sdkKnowing('SummonTheurgistPet'), bot, null), 20)).toBe(1);
+            expect(await casts(memberPetKit(sdkKnowing('SummonTheurgistPet'), bot, null), 19)).toBe(0);
+        });
+
+        test('the higher of the two: a run can still take pets off (--pet.fnfFloor=101), and the kit can\'t lower the run\'s', async () => {
+            const high = { ...PVE_SETTINGS, pet: { ...PET_SETTINGS, fnfFloor: 50 } };
+            expect(await casts(kit(), 45, high)).toBe(0);
+            expect(await casts(kit(), 50, high)).toBe(1);
+        });
+
+        test('the role and the fight of the kit are as they were', () => {
+            expect(theurgist().role).toBe('nuker');
+            expect(theurgist().fight!.map(b => b.name)).toEqual(['assist']);
+            expect(theurgist().pet).toEqual({ fnfFloor: 40 });
         });
     });
 });
@@ -1215,6 +1369,18 @@ describe('pet.enabled false: the group has no pets', () => {
         expect(petsAllowed({ pet: {} })).toBe(true);
         expect(petsAllowed({})).toBe(true);
         expect(petsAllowed(undefined)).toBe(true);
+    });
+
+    test('a character with pet: false reports none either, with the others of the group going on with theirs', () => {
+        const state = makeState({ gameMessages: [], pet: null });
+        const spell = { name: getSpell(SUMMON_ID)!.name, internalId: SUMMON_ID, level: 20, lineName: '', lineIndex: 0, spellIndex: 0, cooldownRemaining: 0 } as Spell;
+        const sdk = { getState: () => state, getPlayer: () => state.player, getSkills: () => ({ spells: [spell] }), getGameMessages: () => state.gameMessages, onStateUpdate: () => () => {} } as unknown as BotSDK;
+        const bot = { getSpellInfo: (s: Spell) => getSpell(s.internalId) ?? null } as unknown as BotActions;
+        const board = new Blackboard();
+        const agent = new MemberAgent({ bot: 'hunter', role: 'melee', sdk, actions: bot, character: { pet: false } }, board, [], { pet: PET_SETTINGS });
+        expect(board.picture().members[0]!.capabilities.pet).toBeNull();
+        agent.dispose();
+        expect(agentReport({ pet: PET_SETTINGS }).capabilities.pet).toBe('main');
     });
 
     test('a member reports no pet to keep up, whatever its spell list: the agent says so, with the rest of what it can do as it was', () => {
@@ -1590,6 +1756,42 @@ describe('summonPet: threats, not the phase', () => {
         const tankList = names(withPets(defaultBehaviors().tank, { main: true }));
         expect(tankList.indexOf('summonPet')).toBeLessThan(tankList.indexOf('tank'));
     });
+
+    describe('with rejoinFight on the list: it takes every turn of the walk back, and at the end of it the fight is too near for a summon', () => {
+        const inRvr = (o: WorldOptions) => {
+            const w = world({ pet: null, summon: SUMMON, orders: { phase: 'engage', anchor: ANCHOR, focus: FOCUS }, ...o });
+            const list = withPets(rvrBehaviors().nuker as Behavior[], { main: true }) as Behavior<TacticsSettings>[];
+            return { w, onTheWay: list.find(b => b.name === 'summonOnTheWayBack')!, list: list.map(b => b.name) };
+        };
+
+        test('a release far off: the summon goes before the walk', async () => {
+            const { w, onTheWay, list } = inRvr({ at: { x: ANCHOR.x + 25_000, y: ANCHOR.y } });
+            expect(list.indexOf('summonOnTheWayBack')).toBeLessThan(list.indexOf('rejoinFight'));
+            expect(await onTheWay.run(w.ctx)).toBe(true);
+            expect(w.calls.summon.length).toBe(1);
+        });
+
+        test('near the fight it has no say: a rez and the heals stay above summonPet', async () => {
+            const { w, onTheWay, list } = inRvr({ at: { x: ANCHOR.x + 3000, y: ANCHOR.y } });
+            expect(await onTheWay.run(w.ctx)).toBe(false);
+            expect(w.calls.summon).toEqual([]);
+            expect(list.indexOf('rez')).toBeLessThan(list.indexOf('summonPet'));
+            expect(list.indexOf('emergencyHeal')).toBeLessThan(list.indexOf('summonPet'));
+        });
+
+        test('its gate still holds on the way: an enemy near us, or short of power', async () => {
+            const hostile = inRvr({ at: { x: ANCHOR.x + 25_000, y: ANCHOR.y }, contacts: [mob(77, 200, { x: ANCHOR.x + 25_100, y: ANCHOR.y, threat: true })] });
+            expect(await hostile.onTheWay.run(hostile.w.ctx)).toBe(false);
+            expect(hostile.w.calls.summon).toEqual([]);
+            const poor = inRvr({ at: { x: ANCHOR.x + 25_000, y: ANCHOR.y }, player: { mana: 100, manaPercent: 10 } });
+            expect(await poor.onTheWay.run(poor.w.ctx)).toBe(false);
+            expect(poor.w.skips).toEqual(['pet: saving power']);
+        });
+
+        test('a list with no rejoinFight has no such entry', () => {
+            expect(withPets(defaultBehaviors().nuker, { main: true }).some(b => b.name === 'summonOnTheWayBack')).toBe(false);
+        });
+    });
 });
 
 describe('"pet: saving power" is seen', () => {
@@ -1726,7 +1928,7 @@ describe('crowdControl: an NPC under 75 %', () => {
     const ADD = 52;
     const ccWorld = (add: Contact, spell: unknown, o: WorldOptions = {}) => {
         const w = world({ contacts: [held(), add], orders: { focus: FOCUS, cc: [] }, ...o });
-        (w.ctx as unknown as { spells: { cc: () => unknown } }).spells.cc = () => spell;
+        (w.ctx as unknown as { spells: { cc: (opts?: { except?: string[] }) => unknown } }).spells.cc = opts => (opts?.except?.includes((spell as { kind: string }).kind) ? null : spell);
         return w;
     };
     const add = (hp: number) => mob(ADD, 5000, { target: 'Owner', hp, threat: true });
@@ -1756,7 +1958,7 @@ describe('crowdControl: an NPC under 75 %', () => {
         const marks: unknown[][] = [];
         (w.ctx as unknown as { markCc: (...a: unknown[]) => void }).markCc = (...a) => { marks.push(a); };
         expect(await crowdControl().run(w.ctx)).toBe(true);
-        expect(w.calls.cast[0]).toEqual([ROOT.spell, ADD]);
+        expect(w.calls.cast[0]).toEqual([ROOT.spell, ADD, {}]);
         expect(marks[0]![1]).toBe('root');
     });
 
@@ -1765,12 +1967,12 @@ describe('crowdControl: an NPC under 75 %', () => {
         (w.ctx as unknown as { spells: { root: () => unknown } }).spells.root = () => ROOT;
         (w.ctx as unknown as { markCc: () => void }).markCc = () => {};
         await crowdControl({ assignedOnly: true }).run(w.ctx);
-        expect(w.calls.cast[0]).toEqual([ROOT.spell, ADD]);
+        expect(w.calls.cast[0]).toEqual([ROOT.spell, ADD, {}]);
         const whole = ccWorld(add(80), MEZZ);
         (whole.ctx as unknown as { spells: { root: () => unknown } }).spells.root = () => ROOT;
         (whole.ctx as unknown as { markCc: () => void }).markCc = () => {};
         await crowdControl().run(whole.ctx);
-        expect(whole.calls.cast[0]).toEqual([MEZZ.spell, ADD]);
+        expect(whole.calls.cast[0]).toEqual([MEZZ.spell, ADD, {}]);
     });
 
     test('a root has no such floor, and a player none', async () => {
@@ -1787,9 +1989,12 @@ describe('crowdControl: an NPC under 75 %', () => {
     test('the line itself, for one that fell during the cast: as effectImmune, left alone by us and marked for the other mezzers', async () => {
         const w = ccWorld(add(76), MEZZ, { castSpell: () => ({ effectImmune: true, resisted: false }) as never });
         const marked: unknown[] = [];
-        (w.ctx as unknown as { markCcImmune: (...a: unknown[]) => void }).markCcImmune = (...a) => { marked.push(a); };
+        (w.ctx as unknown as { markCcImmune: (id: number, kind: string, ms: number) => void }).markCcImmune = (id, kind, ms) => {
+            marked.push([id, kind, ms]);
+            w.ctx.contact(id)!.ccImmune = { [kind]: Date.now() + ms };
+        };
         await crowdControl().run(w.ctx);
-        expect(marked).toEqual([[ADD, 60_000]]);
+        expect(marked).toEqual([[ADD, 'mezz', 60_000]]);
         await crowdControl().run(w.ctx);
         expect(w.calls.cast.length).toBe(1);
     });

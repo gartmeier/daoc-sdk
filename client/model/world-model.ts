@@ -11,7 +11,7 @@ import type {
 import { getZone } from '../../data/zones';
 import { mobRunInMs } from '../../sdk/mob-speed';
 import { ServerOp } from '../protocol/opcodes';
-import { chatTypeName, decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseSpeech } from '../protocol/incoming/chat';
+import { chatTypeName, decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseResurrectionOffer, parseSpeech } from '../protocol/incoming/chat';
 import {
     decodeAttackMode, decodeChangeGroundTarget, decodeChangeTarget, decodeCombatAnimation, decodeConcentrationList, decodeDisableSkills,
     decodeInterrupt, decodePlayerDeath, decodeRevive, decodeSpellCastAnimation, decodeSpellEffect, decodeUpdateIcons,
@@ -85,7 +85,8 @@ export function coinDrops(copper: number): Array<[slot: number, amount: number]>
 /**
  * Reverse of GlobalConstants.GetSpecToInternalIndex (GlobalConstants.cs:801-891), which the server
  * writes as the bonus byte of a 0x16/01 style entry (PacketLib1112.cs:150). Values are the Specs
- * constants (SkillConstants.cs:467-842), i.e. the specialization names in the same skill list.
+ * constants (SkillConstants.cs:467-842), i.e. the DB keys: the same skill list shows four lines
+ * under another name ('Shields' as 'Shield', data/spec-names.ts).
  */
 export const SPEC_BY_INTERNAL_INDEX: Readonly<Record<number, string>> = {
     0x01: 'Slash', 0x02: 'Thrust', 0x08: 'Parry', 0x0E: 'Sword', 0x10: 'Hammer', 0x11: 'Axe', 0x12: 'Left Axe',
@@ -132,6 +133,8 @@ export interface NpcEntry {
     targetAt: number;
     /** When a 0x1B by it last named targetId, or a 0x72 by it began with one on us or a pet of ours: a caster reads 0 in 0xA1 between casts (PacketLib168.cs:820). */
     castAt: number;
+    /** targetId stands on a spell alone, not on what the server said of it or a swing: its 0x1B or a damage spell's 0xBC named it, or it is held through 0xA1's 0 (NearbyNpc.targetBySpell). */
+    bySpell: boolean;
     /** A mob handed to us at the loss of a pet: until when its run at us lasts, reading 0xFFFF all the way. Over at its next real id or 0. */
     chaseUntil: number;
     /** When that run began, and how far off it read last: it goes on as long as it comes nearer. */
@@ -286,6 +289,8 @@ function newSelf(): SelfState {
 }
 
 export function guessNpcRole(name: string, guild: string): string | null {
+    // Blacksmith.cs's guild: repairs, and buys and sells nothing (PlayerSellRequestHandler.cs:32-40).
+    if (guild === 'Smith') return 'smith';
     const t = `${guild} ${name}`.toLowerCase();
     if (/merchant|vendor|shopkeep|smith|armou?r|weapon|tailor|fletcher|baker|grocer|provision|supplies|arrow|bowyer|dyes?\b|poison/.test(t)) return 'merchant';
     if (/trainer|master\b|mentor|instructor|lord|lady|elder/.test(guild.toLowerCase())) return 'trainer';
@@ -300,6 +305,11 @@ export function guessNpcRole(name: string, guild: string): string | null {
 
 const dist3 = (a: PositionRef, b: PositionRef): number => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 const dist2 = (a: PositionRef, b: PositionRef): number => Math.hypot(a.x - b.x, a.y - b.y);
+
+/** eInventoryWindowType.PlayerVault: the window a vault keeper opens (VaultKeeper.cs:78, IPacketLib.cs:466). */
+const PLAYER_VAULT_WINDOW = 3;
+const FIRST_VAULT_SLOT = 110;
+const LAST_VAULT_SLOT = 149;
 
 /** item.Type_Damage in the merchant window's type byte (PacketLib1125.cs:689). */
 const MERCHANT_DAMAGE_TYPES: Record<number, MerchantItem['damageType']> = { 1: 'crush', 2: 'slash', 3: 'thrust' };
@@ -365,6 +375,8 @@ export class WorldModel {
     npcDialog: NpcDialog | null = null;
     dialog: DialogBox | null = null;
     textWindow: TextWindow | null = null;
+    /** When a vault keeper last opened the vault: an empty one sends nothing else, and a closed one sends nothing at all. */
+    vaultOpenedAt: number | null = null;
     /** Replaced per 0xEA, never mutated: snapshots share it. */
     trade: TradeWindow | null = null;
     /**
@@ -523,6 +535,7 @@ export class WorldModel {
     private comesForUs(n: NpcEntry, now: number): void {
         const me = this.hooks.selfPosition?.();
         n.targetId = this.self.objectId;
+        n.bySpell = false;
         n.targetAt = now;
         const distance = me ? dist2(this.npcPosition(n, now), me) : Infinity;
         const run = me ? mobRunInMs(distance, n.healthPercent) : 0;
@@ -675,7 +688,7 @@ export class WorldModel {
                     objectId: d.objectId, name: d.name, guildName: d.guildName, level: d.level, model: d.model,
                     realm: d.realm, x: d.x, y: d.y, z: d.z, heading: d.heading, speed: d.speed, dest: null,
                     // Our pet comes back with no prev after a same-region jump or a cull (GameNPC.cs:2024-2064), wounded as it was.
-                    healthPercent: prev?.healthPercent ?? (d.objectId === this.pet?.objectId ? this.petHealth : 100), targetId: prev?.targetId ?? 0, targetAt: prev?.targetAt ?? 0, castAt: prev?.castAt ?? 0, chaseUntil: prev?.chaseUntil ?? 0,
+                    healthPercent: prev?.healthPercent ?? (d.objectId === this.pet?.objectId ? this.petHealth : 100), targetId: prev?.targetId ?? 0, targetAt: prev?.targetAt ?? 0, castAt: prev?.castAt ?? 0, bySpell: prev?.bySpell ?? false, chaseUntil: prev?.chaseUntil ?? 0,
                     chaseFrom: prev?.chaseFrom ?? 0, chaseDist: prev?.chaseDist ?? Infinity, clearedId: prev?.clearedId ?? 0, clearedAt: prev?.clearedAt ?? 0,
                     isPeaceful: d.isPeaceful, isTargetable: !d.cantTarget, hasQuest: d.questAvailable || d.questFinish,
                     isPet: d.isPet, firstSeenAt: prev?.firstSeenAt ?? now, lastUpdate: now,
@@ -722,6 +735,9 @@ export class WorldModel {
                         if (onOurs && targetId === TARGET_UNNAMED && npc.chaseUntil > 0) this.chaseGoesOn(npc, now);
                         const chasing = targetId === TARGET_UNNAMED && (now - npc.targetAt <= MOB_CHASE_HOLD_MS || now <= npc.chaseUntil);
                         const holds = onOurs && (late || chasing || (targetId === 0 && now - npc.castAt <= PET_AIM_HOLD_MS));
+                        // Held through a 0, only its spell names it; held through a 65535, it is running at us; and the server's own id is its word. A late id says nothing.
+                        if (!holds) npc.bySpell = false;
+                        else if (!late) npc.bySpell = targetId === 0;
                         if (!holds) {
                             // A mob that stops swinging to cast reads 0, and that can come before its 0x72 (PacketLib168.cs:820-828). A mob that goes home sends none.
                             if (onOurs && targetId === 0) {
@@ -867,6 +883,7 @@ export class WorldModel {
                 });
                 if (d.health > 0 && wasDead) {
                     s.isDead = false;
+                    this.closeResurrectionOffer();
                     this.signal('revived');
                 } else if (d.health === 0 && d.maxHealth > 0 && !wasDead) {
                     this.markSelfDead(now);
@@ -916,6 +933,11 @@ export class WorldModel {
                 return this.applyVarious(p);
             case ServerOp.InventoryUpdate: {
                 const d = decodeInventoryUpdate(p);
+                // The first packet of the keeper's answer; a vault past max_items_per_packet goes on with window 0 (PacketLib168.cs:1752-1763).
+                if (d.windowType === PLAYER_VAULT_WINDOW) {
+                    this.vaultOpenedAt = now;
+                    for (const slot of this.items.keys()) if (slot >= FIRST_VAULT_SLOT && slot <= LAST_VAULT_SLOT) this.items.delete(slot);
+                }
                 for (const { slot, item } of d.items) {
                     if (item.empty) this.items.delete(slot);
                     else this.items.set(slot, toInventoryItem(slot, item));
@@ -927,7 +949,8 @@ export class WorldModel {
                 return true;
             case ServerOp.Dialog: {
                 const d = decodeDialog(p);
-                this.dialog = { isOpen: true, code: d.code, data: d.data, type: d.type, text: d.text, receivedAt: now };
+                const resurrection = parseResurrectionOffer(d.text);
+                this.dialog = { isOpen: true, code: d.code, data: d.data, type: d.type, text: d.text, receivedAt: now, ...(resurrection ? { resurrection } : {}) };
                 this.signal('dialog');
                 return true;
             }
@@ -1063,6 +1086,8 @@ export class WorldModel {
                     // A DoT's tick comes with no 0x1B (DoTSpellHandler.cs:169): it says who the spell landed on some time ago, not who the mob is on now.
                     const tick = d.resultCode === SPELL_DAMAGE_RESULT && !!att && att.targetId !== d.defenderId && this.isUsOrOwnPet(att.targetId) && now - att.targetAt <= PET_AIM_HOLD_MS;
                     if (att && !tick) {
+                        // A swing is its own word. A spell's damage names it as a 0x1B does, and says nothing new of one named already.
+                        att.bySpell = d.resultCode === SPELL_DAMAGE_RESULT && (att.bySpell || att.targetId !== d.defenderId);
                         att.targetId = d.defenderId;
                         att.targetAt = now;
                     }
@@ -1081,6 +1106,7 @@ export class WorldModel {
                     caster.targetId = caster.clearedId;
                     caster.clearedId = 0;
                     caster.castAt = now;
+                    caster.bySpell = true;
                 }
                 return true;
             }
@@ -1109,6 +1135,7 @@ export class WorldModel {
                         caster.targetId = d.targetId;
                         caster.targetAt = now;
                         caster.castAt = now;
+                        caster.bySpell = true;
                     }
                 }
                 return true;
@@ -1135,6 +1162,7 @@ export class WorldModel {
                 const d = decodeRevive(p);
                 if (d.objectId === this.self.objectId) {
                     this.self.isDead = false;
+                    this.closeResurrectionOffer();
                     this.signal('revived');
                 }
                 const pl = this.players.get(d.objectId);
@@ -1278,6 +1306,7 @@ export class WorldModel {
             sender: speech?.sender ?? null, popup: d.popup, receivedAt: now,
         };
         this.messages.push(msg);
+        if (d.text === 'Your resurrection spell has expired.') this.closeResurrectionOffer();
         if (this.messages.length > MAX_MESSAGES) this.messages.splice(0, this.messages.length - MAX_MESSAGES);
 
         // NPC dialog: GameNPC.SayTo sends CT_System with the '##' popup prefix (GameNPC.cs:2579-2601),
@@ -1316,6 +1345,15 @@ export class WorldModel {
         if (target && target.name.toLowerCase() === lower) return target;
         for (const n of this.npcs.values()) if (n.name.toLowerCase() === lower) return n;
         return undefined;
+    }
+
+    /**
+     * The server sends no close for a dialog, so a rez question left open would stay open: it expires after
+     * 15 s (ResurrectSpellHandler.cs:215-222), and a release or a revive ends it. Code that answers "the
+     * open box" must not take it for its own.
+     */
+    private closeResurrectionOffer(): void {
+        if (this.dialog?.isOpen && this.dialog.resurrection) this.dialog = { ...this.dialog, isOpen: false };
     }
 
     private markSelfDead(now: number): void {
@@ -1454,6 +1492,7 @@ export class WorldModel {
                 lastSeenAgo: now - n.lastUpdate, firstSeenAt: n.firstSeenAt, guildName: n.guildName, level: n.level, model: n.model,
                 realm: realmName(n.realm), healthPercent: n.healthPercent, speed: n.speed,
                 targetObjectId: n.targetId && n.targetId !== 0xFFFF ? n.targetId : null,
+                ...(n.bySpell && n.targetId && n.targetId !== 0xFFFF ? { targetBySpell: true } : {}),
                 inCombat: n.targetId !== 0, isPeaceful: n.isPeaceful, isTargetable: n.isTargetable,
                 hasQuest: n.hasQuest, isPet: n.isPet, role: n.isPet ? null : guessNpcRole(n.name, n.guildName),
             });
@@ -1578,6 +1617,6 @@ function toInventoryItem(slot: number, d: ItemData): InventoryItem {
     return {
         slot, name: d.name, level: d.level, count: d.count, model: d.model, objectType: d.objectType,
         condition: d.condition, durability: d.durability, quality: d.quality, weight: d.weight,
-        value1: d.value1, value2: d.value2,
+        value1: d.value1, value2: d.value2, hand: d.hand,
     };
 }

@@ -10,10 +10,10 @@ const byLevel = bot.findKillableNpc({ maxLevelDiff: 1, minLevelDiff: -1 });
 ```
 
 - **Alone at low level, hunt below your level.** The default reaches up to yellow, which is too high for a fresh melee. A Hibernian Warden at levels 1-6: 63 fights two levels below it with no death, 26 fights one below with 1, 2 fights at its own level with 1. A Blademaster lost 6 of 6 at its own level at level 3. In con terms that is `maxCon: -1`. Casters weren't measured, and a group is different ([group-coordination.md](group-coordination.md)).
-- **Killable** means the NPC is attackable, has realm `'none'` (a monster, not a realm NPC), and its role isn't one of merchant, trainer, guard, healer, stablemaster, vault, teleporter or service. Roles are guessed from the name and guild text; check `npc.role`.
+- **Killable** means the NPC is attackable, has realm `'none'` (a monster, not a realm NPC), and its role isn't one of merchant, trainer, guard, healer, stablemaster, vault, teleporter or service. Roles are guessed from the name and guild text; check `npc.role`. A lowercase name is a monster whatever role it reads as, so a dergan enchanter (`service`) stays huntable. A capitalised monster with such a word in its name (Undead Guard, Keeper Rasa) is refused.
 - **Engaged mobs are skipped:** ones already fighting someone else, and wounded ones not fighting us. `includeEngaged: true` keeps them.
 - **Con levels** (`conLevel(playerLevel, npcLevel)`, a port of `ConLevelGrid.cs`): -3 grey (no XP), -2 green, -1 blue, 0 yellow, 1 orange, 2 red, 3 purple. `conColor(n)` gives the name. At level 1 a level-0 spirit hound is blue.
-- `bot.getAttackers()` lists the NPCs targeting us, nearest first. Fight those first.
+- `bot.getAttackers()` lists the NPCs fighting us, nearest first: their reported target is us, or their swing or spell landed on us in the last 6 s. Fight those first. `npc.targetObjectId` alone misses a caster or a running mob: the server sends it only for a mob in attack state, able to turn, standing within its attack range, and a mob starting a timed cast leaves attack state (`PacketLib168.cs:820-828`, `StandardMobBrain.cs:442-443`). Seen live: a moss sheerie's spell landed at 427 units with `targetObjectId` null and `inCombat` false, and it stayed null while the mob ran in; a dergan enchanter at 446 reported the same between spells. A hit briefly shows as its target until the mob's next update. A caster that hasn't landed anything yet isn't listed: a cast start doesn't name its target.
 
 ## killNpc
 

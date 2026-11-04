@@ -153,6 +153,11 @@ export interface NearbyNpc extends WorldObjectBase {
      * A DoT's tick on one of ours names nobody when the mob was named on another of ours in the last 6 s: it has no 0x1B, and says where the spell landed some time ago.
      */
     targetObjectId: number | null;
+    /**
+     * `targetObjectId` stands on a spell alone: a mob casting from range at us or a pet of ours, with its 0x1B or its damage spell's 0xBC to go by, or held through 0xA1's 0 between casts.
+     * Its target for the bot's own fight all the same, as the server sends none (PacketLib168.cs:820-828). The group reads it as the others' clients do, from the spell (observeState, Contact.targetBySpell), so what is on a member isn't told by whose report came last. Absent otherwise: the server's own id, a swing, or a run at us (65535).
+     */
+    targetBySpell?: boolean;
     /** When the client first held this entry, on its clock (as `receivedAt`): a death under this id before then was another mob's, as the server hands ids on at once (Region.cs:955). Absent from an older client. */
     firstSeenAt?: number;
     inCombat: boolean;
@@ -213,6 +218,8 @@ export interface InventoryItem {
     /** Raw value fields from ItemData (DPS/AF, SPD/ABS etc. depending on type). */
     value1: number;
     value2: number;
+    /** See ItemHand. Only a weapon's means anything. */
+    hand: number;
 }
 
 export const EquipmentSlot = {
@@ -340,6 +347,7 @@ export const ItemHand = { MainHand: 0, TwoHanded: 1, FitsLeft: 2 } as const;
 // ── Skills / spells ─────────────────────────────────────────────────────────
 
 export interface Specialization {
+    /** The server's display name, not always the key elsewhere: 'Shield' (key Shields), 'Light Magic' (key Light). sdk.findSpecialization takes either. */
     name: string;
     level: number;
     internalId: number;
@@ -408,6 +416,7 @@ export interface Style {
     name: string;
     internalId: number;
     specLevel: number;
+    /** The line's DB key, so 'Shields' where the skill list says 'Shield': find its level with sdk.findSpecialization(specName). */
     specName: string | null;
     /** Index to pass to the useSkill action. */
     skillIndex: number;
@@ -502,6 +511,14 @@ export interface DialogBox {
     type: number;
     text: string;
     receivedAt: number;
+    /** Set when this box is a resurrection offer. */
+    resurrection?: ResurrectionOffer;
+}
+
+/** Another player's rez waiting for our answer: who cast it and the health it restores. It expires after 15 s, and the caster's power is gone then. */
+export interface ResurrectionOffer {
+    caster: string;
+    healthPercent: number;
 }
 
 export type BonusCategory =
@@ -524,12 +541,23 @@ export interface ItemBonus {
     unit: 'pts' | '%' | 'lvls' | null;
     /** category 'stat'. */
     stat?: 'STR' | 'DEX' | 'CON' | 'QUI' | 'INT' | 'PIE' | 'EMP' | 'CHR' | 'ACU';
-    /** category 'skill' and 'focus': the specialization's name in classes.json, null when no class has one. */
+    /** category 'skill' and 'focus': the specialization's DB key, as in classes.json (sdk.findSpecialization takes it), null when no class has one. */
     spec?: string | null;
     /** category 'skill': its ePropertyType group; 'skillGroup': the group it raises, null for "All Skills". */
     group?: SkillGroup | null;
     /** The line as the server sent it. */
     text: string;
+}
+
+/** A weapon's "Damage Modifiers" lines. */
+export interface WeaponDelve {
+    baseDps: number;
+    /** DPS at this character's level (GamePlayer.GetWeaponDpsCap). */
+    clampedDps: number;
+    /** Seconds per swing. */
+    speed: number;
+    quality: number;
+    condition: number;
 }
 
 export interface ParsedDelve {
@@ -581,6 +609,7 @@ export interface MerchantState {
 
 export interface TrainerSpec {
     index: number;
+    /** The server's display name, as in Specialization.name. */
     name: string;
     level: number;
     /** Cost in spec points to train the next level. */
@@ -751,6 +780,8 @@ export interface BotWorldState {
     equipment: InventoryItem[];
     /** Vault items, populated after the vault window has been opened. */
     vault: InventoryItem[];
+    /** When a vault keeper last opened the vault in this client session; null or absent means `vault` says nothing yet. */
+    vaultOpenedAt?: number | null;
     skills: SkillsState;
     effects: Effect[];
     group: GroupMember[];

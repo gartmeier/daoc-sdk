@@ -102,8 +102,8 @@ export interface RunMemberView {
     role: Role;
     activity: Activity;
     effects: string[];
-    /** `pet`: what the group keeps up for it (Capabilities.pet); absent from a runner before pets. */
-    can: { heal: boolean; cc: boolean; nuke: boolean; pet?: Capabilities['pet'] };
+    /** `rez`: Capabilities.rez. `pet`: what the group keeps up for it (Capabilities.pet). Each is absent from a runner before it. */
+    can: { heal: boolean; cc: boolean; nuke: boolean; rez?: boolean; pet?: Capabilities['pet'] };
     /** Cumulative realm points (MemberReport.realmPoints), when the runner reports them. */
     realmPoints?: number;
     /** Runner clock. */

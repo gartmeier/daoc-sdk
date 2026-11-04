@@ -1,0 +1,64 @@
+# Cleric
+
+Albion's healer and buffer: heals from Rejuvenation, every stat buff from Enhancement, and from Smite a nuke and a stun. For every spell, level and cost on this server run `bun data/class-sheet.ts Cleric`; for what a build reaches and which behaviour casts it, `bun sdk/classes/reach.ts Cleric "Healer"`. This file holds what those don't say.
+
+- **Verified:** measured live on this server.
+- **Server code:** read from the server source or data, or worked out by the same `Spellbook` a member fights with.
+- **Community, unverified:** other players' advice, written for other servers and patches.
+
+## No kit
+
+There is no `sdk/classes/cleric.ts`. `roleForClass` makes a Cleric a healer and the list casts what the bot knows, so a kit would hold nothing of the class's own. Nimue runs on the plain role list.
+
+## Builds
+
+`bots/<bot>/build.ts` starts as a copy from `data/builds/cleric.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
+
+| Character level | Points | Healer: Rejuvenation / Enhancement / Smite | Buffer: Enhancement / Rejuvenation / Smite | Smite: Smite / Rejuvenation / Enhancement |
+|---|---|---|---|---|
+| 10 | 54 | 7 / 7 / 1 | 7 / 7 / 1 | 7 / 1 / 7 |
+| 20 | 209 | 18 / 7 / 1 | 16 / 11 / 1 | 14 / 1 / 14 |
+| 24 | 299 | 19 / 14 / 1 | 21 / 11 / 1 | 18 / 6 / 14 |
+| 30 | 464 | 26 / 14 / 1 | 26 / 14 / 1 | 25 / 6 / 14 |
+| 40 | 819 | 37 / 14 / 1 | 32 / 23 / 1 | 36 / 6 / 14 |
+| 50 | 1494 | 41 / 35 / 3 | 42 / 33 / 7 | 44 / 23 / 21 |
+
+Nimue plays Healer. **Server code:** Rejuvenation 19 is Greater Revival (263) against 197 at 14 and 145 at 11. **Community, unverified:** Buffer is the standard Cleric in three sources. Healer's numbers come from a post about two Clerics in one group, and the group here has one.
+
+A Cleric's heals live in the skills list, the hybrid path: `castSpell` handles it ([spells.md](../spells.md)). Promotion at 5: `join the Church of Albion` (**verified**, Lady Winchell). Studded from 10 ([merchants.md](../merchants.md)).
+
+## Healer at 24 in Thidranki
+
+**Server code,** Rejuvenation 19, Enhancement 14, Smite 1:
+
+- **Heals:** the cheapest that covers, up to Greater Revival (263, 3.4 s, 52 power). Greater Recuperation stands out at 145 for 15 power, against 172 for 30, and it takes 3.6 s.
+- **Her instant is rarely picked.** Gift of the Heavens is 40 % of her health, 230 on her template's 575, and a heal on a timer waits until nothing else covers. Greater Revival covers more, and past 263 `pickHeal` falls back to whatever restores most. So it goes off only when she's too short of power for anything bigger. A Healer's and Druid's 55 % does go off ([healer.md](healer.md)).
+- **No crowd control.** Heavenly Visions, her only mezz, is point-blank, so she doesn't count as a mezzer (**verified:** rounds on 2026-11-01). The group's control is the Sorcerer's mezz and two roots.
+- **Rez:** Raise Fallen, at Rejuvenation 15.
+- **Reached, and no behaviour casts it:** Stunning Flare (stun, 2.5 s, 5 s), Heaven's Commendation and the other group heals, the cures. Minor Judgement (54, 3 s, 15 power) is in reach of `assist`, which the healer's list doesn't have.
+
+## More buffs than she can hold
+
+**Server code.** She's the only provider of almost everything in a group with no Bard, so her plan is the largest of any character here: 32 buffs for 232 concentration. Piety 89 and the template's 36 make a pool of 210 ([druid.md](druid.md)). Walking the plan in its order, 5 don't fit: Blessed Coordination on the tank and all four Renewals. Those are the least of it, as `BUFF_NEEDS` wants them, so the pool is about right.
+
+- **Renewal shares a slot:** it's a health regen, and `slotOf` puts every regen in `regen`, so she stands in the plan for Merlin's power regen on Morgana and Taliesin ([sorcerer.md](sorcerer.md)).
+- **Buffer's Enhancement 21** would buy rank upgrades, not more of them: each costs more concentration, so a Buffer would drop more than this.
+
+**Verified, weight:** 90 % load after the template, the second heaviest of the 15.
+
+## What the reports show
+
+**Verified,** six Camelot RvR rounds at level 24, 46 minutes, to 2026-11-03 21:48:
+
+| Deaths | Heals | Rez | `heal:crowd_controlled` | `heal:interrupted` | Targeted | In melee | Moving in fights | Idle in fights |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 47 | 1 | 29 | 14 | 12 % | 6 % | 28 % | 51 % |
+
+- **She's the least targeted healer of the three realms** (12 % against 20-24 %), and the most idle: "nothing to do" 820 times. With no mezz or root she has nothing but heals to cast, and 43 were refused or interrupted against 47 that landed.
+- **Nearly no rezzes:** 1 in 46 minutes, with every death walking 17-23k back from the portal keep (Camelot's log). `rez` needs a quiet moment and no enemy near ([group-coordination.md](../group-coordination.md)).
+
+## Not supported yet
+
+- **Stunning Flare on an enemy healer:** asked for in the group's log since the first RvR rounds. Nothing picks a stun for a target.
+- **Using the idle time:** `{ fight: [assist()] }` in her character would cast Minor Judgement as a Shaman's kit does ([shaman.md](shaman.md)). At Smite 1 its minimum is low ([mentalist.md](mentalist.md)), and it costs a fifth of what her big heal does. Not tried.
+- **Group heals** and **cures,** as for the Healer.

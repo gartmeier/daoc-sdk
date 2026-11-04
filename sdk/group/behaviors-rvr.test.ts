@@ -1,14 +1,15 @@
 // Behaviours against enemy players, run on a stub MemberContext: a fixed picture and orders,
 // our own client's view (getNearbyPlayer / getNearbyNpc), and bot actions that answer with
 // canned results. Region 9999 has no spawns, so safeSpot and safePath see no danger.
+import type { CcKind } from './cc';
 import { describe, expect, test } from 'bun:test';
 import type { CastResult, KillPlayerOptions, KillPlayerResult } from '../actions';
 import { executionContext } from '../execution-context';
 import type { CombatEvent, NearbyNpc, NearbyPlayer } from '../types';
-import { assist, ckey, crowdControl, fightRejoin, flee, heal, holdFormation, isDown, leashFallback, onMember, peelTarget, pull, rest, retreat, tank, type TacticsSettings } from './behaviors';
+import { assist, ckey, crowdControl, fightRejoin, flee, heal, holdFormation, isDown, leashFallback, onMember, peelTarget, pull, rejoinFight, rest, retreat, tank, type TacticsSettings } from './behaviors';
 import { contact, enemy, picture, report } from './fixtures';
 import type { MemberContext } from './member';
-import { PVE_SETTINGS } from './pve';
+import { assignCc, PVE_SETTINGS } from './pve';
 import type { Contact, MemberReport, Orders, Point, Role } from './types';
 
 const R = 9999;
@@ -48,7 +49,7 @@ interface StubOptions {
 function stub(o: StubOptions) {
     const calls = { killPlayer: [] as { id: number; opts: KillPlayerOptions }[], castSpell: [] as number[], walkTo: [] as Point[], attack: [] as number[], killNpc: [] as { id: number; opts: unknown }[], rest: 0 };
     const results: { kind: string; success: boolean; reason?: string; targetId: number | null }[] = [];
-    const marks: { targetId: number; kind: string; ms: number }[] = [];
+    const marks: { targetId: number; kind: string; ms: number; serverName?: string }[] = [];
     const skips: string[] = [];
     const meReport = report(o.name, { role: o.role, regionId: R, x: o.at.x, y: o.at.y, level: 20, objectId: 1 });
     const pic = picture([meReport, ...(o.members ?? [])], o.contacts ?? [], { phase: 'engage', anchor: ANCHOR, facing: { x: ANCHOR.x + 1000, y: ANCHOR.y }, ...o.orders });
@@ -68,6 +69,7 @@ function stub(o: StubOptions) {
             return c && visible(id) ? { ...nearby(c), kind: 'npc', speed: 0, model: 0, guildName: '', targetObjectId: null } as unknown as NearbyNpc : null;
         },
         sendAttack: async () => ({ success: true, message: '' }),
+        waitForCondition: async () => null,
         getSkills: () => ({ styles: [] }),
         getState: () => ({ effects: [], timestamp: Date.now(), combatEvents: o.combatEvents ?? [] }),
     };
@@ -90,7 +92,7 @@ function stub(o: StubOptions) {
     };
     const ctx = {
         name: o.name, role: o.role, settings: o.settings ?? LEASHED, memory: new Map<string, any>(), sdk, bot,
-        spells: { cc: () => ({ spell: { name: 'Mesmerize' }, kind: 'mezz', duration: 30 }), heal: () => o.healSpell ?? null, nuke: () => ({ spell: { name: 'Moon Blast' }, type: 'DirectDamage' }), capabilities: () => ({ heal: o.canHeal ?? true }) },
+        spells: { cc: (opts: { except?: string[] } = {}) => (opts.except?.includes('mezz') ? null : { spell: { name: 'Mesmerize' }, kind: 'mezz', duration: 30 }), heal: () => o.healSpell ?? null, nuke: () => ({ spell: { name: 'Moon Blast' }, type: 'DirectDamage' }), capabilities: () => ({ ccKinds: ['mezz'], heal: o.canHeal ?? true }) },
         me, picture: () => pic, orders: () => pic.orders, members: () => pic.members,
         member: (n: string) => pic.members.find(m => m.name === n),
         tank: () => pic.members.find(m => m.role === 'tank' && !m.isDead),
@@ -102,8 +104,8 @@ function stub(o: StubOptions) {
         skip: (reason: string) => { skips.push(reason); return false as const; },
         result: (kind: string, r: { success: boolean; reason?: string }, targetId: number | null = null) => { results.push({ kind, success: r.success, reason: r.reason, targetId }); },
         note: () => {},
-        markCc: (targetId: number, kind: string, ms: number) => { marks.push({ targetId, kind, ms }); },
-        markCcImmune: (targetId: number, ms: number) => { const c = pic.contacts.find(x => x.objectId === targetId); if (c) c.ccImmuneUntil = Date.now() + ms; },
+        markCc: (targetId: number, kind: string, ms: number, serverName?: string) => { marks.push({ targetId, kind, ms, ...(serverName ? { serverName } : {}) }); },
+        markCcImmune: (targetId: number, kind: CcKind, ms: number) => { const c = pic.contacts.find(x => x.objectId === targetId); if (c) (c.ccImmune ??= {})[kind] = Date.now() + ms; },
     } as unknown as MemberContext<TacticsSettings>;
     return { ctx, calls, results, marks, skips, pic };
 }
@@ -135,9 +137,36 @@ describe('onMember: what counts as an add on a member', () => {
         expect(onMember(pet(10_300), nuker)).toBe(true);
         expect(onMember(pet(11_500), nuker)).toBe(false);
     });
+    test('a monster on a member by its spell alone: only in melee reach, like a player (flee() would draw the member into the melee)', () => {
+        const caster = (x: number) => contact(60, { x, y: 10_000, target: 'Nuker', targetBySpell: true });
+        expect(onMember(caster(10_300), nuker)).toBe(true);
+        expect(onMember(caster(10_446), nuker)).toBe(false);
+    });
     test('never one that targets someone else or is crowd-controlled', () => {
         expect(onMember(foe(52, 10_100, 10_000, { target: 'Tank' }), nuker)).toBe(false);
         expect(onMember(foe(52, 10_100, 10_000, { target: 'Nuker', cc: { by: 'Healer', kind: 'mezz', until: Date.now() + 9000 } }), nuker)).toBe(false);
+    });
+});
+
+describe('pull', () => {
+    const pulling = (over: Partial<Contact>) => stub({
+        name: 'Tank', role: 'tank', at: { x: ANCHOR.x + 1500, y: ANCHOR.y },
+        contacts: [contact(60, { regionId: R, x: ANCHOR.x + 2000, y: ANCHOR.y, target: 'Tank', ...over })],
+        orders: { phase: 'pull', puller: 'Tank', focus: 60 }, settings: PVE_SETTINGS,
+    });
+
+    test('a mob the server has on the puller is walked back to the anchor', async () => {
+        const s = pulling({});
+        expect(await pull().run(s.ctx)).toBe(true);
+        expect(s.calls.walkTo.length).toBe(1);
+        expect(s.calls.attack).toEqual([]);
+    });
+
+    test('a caster on the puller by its spell alone is hit: it stands and casts, and walking back would leave the group waiting under its nukes', async () => {
+        const s = pulling({ targetBySpell: true });
+        expect(await pull().run(s.ctx)).toBe(true);
+        expect(s.calls.walkTo).toEqual([]);
+        expect(s.calls.attack).toEqual([60]);
     });
 });
 
@@ -179,6 +208,28 @@ describe('tank: peels and the chase leash', () => {
         const mob = contact(60, { regionId: R, x: 11_500, y: 11_500, threat: true, target: 'Healer', hostileSince: Date.now() - 1000 });
         const pve = stub({ name: 'Tank', role: 'tank', at: ANCHOR, members: [healer(10_000, 11_500)], contacts: [contact(51, { regionId: R, x: 10_300, y: 10_000, threat: true }), mob], orders: { focus: 51 }, settings: PVE_SETTINGS });
         expect(peelTarget(pve.ctx)?.objectId).toBe(60);
+    });
+
+    test('a monster casting at the healer from range is a peel, since a taunt takes it off; not while it is mezzed', () => {
+        const caster = (over: Partial<Contact> = {}) => contact(60, { regionId: R, x: 11_500, y: 11_500, threat: true, target: 'Healer', targetBySpell: true, hostileSince: Date.now() - 1000, ...over });
+        const pve = (add: Contact) => stub({ name: 'Tank', role: 'tank', at: ANCHOR, members: [healer(10_000, 11_500)], contacts: [contact(51, { regionId: R, x: 10_300, y: 10_000, threat: true }), add], orders: { focus: 51 }, settings: PVE_SETTINGS });
+        expect(peelTarget(pve(caster()).ctx)?.objectId).toBe(60);
+        expect(peelTarget(pve(caster({ cc: { by: 'Healer', kind: 'mezz', until: Date.now() + 9000 } })).ctx)).toBeNull();
+    });
+
+    test('with a leash, such a caster is a peel only inside it, and never away from an enemy player', () => {
+        const caster = (x: number) => contact(60, { regionId: R, x, y: 10_000, threat: true, target: 'Healer', targetBySpell: true, hostileSince: Date.now() - 1000 });
+        const monster = contact(51, { regionId: R, x: 10_300, y: 10_000, threat: true });
+        const leashed = (focus: Contact, add: Contact) => stub({ name: 'Tank', role: 'tank', at: ANCHOR, members: [healer(10_000, 11_500)], contacts: [focus, add], orders: { focus: 51 } });
+        expect(peelTarget(leashed(monster, caster(11_500)).ctx)?.objectId).toBe(60);
+        expect(peelTarget(leashed(monster, caster(12_500)).ctx)).toBeNull();
+        expect(peelTarget(leashed(focusAt(10_300), caster(11_500)).ctx)).toBeNull();
+    });
+
+    test('an enemy pet casting at the healer from range is no such peel: a taunt doesn\'t move an ordered pet', () => {
+        const pet = contact(60, { regionId: R, realm: 'midgard', isPet: true, x: 11_500, y: 11_500, threat: true, target: 'Healer', targetBySpell: true, hostileSince: Date.now() - 1000 });
+        const s = stub({ name: 'Tank', role: 'tank', at: ANCHOR, members: [healer(10_000, 11_500)], contacts: [contact(51, { regionId: R, x: 10_300, y: 10_000, threat: true }), pet], orders: { focus: 51 }, settings: PVE_SETTINGS });
+        expect(peelTarget(s.ctx)).toBeNull();
     });
 
     test('the focus beyond the leash: the tank fights the nearest enemy inside it instead', async () => {
@@ -366,6 +417,67 @@ describe('crowdControl: an enemy pet', () => {
     });
 });
 
+describe('crowdControl: what an add can take, by immunity and by its health', () => {
+    const MEZZ = { spell: { name: 'Mesmerize' }, kind: 'mezz', duration: 30 };
+    const ROOT = { spell: { name: 'Webbing' }, kind: 'root', duration: 30 };
+    const at = { x: 10_000, y: 10_500 };
+    const npc = (over: Partial<Contact>) => contact(52, { regionId: R, x: 11_000, y: 10_500, threat: true, target: 'Healer', hostileSince: Date.now() - 1000, ...over });
+    const world = (add: Contact) => {
+        const s = stub({ name: 'Healer', role: 'healer', at, contacts: [foe(51, 10_300, 10_000), add], orders: { focus: 51, cc: [{ targetId: 52, by: 'Healer' }] } });
+        Object.assign(s.ctx.spells, {
+            cc: (opts: { except?: string[] } = {}) => (opts.except?.includes('mezz') ? (opts.except.includes('root') ? null : ROOT) : MEZZ),
+            root: () => ROOT,
+            capabilities: () => ({ ccKinds: ['mezz', 'root'] }),
+        });
+        return s;
+    };
+    const immune = (...kinds: string[]) => ({ ccImmune: Object.fromEntries(kinds.map(k => [k, Date.now() + 30_000])) });
+
+    test('under 75 %: the root, since a mezz only costs the power', async () => {
+        const s = world(npc({ hp: 70 }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks.map(m => m.kind)).toEqual(['root']);
+    });
+
+    test('immune to a mezz at full health: the root, as the board says', async () => {
+        const s = world(npc(immune('mezz')));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks.map(m => m.kind)).toEqual(['root']);
+    });
+
+    test('under 75 % and immune to a root: nothing can land, so no cast and no failure, and the list goes on', async () => {
+        const s = world(npc({ hp: 70, ...immune('root') }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(false);
+        expect(s.calls.castSpell).toEqual([]);
+        expect(s.results).toEqual([]);
+    });
+
+    test('assignCc the same: under 75 % only to a member with a root, and not one it is immune to', () => {
+        const rooter = report('Bone', { role: 'nuker', capabilities: { heal: false, cc: true, root: true, ccKinds: ['root'], nuke: true, buffs: [], buffSpells: [] } });
+        const mezzer = report('Bard', { role: 'support', capabilities: { heal: false, cc: true, ccKinds: ['mezz'], nuke: false, buffs: [], buffSpells: [] } });
+        expect(assignCc([npc({ hp: 70 })], [mezzer, rooter], [])).toEqual([{ targetId: 52, by: 'Bone' }]);
+        expect(assignCc([npc({ hp: 70, ...immune('root') })], [mezzer, rooter], [])).toEqual([]);
+        expect(assignCc([npc(immune('mezz'))], [mezzer, rooter], [])).toEqual([{ targetId: 52, by: 'Bone' }]);
+    });
+
+    test('an area mezz takes our pet off a neighbour it catches before the cast, and marks both', async () => {
+        const sequence: string[] = [];
+        const s = stub({
+            name: 'Healer', role: 'healer', at, settings: { ...LEASHED, areaMezzMin: 2 },
+            contacts: [foe(51, 12_000, 10_000), foe(52, 11_000, 10_500), foe(53, 11_100, 10_500)], orders: { focus: 51, cc: [{ targetId: 52, by: 'Healer' }] },
+            castSpell: async () => { sequence.push('cast'); return {}; },
+        });
+        Object.assign(s.ctx.spells, { areaMezz: () => ({ spell: { name: 'Dark Wave' }, radius: 350, range: 1500, duration: 30 }), knowsTurret: () => false });
+        Object.assign(s.ctx.sdk, {
+            getState: () => ({ effects: [], pet: { targetObjectId: 53, walk: 'follow' } }),
+            sendPetCommand: async (command: string) => { sequence.push(command); return { success: true, message: '' }; },
+        });
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(sequence).toEqual(['follow', 'cast']);
+        expect(s.marks.map(m => m.targetId)).toEqual([52, 53]);
+    });
+});
+
 describe('crowdControl: immunity and refusals', () => {
     const cc = (castSpell: StubOptions['castSpell'], over: Partial<StubOptions> = {}) => stub({
         name: 'Healer', role: 'healer', at: { x: 10_000, y: 10_500 }, contacts: [foe(51, 10_300, 10_000), foe(52, 11_000, 10_500)],
@@ -379,16 +491,16 @@ describe('crowdControl: immunity and refusals', () => {
         }));
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
         expect(s.marks).toEqual([]);
-        expect((s.ctx.memory.get('ccImmune') as Map<string, number>).has(ckey(s.pic.contacts[1]!))).toBe(true);
-        // ... and the board knows, so the coordinator assigns it to nobody else.
-        expect(s.pic.contacts[1]!.ccImmuneUntil).toBeGreaterThan(Date.now() + 50_000);
+        // The board knows, so the coordinator assigns it to nobody else, and the report calls it what it was.
+        expect(s.pic.contacts[1]!.ccImmune!.mezz).toBeGreaterThan(Date.now() + 50_000);
+        expect(s.results[0]).toMatchObject({ kind: 'cc', success: false, reason: 'immune' });
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(false);
         expect(s.calls.castSpell).toEqual([52]);
     });
 
     test('a target another member found immune (the board\'s mark) is left alone too', async () => {
         const s = cc(async () => ({ success: true, messages: [] as CastResult['messages'] }));
-        s.pic.contacts[1]!.ccImmuneUntil = Date.now() + 30_000;
+        s.pic.contacts[1]!.ccImmune = { mezz: Date.now() + 30_000 };
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(false);
         expect(s.calls.castSpell).toEqual([]);
     });
@@ -399,7 +511,7 @@ describe('crowdControl: immunity and refusals', () => {
         const t0 = Date.now();
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
         expect(Date.now() - t0).toBeGreaterThanOrEqual(290);
-        expect([...(s.ctx.memory.get('ccImmune') as Map<string, number>).keys()]).toEqual([]);
+        expect(s.pic.contacts[1]!.ccImmune).toBeUndefined();
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
         expect(s.calls.castSpell).toEqual([52, 52]);
     });
@@ -412,7 +524,61 @@ describe('crowdControl: immunity and refusals', () => {
         expect(waited).toBeGreaterThanOrEqual(290);
         expect(waited).toBeLessThan(1000);
         expect(s.marks).toEqual([]);
-        expect([...(s.ctx.memory.get('ccImmune') as Map<string, number>).keys()]).toEqual([]);
+        expect(s.pic.contacts[1]!.ccImmune).toBeUndefined();
+    });
+
+    test('the server named what it landed on: on the board, for the whole spell', async () => {
+        const s = cc(async () => ({ success: true, effectLanded: true, landedOn: 'Oisin' }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks).toEqual([{ targetId: 52, kind: 'mezz', ms: 30_000, serverName: 'Oisin' }]);
+        expect(s.results[0]).toMatchObject({ success: true });
+    });
+
+    test('"already has that effect": held for up to the spell and the immunity after it, no mezz of ours on the board', async () => {
+        const s = cc(async () => ({ success: true, alreadyOn: true, effectLanded: false }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks).toEqual([]);
+        expect(s.pic.contacts[1]!.ccImmune!.mezz).toBeGreaterThan(Date.now() + 85_000);
+        expect(s.results[0]).toMatchObject({ success: false, reason: 'already_on' });
+    });
+
+    test('resisted: nothing on the board, and it may be tried again at once', async () => {
+        const s = cc(async () => ({ success: true, resisted: true, effectLanded: false }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks).toEqual([]);
+        expect(s.pic.contacts[1]!.ccImmune).toBeUndefined();
+        expect(s.results[0]).toMatchObject({ success: false, reason: 'resisted' });
+    });
+
+    test('a player with no line from the server: not marked as held', async () => {
+        const s = cc(async () => ({ success: true, effectLanded: false }));
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks).toEqual([]);
+        expect(s.results[0]).toMatchObject({ success: false, reason: 'no_effect' });
+    });
+
+    test('a monster with no line: the repeat replaced the old effect without a word, so it holds', async () => {
+        const s = cc(async () => ({ success: true, effectLanded: false }));
+        s.pic.contacts[1]!.kind = 'npc';
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.marks.map(m => m.kind)).toEqual(['mezz']);
+    });
+
+    test('a target held or being cast at by another member is left alone, and an immune one is skipped for a free one', async () => {
+        const claimed = cc(undefined);
+        claimed.pic.members.push(report('Bard', { role: 'support', activity: { kind: 'cc', targetId: 52, detail: '', since: Date.now() } }));
+        expect(await crowdControl({ assignedOnly: true }).run(claimed.ctx)).toBe(false);
+        expect(claimed.calls.castSpell).toEqual([]);
+
+        const held = cc(undefined);
+        held.pic.contacts[1]!.cc = { by: 'Bard', kind: 'mezz', until: Date.now() + 10_000 };
+        expect(await crowdControl({ assignedOnly: true }).run(held.ctx)).toBe(false);
+        expect(held.calls.castSpell).toEqual([]);
+
+        const next = cc(undefined, { contacts: [foe(51, 10_300, 10_000), foe(52, 11_000, 10_500), foe(54, 10_800, 10_800)], orders: { focus: 51, cc: [{ targetId: 52, by: 'Healer' }, { targetId: 54, by: 'Healer' }] } });
+        next.pic.contacts[1]!.ccImmune = { mezz: Date.now() + 10_000 };
+        expect(await crowdControl({ assignedOnly: true }).run(next.ctx)).toBe(true);
+        expect(next.calls.castSpell).toEqual([54]);
     });
 
     test('an assignment our client can\'t see gives way to the next one it can', async () => {
@@ -440,6 +606,31 @@ describe('flee: only from what can follow us to the tank', () => {
         expect((await run(foe(52, 10_000, 10_900, { target: 'Nuker' }))).walks).toEqual([{ x: ANCHOR.x, y: ANCHOR.y }]);
         expect((await run(contact(60, { regionId: R, x: 10_000, y: 12_200, threat: true, target: 'Nuker' }))).walks).toEqual([{ x: ANCHOR.x, y: ANCHOR.y }]);
     });
+});
+
+describe('rejoinFight', () => {
+    const cases: [string, Role, number, Partial<Orders>, boolean][] = [
+        ['a nuker back from a release', 'nuker', 20_000, { focus: 51 }, true],
+        ['a tank back from a release', 'tank', 6000, { focus: 51 }, true],
+        ['a member at the fight', 'nuker', 2500, { focus: 51 }, false],
+        ['a member 5000 off', 'tank', 5000, { focus: 51 }, false],
+        ['a member far off outside a fight', 'nuker', 20_000, { phase: 'travel' }, false],
+        ['with no anchor', 'nuker', 20_000, { focus: 51, anchor: null }, false],
+    ];
+    for (const [what, role, d, orders, walks] of cases) {
+        test(`${what}: ${walks ? 'walks one leg back' : 'leaves it to the others'}`, async () => {
+            const at = { x: ANCHOR.x + d, y: ANCHOR.y };
+            const s = stub({ name: 'Member', role, at, contacts: [foe(51, ANCHOR.x, ANCHOR.y)], orders });
+            expect(await rejoinFight().run(s.ctx)).toBe(walks);
+            expect(s.calls.walkTo.length).toBe(walks ? 1 : 0);
+            expect(s.calls.killPlayer).toEqual([]);
+            const to = s.calls.walkTo[0];
+            if (to) {
+                expect(dist(to, ANCHOR)).toBeLessThan(d);
+                expect(dist(to, at)).toBeLessThanOrEqual(2501);
+            }
+        });
+    }
 });
 
 describe('holdFormation in a fight', () => {
@@ -498,7 +689,7 @@ describe('refusals that come back at once: reported, so the agent paces them (me
             expect(s.calls.castSpell).toEqual([52, 54]);
             expect(s.marks.map(m => m.targetId)).toEqual([54]);
             // In our own memory only: another mezzer may yet be told otherwise by the server, and the board's mark is for a real immunity.
-            expect(s.pic.contacts[1]!.ccImmuneUntil).toBeUndefined();
+            expect(s.pic.contacts[1]!.ccImmune).toBeUndefined();
         });
     }
 

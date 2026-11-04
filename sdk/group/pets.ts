@@ -23,9 +23,9 @@ import type { BotActions } from '../actions';
 import { firstReasonLine, PET_ANSWERS, PET_REFUSALS, PVP_IMMUNE_RETRY_MS } from '../actions-helpers';
 import type { BotSDK } from '../index';
 import type { NearbyNpc, NearbyPlayer, PetCommand, PetState, PlayerState } from '../types';
-import { beyondLeash, buffRetryMs, ccHolds, claimedBy, foeInView, holdState, isDown, QUIET_PHASES, REST_MANA_UP_TO, SAVING_POWER, stopSwinging, underGuards, type TacticsSettings } from './behaviors';
+import { beyondLeash, buffRetryMs, ccHolds, claimedBy, farFromFight, foeInView, holdState, isDown, QUIET_PHASES, REST_MANA_UP_TO, SAVING_POWER, stopSwinging, underGuards, type TacticsSettings } from './behaviors';
 import { isAlive, readsOnPet } from './blackboard';
-import { ROLE_FIGHT } from './character';
+import { ROLE_FIGHT, type Character } from './character';
 import type { Behavior, MemberContext } from './member';
 import { Spellbook } from './spells';
 import { onMap } from './terrain';
@@ -40,7 +40,7 @@ export interface PetSettings {
     summonMana: number;
     /** petHeal below this pet health % in a fight (between fights: QUIET_HEAL_BELOW). */
     healBelow: number;
-    /** fnfPet stops below this power %. A Theurgist's pets are 12-15 % each, and thrifty wraps only assist. */
+    /** fnfPet stops below this power %, or its character's floor if higher (Character.pet). A Theurgist's pets are 12-15 % each, and thrifty wraps only assist. */
     fnfFloor: number;
     /**
      * fnfPet casts only on a focus with this long left after its cast, at the rate it has gone down since its first loss of the fight: a pet pays at the end of its cast, its first hit comes about 3 s later, and it goes
@@ -49,6 +49,11 @@ export interface PetSettings {
     fnfLifeMs: number;
     /** Hold pulls for a member with no main pet (Orders.waiting, why 'pet'). Off: a member that can't summon would hold them for good. */
     waitForSummon: boolean;
+    /**
+     * Unset, outside a fight a pet comes off a fight only with no threats about: what it fights stays a threat for as long as it does (Blackboard petsOn), and decidePve and decideRvr turn a threat into an engage on their next tick.
+     * On, for a strategy whose orders don't: decidePack walks off and rests with one in sight, with the pet fighting on alone and nobody able to sit. It comes off whatever the threats, and stays passive until the next fight.
+     */
+    strayFightsOff?: boolean;
 }
 
 export const PET_SETTINGS: PetSettings = { enabled: true, summonMana: 30, healBelow: 50, fnfFloor: 20, fnfLifeMs: 10_000, waitForSummon: false };
@@ -67,6 +72,8 @@ const SUMMON_ENEMY_RADIUS = 2500;
 const QUIET_HEAL_BELOW = 80;
 /** ... but only with this much power, as for a heal on a member out of combat. */
 const QUIET_HEAL_MANA = 50;
+/** In a fight a heal on friends goes on the pet only with this % of the pool left after it: those are the group's heals, out of one pool. A Pet-target heal is a tenth of that. */
+const PET_HEAL_RESERVE = 25;
 /** After a refused fire-and-forget summon or pet heal: the fight goes on without one this long. */
 const PET_SPELL_RETRY_MS = 5000;
 /** fnfPet judges a focus's rate after this much damage and not before. */
@@ -327,7 +334,7 @@ export function petHoldOf(settings: unknown): number | undefined {
  * the leash) it comes away. With a focus or a target beyond the leash (or under a keep's guards) and nothing to order it onto, it also stays passive: a defensive pet goes for
  * whoever hits its owner, from any range, and a follow holds only until the next hit (ControlledMobBrain.cs:614-638, GamePlayer.cs:12200-12209). An attack order lifts that.
  * On retreat it turns passive and follows. Otherwise a pet's fight doesn't start on its own: it comes off the focus during a pull (the tank's to bring) and off a stray fight
- * between fights, which would slow our regen (GamePlayer.cs:2318-2320).
+ * between fights, which would slow our regen (GamePlayer.cs:2318-2320), and in a strategy that walks off with a threat in sight off any (pet.strayFightsOff).
  *
  * It runs on the member's side tick, every 250 ms, between and during turns: as a turn it waited for a tank's killNpc to the mob's death and a nuker's walk and cast, and a pet stayed on an add and
  * broke a root. It only sends, and it never acts. A shade's pet (a Necromancer's tactics are its own)
@@ -362,9 +369,10 @@ export const petControl = (): Behavior<TacticsSettings> => ({
         const focus = ctx.focus();
         if (o.phase === 'pull' && o.puller === ctx.name) ctx.memory.set('pulled', o.focus);
         const orderGoes = !!go && go.seen.distance <= PET_ORDER_RANGE && selectFree(ctx, go.mob.objectId);
+        const strays = isOn(s.strayFightsOff) && o.phase !== 'engage' && o.phase !== 'pull';
         // Only an order that goes now lifts this, or one that stands: passive would break that fight off at every heal turn (ControlledMobBrain.cs:199-203).
         const ccOnIt = ctx.picture().contacts.some(c => c.targetPet === ctx.name && !c.stale && underCc(ctx, c)) && !orderGoes && !(go && (on === go.mob.objectId || orderInForce(ctx, go.mob.objectId)));
-        const holdOff = ccOnIt || (!go && ((o.phase === 'engage' && [focus, fighting].some(c => !!c && beyondLeash(ctx, c))) || heldBack(ctx, s, focus) || ctx.threats().some(c => underGuards(ctx, c))));
+        const holdOff = ccOnIt || strays || (!go && ((o.phase === 'engage' && [focus, fighting].some(c => !!c && beyondLeash(ctx, c))) || heldBack(ctx, s, focus) || ctx.threats().some(c => underGuards(ctx, c))));
         const stance = holdOff ? 'passive' : 'defensive';
         if (!parked && pet.aggression !== stance) await order(ctx, 'stance', stance);
         // Calling it off leaves a parked pet parked: both orders end its fight (GamePlayer.cs:12200-12225).
@@ -384,7 +392,7 @@ export const petControl = (): Behavior<TacticsSettings> => ({
         }
         if (on === null) return false;
         // Off the focus in a pull, unless it is on this pet: that can't be walked off, and the coordinator starts the fight there on its next tick.
-        if (o.phase === 'pull' ? on === o.focus && focus?.targetPet !== ctx.name : !ctx.threats().length) await order(ctx, 'walk', away);
+        if (o.phase === 'pull' ? on === o.focus && focus?.targetPet !== ctx.name : strays || !ctx.threats().length) await order(ctx, 'walk', away);
         return false;
     },
 });
@@ -438,12 +446,22 @@ export const summonPet = (): Behavior<TacticsSettings> => ({
 });
 
 /**
+ * summonPet on the way back from a release to a fight, where rejoinFight takes every turn and ends beside the fight, where its gate no longer lets a summon go. Near the fight this has no say:
+ * summonPet stands in its own place there, below a rez and the heals.
+ */
+export const summonOnTheWayBack = (): Behavior<TacticsSettings> => {
+    const summon = summonPet();
+    return { ...summon, name: 'summonOnTheWayBack', run: ctx => (farFromFight(ctx) ? summon.run(ctx) : false) };
+};
+
+/**
  * A Theurgist's pet on the focus, by the rules for a window pet's order (prey), while the power is above pet.fnfFloor. No window and no
  * orders: it fights its target and goes when that dies (TheurgistPetBrain.cs:18-39). Counts as a nuke (the observer's opener). A refused
  * one (at most 16 at once, SummonTheurgistPet.cs:67-69) leaves the turn to the rest of the list for a while. Only on a focus with pet.fnfLifeMs left after the cast, by its rate since its
  * first loss of the fight (lifeLeftMs), and not before that has been judged: it pays at the end of the cast (SummonSpellHandler.cs:56) and gets little back from a short fight, and assist's nuke below lands at the end of the same cast.
+ * `floor`: its character's own (Character.pet), the higher of that and pet.fnfFloor going.
  */
-export const fnfPet = (): Behavior<TacticsSettings> => ({
+export const fnfPet = (floor = 0): Behavior<TacticsSettings> => ({
     name: 'fnfPet',
     interruptible: false,
     async run(ctx) {
@@ -452,7 +470,7 @@ export const fnfPet = (): Behavior<TacticsSettings> => ({
         const sp = ctx.spells.fnf();
         if (!sp || sp.spell.cooldownRemaining > 0) return false;
         const me = ctx.me();
-        if (me.mana < ctx.spells.powerOf(sp) || me.manaPercent < s.fnfFloor) return false;
+        if (me.mana < ctx.spells.powerOf(sp) || me.manaPercent < Math.max(s.fnfFloor, floor)) return false;
         if (!onMap(me.regionId, me, SUMMON_MAP_MARGIN)) return ctx.skip(OFF_THE_MAP);
         const go = prey(ctx, s);
         if (!go || go.seen.distance > sp.range) return false;
@@ -468,8 +486,8 @@ export const fnfPet = (): Behavior<TacticsSettings> => ({
 });
 
 /**
- * Heal our pet below pet.healBelow, or between fights below QUIET_HEAL_BELOW with power to spare. Pet-target heals land on the pet with no
- * target given, no walk and no select (castSpell), so only the range counts; with none, a heal on a friend goes at the pet's id (Spellbook.petHeal). After one that landed it waits for the
+ * Heal our pet below pet.healBelow, or between fights below QUIET_HEAL_BELOW with power to spare, with what covers what it misses (petMaxHp): a Druid's biggest heal on a L7 pet cost more than a new one. Pet-target heals land on the pet with no
+ * target given, no walk and no select (castSpell), so only the range counts; with none, a heal on a friend goes at the pet's id (Spellbook.petHeal), in a fight only with PET_HEAL_RESERVE left. After one that landed it waits for the
  * pet's reading (healLanding). The rest doesn't wait for a hurt pet (no petHealthPercent): this is all it gets.
  */
 /** Whether the last heal is still on its way to the pet's reading: the reading hasn't changed since, for PET_HEAL_READING_MS, or PET_FULLY_HEALED_MS with the server's "The ruby simulacrum is fully healed." */
@@ -484,6 +502,9 @@ function healLanding(ctx: MemberContext, pet: NearbyNpc): boolean {
 
 const isFullyHealed = (line: string, name: string) => line.endsWith(' is fully healed.') && line.toLowerCase().includes(name.toLowerCase());
 
+/** A summoned pet's full health by its level, unbuffed: CON 30 + level - 1, a template's percent aside (MaxHealthCalculator.cs:102, GameSummonedPet.cs SetStats; ServerProperties pet_autoset_con_base, _multiplier). */
+export const petMaxHp = (level: number): number => Math.round(17 * (level + 1) + 0.535 * level * level + (30 + Math.max(1, level - 1) - 25) * 3);
+
 export const petHeal = (): Behavior<TacticsSettings> => ({
     name: 'petHeal',
     interruptible: false,
@@ -495,11 +516,13 @@ export const petHeal = (): Behavior<TacticsSettings> => ({
         const quiet = QUIET_PHASES.has(ctx.orders().phase) && !ctx.threats().length;
         if (quiet && me.manaPercent < QUIET_HEAL_MANA) return false;
         if (pet.healthPercent >= (quiet ? QUIET_HEAL_BELOW : s.healBelow) || healLanding(ctx, pet)) return false;
-        const sp = ctx.spells.petHeal();
+        const sp = ctx.spells.petHeal(pet.level ? Math.round(petMaxHp(pet.level) * (100 - pet.healthPercent) / 100) : undefined);
         if (!sp || sp.spell.cooldownRemaining > 0 || pet.distance > sp.range) return false;
+        const friends = sp.target === 'Realm' || sp.target === 'Group';
+        if (friends && !quiet && me.maxMana > 0 && 100 * (me.mana - ctx.spells.powerOf(sp)) / me.maxMana < PET_HEAL_RESERVE) return false;
         await stopSwinging(ctx);
         ctx.doing('heal', pet.objectId, sp.spell.name);
-        const c = await (sp.target === 'Realm' || sp.target === 'Group' ? ctx.bot.castSpell(sp.spell, pet.objectId) : ctx.bot.castSpell(sp.spell));
+        const c = await (friends ? ctx.bot.castSpell(sp.spell, pet.objectId) : ctx.bot.castSpell(sp.spell));
         ctx.result('petHeal', c, pet.objectId);
         if (!c.success) ctx.memory.set('petHealRetry', Date.now() + Math.max(c.retryAfterMs ?? 0, PET_SPELL_RETRY_MS));
         else ctx.memory.set('petHealLanded', { at: Date.now(), hp: ctx.sdk.getPet()?.healthPercent ?? pet.healthPercent, full: !!c.messages?.some(m => isFullyHealed(m.text, pet.name)) });
@@ -548,6 +571,8 @@ export interface PetKit {
     fnf?: boolean;
     /** A window pet is up that petControl can order: a charm from an earlier script, say. */
     window?: boolean;
+    /** Its character's floor for fnfPet (Character.pet). */
+    fnfFloor?: number;
 }
 
 /** Left to their own tactics: a shade's pet and a turret. */
@@ -560,6 +585,13 @@ export function petKit(sdk: Pick<BotSDK, 'getSkills' | 'getPlayer' | 'getPetStat
     const book = new Spellbook(sdk as BotSDK, bot as BotActions);
     const p: PlayerState | null = sdk.getPlayer();
     return { main: !!book.summon(), fnf: !!book.fnf(), window: !!sdk.getPetState() && !p?.isShade && !book.knowsTurret() };
+}
+
+/** A member's kit as its character has it: none with pet false, whatever it knows or has up. */
+export function memberPetKit(sdk: Pick<BotSDK, 'getSkills' | 'getPlayer' | 'getPetState'>, bot: Pick<BotActions, 'getSpellInfo'>, character: Pick<Character, 'pet'> | null | undefined): PetKit | null {
+    if (character?.pet === false) return null;
+    const kit = petKit(sdk, bot);
+    return character?.pet?.fnfFloor === undefined ? kit : { ...kit, fnfFloor: character.pet.fnfFloor };
 }
 
 const nameIndex = <S>(list: Behavior<S>[], ...names: string[]): number => {
@@ -599,13 +631,14 @@ export function withPets<S>(list: Behavior<S>[], kit: PetKit | null | undefined)
     if (!kit || (!kit.main && !kit.fnf && !kit.window)) return list;
     const steps: [() => Behavior<TacticsSettings>, (l: Behavior<S>[]) => number][] = [];
     if (kit.main || kit.window) steps.push([petControl, aboveTheFight]);
-    if (kit.fnf) steps.push([fnfPet, beforeTheFight]);
+    if (kit.fnf) steps.push([() => fnfPet(kit.fnfFloor), beforeTheFight]);
     if (kit.main) steps.push(
         [petHeal, beforeTheFight],
         // Above what walks: holdFormation in every travel turn, position and the fight on the way back from a release. Its gate is what's hostile near us, so in a fight it falls through.
         [summonPet, beforeTheWalk],
         [petBuff, l => nameIndex(l, 'buff', 'rest')],
     );
+    if (kit.main && list.some(b => b.name === 'rejoinFight')) steps.push([summonOnTheWayBack, l => nameIndex(l, 'rejoinFight')]);
     let out = list;
     for (const [make, place] of steps) {
         const b = make() as unknown as Behavior<S>;

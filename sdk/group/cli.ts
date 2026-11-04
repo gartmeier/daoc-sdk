@@ -80,7 +80,7 @@ if (watch > 0) {
         const grouped = conns.find(c => c.sdk.getPlayer()?.name === m.name)?.sdk.getGroup().map(g => g.name) ?? [];
         console.log(`  ${m.name.padEnd(12)} ${m.className.padEnd(10)} L${String(m.level).padEnd(3)} ${m.role.padEnd(7)} hp ${String(m.hp).padStart(3)}% mana ${String(m.mana).padStart(3)}% load ${String(m.load).padStart(3)}%`
             + `${m.isDead ? ' DEAD' : ''}${m.isSitting ? ' sitting' : ''}${m.inCombat ? ' in combat' : ''}  region ${m.regionId} (${m.x}, ${m.y}) ${d ? `${d} from ${leader!.name}` : ''}`
-            + `  group: ${grouped.length ? grouped.join(',') : 'none'}  can: ${['heal', 'cc', 'nuke', 'pet'].filter(k => (m.capabilities as any)[k]).join('/') || '-'}`
+            + `  group: ${grouped.length ? grouped.join(',') : 'none'}  can: ${['heal', 'cc', 'nuke', 'rez', 'pet'].filter(k => (m.capabilities as any)[k]).join('/') || '-'}`
             + (m.pet ? `  pet: ${petLine(m.pet, nameOf)}` : `  ${noWindowPet(m.summons?.length ?? 0, m.capabilities.pet) ?? ''}`.trimEnd()));
     }
     console.log(`Enemies the group knows (${p.contacts.length}):`);

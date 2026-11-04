@@ -7,7 +7,7 @@ import { decodeCharacterOverview, decodeCryptKey, decodeDupNameCheckReply, decod
 import { decodeCharacterJump, decodeEncumbrance, decodeLosRequest, decodeMaxSpeed, decodePositionAndObjectId, decodeQuit, decodeRegionChanged, decodeTime } from './world';
 import { decodeModelChange, decodeNpcCreate, decodeObjectCreate, decodeObjectDataUpdate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate, decodePlayerHeading, decodePlayerPosition, decodeRemoveObject } from './objects';
 import { decodeInventoryUpdate, decodeMoney, decodePointsUpdate, decodeStatsUpdate, decodeStatusUpdate, decodeVariousUpdate } from './player';
-import { decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseSpeech, chatTypeName } from './chat';
+import { decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseResurrectionOffer, parseSpeech, chatTypeName } from './chat';
 import { decodeAttackMode, decodeChangeGroundTarget, decodeChangeTarget, decodeCombatAnimation, decodeConcentrationList, decodeDisableSkills, decodeInterrupt, decodePlayerDeath, decodeSpellCastAnimation, decodeSpellEffect, decodeUpdateIcons } from './combat';
 import { decodeGroupMemberUpdate, decodeMerchantWindow, decodePetWindow, decodeTradeWindow, decodeTrainerWindow } from './windows';
 import { ObjectType } from '../../../sdk/types';
@@ -283,6 +283,11 @@ describe('chat / ui packets', () => {
         expect(decodeDialog(p)).toEqual({ code: 5, data: [8, 0, 0, 0], type: 1, autoWrap: true, text: 'Join group?' });
     });
 
+    test('a rez spell\'s question names the caster and the health (ResurrectSpellHandler.cs:54)', () => {
+        expect(parseResurrectionOffer('Do you allow Nimue to resurrected you\n with 30 percent hits/power?')).toEqual({ caster: 'Nimue', healthPercent: 30 });
+        expect(parseResurrectionOffer('It will cost 188 copper to have your lost constitution restored. Do you accept?')).toBeNull();
+    });
+
     test('0xC4 text window joins split lines', () => {
         const p = W().u8(0).u8(0).pascal('Caption').u8(1).pascal('first ').u8(1).pascal('part').u8(2).pascal('second').u8(0).toBytes();
         expect(decodeTextWindow(p)).toEqual({ caption: 'Caption', lines: ['first part', 'second'] });
@@ -331,8 +336,8 @@ describe('window packets', () => {
     });
 
     test('0x7B TrainerWindow spec list (PacketLib1105.cs:29)', () => {
-        const p = W().u8(2).u8(7).u8(0).u8(0).u8(0).u8(1).u8(2).pascal('Slash').u8(1).u8(3).u8(4).pascal('Shields').toBytes();
-        expect(decodeTrainerWindow(p)).toEqual({ code: 0, specPoints: 7, specs: [{ index: 0, level: 1, nextLevel: 2, name: 'Slash' }, { index: 1, level: 3, nextLevel: 4, name: 'Shields' }] });
+        const p = W().u8(2).u8(7).u8(0).u8(0).u8(0).u8(1).u8(2).pascal('Slash').u8(1).u8(3).u8(4).pascal('Shield').toBytes();
+        expect(decodeTrainerWindow(p)).toEqual({ code: 0, specPoints: 7, specs: [{ index: 0, level: 1, nextLevel: 2, name: 'Slash' }, { index: 1, level: 3, nextLevel: 4, name: 'Shield' }] });
         expect(decodeTrainerWindow(Uint8Array.of(0, 7, 1, 0))).toEqual({ code: 1, specPoints: 7 });
     });
 

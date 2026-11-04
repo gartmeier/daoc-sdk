@@ -19,6 +19,7 @@ import type {
     ConnectionMode,
     ConnectionState,
     DialogBox,
+    ResurrectionOffer,
     Effect,
     GameMessage,
     GroupMember,
@@ -46,6 +47,7 @@ import type {
 import { ChatHistory, PLAYER_CHAT_TYPES, isOtherPlayersChat, isOwnMessage, isPlayerChat } from './chat-history';
 import { chunkMessage, DEFAULT_MAX_MESSAGE_LENGTH } from './chunking';
 import { executionContext, executionWait, throwIfExecutionAborted } from './execution-context';
+import { specDisplayName, specKey } from '../data/spec-names';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, openSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -774,9 +776,20 @@ export class BotSDK {
         return this.state?.skills ?? { specializations: [], abilities: [], styles: [], spells: [] };
     }
 
-    /** Specialization by name (shortest name wins). */
+    /**
+     * Specialization by any name of its line: as listed ('Shield'), its DB key ('Shields', from classes.json,
+     * Style.specName or ItemBonus.spec) or an item's bonus name ('Cave Magic'). Failing those, by part of
+     * the listed name (shortest wins). Look lines up here rather than with === on the list, which only knows the listed name.
+     */
     findSpecialization(pattern: NamePattern): Specialization | null {
-        return bestNameMatch(this.getSkills().specializations, pattern);
+        if (pattern === '') return null;
+        const specs = this.getSkills().specializations;
+        if (typeof pattern === 'string') {
+            const listed = specDisplayName(pattern).toLowerCase();
+            return specs.find(s => s.name.toLowerCase() === listed) ?? bestNameMatch(specs, pattern);
+        }
+        const matches = nameMatcher(pattern);
+        return bestNameMatch(specs, pattern) ?? specs.find(s => matches(specKey(s.name))) ?? null;
     }
 
     /** Spell by name; pass its lineIndex/spellIndex to sendCastSpell. Highest level wins among equal names. */
@@ -845,6 +858,11 @@ export class BotSDK {
     /** Open 0x81 dialog box (group invite, quest offer, yes/no), or null. Answer with sendRespondDialog. */
     getDialog(): DialogBox | null {
         return this.state?.dialog?.isOpen ? this.state.dialog : null;
+    }
+
+    /** The resurrection offer waiting for our answer, or null. Answer with bot.acceptResurrection or bot.respondToDialog. */
+    getResurrectionOffer(): ResurrectionOffer | null {
+        return this.getDialog()?.resurrection ?? null;
     }
 
     /** Last NPC dialogue with its [keywords]; answer with sendWhisper(npcObjectId, keyword). */
@@ -1151,7 +1169,7 @@ export class BotSDK {
         return this.sendAction({ type: 'sell', slot, reason: 'SDK' });
     }
 
-    /** Open the trainer window (stand near a trainer first). */
+    /** Open the trainer window, anywhere while allow_train_anywhere is on (train.cs:143), else with a trainer targeted. */
     async sendOpenTrainer(): Promise<ActionResult> {
         return this.sendAction({ type: 'openTrainer', reason: 'SDK' });
     }

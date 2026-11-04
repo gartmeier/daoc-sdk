@@ -43,7 +43,10 @@ export interface LiveBot {
 export async function startLiveBot(opts: LiveBotOptions, gateway: Gateway): Promise<LiveBot> {
     const { username } = opts;
     const password = opts.password ?? `${username}pw`;
+    // LIVE_SERVER=host:port points the check at a throwaway stack.
+    const [host, port] = (process.env.LIVE_SERVER ?? '').split(':');
     const client = new DaocClient({
+        ...(host ? { host, port: Number(port) } : {}),
         username, password,
         realm: opts.realm ?? 'albion',
         className: opts.className ?? 'Fighter',

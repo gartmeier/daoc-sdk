@@ -3,6 +3,9 @@ import {
     botProperties, checksum, cryptKeyRequest, literalType, loadPropertyDefs, normaliseValue, parseArgs, parseServerProperties, sqlString,
 } from './setup-server';
 
+/** A test that reads every C# file in server/core: 16-26 s on a fresh checkout on Windows, well under a second after that. */
+const sourceTest = (name: string, fn: () => void) => test(name, fn, 60_000);
+
 describe('server property metadata', () => {
     test('parses [ServerProperty] attributes', () => {
         const src = `
@@ -19,7 +22,7 @@ describe('server property metadata', () => {
         expect(defs[0]!.description).toBe('The "XP" rate');
     });
 
-    test('every bot property exists in the C# source with a compatible type', () => {
+    sourceTest('every bot property exists in the C# source with a compatible type', () => {
         const defs = loadPropertyDefs();
         expect(defs.size).toBeGreaterThan(440);
         for (const p of botProperties(3)) {
@@ -32,7 +35,7 @@ describe('server property metadata', () => {
         expect(defs.get('start_as_base_class')?.file).toContain('StartAsBaseClass.cs');
     });
 
-    test('values are checked against the default literal type that ServerProperties.Load converts to', () => {
+    sourceTest('values are checked against the default literal type that ServerProperties.Load converts to', () => {
         expect(literalType('1.0', 'double')).toBe('double');
         expect(literalType('0', 'double')).toBe('int');
         expect(literalType('(ushort)30000', 'ushort')).toBe('ushort');

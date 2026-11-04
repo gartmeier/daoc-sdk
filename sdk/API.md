@@ -37,7 +37,7 @@
 | `async useStyle(name: NamePattern): Promise<SkillUseResult>` | Queue a combat style for the next swing; observed by "You prepare to perform a ...". |
 | `findKillableNpc(options: FindKillableOptions = {}): NearbyNpc \| null` | Best monster to fight nearby: killable, not engaged with someone else, within the con (or level-difference) window, nearest first. A pet we just lost counts as our own fight for 10 s, hurt as it is. |
 | `findKillableNpcs(options: FindKillableOptions = {}): NearbyNpc[]` | All candidates findKillableNpc considers, best first. |
-| `getAttackers(): NearbyNpc[]` | NPCs currently targeting us, nearest first. |
+| `getAttackers(): NearbyNpc[]` | NPCs fighting us, nearest first: their reported target is us, or their swing or spell landed on us within the last 6 s. The server reports a target only for a mob standing within its attack range and in attack state, so the hits are what shows a caster at range or a mob running at us. |
 | `getPlayerAttackers(windowMs: number = PLAYER_AIM_MS): NearbyPlayer[]` | Enemy-realm players whose melee swing or spell effect landed on us within `windowMs` (default 6 s, longer than a two-handed weapon's or a bow's swing), nearest first. The server never sends a player's target, so these combat events are the evidence. |
 
 ### Other
@@ -45,12 +45,16 @@
 | Signature | Description |
 |---|---|
 | `async interactWith(target: ObjectTarget, options: InteractOptions = {}): Promise<InteractResult>` | Walk within ~150 of an NPC/object and interact (right-click). Success needs a response: merchant/trainer window, NPC dialog, dialog box, text window or a message from the NPC. |
+| `async acceptResurrection(options: { timeout?: number } = {}): Promise<AcceptResurrectionResult>` | Wait for a resurrection offer, say yes and observe the revive. We come back standing at the caster, with the spell's health and power (10 % and none for a baseline rez). That saves the release's XP loss, grave and constitution loss; resurrection illness comes all the same. Reasons: not_in_game, not_dead, timeout (no offer came), expired (the offer was gone when we answered). |
 | `async takeMeleeSlot(options: { styles?: readonly string[]; weapon?: string; keepOnTie?: boolean } = {}): Promise<MeleeSlotResult>` | Take a melee weapon in hand, for a fighter who may stand with the wrong one or a bow: the state can't say which is active, and the server swings what it is. The weapon the first of `styles` needs, else the higher spec of the two weapon types worn, else the one we took last, else the right hand. With `weapon` (a style tooltip's word, as "This style requires a X weapon!" has it) the slot holding that. Observed by the server's "You attempt to use" (GamePlayer.cs:6564), which comes for a weapon in hand as well: that one changes nothing, and a swing going stops only at a real switch (:4995-4996). A cast going stops with it too (:5004-5008). With `keepOnTie`, two weapons that neither the style nor the spec tells apart (a sword and a two-handed sword of one line) stay as the owner left them: success, slot null, and nothing sent. Equipping a two-hander brings it out by itself, and nothing here knows its damage. A bow left in hand then goes at the first swing (attack, killNpc, killPlayer). Reasons: not_in_game, dead, refused (no melee weapon worn), not_found (none of that `weapon`), no_response. |
 | `async useAbility(name: NamePattern): Promise<SkillUseResult>` | Use an ability (e.g. Sprint); success when the server answers without a refusal or an effect appears. |
-| `isInCombat(): boolean` | In combat: attack mode on, recently hit, an NPC targets us, our pet or a summon, or an enemy player hit us (getPlayerAttackers). |
+| `isInCombat(): boolean` | In combat: attack mode on, recently hit, an NPC is fighting us (getAttackers) or targets our pet or a summon, or an enemy player hit us (getPlayerAttackers). |
+| `resurrectSpell(): Spell \| null` | Our strongest resurrection spell, or null. The higher its level, the more it restores: 10 %, then 30, 50 and 100 % on a spec line. |
+| `async resurrect(target: PlayerTarget, options: ResurrectOptions = {}): Promise<ResurrectResult>` | Resurrect a dead player of our realm: walk into range, cast, and wait for its answer. Success means it is alive again: a finished cast only asks, and a corpse no script controls never answers (the power is gone then). It comes back at our feet. It must be in view. Costs half our full power at equal level (resurrectCost), paid when the cast ends. Reasons: those of castSpell, plus spell_not_found, not_found, invalid_target, not_dead (alive, or released meanwhile), no_power, already_considering (someone else's rez waits for its answer), no_answer. |
 | `getSpellInfo(spell: NamePattern \| Spell): SpellInfo \| null` | Static data for a known spell (type, target, range, cast time, power), from the DB dump; null when unknown. |
 | `isDead(): boolean` | Our character is dead. |
 | `freeBackpackSlots(): number` | Free backpack slots (of 40). |
+| `async repairAll(smith: NpcTarget, options: { maxCost?: number } = {}): Promise<RepairResult>` | Have a smith repair everything at once: worn, backpack and vault, whatever its type, and 20 % over the single prices (Blacksmith.cs:14, :219-228). The only way to repair an instrument. Success with cost 0 means nothing needed it. Reasons as repairItem. |
 | `findNpcSpawn(pattern: NamePattern, options: { regionId?: number; guild?: NamePattern } = {}): NpcSpawnMatch \| null` | Nearest static spawn (DB `mob` table) in our region matching a name, or null. |
 | `async travelTo(destination: NamePattern \| (Point & { regionId?: number }), options: WalkOptions = {}): Promise<TravelResult>` | Walk (same region, through walkTo: navmesh route when built, else a straight line) to a named spawn from static data or to a point. |
 | `async useZonePoint(target: number \| ZonePoint, options: UseZonePointOptions = {}): Promise<ZonePointResult>` | Use a zone point, by its id or as static data (getZonePointsFrom): walk to its source when farther than `tolerance`, send 0x90 and watch for the jump. Reasons: 'not_found' (no such id), 'wrong_region', 'wrong_realm', 'refused' (a server message said so), 'timeout' (no jump and no word: the server ignores a request it won't take, RegionChangeRequestHandler.cs:41-45), 'dead', and the walk's own ('stuck', 'died', ...). The server checks no distance (the handler reads only the id), so the walk is ours: a real client asks when it steps on the zone point, and a walk that stopped within 400 still asks. The realm is the zone point's in the DB, as for a PrivLevel-1 account (:33-37), and an id with a row per realm means our realm's row. The one other rule (:28, Trials of Atlantis regions go by the zone's realm) has no zone point in the dump. In shade a zone change costs health: PlayerState.isShade; releasePet first. |
@@ -89,7 +93,7 @@
 | Signature | Description |
 |---|---|
 | `async lootNearby(options: LootOptions = {}): Promise<LootResult>` | Pick up loot on the ground within `radius` and report what changed in the backpack and purse (autoloot usually already took it during the kill). |
-| `async equipItem(target: InventoryItem \| NamePattern \| number, options: { slot?: number } = {}): Promise<ItemResult>` | Equip a backpack item; the server picks its slot, or takes `options.slot` when given (a worn item there swaps into the backpack). Observed in state.equipment: with a slot, that slot must hold this item, so an equal-named item already worn elsewhere doesn't count. A weapon put in the ranged slot (13) also takes the hand ("You wield it in both hands"), and melee is refused until a melee slot is used (sendUseItem(10 or 12, 0); killNpc does that itself). |
+| `async equipItem(target: InventoryItem \| NamePattern \| number, options: { slot?: number } = {}): Promise<ItemResult>` | Equip a backpack item; the server picks its slot, or takes `options.slot` when given (a worn item there swaps into the backpack). Observed in state.equipment: with a slot, that slot must hold this item, so an equal-named item already worn elsewhere doesn't count. What it replaces lands in the backpack slot this one left, so only this very item still there means it didn't move. A swap with a piece that reads the same changes no reading, so a magical piece counts on the server's "The magic of X flows through you". A plain one has nothing that tells them apart and no message: `timeout`. A weapon put in the ranged slot (13) also takes the hand ("You wield it in both hands"), and melee is refused until a melee slot is used (sendUseItem(10 or 12, 0); killNpc does that itself). |
 | `async unequipItem(target: number \| NamePattern): Promise<ItemResult>` | Move an equipped item (by slot or name) back into the backpack. |
 | `async dropItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Drop a backpack item on the ground. |
 | `async destroyItem(target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Destroy a backpack item. |
@@ -100,6 +104,8 @@
 | `async buyItem(merchant: NpcTarget, item: NamePattern \| { page: number; slot: number }, count: number = 1): Promise<BuyResult>` | Buy `count` of an item (name or page/slot) and observe the backpack and purse. |
 | `async sellItem(merchant: NpcTarget, item: InventoryItem \| NamePattern \| number): Promise<SellResult>` | Sell one backpack item (whole stack) to a merchant and observe the purse. |
 | `async sellItems(merchant: NpcTarget, filter: NamePattern \| ((item: InventoryItem) => boolean)): Promise<SellItemsResult>` | Sell every backpack item matching a predicate or name pattern. |
+| `async repairItem(smith: NpcTarget, target: InventoryItem \| NamePattern \| number, options: { maxCost?: number } = {}): Promise<RepairResult>` | Have a smith repair one item, worn or in the backpack: walk within 128 (3D), hand it over, read the price off the yes/no box, say yes, and observe the smith's answer. Costs the Durability it restores, and when too little is left it charges in full and restores only that much. Reasons: `not_found`, `out_of_range`, `no_need` (already whole), `not_repairable`, `too_expensive` (over `options.maxCost`, declined), `insufficient_funds`, `no_response` (not a smith, or no answer). A smith takes no jewellery, instruments or stacks: an instrument only through repairAll. |
+| `async withdrawItem(keeper: NpcTarget, target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Take an item out of the vault into the backpack, at a vault keeper. A number is a vault slot (110-149). A stack behaves as in depositItem. Reasons: `not_found`, `inventory_full`, those of openVault, `timeout`. |
 
 ### Status & Recovery
 
@@ -107,6 +113,7 @@
 |---|---|
 | `async rest(options: RestOptions = {}): Promise<RestResult>` | Sit until health (and optionally mana, endurance and our pet's health) reach the thresholds, then stand. Reason 'in_combat' while a pet of ours fights or a mob is on one, also on its way to a mob, a summon as well, also with nothing to rest for, and also when it starts while we sit: the server counts its fight as ours, so regen ticks every 10 s (GamePlayer.cs:2314-2322, :6045-6047), and a sit wouldn't stop that fight. A mob on us counts only if there is something to rest for: 'in_combat' at the start, 'attacked' while sitting. So does a summon that has only just come, which may well be in its fight with nothing to show for it yet: 'in_combat' whenever it holds up a rest, with the message saying so (BotWorldState.freshSummons). |
 | `async releaseAndRespawn(options: { timeout?: number } = {}): Promise<RespawnResult>` | Release after death and observe being alive at the bind point. In the server's first 10 s the request arms its automatic release, and a second one would disarm it (GamePlayer.cs:1438-1449), so that one is waited out, and asked again only 2 s past its time. One that finds it armed already, by an earlier call, has disarmed it, so another goes at once and arms it again with the right time. Any other refusal is retried until the server allows it. |
+| `async depositItem(keeper: NpcTarget, target: InventoryItem \| NamePattern \| number): Promise<ItemResult>` | Put a backpack item in the vault, at a vault keeper. Vaulted items don't wear, count toward no weight and can't be sold by `sellItems`, but `repairAll` charges for them if they're worn. A stack goes onto a partial stack first, and what doesn't fit stays in the backpack: check the count if that matters. Reasons: `not_found`, `vault_full`, those of openVault, `timeout`. |
 
 ### Condition Waiting
 
@@ -121,11 +128,19 @@
 | `async openMerchant(merchant: NpcTarget): Promise<MerchantResult>` | Walk to a merchant and open its window; observed via state.merchant. |
 | `async closeMerchant(): Promise<ActionResult>` | Close the merchant window (client-side state). |
 
+### Vault
+
+| Signature | Description |
+|---|---|
+| `async openVault(keeper: NpcTarget): Promise<VaultResult>` | Walk to a vault keeper and open the character's vault. Until then, in each client session, `sdk.getVault()` is empty whatever the vault holds. Reason `not_a_vault_keeper` for an NPC that answers some other way. The vault is the character's own: 40 slots, not shared with other bots. |
+
 ### Training
 
 | Signature | Description |
 |---|---|
-| `async trainSpec(trainer: NpcTarget, specName: NamePattern, levels: number = 1): Promise<TrainResult>` | Train a specialization at a trainer of our class: target it, open the trainer window (falling back to '/train'), and observe the spec level rise. |
+| `async trainSpec(trainer: NpcTarget \| null, specName: NamePattern, levels: number = 1): Promise<TrainResult>` | Train a specialization: open the trainer window (falling back to '/train') and observe the spec level rise. With a trainer of our class, it walks into reach and targets it first. With `null` it stays where it stands: the server trains anywhere while allow_train_anywhere is on, as by default and here (train.cs:143), and with it off the answer is `needs_trainer`. `specName` is any name of the line (sdk.findSpecialization); a name no line answers to gives 'spec_not_found'. |
+| `async trainBuild(trainer: NpcTarget \| null, build?: Build): Promise<TrainBuildResult>` | Spend the points on a build, as far as they reach: the rule in data/builds/rule.ts names each line and trainSpec raises it, at a trainer of the class or, with `null`, where the character stands (trainSpec). Without `build` it is the bot's own `bots/<bot>/build.ts` (loadBuild in sdk/build.ts), and a broken file throws. Success means it stopped for a good reason: `done` (nothing to raise at this level) or `waiting` (the next line costs more than there is, and the points stay banked for it). `done` sends nothing. Before `waiting` with nothing raised it talks once to a trainer in reach, because a promotion sends no points and player.specPoints can still be the base class's number. A trainer out of reach or not found gets nothing, and the number stands. A base class trains the lines it has of its advanced class's build. Reasons: `no_build`, `invalid_build` (buildProblems of a build passed in), `wrong_class`, `not_in_game`, `too_many_steps`, and those of trainSpec. |
+| `async respec(trainer: NpcTarget, line?: NamePattern): Promise<RespecResult>` | Take the points back out of every line, or with `line` (any of its names) out of that one, at a trainer of the class: sends /respec, says yes to the server's box and watches the points come back. It is free, at any level and any number of times, because the stone check can never hold (respec.cs:96, 153 test TimeSpan.Hours > 24). A line falls to 1, an autotrain line to its free levels. A respec ends the character's own buffs and kills its pet (respec.cs:247). Reasons: `not_found` (trainer), `spec_not_found`, `no_need` (nothing trained above that floor; nothing is sent), `refused` (the server's words in `message`), `timeout`, `not_in_game`, and those of the walk there. |
 
 ### Group
 
@@ -206,7 +221,7 @@
 | `getObject(objectId: number): NearbyNpc \| NearbyPlayer \| NearbyObject \| null` | Any nearby NPC, player or object by object id. |
 | `getTarget(): NearbyNpc \| NearbyPlayer \| NearbyObject \| null` | Our current target (player.targetObjectId) when it is nearby. |
 | `getSkills(): SkillsState` | Specializations, abilities, styles and spells. |
-| `findSpecialization(pattern: NamePattern): Specialization \| null` | Specialization by name (shortest name wins). |
+| `findSpecialization(pattern: NamePattern): Specialization \| null` | Specialization by any name of its line: as listed ('Shield'), its DB key ('Shields', from classes.json, Style.specName or ItemBonus.spec) or an item's bonus name ('Cave Magic'). Failing those, by part of the listed name (shortest wins). Look lines up here rather than with === on the list, which only knows the listed name. |
 | `findSpell(pattern: NamePattern): Spell \| null` | Spell by name; pass its lineIndex/spellIndex to sendCastSpell. Highest level wins among equal names. |
 | `findStyle(pattern: NamePattern): Style \| null` | Combat style by name; pass its skillIndex to sendUseSkill. |
 | `findAbility(pattern: NamePattern): Ability \| null` | Ability by name; pass its skillIndex to sendUseSkill. |
@@ -219,6 +234,7 @@
 | `getPet(): NearbyNpc \| null` | Our window pet's NPC entry, or null: no pet, or it is out of view right now. |
 | `getSummons(): NearbyNpc[]` | Our own pets with no window, the entries in view, nearest first: a Theurgist's, a fire-and-forget turret, a bomber, a Bonedancer's minion. Known from the 0x1B of their summon (BotWorldState.summons), and never in getPetState. Orders don't reach them. |
 | `getDialog(): DialogBox \| null` | Open 0x81 dialog box (group invite, quest offer, yes/no), or null. Answer with sendRespondDialog. |
+| `getResurrectionOffer(): ResurrectionOffer \| null` | The resurrection offer waiting for our answer, or null. Answer with bot.acceptResurrection or bot.respondToDialog. |
 | `getNpcDialog(): NpcDialog \| null` | Last NPC dialogue with its [keywords]; answer with sendWhisper(npcObjectId, keyword). |
 | `getTextWindow(): TextWindow \| null` | Last custom text window (0xC4), or null. |
 | `getGroup(): GroupMember[]` | Group members (empty when not grouped). |
@@ -269,7 +285,7 @@
 | `async sendDestroyItem(slot: number): Promise<ActionResult>` | Destroy an item. |
 | `async sendBuy(page: number, slot: number, count: number = 1): Promise<ActionResult>` | Buy from the open merchant by page/slot (see getMerchant). |
 | `async sendSell(slot: number): Promise<ActionResult>` | Sell a backpack item to the open merchant. |
-| `async sendOpenTrainer(): Promise<ActionResult>` | Open the trainer window (stand near a trainer first). |
+| `async sendOpenTrainer(): Promise<ActionResult>` | Open the trainer window, anywhere while allow_train_anywhere is on (train.cs:143), else with a trainer targeted. |
 | `async sendTrainSpec(specIndex: number, levels?: number): Promise<ActionResult>` | Train a specialization (index from getTrainer().specs). |
 | `async sendTradeOfferItem(partnerObjectId: number, slot: number): Promise<ActionResult>` | Add a backpack item to the trade window with a player, opening it if needed. Evidence is the slot in getState().trade.mySlots. Never from both sides at once: two adds that open a window in one server tick can hang the server (learnings/trading.md). bot.offerTrade keeps them apart. |
 | `async sendTradeOfferMoney(partnerObjectId: number, copper: number): Promise<ActionResult>` | Add copper to the trade window with a player, on top of what is there. It goes out as one drop per coin, and the server holds only that drop against the purse, never the total (PlayerMoveItemRequestHandler.cs:258): an amount above the purse can be refused in part, or shown in full and fail at the commit. bot.offerTrade checks the purse first. |
@@ -434,6 +450,8 @@ interface NearbyNpc extends WorldObjectBase {
   speed: number;
   /** Object the NPC is attacking/targeting, if any. Its 0xA1 names one only at a standstill within reach (PacketLib168.cs:820-828), so its swings and spells on us, our pet or a summon name it too. That holds for 5 s while it is on the move, and 6 s between its casts, from a cast's first animation when it was on one of those then. When a pet of ours is lost, not to a region change or our death, a mob on it reads as on us at once: the server re-aims it. So does the window pet's own target if it was moving or hurt, on its first run at the pet and never named. That holds for its run: its distance at 150 units/s, slower below 33 % health, plus 2 s, at least 5 s, and on while it reads 0xFFFF and comes nearer, 30 s at most, until a real id or a 0 says otherwise. The server goes by threat, so where it has another to turn to it reads as on nobody until its next swing or 0xA1: with another pet of ours within 600 of it, a minion's mob while its commander lives, and in a group of two or more. So does a mob on the pet at full health with nothing to show that it or we attacked it: it has no aggro on us (StandardMobBrain.cs:566-571). A 0 clears any of this, and a 0x72 under 6 s after its naming puts it back: a caster's 0 can come first. A DoT's tick on one of ours names nobody when the mob was named on another of ours in the last 6 s: it has no 0x1B, and says where the spell landed some time ago. */
   targetObjectId: number | null;
+  /** `targetObjectId` stands on a spell alone: a mob casting from range at us or a pet of ours, with its 0x1B or its damage spell's 0xBC to go by, or held through 0xA1's 0 between casts. Its target for the bot's own fight all the same, as the server sends none (PacketLib168.cs:820-828). The group reads it as the others' clients do, from the spell (observeState, Contact.targetBySpell), so what is on a member isn't told by whose report came last. Absent otherwise: the server's own id, a swing, or a run at us (65535). */
+  targetBySpell?: boolean;
   /** When the client first held this entry, on its clock (as `receivedAt`): a death under this id before then was another mob's, as the server hands ids on at once (Region.cs:955). Absent from an older client. */
   firstSeenAt?: number;
   inCombat: boolean;
@@ -504,6 +522,8 @@ interface InventoryItem {
   /** Raw value fields from ItemData (DPS/AF, SPD/ABS etc. depending on type). */
   value1: number;
   value2: number;
+  /** See ItemHand. Only a weapon's means anything. */
+  hand: number;
 }
 ```
 
@@ -511,6 +531,7 @@ interface InventoryItem {
 
 ```typescript
 interface Specialization {
+  /** The server's display name, not always the key elsewhere: 'Shield' (key Shields), 'Light Magic' (key Light). sdk.findSpecialization takes either. */
   name: string;
   level: number;
   internalId: number;
@@ -597,6 +618,7 @@ interface Style {
   name: string;
   internalId: number;
   specLevel: number;
+  /** The line's DB key, so 'Shields' where the skill list says 'Shield': find its level with sdk.findSpecialization(specName). */
   specName: string | null;
   /** Index to pass to the useSkill action. */
   skillIndex: number;
@@ -710,6 +732,19 @@ interface DialogBox {
   type: number;
   text: string;
   receivedAt: number;
+  /** Set when this box is a resurrection offer. */
+  resurrection?: ResurrectionOffer;
+}
+```
+
+### ResurrectionOffer
+
+Another player's rez waiting for our answer: who cast it and the health it restores. It expires after 15 s, and the caster's power is gone then.
+
+```typescript
+interface ResurrectionOffer {
+  caster: string;
+  healthPercent: number;
 }
 ```
 
@@ -727,12 +762,28 @@ interface ItemBonus {
   unit: 'pts' | '%' | 'lvls' | null;
   /** category 'stat'. */
   stat?: 'STR' | 'DEX' | 'CON' | 'QUI' | 'INT' | 'PIE' | 'EMP' | 'CHR' | 'ACU';
-  /** category 'skill' and 'focus': the specialization's name in classes.json, null when no class has one. */
+  /** category 'skill' and 'focus': the specialization's DB key, as in classes.json (sdk.findSpecialization takes it), null when no class has one. */
   spec?: string | null;
   /** category 'skill': its ePropertyType group; 'skillGroup': the group it raises, null for "All Skills". */
   group?: SkillGroup | null;
   /** The line as the server sent it. */
   text: string;
+}
+```
+
+### WeaponDelve
+
+A weapon's "Damage Modifiers" lines.
+
+```typescript
+interface WeaponDelve {
+  baseDps: number;
+  /** DPS at this character's level (GamePlayer.GetWeaponDpsCap). */
+  clampedDps: number;
+  /** Seconds per swing. */
+  speed: number;
+  quality: number;
+  condition: number;
 }
 ```
 
@@ -803,6 +854,7 @@ interface MerchantState {
 ```typescript
 interface TrainerSpec {
   index: number;
+  /** The server's display name, as in Specialization.name. */
   name: string;
   level: number;
   /** Cost in spec points to train the next level. */
@@ -972,6 +1024,8 @@ interface BotWorldState {
   equipment: InventoryItem[];
   /** Vault items, populated after the vault window has been opened. */
   vault: InventoryItem[];
+  /** When a vault keeper last opened the vault in this client session; null or absent means `vault` says nothing yet. */
+  vaultOpenedAt?: number | null;
   skills: SkillsState;
   effects: Effect[];
   group: GroupMember[];
@@ -1110,6 +1164,29 @@ interface WalkOptions {
   speedFactor?: number;
   /** Fail after this long without getting closer (default 8000 ms). */
   stuckMs?: number;
+}
+```
+
+### RepairResult
+
+```typescript
+interface RepairResult extends ActionResult {
+  /** What was handed over; null for repairAll. */
+  item: InventoryItem | null;
+  /** The same item as it is now; null for repairAll. Its `condition` is a percent rounded up, so 100 can still hide wear. */
+  repaired: InventoryItem | null;
+  /** Copper the purse lost. */
+  cost: number;
+  messages: GameMessage[];
+}
+```
+
+### VaultResult
+
+```typescript
+interface VaultResult extends ActionResult {
+  keeper: NearbyNpc | null;
+  items: InventoryItem[];
 }
 ```
 
@@ -1283,6 +1360,38 @@ interface KillPlayerResult extends Omit<KillResult, 'npc'> {
 }
 ```
 
+### ResurrectOptions
+
+```typescript
+interface ResurrectOptions {
+  /** The rez to cast; default our strongest (resurrectSpell). */
+  spell?: Spell;
+  /** How long to wait for the target's answer once the cast is done (default 16 s: its question expires after 15 s). */
+  answerMs?: number;
+  /** Walk into range (default true). */
+  approach?: boolean;
+}
+```
+
+### ResurrectResult
+
+```typescript
+interface ResurrectResult extends ActionResult {
+  spell: Spell | null;
+  target: NearbyPlayer | null;
+  /** The cast itself. A finished cast only asks the target. */
+  cast: CastResult | null;
+}
+```
+
+### AcceptResurrectionResult
+
+```typescript
+interface AcceptResurrectionResult extends ActionResult {
+  offer: ResurrectionOffer | null;
+}
+```
+
 ### CastOptions
 
 ```typescript
@@ -1317,6 +1426,12 @@ interface CastResult extends ActionResult {
   effectImmune?: boolean;
   /** With reason already_dead: our target died during this cast. Nothing landed and nothing was paid, and it says nothing against the caster: it is the fight's end. */
   targetDied?: true;
+  /** The cast went off but the server refused the effect: "{0} already has that effect. Wait until it expires. Spell failed." The same spell is still on a player (EffectListComponent.cs:689), as for a second root while one holds. */
+  alreadyOn?: boolean;
+  /** Whether the server said its effect landed: the spell's own line for that ("{0} is entranced!", Message2), sent to the caster. false when the spell has one and it never came, undefined when it has none. A monster's repeat replaces the old effect without a word (ECSGameEffect.cs OnEffectStartsMsg). */
+  effectLanded?: boolean;
+  /** The name in that line: an enemy player's real name, which its race-named entry in the world state never shows. */
+  landedOn?: string;
   /** Damage from "You hit X for N damage!" / "Your <this spell> hits X for N damage!" lines that arrived once the cast time was up. Other spells' DoT ticks and "extra damage" lines are left out; a damage shield's "You hit X for N damage!" in the same moment cannot be told apart. Always 0 for a summon. A bomber's hit comes when it arrives, up to 4 s later, and reads like any other (BomberBrain.cs:25-30): watch the mob's health for it. */
   damage: number;
   messages: GameMessage[];
@@ -1608,10 +1723,41 @@ interface SellItemsResult extends ActionResult {
 
 ```typescript
 interface TrainResult extends ActionResult {
+  /** The line as the skill list names it, whichever of its names was asked for. */
   spec: string | null;
   fromLevel: number;
   toLevel: number;
   specPointsLeft: number;
+}
+```
+
+### TrainBuildResult
+
+```typescript
+interface TrainBuildResult extends ActionResult {
+  /** The build's name; null when there is none. */
+  build: string | null;
+  /** Every line this call raised, by KeyName, also when a later one failed. */
+  trained: { spec: string; fromLevel: number; toLevel: number }[];
+  /** The line the points are banked for, when that is what stopped the training. */
+  waiting: { spec: string; cost: number; points: number } | null;
+  /** Nothing left to raise at this level. */
+  done: boolean;
+  /** Lines with points spent beyond the current target, by KeyName. Only a respec gets those back. */
+  over: { spec: string; level: number; target: number }[];
+  specPointsLeft: number;
+}
+```
+
+### RespecResult
+
+```typescript
+interface RespecResult extends ActionResult {
+  /** What player.specPoints rose by. */
+  regained: number;
+  specPointsLeft: number;
+  /** Every line as it stands now, as the skill list names it. */
+  specs: { name: string; level: number }[];
 }
 ```
 

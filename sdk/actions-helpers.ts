@@ -76,8 +76,13 @@ export function isCrowdControlled(text: string): boolean {
  * sends another player's target, only its swings, and a swing round lasts the weapon's speed
  * (AttackComponent.AttackSpeed): two-handed weapons and bows of levels 18-26 mostly swing every
  * 4-5.4 s (SPD_ABS 40-54 in itemtemplate.sql), so a shorter window drops the target between two
- * swings at the same victim.
+ * swings at the same victim. attackers() keeps an NPC on us this long after a hit too.
  */
+/** A spell's message template (Message1..4) as a pattern on what the client reads; `{0}` captures the name. */
+export function spellMessagePattern(template: string): RegExp {
+    return new RegExp(`^${template.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace('\\{0\\}', '(.+?)')}$`, 'i');
+}
+
 export const PLAYER_AIM_MS = 6000;
 
 /** How long a pet's last swing or spell says who it fights: past a slow pet's swing (4-5 s, or a 3.5 s cast and a 600 ms think). */
@@ -133,7 +138,7 @@ export const WEAPON_LINES: Partial<Record<number, string>> = {
     [ObjectType.TwoHandedWeapon]: 'Two Handed', [ObjectType.PolearmWeapon]: 'Polearm', [ObjectType.Staff]: 'Staff', [ObjectType.Flexible]: 'Flexible',
     [ObjectType.Sword]: 'Sword', [ObjectType.Hammer]: 'Hammer', [ObjectType.Axe]: 'Axe', [ObjectType.LeftAxe]: 'Axe', [ObjectType.Spear]: 'Spear',
     [ObjectType.Blades]: 'Blades', [ObjectType.Blunt]: 'Blunt', [ObjectType.Piercing]: 'Piercing', [ObjectType.LargeWeapons]: 'Large Weapons',
-    [ObjectType.CelticSpear]: 'Celtic Spear', [ObjectType.Scythe]: 'Scythe',
+    [ObjectType.CelticSpear]: 'Celtic Spear', [ObjectType.Scythe]: 'Scythe', [ObjectType.HandToHand]: 'Hand to Hand',
 };
 
 /** A style that the weapon in hand can't do (StyleProcessor.cs:175; language/EN/GameObjects/GamePlayer.txt:56). The state can't say what is in hand, so this is how we find out. */
@@ -260,7 +265,16 @@ export const CAST_REFUSALS = [
     CORPSE_ONLY.toLowerCase(),
     ...PET_CAST_REFUSALS.map(([text]) => text),
     ...PULSE_CANCELLED,
+    'is already considering a resurrection',
 ] as const;
+
+/**
+ * What a rez costs: a share of the caster's full power by the level gap, half at equal level, whatever the
+ * spell's power column says (ResurrectSpellHandler.PowerCost, :63-70). Paid when the cast ends, refunded on a "no".
+ */
+export function resurrectCost(maxMana: number, casterLevel: number, targetLevel: number): number {
+    return Math.trunc(maxMana * Math.max(0.1, 0.5 + (targetLevel - casterLevel) / casterLevel));
+}
 
 /** "{0} is dead!" to a spell at the dead (SpellHandler.cs:783, HealSpellHandler.cs:78). All before it is a name, so it goes by its end. */
 export const TARGET_IS_DEAD = / is dead!$/;
@@ -446,6 +460,41 @@ export const TRADE_COMMIT_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
     [/^\S+ doesn't have enough space in his inventory\.$/, 'partner_inventory_full'],
 ];
 
+/** A smith's price, single item or everything (Blacksmith.txt:10, Blacksmith.cs:231). The text is the box's. */
+export const REPAIR_OFFER = /^It will cost (.+) to repair .+\. Do you accept\?$/;
+
+/** A smith's answer to an item handed over: no box follows. Anchored, as TRADE_REFUSALS (Blacksmith.txt:15-17, GamePlayer.txt). */
+export const REPAIR_REFUSALS: ReadonlyArray<readonly [RegExp, string]> = [
+    [/^Your .+ is already in perfect condition\.$/, 'no_need'],
+    [/^.+ says, "I can't repair that\."$/, 'not_repairable'],
+    [/^.+ doesn't want stacked items\.$/, 'not_repairable'],
+    [/^You are too far away to give anything to /, 'out_of_range'],
+    [/^Invalid trade target\.$/, 'not_found'],
+];
+
+/**
+ * The smith's lines after a yes. A repair-all that can't pay reads with its placeholders still in it
+ * (Blacksmith.cs:267), and a smith that lost track of the item says it can't (:180-186).
+ */
+export const REPAIR_ANSWERS: ReadonlyArray<readonly [RegExp, string]> = [
+    [/^.+ says, "I can't repair that\."$/, 'not_repairable'],
+    [/ says, "There, .+ is ready for combat\."$/, 'done'],
+    [/ says, "Uhh, .+ is rather old\. /, 'done'],
+    [/It costs .+ to repair .+ You don't have that much/, 'insufficient_funds'],
+];
+
+/** "All items are fully repaired already." (Blacksmith.cs:233), in a popup that names the smith. */
+export const NOTHING_TO_REPAIR = /all items are fully repaired already/i;
+
+const COIN_COPPER: Record<string, number> = { copper: 1, silver: 100, gold: 10_000, platinum: 10_000_000, mithril: 10_000_000_000 };
+
+/** The copper in a Money.GetString text: "3 gold, 24 silver", "0 copper pieces" (Money.cs:74, money.txt). */
+export function parseMoneyText(text: string): number {
+    let copper = 0;
+    for (const [, n, coin] of text.matchAll(/(\d+) (copper|silver|gold|platinum|mithril)/g)) copper += Number(n) * COIN_COPPER[coin!]!;
+    return copper;
+}
+
 /** PlayerTradeWindow.cs:676-677. It comes before the close, after the inventory changes. */
 export const TRADE_COMPLETED = /^Trade Completed\. \d+ items for \d+ items\.$/;
 
@@ -506,14 +555,28 @@ export const PICKUP_REFUSALS = [
     'below your battlegroups lootlevel',
 ] as const;
 
+/** What training gets with no trainer targeted while allow_train_anywhere is off (train.cs:150). */
+export const TRAINER_WANTED = 'you must select a valid trainer';
+
 export const TRAIN_REFUSALS = [
-    'you must select a valid trainer',
+    TRAINER_WANTED,
     'specialization points!',
     'you cannot train',
     "you can't train",
     'you have already trained',
     'could not be found',
     'not enough',
+] as const;
+
+/** The yes/no box /respec opens (respec.cs:107, 178). */
+export const RESPEC_OFFER = /all respec changes are final/i;
+
+/** What /respec says instead of that box (respec.cs:66, 102, 159, 169, 174). */
+export const RESPEC_REFUSALS = [
+    'you must be speaking with your trainer',
+    "you don't seem to have any",
+    'no line with name',
+    'line is less than 2',
 ] as const;
 
 export const RELEASE_REFUSALS = [
@@ -577,7 +640,7 @@ export function conColor(level: number): ConColor {
 }
 
 /** NPC roles that are never fight targets. */
-const NON_COMBAT_ROLES = new Set(['merchant', 'trainer', 'guard', 'healer', 'stablemaster', 'vault', 'teleporter', 'service']);
+const NON_COMBAT_ROLES = new Set(['merchant', 'smith', 'trainer', 'guard', 'healer', 'stablemaster', 'vault', 'teleporter', 'service']);
 
 /** A monster we can fight for XP: attackable, realm 'none', not a townsperson, not a pet (killing one is worth nothing, GameNPC.cs:2731-2732). */
 export function isKillable(npc: NearbyNpc, player: PlayerState | null): boolean {
@@ -626,6 +689,16 @@ export interface InventoryDelta {
     gained: InventoryItem[];
     /** Items (or stack counts) that went away. */
     lost: InventoryItem[];
+}
+
+/**
+ * Two readings of one item, as far as the client can tell: what tells it from an equal-named one a swap put in
+ * its slot. Equal readings can still be two items: bonuses never reach the client, and condition and durability
+ * come as whole percents.
+ */
+export function sameItem(a: InventoryItem, b: InventoryItem): boolean {
+    return a.name === b.name && a.level === b.level && a.condition === b.condition && a.durability === b.durability
+        && a.quality === b.quality && a.value1 === b.value1 && a.value2 === b.value2 && a.model === b.model && a.weight === b.weight;
 }
 
 /** Per-name count deltas between two backpack snapshots. */
@@ -894,11 +967,43 @@ export class ActionHelpers {
             ?? this.sdk.findInventoryItem(target.name);
     }
 
-    /** NPCs whose current target is us. One reading 0 % still is one: the percent is truncated (GameLiving.cs:2621), and a dead one leaves the list. */
+    /**
+     * NPCs fighting us: their reported target is us, or their swing or spell landed on us within PLAYER_AIM_MS.
+     * The target alone misses a caster or a running mob: the server sends it only for a mob in attack state, able to
+     * turn, that stands within its attack range (PacketLib168.cs:820-828), and a mob starting a timed cast
+     * leaves attack state (StandardMobBrain.cs:442-443). A hit from something we couldn't fight, such as a realm NPC's buff, doesn't count.
+     * Nor one from a mob that reads on a pet of ours: a swing of its would have named us, so that is a DoT's tick, with no 0x1B, saying where the spell landed some time ago (the model's own reading, CombatAnimation).
+     * One reading 0 % still is one: the percent is truncated (GameLiving.cs:2621). Only its death ends it (npcJustDied).
+     */
     attackers(state: BotWorldState | null = this.sdk.getState()): NearbyNpc[] {
-        const me = state?.player?.objectId;
-        if (!me) return [];
-        return (state?.nearbyNpcs ?? []).filter(n => n.targetObjectId === me);
+        const p = state?.player;
+        if (!state || !p) return [];
+        const hitBy = this.hitUsBy(state, PLAYER_AIM_MS);
+        const pets = this.ownPets(state);
+        return state.nearbyNpcs.filter(n => !this.npcJustDied(state, n) && (n.targetObjectId === p.objectId || (hitBy.has(n.objectId) && isAttackable(n, p) && !(n.targetObjectId !== null && pets.has(n.targetObjectId)))));
+    }
+
+    /**
+     * Dead by what the server said: an NPC's 0 % doesn't tell, it is truncated (GameLiving.cs:2621). A dead one has its 0xA2 type 0, which also
+     * takes the entry, so an entry at 0 % with that event is one just going. Only a death since this entry appeared: the server hands a dead mob's id to the next object it adds (Region.cs:955), and the event stays in the ring. With no first sight, from an older client, any: the health keeps a new spawn out then, but not one at 0 %.
+     */
+    npcJustDied(state: BotWorldState | null, n: NearbyNpc): boolean {
+        return n.healthPercent <= 0 && !!state?.combatEvents.some(e => e.kind === 'death' && e.targetObjectId === n.objectId && e.receivedAt > (n.firstSeenAt ?? 0));
+    }
+
+    /** Who swung at us (hit or miss) or landed a spell effect on us within `windowMs` of the snapshot. */
+    private hitUsBy(state: BotWorldState, windowMs: number): Set<number> {
+        const me = state.player?.objectId;
+        const since = state.timestamp - windowMs;
+        const ids = new Set<number>();
+        for (const e of state.combatEvents) {
+            // The next object in the region takes a dead mob's id (Region.cs): its hits aren't from that one.
+            if (e.kind === 'death' && e.targetObjectId !== null) ids.delete(e.targetObjectId);
+            else if ((e.kind === 'melee' || e.kind === 'spellEffect') && e.targetObjectId === me && e.attackerObjectId !== null && e.receivedAt >= since) {
+                ids.add(e.attackerObjectId);
+            }
+        }
+        return ids;
     }
 
     /** Our pets by object id: the window pet and the summons. */
@@ -1009,13 +1114,7 @@ export class ActionHelpers {
     playerAttackers(state: BotWorldState | null = this.sdk.getState(), windowMs: number = PLAYER_AIM_MS): NearbyPlayer[] {
         const p = state?.player;
         if (!state || !p) return [];
-        const since = state.timestamp - windowMs;
-        const ids = new Set<number>();
-        for (const e of state.combatEvents) {
-            if ((e.kind === 'melee' || e.kind === 'spellEffect') && e.targetObjectId === p.objectId && e.attackerObjectId !== null && e.receivedAt >= since) {
-                ids.add(e.attackerObjectId);
-            }
-        }
+        const ids = this.hitUsBy(state, windowMs);
         return state.nearbyPlayers.filter(pl => ids.has(pl.objectId) && pl.realm !== p.realm && !pl.isDead);
     }
 

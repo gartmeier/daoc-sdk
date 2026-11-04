@@ -10,6 +10,7 @@
 // that (petControl: it only sends) is marked `side` and runs on a clock of its own beside the turns, and once at the end of
 // each turn that acted, with no turn announced: a healer's casts can follow each other in one macrotask.
 
+import type { CcKind } from './cc';
 import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import type { PlayerState } from '../types';
@@ -143,6 +144,10 @@ export class MemberContext<S = any> {
     }
     /** What the behaviour running in the turn right now has announced; null between behaviours and before it has. The side tick reads this: a select of its own would take the turn's cast or swing. */
     turn(): { kind: string; targetId: number | null } | null { return this.agent.turn; }
+    /** The rest of this turn is a cast, which finishes: an orders change no longer aborts it. */
+    finishTurn(): void {
+        if (!this.onSide) this.agent.finishTurn();
+    }
     /** Why a behaviour did not act; shown as the idle reason when nothing acts. */
     skip(reason: string): false {
         if (!this.onSide) this.agent.lastSkip = reason;
@@ -162,13 +167,13 @@ export class MemberContext<S = any> {
         });
     }
     note(text: string): void { this.agent.board.emit({ at: Date.now(), kind: 'note', member: this.name, text }); }
-    /** Tell the group a mob is crowd-controlled for `durationMs`. */
-    markCc(targetId: number, kind: string, durationMs: number): void {
-        this.agent.board.markCc(targetId, this.me().regionId, this.name, kind, durationMs);
+    /** Tell the group our crowd control landed on it, for at most `durationMs`; `serverName` is the name in the server's line for that (CastResult.landedOn). */
+    markCc(targetId: number, kind: CcKind, durationMs: number, serverName?: string): void {
+        this.agent.board.markCc(targetId, this.me().regionId, this.name, kind, durationMs, Date.now(), serverName);
     }
-    /** Tell the group crowd control can't land on it for `durationMs` (it answered "immune"). */
-    markCcImmune(targetId: number, durationMs: number): void {
-        this.agent.board.markCcImmune(targetId, this.me().regionId, durationMs);
+    /** Tell the group this kind can't land on it for up to `durationMs` (the server answered so). */
+    markCcImmune(targetId: number, kind: CcKind, durationMs: number): void {
+        this.agent.board.markCcImmune(targetId, this.me().regionId, kind, durationMs);
     }
 }
 
@@ -221,10 +226,14 @@ export class MemberAgent<S = any> {
         this.publish();
     }
 
-    /** What the group can count on. With pets off (pet.enabled) a summon is a spell it won't cast: nobody waits on its power or its pet, and the report has none. */
+    /**
+     * What the group can count on, from the spell list. Rez only if our list also casts it, since corpses wait for whoever says it can.
+     * With pets off (pet.enabled, or its character's pet: false) a summon is a spell it won't cast: nobody waits on its power or its pet, and the report has none.
+     */
     private ownCapabilities(): Capabilities {
         const can = this.spells.capabilities();
-        return petsAllowed(this.ctx.settings) ? can : { ...can, pet: null };
+        const own = { ...can, rez: !!can.rez && this.behaviors.some(b => b.name === 'rez') };
+        return petsAllowed(this.ctx.settings) && this.member.character?.pet !== false ? own : { ...own, pet: null };
     }
 
     /** Push our latest snapshot (with the current activity) to the blackboard. */
@@ -258,6 +267,10 @@ export class MemberAgent<S = any> {
         const mine = (o: Orders) => o.cc.filter(c => c.by === this.ctx.name).map(c => c.targetId).join(',');
         const moved = (a: Orders['anchor'], b: Orders['anchor']) => !a !== !b || (!!a && !!b && Math.hypot(a.x - b.x, a.y - b.y) > 300);
         return mine(next) !== mine(prev) || moved(next.retreatTo, prev.retreatTo) || (next.phase !== 'engage' && moved(next.anchor, prev.anchor));
+    }
+
+    finishTurn(): void {
+        if (this.current) this.current.interruptible = false;
     }
 
     /** Abort the running behaviour if it may be interrupted. */

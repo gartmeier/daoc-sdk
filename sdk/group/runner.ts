@@ -11,10 +11,11 @@ import { abortable, executionContext } from '../execution-context';
 import type { BotActions } from '../actions';
 import { gatewayHttpBase, type BotSDK } from '../index';
 import { BotDisconnectedError, BotPreemptedError, runScript, type ScriptContext } from '../runner';
+import { awaitingRez, type TacticsSettings } from './behaviors';
 import { Blackboard } from './blackboard';
 import { MemberAgent, type Behavior, type Member } from './member';
 import { withCharacter } from './character';
-import { leftPassive, petAfterRun, petHoldOf, petKit, petLeftAlone, petsAllowed, withPets } from './pets';
+import { leftPassive, memberPetKit, petAfterRun, petHoldOf, petLeftAlone, petsAllowed, withPets } from './pets';
 import { formatReport, GroupObserver, saveReport, stampOf, type Finding, type RunReport } from './observer';
 import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type PublisherDeps } from './publish';
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
@@ -94,7 +95,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     const lists = new Map<string, Behavior<S>[]>();
     const behaviorsOf = (m: Member) => {
         let list = lists.get(m.bot);
-        if (!list) lists.set(m.bot, list = withPets(strategy.memberBehaviors?.[m.bot] ?? withCharacter(strategy.behaviors[m.role] ?? strategy.behaviors.melee, m.character), petsOn ? petKit(m.sdk, m.actions) : null));
+        if (!list) lists.set(m.bot, list = withPets(strategy.memberBehaviors?.[m.bot] ?? withCharacter(strategy.behaviors[m.role] ?? strategy.behaviors.melee, m.character), petsOn ? memberPetKit(m.sdk, m.actions, m.character) : null));
         return list;
     };
     const routines = Object.fromEntries(members.map(m => [m.bot, {
@@ -175,7 +176,9 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
             applyWindDown(now);
             if (now >= deadline && !coordinator.windingDown) { coordinator.windingDown = true; log('time is up: finishing the current fight'); }
             const phase = board.getOrders().phase;
-            if (coordinator.windingDown && (now >= hardStop || !['engage', 'retreat', 'pull'].includes(phase))) break;
+            // A corpse waiting for a rez would otherwise be left dead, and a member's report says so: wait for it too, up to the hard stop.
+            const settled = !['engage', 'retreat', 'pull'].includes(phase) && !awaitingRez(board.picture().members, settings as Partial<TacticsSettings>);
+            if (coordinator.windingDown && (now >= hardStop || settled)) break;
         }
         if (run.signal.aborted) failure = run.signal.reason;
         else { finished = true; run.abort(new Error('group run finished')); }
@@ -201,7 +204,8 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
                 return;
             }
             if (m.sdk.getPlayer()?.attacking) await m.sdk.sendAttack(false);
-            if (petsOn) await petAfterRun(m.sdk, agent?.ctx.memory, petLeftAlone(m.sdk, m.actions));
+            // A character with no pet of its own (pet: false) has had nothing ordered, as with pet.enabled false.
+            if (petsOn && m.character?.pet !== false) await petAfterRun(m.sdk, agent?.ctx.memory, petLeftAlone(m.sdk, m.actions));
             await m.sdk.sendStop();
         })));
     }

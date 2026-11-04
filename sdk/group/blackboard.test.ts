@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { makePlayer, makePlayerObj, makeState } from '../test/fixtures';
+import { makeNpc, makePlayer, makePlayerObj, makeState } from '../test/fixtures';
 import type { CombatEvent, NearbyPlayer } from '../types';
 import { Blackboard, isMaterialChange, emptyOrders, observeState, type MemberSelf } from './blackboard';
 import { obs, report, sighting } from './fixtures';
@@ -521,5 +521,186 @@ describe('enemy players: who is hostile to us, and who died', () => {
         b.publish(look(100, [], corpse(60_000)), T + 100);
         expect(b.picture(T + 100).contacts.find(c => c.objectId === 300)).toMatchObject({ hp: 100, target: 'Healer' });
         expect(events.filter(e => e.kind === 'kill')).toEqual([]);
+    });
+});
+
+describe('a monster casting at a member from range', () => {
+    const T = 1_800_000_000_000;
+    const self: MemberSelf = { bot: 'testbot', role: 'tank', activity: { kind: 'idle', targetId: null, detail: '', since: 0 }, capabilities: { heal: false, cc: false, nuke: false, buffs: [], buffSpells: [] } };
+    const MOB = 500, ME = 100, HEALER = 302;
+    let id = 0;
+    /** A combat event received at T + `at`. */
+    const ev = (kind: CombatEvent['kind'], attacker: number, target: number | null, at: number, extra: Partial<CombatEvent> = {}): CombatEvent =>
+        ({ id: ++id, kind, attackerObjectId: attacker, targetObjectId: target, receivedAt: T + at, ...extra });
+    // As live: a dergan enchanter 446 away, and the server reports it neither targeting nor in combat.
+    const mob = (over: Parameters<typeof makeNpc>[0] = {}) => makeNpc({ objectId: MOB, name: 'dergan enchanter', level: 6, distance: 446, distance2d: 446, ...over });
+    const look = (ms: number, combatEvents: CombatEvent[], npc = mob()) => {
+        const player = makePlayer({ objectId: ME });
+        return observeState(makeState({ timestamp: T + ms, player, nearbyNpcs: [npc], nearbyPlayers: [makePlayerObj({ objectId: HEALER, name: 'Friend', realm: player.realm })], combatEvents }), self)!;
+    };
+    /** A board with both members on it, the healer too far off to see the mob; `step` publishes our observation and reads the contact. */
+    const board = (options = {}) => {
+        const b = new Blackboard(options);
+        const regionId = look(0, []).report.regionId;
+        const step = (ms: number, combatEvents: CombatEvent[], npc = mob()) => {
+            const o = look(ms, combatEvents, npc);
+            b.publish(obs(report('Friend', { objectId: HEALER, regionId, x: o.report.x + 9000, y: o.report.y, at: T + ms }), []), T + ms);
+            b.publish(o, T + ms);
+            return b.picture(T + ms).contacts.find(c => c.objectId === MOB)!;
+        };
+        return { b, step, regionId };
+    };
+
+    test('its spell landing on a member puts it on that member and makes it a threat, for the aim window', () => {
+        const { step } = board();
+        const hit = [ev('spellEffect', MOB, HEALER, 0)];
+        expect(step(0, [])).toMatchObject({ target: null, threat: false });
+        expect(step(100, hit)).toMatchObject({ target: 'Friend', targetId: HEALER, targetBySpell: true, threat: true, targetSince: T + 100, inCombat: false });
+        // Between two spells: same target, same streak.
+        step(3000, hit);
+        expect(step(5000, hit)).toMatchObject({ target: 'Friend', targetSince: T + 100, hostileSince: T + 100, threat: true });
+        // The aim window ends; the threat lasts hostileMs more, as for any hostile sign.
+        expect(step(6100, hit)).toMatchObject({ target: null, targetId: null, targetBySpell: false, threat: true });
+        expect(step(10_000, hit)).toMatchObject({ threat: false });
+    });
+
+    test('the newest spell names the target, and one the server reports goes first', () => {
+        const { step } = board();
+        const hits = [ev('spellEffect', MOB, HEALER, 0), ev('spellEffect', MOB, ME, 1000)];
+        expect(step(1100, hits).targetId).toBe(ME);
+        expect(step(1200, hits, mob({ targetObjectId: HEALER, inCombat: true }))).toMatchObject({ target: 'Friend', targetBySpell: false });
+    });
+
+    test('melee shows no aim: a swing keeps no target after a reset', () => {
+        const { step } = board();
+        expect(step(100, [ev('melee', MOB, HEALER, 0)])).toMatchObject({ target: null, targetId: null, targetBySpell: false, swinging: true });
+    });
+
+    test('a self-buff, a buff on its friend or a cast start is no threat', () => {
+        const friend = makeNpc({ objectId: 501, name: 'dergan fury', level: 6 });
+        for (const e of [ev('spellEffect', MOB, MOB, 0), ev('spellEffect', MOB, friend.objectId, 0), ev('spellCast', MOB, null, 0, { castTimeMs: 3000 })]) {
+            const o = observeState(makeState({ timestamp: T + 100, player: makePlayer({ objectId: ME }), nearbyNpcs: [mob(), friend], nearbyPlayers: [], combatEvents: [e] }), self)!;
+            expect(o.sightings.find(s => s.objectId === MOB)).toMatchObject({ spellTargetId: null, swinging: false, targetId: null });
+            const b = new Blackboard();
+            b.publish(o, T + 100);
+            expect(b.picture(T + 100).contacts.find(c => c.objectId === MOB)).toMatchObject({ target: null, threat: false, hostileSince: 0 });
+        }
+    });
+
+    test('a member\'s spell on it does not read as its aim', () => {
+        const { step } = board();
+        expect(step(100, [ev('spellEffect', HEALER, MOB, 0)])).toMatchObject({ target: null, targetId: null, swinging: false });
+    });
+
+    test('a mezzed caster drops out of the threats as a melee add does, not after the whole aim window', () => {
+        const { b, step, regionId } = board({ hostileMs: 4000 });
+        // It nuked the healer 1 s before the mezz, so the swing flag holds to T + 1000 and the threat to T + 5000.
+        const hit = [ev('spellEffect', MOB, HEALER, -1000)];
+        expect(step(-500, hit)).toMatchObject({ target: 'Friend', threat: true });
+        b.markCc(MOB, regionId, 'Friend', 'mezz', 30_000, T);
+        expect(step(100, hit)).toMatchObject({ target: null, targetId: null, targetBySpell: false, threat: true });
+        // The spell from before the mezz neither ends the mezz nor counts as a target.
+        expect(step(900, hit).cc?.by).toBe('Friend');
+        expect(step(1900, hit).cc?.by).toBe('Friend');
+        const c = step(5100, hit);
+        expect(c).toMatchObject({ target: null, threat: false });
+        expect(c.cc?.by).toBe('Friend');
+    });
+
+    test('a spell landing after the mezz ends the board\'s cc entry, with a note, and puts it back on the member', () => {
+        const { b, step, regionId } = board();
+        const notes: string[] = [];
+        b.onEvent(e => { if (e.kind === 'note') notes.push(e.text); });
+        step(0, []);
+        b.markCc(MOB, regionId, 'Friend', 'mezz', 30_000, T);
+        const hit = [ev('spellEffect', MOB, HEALER, 3000)];
+        expect(step(3000, hit).cc).toBeNull();
+        expect(notes).toEqual(['mezz on dergan enchanter broke']);
+        expect(step(3250, hit)).toMatchObject({ target: 'Friend', targetBySpell: true, threat: true });
+    });
+
+    test('a cast start after the mezz ends nothing: only a landed spell does', () => {
+        const { b, step, regionId } = board();
+        step(0, []);
+        b.markCc(MOB, regionId, 'Friend', 'mezz', 30_000, T);
+        expect(step(3000, [ev('spellCast', MOB, null, 3000, { castTimeMs: 3000 })]).cc?.by).toBe('Friend');
+    });
+
+    test('a rooted caster that keeps casting is no longer controlled', () => {
+        const { b, step, regionId } = board();
+        step(0, []);
+        b.markCc(MOB, regionId, 'Friend', 'root', 30_000, T);
+        expect(step(3000, [ev('spellEffect', MOB, ME, 3000)]).cc).toBeNull();
+    });
+
+    test('its spell on a member who died is no target: nothing else would end it', () => {
+        const { b, regionId } = board();
+        b.publish(obs(report('Friend', { objectId: HEALER, regionId, isDead: true, at: T + 100 }), []), T + 100);
+        b.publish(look(100, [ev('spellEffect', MOB, HEALER, 0)]), T + 100);
+        expect(b.picture(T + 100).contacts.find(c => c.objectId === MOB)).toMatchObject({ target: null, targetId: null });
+    });
+
+    test('its spell on someone outside the group: targeting, but on no member', () => {
+        const stranger = 700;
+        const o = observeState(makeState({ timestamp: T + 100, player: makePlayer({ objectId: ME }), nearbyNpcs: [mob()], nearbyPlayers: [makePlayerObj({ objectId: stranger, name: 'Stranger', realm: 'albion' })], combatEvents: [ev('spellEffect', MOB, stranger, 0)] }), self)!;
+        expect(o.sightings[0]).toMatchObject({ spellTargetId: stranger });
+        const b = new Blackboard();
+        b.publish(o, T + 100);
+        expect(b.picture(T + 100).contacts[0]).toMatchObject({ target: null, targetId: stranger });
+    });
+
+    describe('fighting someone outside the group is not our fight', () => {
+        const STRANGER = 700;
+        const see = (ms: number, combatEvents: CombatEvent[], extra: { attacking?: boolean } = {}) => observeState(makeState({
+            timestamp: T + ms, player: makePlayer({ objectId: ME, ...extra, ...(extra.attacking ? { targetObjectId: MOB } : {}) }), nearbyNpcs: [mob()],
+            nearbyPlayers: [makePlayerObj({ objectId: STRANGER, name: 'Stranger', realm: 'albion' })], combatEvents,
+        }), self)!;
+        const threat = (b: Blackboard, ms: number) => b.picture(T + ms).contacts[0]!.threat;
+
+        test('its spell or its swing on a stranger makes no threat, wherever it stands: a damage spell also arrives as a swing', () => {
+            for (const kind of ['spellEffect', 'melee'] as const) {
+                const b = new Blackboard();
+                b.publish(see(100, [ev(kind, MOB, STRANGER, 0)]), T + 100);
+                expect(threat(b, 100)).toBe(false);
+            }
+        });
+
+        test('its next hit on us does', () => {
+            const b = new Blackboard();
+            b.publish(see(100, [ev('melee', MOB, STRANGER, 0)]), T + 100);
+            b.publish(see(200, [ev('melee', MOB, STRANGER, 0), ev('melee', MOB, ME, 150)]), T + 200);
+            expect(threat(b, 200)).toBe(true);
+        });
+
+        test('so does the group hitting it', () => {
+            const b = new Blackboard();
+            b.publish(see(100, [ev('melee', MOB, STRANGER, 0)], { attacking: true }), T + 100);
+            b.publish(see(200, [ev('melee', MOB, STRANGER, 0)], { attacking: true }), T + 200);
+            expect(threat(b, 200)).toBe(true);
+        });
+
+        test('its swing on something that is no player, a pet of ours for one, still counts', () => {
+            const b = new Blackboard();
+            b.publish(see(100, [ev('melee', MOB, 900, 0)]), T + 100);
+            expect(threat(b, 100)).toBe(true);
+        });
+    });
+
+    describe('only a mob standing to cast is on a member by its spell', () => {
+        test('a target the server names that differs from the spell is the server\'s', () => {
+            const { step } = board();
+            const c = step(100, [ev('spellEffect', MOB, HEALER, 0)], mob({ targetObjectId: ME, inCombat: true }));
+            expect(c.targetId).toBe(ME);
+            expect(c.targetBySpell).toBe(false);
+        });
+
+        test('in combat with no target it is running: not by spell, and the target it had is kept', () => {
+            const { step } = board();
+            step(100, [], mob({ targetObjectId: HEALER, inCombat: true }));
+            const c = step(200, [ev('spellEffect', MOB, HEALER, 150)], mob({ inCombat: true }));
+            expect(c.targetBySpell).toBe(false);
+            expect(c.target).toBe('Friend');
+            expect(c.movedAt).toBeGreaterThan(0);
+        });
     });
 });

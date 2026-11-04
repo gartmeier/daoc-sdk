@@ -16,6 +16,7 @@ import {
     CROWD_CONTROL_REFUSALS,
     CROWD_CONTROLLED_RETRY_MS,
     diffInventory,
+    sameItem,
     experienceFromMessages,
     INTERACT_REFUSALS,
     isFatalAttackRefusal,
@@ -32,6 +33,8 @@ import {
     PET_REFUSALS,
     PET_UNDER_CONTROL,
     petSpellKind,
+    NOTHING_TO_REPAIR,
+    parseMoneyText,
     PICKUP_REFUSALS,
     PLAYER_AIM_MS,
     AUTO_RELEASE_ARMED,
@@ -42,14 +45,22 @@ import {
     PVP_IMMUNE_RETRY_MS,
     RANGED_IN_HAND,
     RELEASE_REFUSALS,
+    REPAIR_ANSWERS,
+    REPAIR_OFFER,
+    REPAIR_REFUSALS,
+    RESPEC_OFFER,
+    RESPEC_REFUSALS,
+    resurrectCost,
     RETRYABLE_ATTACK_REFUSALS,
     SELL_REFUSALS,
     SIT_REFUSALS,
     STYLE_NEEDS_WEAPON,
     STYLE_REFUSALS,
     slotHolding,
+    spellMessagePattern,
     SUMMON_FAILURES,
     TRAIN_REFUSALS,
+    TRAINER_WANTED,
     TRADE_COMMIT_FAILURES,
     TRADE_COMPLETED,
     TRADE_REFUSALS,
@@ -82,11 +93,15 @@ import { EquipmentSlot, isWeapon } from './types';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
 import { groundTargetSnap } from './ground';
 import { isDelveOf, parseDelve } from './delve';
-import { findNpcSpawns, getSpecialization, getSpell, getSpellLine, getSpells, getZonePoint, realmId, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
+import { botFolder, loadBuild } from './build';
+import { findNpcSpawns, getClass, getSpecialization, getSpell, getSpellLine, getSpells, getZonePoint, realmId, specKey, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
+import { buildProblems, freeLevels, linesOverTarget, nextBuildStep, type BuildState } from '../data/builds/rule';
+import type { Build } from '../data/builds/types';
 import type {
     ActionResult,
     BotWorldState,
     DialogBox,
+    ResurrectionOffer,
     GameMessage,
     GroupMember,
     InventoryItem,
@@ -119,12 +134,14 @@ export { TerrainStore, getTerrainStore, type TerrainSample } from './terrain';
 
 // Server ranges (world/WorldMgr.cs, GamePlayer.cs) and the margins we approach to.
 const MELEE_APPROACH = 90;       // AttackRange 128 (+32 per moving side), 3D
+const MELEE_RANGE = 128;
 const MELEE_REAPPROACH = 118;
 /** As far as a swing reaches with both of us moving. */
 const MELEE_REACH = 160;
 const INTERACT_APPROACH = 150;   // INTERACT_DISTANCE 192, 3D
 const PICKUP_APPROACH = 150;     // world_pickup_distance 256, 2D
 const MERCHANT_APPROACH = 150;   // GameMerchant.OnPlayerBuy 256
+const GIVE_APPROACH = 100;       // GIVE_ITEM_DISTANCE 128, 3D
 const WHISPER_APPROACH = 300;    // WHISPER_DISTANCE 512
 const WHISPER_RATE_LIMIT = /^slow down! think before you say each word/i;
 // NPCs silently ignore a whisper < 1500 ms after the last one they accepted
@@ -133,6 +150,14 @@ const WHISPER_SPACING_MS = 1600;
 /** Gap between bot.say calls (the server drops says < 500 ms apart, say.cs:49-53). */
 const SAY_SPACING_MS = 600;
 const DEFAULT_SPELL_RANGE = 1500;
+/** A 0xDD to an object has toSlot = 1000 + objectId (PlayerMoveItemRequestHandler.cs:20-23). */
+const GIVE_TO_OBJECT = 1000;
+/** No target has this many lines: a trainBuild past it isn't getting anywhere. */
+const TRAIN_BUILD_MAX_STEPS = 32;
+/** eInventorySlot.GeneralVault: the server picks an empty slot on the other side, or a partial stack (PlayerMoveItemRequestHandler.cs:306-337). A full side fails without a word. */
+const GENERAL_VAULT_SLOT = 601;
+/** Personal vault slots 110-149. */
+const VAULT_SLOTS = 40;
 /** CommandNpcAttack refuses a target farther than this from us, in 3D (GamePlayer.cs:12185). */
 const PET_ORDER_RANGE = 2000;
 /** Where petKill stops when it has to walk up to order the pet. */
@@ -213,6 +238,8 @@ const GRIND_FINISHING_MS = 10_000;
 const AUTO_RELEASE_MARGIN_MS = 2000;
 /** eInventorySlot.PlayerPaperDoll: the server picks the item's own equipment slot (PlayerMoveItemRequestHandler.cs:28). */
 const PAPER_DOLL_SLOT = 100;
+/** What the server says when a slot won't take an item (GamePlayerInventory.cs CheckItemSlotRestriction). */
+const MOVE_REFUSALS = [/you can't|you cannot|you are not|you must|can't go there|you have no skill/i];
 /** Server dialog code for a group invite (PacketLib168.SendGroupInviteCommand). */
 const GROUP_INVITE_DIALOG = 0x05;
 /** Bound on one route plan when walkTo has no explicit timeout (its deadline follows the plan). */
@@ -236,6 +263,21 @@ export interface WalkOptions {
     speedFactor?: number;
     /** Fail after this long without getting closer (default 8000 ms). */
     stuckMs?: number;
+}
+
+export interface RepairResult extends ActionResult {
+    /** What was handed over; null for repairAll. */
+    item: InventoryItem | null;
+    /** The same item as it is now; null for repairAll. Its `condition` is a percent rounded up, so 100 can still hide wear. */
+    repaired: InventoryItem | null;
+    /** Copper the purse lost. */
+    cost: number;
+    messages: GameMessage[];
+}
+
+export interface VaultResult extends ActionResult {
+    keeper: NearbyNpc | null;
+    items: InventoryItem[];
 }
 
 export interface WalkResult extends ActionResult {
@@ -265,7 +307,7 @@ export interface TargetResult extends ActionResult {
     target: NearbyNpc | NearbyPlayer | NearbyObject | null;
 }
 
-export type InteractResponse = 'merchant' | 'dialog' | 'dialogBox' | 'textWindow' | 'trainer' | 'message';
+export type InteractResponse = 'merchant' | 'dialog' | 'dialogBox' | 'textWindow' | 'trainer' | 'vault' | 'message';
 
 export interface InteractOptions {
     /** Walk until within this 3D distance first (default 150; the server allows 192). */
@@ -382,6 +424,26 @@ export interface KillPlayerResult extends Omit<KillResult, 'npc'> {
     player: NearbyPlayer | null;
 }
 
+export interface ResurrectOptions {
+    /** The rez to cast; default our strongest (resurrectSpell). */
+    spell?: Spell;
+    /** How long to wait for the target's answer once the cast is done (default 16 s: its question expires after 15 s). */
+    answerMs?: number;
+    /** Walk into range (default true). */
+    approach?: boolean;
+}
+
+export interface ResurrectResult extends ActionResult {
+    spell: Spell | null;
+    target: NearbyPlayer | null;
+    /** The cast itself. A finished cast only asks the target. */
+    cast: CastResult | null;
+}
+
+export interface AcceptResurrectionResult extends ActionResult {
+    offer: ResurrectionOffer | null;
+}
+
 export interface CastOptions {
     /** Walk into range first (default true). */
     approach?: boolean;
@@ -429,6 +491,19 @@ export interface CastResult extends ActionResult {
     effectImmune?: boolean;
     /** With reason already_dead: our target died during this cast. Nothing landed and nothing was paid, and it says nothing against the caster: it is the fight's end. */
     targetDied?: true;
+    /**
+     * The cast went off but the server refused the effect: "{0} already has that effect. Wait until it expires. Spell
+     * failed." The same spell is still on a player (EffectListComponent.cs:689), as for a second root while one holds.
+     */
+    alreadyOn?: boolean;
+    /**
+     * Whether the server said its effect landed: the spell's own line for that ("{0} is entranced!", Message2), sent to the
+     * caster. false when the spell has one and it never came, undefined when it has none. A monster's repeat replaces the
+     * old effect without a word (ECSGameEffect.cs OnEffectStartsMsg).
+     */
+    effectLanded?: boolean;
+    /** The name in that line: an enemy player's real name, which its race-named entry in the world state never shows. */
+    landedOn?: string;
     /**
      * Damage from "You hit X for N damage!" / "Your <this spell> hits X for N damage!" lines that
      * arrived once the cast time was up. Other spells' DoT ticks and "extra damage" lines are left
@@ -640,10 +715,33 @@ export interface SellItemsResult extends ActionResult {
 }
 
 export interface TrainResult extends ActionResult {
+    /** The line as the skill list names it, whichever of its names was asked for. */
     spec: string | null;
     fromLevel: number;
     toLevel: number;
     specPointsLeft: number;
+}
+
+export interface TrainBuildResult extends ActionResult {
+    /** The build's name; null when there is none. */
+    build: string | null;
+    /** Every line this call raised, by KeyName, also when a later one failed. */
+    trained: { spec: string; fromLevel: number; toLevel: number }[];
+    /** The line the points are banked for, when that is what stopped the training. */
+    waiting: { spec: string; cost: number; points: number } | null;
+    /** Nothing left to raise at this level. */
+    done: boolean;
+    /** Lines with points spent beyond the current target, by KeyName. Only a respec gets those back. */
+    over: { spec: string; level: number; target: number }[];
+    specPointsLeft: number;
+}
+
+export interface RespecResult extends ActionResult {
+    /** What player.specPoints rose by. */
+    regained: number;
+    specPointsLeft: number;
+    /** Every line as it stands now, as the skill list names it. */
+    specs: { name: string; level: number }[];
 }
 
 export interface TravelResult extends WalkResult {
@@ -1107,6 +1205,9 @@ const ZONE_POINT_RANGE = 400;
 /** What the server says when it won't take a zone point (RegionChangeRequestHandler.cs:69, 129, 162; the jump point handlers). */
 const ZONE_POINT_REFUSALS = [/region has been disabled/i, /not supported by your client type/i, /exception in jump point/i, /do not meet the requirements/i, /proper mission/i, /another instance/i];
 
+/** A rezzed player stands this near its caster; the margin is for what either of them does right after. */
+const REZZED_NEAR = 300;
+
 const fail = <T extends object>(message: string, reason: string, extra: T): ActionResult & T =>
     ({ success: false, message, reason, ...extra });
 
@@ -1130,6 +1231,7 @@ export function castFailureReason(text: string, fallback: string = 'refused'): s
     if (isPvpImmunity(t)) return 'immune';
     if (isCrowdControlled(t)) return 'crowd_controlled';
     if (t.includes('you are dead')) return 'died'; // "You are dead and can't cast!" (SpellHandler.cs:881-884)
+    if (t.includes('considering a resurrection')) return 'already_considering'; // ResurrectSpellHandler.cs:246, :264
     if (t.includes('interrupt')) return 'interrupted';
     if (t.includes('you must wait')) return 'must_wait';
     if (t.includes('power')) return 'no_power';
@@ -1313,6 +1415,7 @@ export class BotActions {
         const prevBox = before?.dialog?.receivedAt ?? 0;
         const prevText = before?.textWindow?.receivedAt ?? 0;
         const trainerWasOpen = before?.trainer.isOpen ?? false;
+        const prevVault = before?.vaultOpenedAt;
         const watch = this.helpers.watch();
         try {
             const r = await this.sdk.sendInteract(obj.objectId);
@@ -1326,6 +1429,7 @@ export class BotActions {
                 if (s.dialog?.isOpen && s.dialog.receivedAt !== prevBox) return 'dialogBox';
                 if (s.textWindow && s.textWindow.receivedAt !== prevText) return 'textWindow';
                 if (s.trainer.isOpen && !trainerWasOpen) return 'trainer';
+                if (s.vaultOpenedAt && s.vaultOpenedAt !== prevVault) return 'vault';
                 if (name && watch.messages().some(m => m.text.toLowerCase().startsWith(name))) return 'message';
                 return null;
             }, options.timeout ?? 4000);
@@ -1447,6 +1551,34 @@ export class BotActions {
         if (!r.success) return { ...r, dialog: box };
         const closed = await this.helpers.waitFor(s => !s.dialog?.isOpen || s.dialog.receivedAt !== box.receivedAt, 2000);
         return closed ? { success: true, message: `Dialog ${accept ? 'accepted' : 'declined'}: ${box.text.slice(0, 80)}`, dialog: box } : fail('Dialog still open', 'timeout', { dialog: box });
+    }
+
+    /**
+     * Wait for a resurrection offer, say yes and observe the revive. We come back standing at the caster, with
+     * the spell's health and power (10 % and none for a baseline rez). That saves the release's XP loss, grave
+     * and constitution loss; resurrection illness comes all the same.
+     * Reasons: not_in_game, not_dead, timeout (no offer came), expired (the offer was gone when we answered).
+     */
+    async acceptResurrection(options: { timeout?: number } = {}): Promise<AcceptResurrectionResult> {
+        const none = { offer: null };
+        const p = this.helpers.player();
+        if (!p) return fail('Not in game', 'not_in_game', none);
+        if (!p.isDead) return fail('Not dead', 'not_dead', none);
+        const offer = await this.helpers.waitFor(s => (s.dialog?.isOpen ? s.dialog.resurrection : null) ?? null, options.timeout ?? 30_000);
+        if (!offer) return fail('No resurrection offer arrived', 'timeout', none);
+        const watch = this.helpers.watch();
+        try {
+            const r = await this.sdk.sendRespondDialog(true);
+            if (!r.success) return { ...r, offer };
+            // "No one is currently trying to resurrect you." (:95): the expiry beat our answer, or an earlier box left unanswered undid this one.
+            const end = await this.helpers.waitFor(s => (!s.player?.isDead ? 'revived' : watch.find(['no one is currently trying']) ? 'expired' : null), 5000);
+            if (end !== 'revived') return fail(end ? `${offer.caster}'s offer was gone when we answered` : `Said yes to ${offer.caster}, still dead`, end ?? 'timeout', { offer });
+            // The server moves us to the caster along with the revive (:163): a caller must not walk on from the corpse.
+            await this.helpers.waitFor(s => s.player && Math.hypot(s.player.x - p.x, s.player.y - p.y) > 50, 1000);
+            return { success: true, message: `Resurrected by ${offer.caster} at ${offer.healthPercent} % health`, offer };
+        } finally {
+            watch.dispose();
+        }
     }
 
     // ============ Combat ============
@@ -1633,13 +1765,9 @@ export class BotActions {
         if (paid !== 'nothing') await this.helpers.sleep(400);
     }
 
-    /**
-     * Dead by what the server said: an NPC's 0 % doesn't tell, it is truncated (GameLiving.cs:2621). A dead one has its 0xA2 type 0, which also
-     * takes the entry, so an entry at 0 % with that event is one just going. Only a death since this entry appeared: the server hands a dead mob's id to the next object it adds (Region.cs:955), and the event stays in the ring. With no first sight, from an older client, any: the health keeps a new spawn out then, but not one at 0 %.
-     */
+    /** Dead by what the server said: a player's entry has it, and an NPC goes by its death event (npcJustDied). */
     private isDeadTarget(t: NearbyNpc | NearbyPlayer): boolean {
-        if (t.kind === 'player') return t.isDead;
-        return t.healthPercent <= 0 && !!this.helpers.state()?.combatEvents.some(e => e.kind === 'death' && e.targetObjectId === t.objectId && e.receivedAt > (t.firstSeenAt ?? 0));
+        return t.kind === 'player' ? t.isDead : this.helpers.npcJustDied(this.helpers.state(), t);
     }
 
     /** killNpc's orders to a window pet: one when the fight starts, another for a new pet or if it ends up on another mob. */
@@ -2225,7 +2353,7 @@ export class BotActions {
             // Sent right after "You cast a ..." when the effect can't take (CCSpellHandler.CheckSpellResist).
             const enraged = ours.some(m => ENRAGED_REFUSAL.test(m.text));
             const effectImmune = enraged || ours.some(m => /your target is immune to this effect/i.test(m.text));
-            const outcome = resisted ? ' (resisted)' : enraged ? ' (target enraged)' : effectImmune ? ' (target immune)' : damage ? ` for ${damage} damage` : '';
+            const alreadyOn = ours.some(m => /already has that effect/i.test(m.text));
             // A Group spell's list is us and our group, whatever is selected (SpellHandler.cs:1747-1761).
             const cast = `Cast ${sp.name}${obj && info?.target.toLowerCase() !== 'group' ? ` ${info?.radius ? 'around' : 'on'} ${nameOf(obj)}` : ''}`;
             if (queued) {
@@ -2234,9 +2362,22 @@ export class BotActions {
                     spell: sp, target: obj, castTimeMs, completed: false, queued, resisted, effectImmune, damage, messages,
                 };
             }
+            // A summon lands on nothing: what comes meanwhile is someone else's, as above.
+            const starts = !summon && info?.effectStarts?.includes('{0}') ? spellMessagePattern(info.effectStarts) : null;
+            // Another member's line of the same spell can come first: a monster's name must match (a player's is its real one, which we don't see).
+            const npcName = obj && 'kind' in obj && obj.kind === 'npc' ? obj.name.toLowerCase() : null;
+            const landedLine = starts && !resisted && !effectImmune && !alreadyOn ? await this.helpers.waitFor(st => {
+                for (const m of landed(st)) {
+                    const hit = starts.exec(m.text);
+                    if (hit && (!npcName || hit[1]!.toLowerCase().endsWith(npcName))) return hit;
+                }
+                return null;
+            }, 500) : null;
+            const outcome = resisted ? ' (resisted)' : enraged ? ' (target enraged)' : effectImmune ? ' (target immune)' : alreadyOn ? ' (already has it)' : damage ? ` for ${damage} damage` : '';
             return {
                 success: true, message: `${cast}${outcome}`,
-                spell: sp, target: obj, castTimeMs, completed: true, resisted, effectImmune, damage, messages,
+                spell: sp, target: obj, castTimeMs, completed: true, resisted, effectImmune, alreadyOn, damage, messages: msgs(),
+                ...(starts ? { effectLanded: !!landedLine, ...(landedLine ? { landedOn: landedLine[1]! } : {}) } : {}),
             };
         } finally {
             watch.dispose();
@@ -2278,17 +2419,18 @@ export class BotActions {
         const maxCon = options.maxCon ?? 0;
         const exclude = new Set(options.exclude ?? []);
         const matches = options.pattern !== undefined ? nameMatcher(options.pattern) : () => true;
+        const onUs = new Set(this.helpers.attackers(s).map(n => n.objectId));
         // A mob our pet fights is ours: the server credits its damage to us (GameLiving.cs:1299-1300).
         const petMobs = this.helpers.petMobIds(s);
         // A charm's ex-pet stays: not one of ours any more, and its wounds are from our fight. Its id can go to something else (Region.cs:955), so the name has to fit.
         const loss = s.lastPetLoss;
         const exPet = (n: NearbyNpc) => !!loss && n.objectId === loss.objectId && n.name === loss.name && Date.now() - loss.at < EX_PET_MS;
-        const ours = (n: NearbyNpc) => n.targetObjectId === p.objectId || petMobs.has(n.objectId) || exPet(n);
+        const ours = (n: NearbyNpc) => petMobs.has(n.objectId) || exPet(n);
         return s.nearbyNpcs
             .filter(n => {
                 if (exclude.has(n.objectId) || !isKillable(n, p) || !matches(n.name)) return false;
-                if (n.healthPercent < 100 && !ours(n) && !options.includeEngaged) return false;
-                if (!options.includeEngaged && n.targetObjectId !== null && !ours(n)) return false;
+                if (n.healthPercent < 100 && !onUs.has(n.objectId) && !ours(n) && !options.includeEngaged) return false;
+                if (!options.includeEngaged && n.targetObjectId !== null && n.targetObjectId !== p.objectId && !ours(n)) return false;
                 const diff = n.level - p.level;
                 if (options.maxLevelDiff !== undefined && diff > options.maxLevelDiff) return false;
                 if (options.minLevelDiff !== undefined && diff < options.minLevelDiff) return false;
@@ -2301,13 +2443,16 @@ export class BotActions {
             .sort((a, b) => (a.distance2d + Math.abs(a.z - p.z)) - (b.distance2d + Math.abs(b.z - p.z)));
     }
 
-    /** In combat: attack mode on, recently hit, an NPC targets us, our pet or a summon, or an enemy player hit us (getPlayerAttackers). */
+    /** In combat: attack mode on, recently hit, an NPC is fighting us (getAttackers) or targets our pet or a summon, or an enemy player hit us (getPlayerAttackers). */
     isInCombat(): boolean {
         const p = this.helpers.player();
         return !!p && (p.inCombat || p.attacking || this.helpers.attackers().length > 0 || this.helpers.playerAttackers().length > 0);
     }
 
-    /** NPCs currently targeting us, nearest first. */
+    /**
+     * NPCs fighting us, nearest first: their reported target is us, or their swing or spell landed on us within the last 6 s.
+     * The server reports a target only for a mob standing within its attack range and in attack state, so the hits are what shows a caster at range or a mob running at us.
+     */
     getAttackers(): NearbyNpc[] {
         return this.helpers.attackers().sort((a, b) => a.distance - b.distance);
     }
@@ -2490,7 +2635,8 @@ export class BotActions {
      */
     private meleeOnUs(s: BotWorldState, info: SpellInfo): string | null {
         const p = s.player!;
-        const attacker = this.helpers.attackers(s)[0];
+        // By what it reads: a hit from one that doesn't name us goes by its own clock below.
+        const attacker = s.nearbyNpcs.find(n => n.targetObjectId === p.objectId);
         if (attacker) return `${nameOf(attacker)} is on us`;
         const onPet = s.nearbyNpcs.filter(n => n.targetObjectId === s.pet?.objectId && n.distance <= castRoom(info.castTime, n.speed)).sort((a, b) => a.distance - b.distance)[0];
         if (onPet) return `${nameOf(onPet)} on our pet turns on us at the release`;
@@ -3335,6 +3481,49 @@ export class BotActions {
         }
     }
 
+    /** Our strongest resurrection spell, or null. The higher its level, the more it restores: 10 %, then 30, 50 and 100 % on a spec line. */
+    resurrectSpell(): Spell | null {
+        return this.sdk.getSkills().spells.filter(s => this.getSpellInfo(s)?.type === 'Resurrect').sort((a, b) => b.level - a.level)[0] ?? null;
+    }
+
+    /**
+     * Resurrect a dead player of our realm: walk into range, cast, and wait for its answer. Success means it
+     * is alive again: a finished cast only asks, and a corpse no script controls never answers (the power is
+     * gone then). It comes back at our feet. It must be in view. Costs half our full power at equal level
+     * (resurrectCost), paid when the cast ends.
+     * Reasons: those of castSpell, plus spell_not_found, not_found, invalid_target, not_dead (alive, or released
+     * meanwhile), no_power, already_considering (someone else's rez waits for its answer), no_answer.
+     */
+    async resurrect(target: PlayerTarget, options: ResurrectOptions = {}): Promise<ResurrectResult> {
+        const none = { spell: null, target: null, cast: null };
+        const me = this.helpers.player();
+        if (!me) return fail('Not in game', 'not_in_game', none);
+        if (me.isDead) return fail('We are dead', 'dead', none);
+        const spell = options.spell ?? this.resurrectSpell();
+        if (!spell) return fail('We know no resurrection spell', 'spell_not_found', none);
+        const t = this.helpers.resolvePlayer(target);
+        if (!t) return fail(`Target not found: ${describeTarget(target)}`, 'not_found', { ...none, spell });
+        const base = { spell, target: t, cast: null };
+        if (t.realm !== me.realm) return fail(`${t.name} is of another realm`, 'invalid_target', base);
+        if (!t.isDead) return fail(`${t.name} is not dead`, 'not_dead', base);
+        const cost = resurrectCost(me.maxMana, me.level, t.level || me.level);
+        if (me.mana < cost) return fail(`Resurrecting ${t.name} costs ${cost} power, we have ${me.mana}`, 'no_power', base);
+        const cast = await this.castSpell(spell, t.objectId, options.approach === undefined ? {} : { approach: options.approach });
+        // The realm is checked above, so the Corpse line says it is alive by now (SpellHandler.cs:764).
+        if (!cast.success) return fail(cast.message, cast.message === CORPSE_ONLY ? 'not_dead' : cast.reason ?? 'refused', { ...base, cast });
+            // 0x89 goes to the revived player alone: we see its health come back in its relayed position. Alive
+            // isn't enough, since a release shows the same when the bind point is in view: a rez puts it at our feet (:163).
+            const back = await this.helpers.waitFor(s => {
+                const seen = s.nearbyPlayers.find(n => n.objectId === t.objectId);
+                return seen && !seen.isDead && s.player && Math.hypot(seen.x - s.player.x, seen.y - s.player.y) <= REZZED_NEAR ? true : null;
+            }, options.answerMs ?? 16_000);
+            if (back) return { success: true, message: `${t.name} is back`, ...base, cast };
+            const seen = this.helpers.resolvePlayer(t.objectId);
+            return seen && !seen.isDead
+                ? fail(`${t.name} is alive elsewhere: it released`, 'not_dead', { ...base, cast })
+                : fail(`${t.name} did not answer ${spell.name}`, 'no_answer', { ...base, cast });
+    }
+
     /** Static data for a known spell (type, target, range, cast time, power), from the DB dump; null when unknown. */
     getSpellInfo(spell: NamePattern | Spell): SpellInfo | null {
         const sp = typeof spell === 'object' && !(spell instanceof RegExp) ? spell : this.sdk.findSpell(spell);
@@ -3358,18 +3547,24 @@ export class BotActions {
     /**
      * Equip a backpack item; the server picks its slot, or takes `options.slot` when given (a worn
      * item there swaps into the backpack). Observed in state.equipment: with a slot, that slot must
-     * hold this item, so an equal-named item already worn elsewhere doesn't count. A weapon put in the ranged slot (13) also takes the hand ("You wield it in both hands"),
+     * hold this item, so an equal-named item already worn elsewhere doesn't count. What it replaces lands
+     * in the backpack slot this one left, so only this very item still there means it didn't move. A swap
+     * with a piece that reads the same changes no reading, so a magical piece counts on the server's "The
+     * magic of X flows through you". A plain one has nothing that tells them apart and no message: `timeout`.
+     * A weapon put in the ranged slot (13) also takes the hand ("You wield it in both hands"),
      * and melee is refused until a melee slot is used (sendUseItem(10 or 12, 0); killNpc does that itself).
      */
     async equipItem(target: InventoryItem | NamePattern | number, options: { slot?: number } = {}): Promise<ItemResult> {
         const item = this.helpers.resolveInventoryItem(target);
         if (!item) return fail(`Item not found in backpack: ${describeTarget(target)}`, 'not_found', { item: null, messages: [] });
         const { slot } = options;
+        const worn = (e: InventoryItem) => e.name === item.name && e.level === item.level;
+        const left = (s: BotWorldState) => !s.inventory.some(i => i.slot === item.slot && sameItem(i, item));
+        const saysSo = this.helpers.state()?.equipment.some(e => sameItem(e, item)) ? `${item.name.toLowerCase()} flows through you` : undefined;
         if (slot !== undefined) {
-            const same = (i: InventoryItem) => i.name === item.name && i.level === item.level;
-            return this.moveObserved(item, slot, s => s.equipment.some(e => e.slot === slot && same(e)) && !s.inventory.some(i => i.slot === item.slot && same(i)), `Equipped ${item.name} in slot ${slot}`);
+            return this.moveObserved(item, slot, s => s.equipment.some(e => e.slot === slot && worn(e)) && left(s), `Equipped ${item.name} in slot ${slot}`, saysSo);
         }
-        return this.moveObserved(item, PAPER_DOLL_SLOT, s => s.equipment.some(e => e.name === item.name) && !s.inventory.some(i => i.slot === item.slot && i.name === item.name), `Equipped ${item.name}`);
+        return this.moveObserved(item, PAPER_DOLL_SLOT, s => s.equipment.some(worn) && left(s), `Equipped ${item.name}`, saysSo);
     }
 
     /** Move an equipped item (by slot or name) back into the backpack. */
@@ -3615,31 +3810,185 @@ export class BotActions {
         };
     }
 
+    // ============ Smiths and the vault ============
+
     /**
-     * Train a specialization at a trainer of our class: target it, open the
-     * trainer window (falling back to '/train'), and observe the spec level rise.
+     * Have a smith repair one item, worn or in the backpack: walk within 128 (3D), hand it over, read
+     * the price off the yes/no box, say yes, and observe the smith's answer. Costs the Durability it
+     * restores, and when too little is left it charges in full and restores only that much. Reasons:
+     * `not_found`, `out_of_range`, `no_need` (already whole), `not_repairable`, `too_expensive` (over
+     * `options.maxCost`, declined), `insufficient_funds`, `no_response` (not a smith, or no answer).
+     * A smith takes no jewellery, instruments or stacks: an instrument only through repairAll.
      */
-    async trainSpec(trainer: NpcTarget, specName: NamePattern, levels: number = 1): Promise<TrainResult> {
-        const empty = { spec: null, fromLevel: 0, toLevel: 0, specPointsLeft: this.helpers.player()?.specPoints ?? 0 };
-        let n = this.helpers.resolveNpc(trainer);
-        if (!n) return fail(`Trainer not found: ${describeTarget(trainer)}`, 'not_found', empty);
-        const spec0 = this.sdk.findSpecialization(specName);
-        if (!spec0) return fail(`No specialization matching ${describeTarget(specName)}`, 'spec_not_found', empty);
-        const target = spec0.level + Math.max(1, Math.floor(levels));
-        if (n.distance > INTERACT_APPROACH) {
-            const walk = await this.walkToObject(n, { range: INTERACT_APPROACH });
-            if (!walk.success) return fail(walk.message, walk.reason ?? 'out_of_reach', { ...empty, spec: spec0.name, fromLevel: spec0.level, toLevel: spec0.level });
+    async repairItem(smith: NpcTarget, target: InventoryItem | NamePattern | number, options: { maxCost?: number } = {}): Promise<RepairResult> {
+        const item = this.resolveUsableItem(target);
+        const empty = { item, repaired: null, cost: 0, messages: [] as GameMessage[] };
+        if (!item) return fail(`Item not found: ${describeTarget(target)}`, 'not_found', empty);
+        let n = this.helpers.resolveNpc(smith);
+        if (!n) return fail(`Smith not found: ${describeTarget(smith)}`, 'not_found', empty);
+        if (n.distance > GIVE_APPROACH) {
+            const walk = await this.walkToObject(n, { range: GIVE_APPROACH });
+            if (!walk.success) return fail(walk.message, walk.reason ?? 'out_of_reach', empty);
             n = this.helpers.resolveNpc(n.objectId) ?? n;
         }
-        await this.sdk.sendSetTarget(n.objectId);
-        await this.helpers.waitFor(s => s.player?.targetObjectId === n.objectId, 1500);
+        const objectId = n.objectId;
+        if (GIVE_TO_OBJECT + objectId > 0xffff) return fail(`${n.name}'s object id ${objectId} doesn't fit the packet`, 'bad_args', empty);
+        const r = await this.answerRepairBox(n.name, options, () => this.sdk.sendMoveItem(item.slot, GIVE_TO_OBJECT + objectId), 4000);
+        // The item's own update can trail the smith's line by a snapshot.
+        if (r.success) await this.helpers.waitFor(() => (this.resolveUsableItem(item.slot)?.condition ?? 0) > item.condition, 1000);
+        return { ...r, item, repaired: this.resolveUsableItem(item.slot) };
+    }
+
+    /**
+     * Have a smith repair everything at once: worn, backpack and vault, whatever its type, and 20 % over the
+     * single prices (Blacksmith.cs:14, :219-228). The only way to repair an instrument. Success with
+     * cost 0 means nothing needed it. Reasons as repairItem.
+     */
+    async repairAll(smith: NpcTarget, options: { maxCost?: number } = {}): Promise<RepairResult> {
+        const empty = { item: null, repaired: null, cost: 0, messages: [] as GameMessage[] };
+        const n = this.helpers.resolveNpc(smith);
+        if (!n) return fail(`Smith not found: ${describeTarget(smith)}`, 'not_found', empty);
+        let nothingDue = false;
+        const r = await this.answerRepairBox(n.name, options, async () => {
+            const said = await this.whisper(n, 'repair all');
+            nothingDue = NOTHING_TO_REPAIR.test(said.text);
+            return said;
+        }, 2000, () => nothingDue);
+        return nothingDue ? { success: true, message: `${n.name}: nothing to repair`, ...empty, messages: r.messages } : r;
+    }
+
+    /**
+     * Send what brings the smith's box, then answer it: only a box that opened since and names a repair,
+     * because an answer goes to whatever box is open. The next hand-over needs this one answered:
+     * another box in between makes the smith forget the item (Blacksmith.cs:138, PacketLib168.cs:1511-1513).
+     */
+    private async answerRepairBox(smith: string, options: { maxCost?: number }, send: () => Promise<ActionResult>, timeout: number, nothingDue?: () => boolean): Promise<RepairResult> {
+        const empty = { item: null, repaired: null, cost: 0 };
+        const before = this.helpers.state();
+        const money0 = totalCopper(before);
+        const box0 = before?.dialog?.receivedAt;
         const watch = this.helpers.watch();
         try {
+            const failed = (message: string, reason: string): RepairResult => ({ ...fail(message, reason, empty), messages: watch.messages().slice() });
+            // Left open by a run that was cut off: a no now, or the smith forgets what comes next.
+            if (before?.dialog?.isOpen && REPAIR_OFFER.test(before.dialog.text)) await this.sdk.sendRespondDialog(false);
+            const sent = await send();
+            if (!sent.success) return failed(sent.message, sent.reason ?? 'dispatch_failed');
+            if (nothingDue?.()) return failed('', 'no_need');
+            const box = await this.helpers.waitFor(s => {
+                if (firstReasonLine(watch.messages(), REPAIR_REFUSALS)) return 'refused' as const;
+                return s.dialog?.isOpen && s.dialog.receivedAt !== box0 && REPAIR_OFFER.test(s.dialog.text) ? s.dialog : null;
+            }, timeout);
+            if (box === 'refused') {
+                const line = firstReasonLine(watch.messages(), REPAIR_REFUSALS)!;
+                return failed(line.text, line.reason);
+            }
+            if (!box) return failed(`${smith} did not offer a repair`, 'no_response');
+            const price = parseMoneyText(REPAIR_OFFER.exec(box.text)![1]!);
+            const decline = async (message: string, reason: string) => {
+                await this.sdk.sendRespondDialog(false);
+                return failed(message, reason);
+            };
+            if (options.maxCost !== undefined && price > options.maxCost) return decline(`${smith} asks ${price}c, over the ${options.maxCost}c allowed`, 'too_expensive');
+            if (price > money0) return decline(`${smith} asks ${price}c, we have ${money0}c`, 'insufficient_funds');
+            const yes = await this.sdk.sendRespondDialog(true);
+            if (!yes.success) return failed(yes.message, yes.reason ?? 'dispatch_failed');
+            const answer = await this.helpers.waitFor(() => firstReasonLine(watch.messages(), REPAIR_ANSWERS), 4000);
+            if (answer && answer.reason !== 'done') return failed(answer.text, answer.reason);
+            if (!answer) return failed(`No answer from ${smith} after the yes`, 'no_response');
+            // The purse and the item's update come with or just after that line.
+            await this.helpers.waitFor(s => price === 0 || totalCopper(s) < money0, 1000);
+            await this.helpers.sleep(250);
+            const cost = Math.max(0, money0 - totalCopper(this.helpers.state()));
+            return { success: true, message: `${smith} repaired it for ${cost}c`, ...empty, cost, messages: watch.messages().slice() };
+        } finally {
+            watch.dispose();
+        }
+    }
+
+    /**
+     * Walk to a vault keeper and open the character's vault. Until then, in each client session,
+     * `sdk.getVault()` is empty whatever the vault holds. Reason `not_a_vault_keeper` for an NPC that answers
+     * some other way. The vault is the character's own: 40 slots, not shared with other bots.
+     */
+    async openVault(keeper: NpcTarget): Promise<VaultResult> {
+        const n = this.helpers.resolveNpc(keeper);
+        if (!n) return fail(`Vault keeper not found: ${describeTarget(keeper)}`, 'not_found', { keeper: null, items: [] });
+        const before = this.helpers.state()?.vaultOpenedAt;
+        if (before === undefined) return fail('This game client is too old to report the vault window: restart it with a quit action', 'unknown_action', { keeper: n, items: [] });
+        const r = await this.interactWith(n, { range: INTERACT_APPROACH });
+        // A keeper can speak first: Interact's ambient line goes out before the window (VaultKeeper.cs:66-78; Jarl Yuliwyf says one every time).
+        const opened = r.response === 'vault' || (r.success && await this.helpers.waitFor(s => !!s.vaultOpenedAt && s.vaultOpenedAt !== before, 1500));
+        if (!opened) return fail(r.success ? `${n.name} answered but no vault opened (${r.response})` : r.message, r.success ? 'not_a_vault_keeper' : r.reason ?? 'no_response', { keeper: n, items: [] });
+        // Past max_items_per_packet (30) the rest comes in a second packet, with window 0 (PacketLib168.cs:1752-1763).
+        await this.helpers.sleep(300);
+        const items = this.sdk.getVault();
+        return { success: true, message: `Opened ${n.name}'s vault (${items.length} items)`, keeper: n, items };
+    }
+
+    /**
+     * Put a backpack item in the vault, at a vault keeper. Vaulted items don't wear, count toward no
+     * weight and can't be sold by `sellItems`, but `repairAll` charges for them if they're worn. A stack goes
+     * onto a partial stack first, and what doesn't fit stays in the backpack: check the count if that matters.
+     * Reasons: `not_found`, `vault_full`, those of openVault, `timeout`.
+     */
+    async depositItem(keeper: NpcTarget, target: InventoryItem | NamePattern | number): Promise<ItemResult> {
+        const item = this.helpers.resolveInventoryItem(target);
+        if (!item) return fail(`Item not found: ${describeTarget(target)}`, 'not_found', { item: null, messages: [] });
+        const open = await this.openVault(keeper);
+        if (!open.success) return fail(open.message, open.reason ?? 'no_response', { item, messages: [] });
+        const merges = item.count > 1 && open.items.some(i => i.name === item.name);
+        if (open.items.length >= VAULT_SLOTS && !merges) return fail(`The vault is full (${VAULT_SLOTS})`, 'vault_full', { item, messages: [] });
+        return this.moveObserved(item, GENERAL_VAULT_SLOT, s => !s.inventory.some(i => i.slot === item.slot && i.name === item.name && i.count === item.count) && s.vault.some(i => i.name === item.name), `Put ${item.name} in the vault`);
+    }
+
+    /**
+     * Take an item out of the vault into the backpack, at a vault keeper. A number is a vault slot
+     * (110-149). A stack behaves as in depositItem. Reasons: `not_found`, `inventory_full`, those of openVault, `timeout`.
+     */
+    async withdrawItem(keeper: NpcTarget, target: InventoryItem | NamePattern | number): Promise<ItemResult> {
+        const open = await this.openVault(keeper);
+        if (!open.success) return fail(open.message, open.reason ?? 'no_response', { item: null, messages: [] });
+        const item = typeof target === 'number' ? open.items.find(i => i.slot === target)
+            : typeof target === 'string' || target instanceof RegExp ? bestNameMatch(open.items, target)
+            : open.items.find(i => i.slot === target.slot && i.name === target.name) ?? open.items.find(i => i.name === target.name);
+        if (!item) return fail(`Not in the vault: ${describeTarget(target)}`, 'not_found', { item: null, messages: [] });
+        const merges = item.count > 1 && this.sdk.getInventory().some(i => i.name === item.name);
+        if (this.sdk.getFreeInventorySlots() <= 0 && !merges) return fail('Backpack is full', 'inventory_full', { item, messages: [] });
+        return this.moveObserved(item, GENERAL_VAULT_SLOT, s => !s.vault.some(i => i.slot === item.slot && i.name === item.name && i.count === item.count) && s.inventory.some(i => i.name === item.name), `Took ${item.name} out of the vault`);
+    }
+
+    /**
+     * Train a specialization: open the trainer window (falling back to '/train') and observe the spec level rise.
+     * With a trainer of our class, it walks into reach and targets it first. With `null` it stays where it stands: the
+     * server trains anywhere while allow_train_anywhere is on, as by default and here (train.cs:143), and with it off the
+     * answer is `needs_trainer`. `specName` is any name of the line (sdk.findSpecialization); a name no line answers to
+     * gives 'spec_not_found'.
+     */
+    async trainSpec(trainer: NpcTarget | null, specName: NamePattern, levels: number = 1): Promise<TrainResult> {
+        const empty = { spec: null, fromLevel: 0, toLevel: 0, specPointsLeft: this.helpers.player()?.specPoints ?? 0 };
+        const n = trainer === null ? null : this.helpers.resolveNpc(trainer);
+        if (trainer !== null && !n) return fail(`Trainer not found: ${describeTarget(trainer)}`, 'not_found', empty);
+        const spec0 = this.sdk.findSpecialization(specName);
+        if (!spec0) return fail(`No specialization matching ${describeTarget(specName)} (known: ${this.sdk.getSkills().specializations.map(s => s.name).join(', ') || 'none'})`, 'spec_not_found', empty);
+        const target = spec0.level + Math.max(1, Math.floor(levels));
+        const walk = n && await this.targetTrainer(n);
+        if (walk) return fail(walk.message, walk.reason ?? 'out_of_reach', { ...empty, spec: spec0.name, fromLevel: spec0.level, toLevel: spec0.level });
+        const watch = this.helpers.watch();
+        try {
+            const window0 = this.helpers.state()?.trainer.receivedAt;
             await this.sdk.sendOpenTrainer();
-            const win = await this.helpers.waitFor(s => s.trainer.isOpen && s.trainer.specs.length ? s.trainer : null, 3000);
-            const ts = win ? bestNameMatch(win.specs, spec0.name) : null;
-            if (ts) await this.sdk.sendTrainSpec(ts.index, target - ts.level);
-            else await this.sdk.sendCommand(`/train ${spec0.name} ${target}`);
+            // A new window, not one already open: a promotion sends none and moves the lines (GameTrainer.cs:333-365), so an old index raises another line.
+            const win = await this.helpers.waitFor(s => {
+                if (watch.find([TRAINER_WANTED])) return 'refused' as const;
+                return s.trainer.isOpen && s.trainer.specs.length && s.trainer.receivedAt !== window0 ? s.trainer : null;
+            }, 3000);
+            if (win !== 'refused') {
+                const ts = win ? bestNameMatch(win.specs, spec0.name) : null;
+                if (ts) await this.sdk.sendTrainSpec(ts.index, target - ts.level);
+                // /train takes a key prefix (train.cs:57-66): 'Light Magic' isn't one, 'Light' is.
+                else await this.sdk.sendCommand(`/train ${specKey(spec0.name)} ${target}`);
+            }
             const got = await this.helpers.waitFor(s => {
                 if (watch.find(TRAIN_REFUSALS)) return 'refused';
                 const now = s.skills.specializations.find(x => x.name === spec0.name);
@@ -3648,7 +3997,167 @@ export class BotActions {
             const now = this.sdk.getSkills().specializations.find(x => x.name === spec0.name);
             const extra = { spec: spec0.name, fromLevel: spec0.level, toLevel: now?.level ?? spec0.level, specPointsLeft: this.helpers.player()?.specPoints ?? 0 };
             if (got === 'trained') return { success: true, message: `Trained ${spec0.name} ${spec0.level} → ${extra.toLevel}`, ...extra };
-            return fail(got === 'refused' ? watch.findText(TRAIN_REFUSALS)! : `No training observed for ${spec0.name}`, got === 'refused' ? 'refused' : 'timeout', extra);
+            if (got !== 'refused') return fail(`No training observed for ${spec0.name}`, 'timeout', extra);
+            const refusal = watch.findText(TRAIN_REFUSALS)!;
+            return fail(refusal, !n && refusal.toLowerCase().includes(TRAINER_WANTED) ? 'needs_trainer' : 'refused', extra);
+        } finally {
+            watch.dispose();
+        }
+    }
+
+    /**
+     * Walk into reach of a trainer and target it. A respec goes by the target (respec.cs:62-67), and training too on a
+     * server with allow_train_anywhere off (train.cs:143-150). Returns the walk when it failed.
+     */
+    private async targetTrainer(n: NearbyNpc): Promise<WalkToObjectResult | null> {
+        if (n.distance > INTERACT_APPROACH) {
+            const walk = await this.walkToObject(n, { range: INTERACT_APPROACH });
+            if (!walk.success) return walk;
+        }
+        await this.sdk.sendSetTarget(n.objectId);
+        await this.helpers.waitFor(s => s.player?.targetObjectId === n.objectId, 1500);
+        return null;
+    }
+
+    /**
+     * Talk to a trainer in reach, and give the points about a second to change. A promotion sends none (GameTrainer.cs:335-349)
+     * and talking does (:134, GamePlayer.cs:4430), while the window that trainSpec asks for doesn't (PlayerTrainWindowHandler).
+     */
+    private async refreshSpecPoints(trainer: NpcTarget | null): Promise<void> {
+        const n = trainer === null ? null : this.helpers.resolveNpc(trainer);
+        if (!n || n.distance > INTERACT_APPROACH) return;
+        const points0 = this.helpers.player()?.specPoints;
+        const r = await this.sdk.sendInteract(n.objectId);
+        if (r.success) await this.helpers.waitFor(s => s.player?.specPoints !== points0, 1000);
+    }
+
+    /** What the build rule reads. Autotrain is the current class's: a base class has none. */
+    private buildState(): BuildState | null {
+        const p = this.helpers.player();
+        return p && { level: p.level, specs: this.sdk.getSkills().specializations, points: p.specPoints, autotrain: getClass(p.className, p.realm)?.autotrainSpecs };
+    }
+
+    /**
+     * Spend the points on a build, as far as they reach: the rule in data/builds/rule.ts names each line and trainSpec
+     * raises it, at a trainer of the class or, with `null`, where the character stands (trainSpec). Without `build` it is
+     * the bot's own `bots/<bot>/build.ts` (loadBuild in sdk/build.ts), and a broken file throws. Success means it stopped
+     * for a good reason: `done` (nothing to raise at this level) or `waiting` (the next line costs more than there is, and
+     * the points stay banked for it). `done` sends nothing. Before `waiting` with nothing raised it talks once to a trainer
+     * in reach, because a promotion sends no points and player.specPoints can still be the base class's number. A trainer
+     * out of reach or not found gets nothing, and the number stands. A base class trains the lines it has of its advanced
+     * class's build. Reasons: `no_build`, `invalid_build` (buildProblems of a build passed in), `wrong_class`,
+     * `not_in_game`, `too_many_steps`, and those of trainSpec.
+     */
+    async trainBuild(trainer: NpcTarget | null, build?: Build): Promise<TrainBuildResult> {
+        const nothing = { build: null, trained: [], waiting: null, done: false, over: [], specPointsLeft: this.helpers.player()?.specPoints ?? 0 };
+        const bot = this.sdk.config.botUsername;
+        const chosen = build ?? await loadBuild(bot);
+        if (!chosen) {
+            const folder = botFolder(bot);
+            return fail(`${bot} has no bots/${folder}/build.ts: bun bots/choose-build.ts ${folder} lists the builds of its class`, 'no_build', nothing);
+        }
+        const named = { ...nothing, build: chosen.name };
+        const player = this.helpers.player();
+        const problems = buildProblems(chosen, player?.realm);
+        if (problems.length) return fail(`${chosen.name}: ${problems.join(' ')}`, 'invalid_build', named);
+        if (!player) return fail('Not in game', 'not_in_game', named);
+        // By id: a female character's className can be a name of its own, and two realms share "Rogue".
+        const wanted = getClass(chosen.className, player.realm) ?? getClass(chosen.className)!;
+        const mine = getClass(player.className, player.realm);
+        if (mine?.id !== wanted.id && mine?.id !== wanted.baseClassId) return fail(`${chosen.name} is a build for ${wanted.name}, this character is a ${player.className}`, 'wrong_class', named);
+
+        const trained: TrainBuildResult['trained'] = [];
+        const raised = () => trained.map(t => `${t.spec} ${t.fromLevel} → ${t.toLevel}`).join(', ');
+        const failed = (message: string, reason: string, state: BuildState | null) => fail(trained.length ? `${raised()}, then: ${message}` : message, reason, {
+            ...named, trained, over: state ? linesOverTarget(chosen, state) : [], specPointsLeft: state?.points ?? 0,
+        });
+        let refreshed = false;
+        for (let i = 0; i < TRAIN_BUILD_MAX_STEPS; i++) {
+            const state = this.buildState();
+            if (!state) return failed('Not in game', 'not_in_game', null);
+            const step = nextBuildStep(chosen, state);
+            if (step.kind === 'wait' && !trained.length && !refreshed) {
+                refreshed = true;
+                await this.refreshSpecPoints(trainer);
+                continue;
+            }
+            if (step.kind !== 'train') {
+                const over = linesOverTarget(chosen, state);
+                const stopped = step.kind === 'wait' ? `saving for ${step.spec} ${step.from + 1}: ${step.points}/${step.cost} points` : `on target for level ${state.level}`;
+                const said = trained.length ? `${raised()}, ${stopped}` : stopped[0]!.toUpperCase() + stopped.slice(1);
+                return {
+                    success: true,
+                    message: over.length ? `${said}. Over target: ${over.map(o => `${o.spec} ${o.level} (target ${o.target})`).join(', ')}` : said,
+                    ...named, trained, over, specPointsLeft: state.points,
+                    waiting: step.kind === 'wait' ? { spec: step.spec, cost: step.cost, points: step.points } : null,
+                    done: step.kind === 'done',
+                };
+            }
+            const r = await this.trainSpec(trainer, step.spec, step.to - step.from);
+            if (r.toLevel > r.fromLevel) trained.push({ spec: step.spec, fromLevel: r.fromLevel, toLevel: r.toLevel });
+            if (!r.success) return failed(r.message, r.reason ?? 'refused', this.buildState());
+        }
+        return failed(`Still training after ${TRAIN_BUILD_MAX_STEPS} steps`, 'too_many_steps', this.buildState());
+    }
+
+    /**
+     * Take the points back out of every line, or with `line` (any of its names) out of that one, at a trainer of the
+     * class: sends /respec, says yes to the server's box and watches the points come back. It is free, at any level and
+     * any number of times, because the stone check can never hold (respec.cs:96, 153 test TimeSpan.Hours > 24). A line
+     * falls to 1, an autotrain line to its free levels. A respec ends the character's own buffs and kills its pet
+     * (respec.cs:247). Reasons: `not_found` (trainer), `spec_not_found`, `no_need` (nothing trained above that floor;
+     * nothing is sent), `refused` (the server's words in `message`), `timeout`, `not_in_game`, and those of the walk there.
+     */
+    async respec(trainer: NpcTarget, line?: NamePattern): Promise<RespecResult> {
+        const report = (regained = 0) => ({
+            regained,
+            specPointsLeft: this.helpers.player()?.specPoints ?? 0,
+            specs: this.sdk.getSkills().specializations.map(s => ({ name: s.name, level: s.level })),
+        });
+        const state0 = this.buildState();
+        if (!state0) return fail('Not in game', 'not_in_game', report());
+        const n = this.helpers.resolveNpc(trainer);
+        if (!n) return fail(`Trainer not found: ${describeTarget(trainer)}`, 'not_found', report());
+        const spec = line === undefined ? null : this.sdk.findSpecialization(line);
+        if (line !== undefined && !spec) return fail(`No specialization matching ${describeTarget(line)} (known: ${report().specs.map(s => s.name).join(', ') || 'none'})`, 'spec_not_found', report());
+        // RespecSingleLine's floor (GamePlayer.cs:3052-3056); points only come back from above it.
+        const floor = (name: string) => state0.autotrain?.includes(specKey(name)) ? freeLevels(state0.level) : 1;
+        const lines0 = this.sdk.getSkills().specializations;
+        if (!(spec ? [spec] : lines0).some(s => s.level > floor(s.name))) return fail(spec ? `${spec.name} has nothing trained to give back` : 'No line has anything trained to give back', 'no_need', report());
+        const walk = await this.targetTrainer(n);
+        if (walk) return fail(walk.message, walk.reason ?? 'out_of_reach', report());
+
+        const before = this.helpers.state();
+        const points0 = before?.player?.specPoints ?? 0;
+        const box0 = before?.dialog?.receivedAt;
+        const window0 = before?.trainer.receivedAt;
+        const watch = this.helpers.watch();
+        try {
+            // Left open by a run that was cut off: a no, so that our yes goes to our own box. A no doesn't clear what that box
+            // was for (respec.cs:188): if it was /respec all, our yes runs that too, seen live. `message` and `specs` show what fell.
+            if (before?.dialog?.isOpen && RESPEC_OFFER.test(before.dialog.text)) await this.sdk.sendRespondDialog(false);
+            // By KeyName: GetSpecializationByName takes no other name (GamePlayer.cs:3102).
+            const sent = await this.sdk.sendCommand(spec ? `/respec ${specKey(spec.name)}` : '/respec all');
+            if (!sent.success) return fail(sent.message, sent.reason ?? 'dispatch_failed', report());
+            const box = await this.helpers.waitFor(s => {
+                if (watch.find(RESPEC_REFUSALS)) return 'refused' as const;
+                // The last box stays in the state, closed, and another may be open: only a new one that names a respec.
+                return s.dialog?.isOpen && s.dialog.receivedAt !== box0 && RESPEC_OFFER.test(s.dialog.text) ? s.dialog : null;
+            }, 3000);
+            if (box === 'refused') return fail(watch.findText(RESPEC_REFUSALS)!, 'refused', report());
+            if (!box) return fail(`${n.name} offered no respec`, 'timeout', report());
+            const yes = await this.sdk.sendRespondDialog(true);
+            if (!yes.success) return fail(yes.message, yes.reason ?? 'dispatch_failed', report());
+            const back = await this.helpers.waitFor(s => (s.player?.specPoints ?? 0) > points0, 4000);
+            if (!back) return fail(`Said yes to ${n.name}, but no points came back`, 'timeout', report());
+            // The window comes after the points (respec.cs:239-241), and trainSpec counts levels from it.
+            await this.helpers.waitFor(s => s.trainer.receivedAt !== window0, 1000);
+            const result = report((this.helpers.player()?.specPoints ?? 0) - points0);
+            const lowered = lines0.flatMap(s => {
+                const now = result.specs.find(x => x.name === s.name);
+                return now && now.level !== s.level ? [`${s.name} ${s.level} → ${now.level}`] : [];
+            });
+            return { success: true, message: `Regained ${result.regained} points${lowered.length ? `: ${lowered.join(', ')}` : ''}`, ...result };
         } finally {
             watch.dispose();
         }
@@ -4286,10 +4795,13 @@ export class BotActions {
             }
             shadeBefore = !!p.isShade;
             const attackers = this.getAttackers();
+            // A failed fight rules out a mob hitting us from where we can't get at it, not one in melee range.
+            // Its target doesn't tell them apart: the client shows a spell's hit as its target until its next update.
+            const fightable = attackers.filter(n => n.distance <= MELEE_RANGE || !avoid.has(n.objectId));
             // Until one has arrived the pet stays on the one it has: a pass with it lasts only a run-in, and the next would have it swap onto a nearer one for nothing. Among them a fight of ours or a hurt one first: one at full health can be an add on the pet that was never hit, on its way home, not to us (StandardMobBrain.cs:566-571).
-            const beside = attackers.filter(n => n.distance <= GRIND_SUMMON_ROOM);
-            const pool = beside.length ? beside : attackers;
-            let target = (beside.length ? undefined : attackers.find(n => n.objectId === s?.pet?.targetObjectId)) ?? pool.find(n => fights.has(n.objectId)) ?? pool.find(n => n.healthPercent < 100) ?? pool[0] ?? null;
+            const beside = fightable.filter(n => n.distance <= GRIND_SUMMON_ROOM);
+            const pool = beside.length ? beside : fightable;
+            let target = (beside.length ? undefined : fightable.find(n => n.objectId === s?.pet?.targetObjectId)) ?? pool.find(n => fights.has(n.objectId)) ?? pool.find(n => n.healthPercent < 100) ?? pool[0] ?? null;
             const short = remaining() < minEngage();
             // A mob still on its way to us leaves room for what a mob beside us would interrupt.
             if (target && wantsPet(s) && Date.now() >= summonRetryAt && target.distance > summonRoom(target)) {
@@ -4315,7 +4827,7 @@ export class BotActions {
                     idleSince = null;
                     const wait = summonRetryAt - Date.now();
                     if (wait <= 0) {
-                        const ended = await summonOnce(false);
+                        const ended = await summonOnce(attackers.length > 0);
                         if (ended) return ended;
                         if (summonSpent) break;
                         continue;
@@ -4352,7 +4864,8 @@ export class BotActions {
                 // Once the gate has called for a rest it goes on to restTo, over the end of a rest (one stops at 120 s, and a servant's 50 to 90 % takes longer) and of a run. A pet out of view can't say.
                 const petResting = !!pet && pet.healthPercent < (petPlan!.restBelow > 0 && this.restingPet === pet.objectId ? petPlan!.restTo : petPlan!.restBelow);
                 if (pet) this.restingPet = petResting ? pet.objectId : null;
-                if (p.healthPercent < restBelow || lowMana || petResting) {
+                const hurt = p.healthPercent < restBelow || lowMana || petResting;
+                if (hurt && !attackers.length) {
                     const rested = await this.rest({ healthPercent: Math.max(restTo, restBelow), manaPercent: lowMana ? Math.min(100, options.restBelowMana! + 40) : undefined, petHealthPercent: petPlan?.restBelow ? petPlan.restTo : undefined, timeout: Math.max(5000, Math.min(120_000, deadline - Date.now())) });
                     if (!rested.success && rested.reason !== 'attacked') await this.helpers.sleep(1000);
                     idleSince = null; // resting is not idling: count the search time afresh
@@ -4363,7 +4876,8 @@ export class BotActions {
                     await backToAnchor();
                     continue;
                 }
-                target = this.findKillableNpcs({
+                // Hurt under fire from a mob ruled out: rest refuses, and no new fight now. It waits for no_targets, the deadline or that mob's 60 s to run out.
+                if (!hurt || !attackers.length) target = this.findKillableNpcs({
                     pattern: options.pattern, maxLevelDiff: options.maxLevelDiff, minLevelDiff: options.minLevelDiff,
                     minCon: options.minCon, maxCon: options.maxCon, radius, from: anchor, exclude: avoid.keys(),
                 }).find(n => !beyondTurret(n)) ?? null;
@@ -4400,7 +4914,8 @@ export class BotActions {
             const lossBefore = s?.lastPetLoss?.at;
             // A pass is when we look: while the pet wears the mob down it goes on to the end of the overrun. Its order stands from pass to pass: petFight gives none while the model has it on the mob.
             const killTimeout = Math.max(0, Math.min(options.killTimeout ?? 60_000, fightEnd - passStart));
-            const onUs = target.targetObjectId === p.objectId;
+            // By its hits too: one at range reads no target. As a turret's fight it would come straight back from the refusal, with no wait.
+            const onUs = target.targetObjectId === p.objectId || attackers.some(n => n.objectId === target!.objectId);
             const arrived = target.distance <= GRIND_SUMMON_ROOM;
             // A mob on us that a turret can't reach is ours to fight, and so is one that has arrived, if we can swing: a new pet's threat can take long to take it off us, and killNpc orders the pet as well.
             const petFights = petOnly() && !!this.sdk.getPetState() && !(onUs && (beyondTurret(target) || (arrived && !p.isShade && !noMelee())));
@@ -4504,7 +5019,7 @@ export class BotActions {
                 result.failures++;
                 avoid.set(target.objectId, Date.now() + 60_000);
                 fights.delete(target.objectId);
-                // No refusal may spin: a mob on us or on the pet comes straight back, avoided or not.
+                // No refusal may spin: a mob on us in melee range or on the pet comes straight back, avoided or not.
                 if (atOnce && kill.reason !== 'timeout') await this.helpers.sleep(GRIND_RETRY_MS);
                 // What failed is no fight in progress: the overrun isn't for trying again.
                 if (Date.now() >= deadline) break;
@@ -4914,15 +5429,15 @@ export class BotActions {
         }
     }
 
-    private async moveObserved(item: InventoryItem, toSlot: number, done: (s: BotWorldState) => boolean, okMessage: string): Promise<ItemResult> {
+    private async moveObserved(item: InventoryItem, toSlot: number, done: (s: BotWorldState) => boolean, okMessage: string, saysDone?: string): Promise<ItemResult> {
         const watch = this.helpers.watch();
         try {
             const r = await this.sdk.sendMoveItem(item.slot, toSlot);
             if (!r.success) return { ...r, item, messages: [] };
-            const got = await this.helpers.waitFor(s => done(s) ? 'ok' : watch.find([/you can't|you cannot|you are not|you must/i]) ? 'refused' : null, 3000);
+            const got = await this.helpers.waitFor(s => done(s) || (saysDone && watch.find([saysDone])) ? 'ok' : watch.find(MOVE_REFUSALS) ? 'refused' : null, 3000);
             const messages = watch.messages().slice();
             if (got === 'ok') return { success: true, message: okMessage, item, messages };
-            return { ...fail(got === 'refused' ? watch.findText([/you can't|you cannot|you are not|you must/i])! : `No change observed for ${item.name}`, got === 'refused' ? 'refused' : 'timeout', {}), item, messages };
+            return { ...fail(got === 'refused' ? watch.findText(MOVE_REFUSALS)! : `No change observed for ${item.name}`, got === 'refused' ? 'refused' : 'timeout', {}), item, messages };
         } finally {
             watch.dispose();
         }

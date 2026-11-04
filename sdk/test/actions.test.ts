@@ -1,12 +1,18 @@
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test, type Mock } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { BotSDK } from '../index';
 import { BotActions, castFailureReason, tradeSlotWait, getNavmeshStore, type KillResult, type NavMesh, type NavmeshStore, type PetCommandResult } from '../actions';
-import { ActionHelpers, PVP_IMMUNE_RETRY_MS } from '../actions-helpers';
+import { ActionHelpers, PVP_IMMUNE_RETRY_MS, resurrectCost } from '../actions-helpers';
 import { ChatHistory } from '../chat-history';
 import { setDefaultPathProvider, StraightLinePathProvider, type PathProvider } from '../pathfinding';
 import { executionContext, throwIfExecutionAborted } from '../execution-context';
 import { ObjectType } from '../types';
-import type { ActionResult, BotAction, BotWorldState, GameMessage, InventoryItem, NearbyNpc, NearbyPlayer, PetCommand, PetState } from '../types';
+import type { Build } from '../../data/builds/types';
+import { getSpells } from '../../data/index';
+import { specKey } from '../../data/spec-names';
+import type { ActionResult, BotAction, BotWorldState, GameMessage, InventoryItem, NearbyNpc, NearbyPlayer, PetCommand, PetState, PlayerState, Spell } from '../types';
 import { makeMessage, makeNpc, makeObject, makePlayer, makePlayerObj, makeState } from './fixtures';
 
 // Fixed straight-line paths: a locally built server/navmesh/zone000.nav would otherwise route every walk here.
@@ -668,7 +674,7 @@ describe('attack / findKillableNpc / con', () => {
     });
 
     test('attack with no weapon, or a shield alone, is refused before any walk: the server says so only at the first swing (AttackComponent.cs:548)', async () => {
-        const shield = { slot: 11, name: 'small shield', level: 1, count: 1, model: 3, objectType: 42, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0 };
+        const shield = { slot: 11, name: 'small shield', level: 1, count: 1, model: 3, objectType: 42, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0, hand: 0 };
         for (const equipment of [[], [shield]]) {
             const { w, bot } = world({ equipment, nearbyNpcs: [makeNpc({ objectId: 201, name: 'rat', x: 561300, y: 511000 })] });
             const r = await bot.attack(201);
@@ -706,6 +712,92 @@ describe('attack / findKillableNpc / con', () => {
         w.publish();
         expect(bot.isInCombat()).toBeTrue();
         expect(bot.getAttackers().map(n => n.objectId)).toEqual([200]);
+    });
+
+    describe('a mob that reports no target', () => {
+        const mob = (objectId: number, over: Partial<NearbyNpc> = {}) => makeNpc({ objectId, name: 'dergan enchanter', level: 5, x: 561000, y: 511000, distance: 900, targetObjectId: null, inCombat: false, ...over });
+
+        test('a caster whose spell landed on us counts, and so does a runner whose swing did', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501), mob(502, { x: 560100, inCombat: true })] });
+            const me = w.player.objectId;
+            w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: me, effectId: 5208 });
+            w.combat({ kind: 'melee', attackerObjectId: 502, targetObjectId: me, result: 'miss' });
+            w.publish();
+            expect(bot.getAttackers().map(n => n.objectId)).toEqual([502, 501]);
+            expect(bot.isInCombat()).toBeTrue();
+        });
+
+        test('a hit too old, or on someone else, does not', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501), mob(502)] });
+            w.state.combatEvents.push({ id: 90, kind: 'spellEffect', attackerObjectId: 501, targetObjectId: w.player.objectId, receivedAt: w.state.timestamp - 7000 });
+            w.combat({ kind: 'spellEffect', attackerObjectId: 502, targetObjectId: 999, effectId: 5208 });
+            w.publish();
+            expect(bot.getAttackers()).toEqual([]);
+        });
+
+        test('one that reads on our pet isn\'t on us for its DoT ticking on us: a tick has no 0x1B, and says where the spell landed some time ago (DoTSpellHandler.cs:169)', async () => {
+            const PET = 600, SUMMON = 610;
+            const { w, bot } = world({ nearbyNpcs: [mob(501, { targetObjectId: PET }), mob(502, { targetObjectId: SUMMON }), mob(503)], pet: { objectId: PET, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: 501 }, summons: [SUMMON] });
+            const me = w.player.objectId;
+            for (const id of [501, 502, 503]) w.combat({ kind: 'melee', attackerObjectId: id, targetObjectId: me, result: 'other', targetHealthPercent: 90 });
+            w.publish();
+            // The one with no reading at all is main's caster at range, and still counts.
+            expect(bot.getAttackers().map(n => n.objectId)).toEqual([503]);
+            expect(bot.getPetAttackers().map(n => n.objectId).sort()).toEqual([501, 502]);
+        });
+
+        test('hits from before a mob died are not from the next one with its id', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501)] });
+            const me = w.player.objectId;
+            w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: me, effectId: 5208 });
+            w.combat({ kind: 'death', attackerObjectId: null, targetObjectId: 501, targetHealthPercent: 0 });
+            w.publish();
+            expect(bot.getAttackers()).toEqual([]);
+            w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: me, effectId: 5208 });
+            w.publish();
+            expect(bot.getAttackers().map(n => n.objectId)).toEqual([501]);
+        });
+
+        test('nor a cast that has not landed yet: its target is unknown', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501)] });
+            w.combat({ kind: 'spellCast', attackerObjectId: 501, targetObjectId: null, castTimeMs: 2000 });
+            w.publish();
+            expect(bot.getAttackers()).toEqual([]);
+        });
+
+        test('nobody we could not fight anyway: a realm NPC or a peaceful one casting on us, a pet, the dead', async () => {
+            const { w, bot } = world({
+                nearbyNpcs: [mob(501, { realm: 'albion' }), mob(502, { isPeaceful: true }), mob(503, { isPet: true }), mob(504, { isTargetable: false }), mob(505, { healthPercent: 0 })],
+            });
+            for (const id of [501, 502, 503, 504, 505]) w.combat({ kind: 'spellEffect', attackerObjectId: id, targetObjectId: w.player.objectId, effectId: 5208 });
+            w.state.nearbyNpcs[4]!.targetObjectId = w.player.objectId;
+            w.combat({ kind: 'death', attackerObjectId: null, targetObjectId: 505, targetHealthPercent: 0 });
+            w.publish();
+            expect(bot.getAttackers()).toEqual([]);
+        });
+
+        test('one at 0 % with no death seen is alive: a mob under 1 % reads that (GameLiving.cs:2621)', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501, { healthPercent: 0 })] });
+            w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: w.player.objectId, effectId: 5208 });
+            w.publish();
+            expect(bot.getAttackers().map(n => n.objectId)).toEqual([501]);
+        });
+
+        test('rest refuses while one hits us, and names one that hits us sitting', async () => {
+            const { w, bot } = world({ player: makePlayer({ health: 50, healthPercent: 50 }), nearbyNpcs: [mob(501)] });
+            setTimeout(() => w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: w.player.objectId, effectId: 5208 }), 60);
+            const sitting = await bot.rest();
+            expect(sitting.reason).toBe('attacked');
+            expect(sitting.message).toContain('dergan enchanter');
+            expect((await bot.rest()).reason).toBe('in_combat');
+        });
+
+        test('findKillableNpc still takes a hurt one that is hitting us, not one hurt by someone else', async () => {
+            const { w, bot } = world({ nearbyNpcs: [mob(501, { healthPercent: 60, distance: 900 }), mob(502, { healthPercent: 60, distance: 100 })] });
+            w.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: w.player.objectId, effectId: 5208 });
+            w.publish();
+            expect(bot.findKillableNpcs().map(n => n.objectId)).toEqual([501]);
+        });
     });
 });
 
@@ -1184,6 +1276,141 @@ describe('castSpell', () => {
     });
 });
 
+// ── Resurrection ────────────────────────────────────────────────────────────
+
+describe('resurrection', () => {
+    // Revive 1315: a baseline Cleric rez in the spell data.
+    const makeSpell = (s: Pick<Spell, 'name' | 'level' | 'internalId' | 'spellIndex'>): Spell => ({ lineName: 'Rejuvenation', lineIndex: 0, cooldownRemaining: 0, ...s });
+    const revive = makeSpell({ name: 'Revive', level: 10, internalId: 1315, spellIndex: 3 });
+    const skills = () => ({ ...makeState().skills, spells: [revive] });
+    const corpse = (over: Partial<NearbyPlayer> = {}) => makePlayerObj({ objectId: 301, name: 'Tank', level: 20, isDead: true, healthPercent: 0, distance: 300, distance2d: 300, ...over });
+    const scene = (over: Partial<NearbyPlayer> = {}, player: Partial<PlayerState> = {}) =>
+        world({ skills: skills(), nearbyPlayers: [corpse(over)], player: makePlayer({ level: 20, mana: 1000, maxMana: 1000, ...player }) });
+    const finishes = (w: FakeWorld) => {
+        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message('You cast a Revive spell!', { type: 'spell' }), 10); };
+    };
+
+    test('resurrectCost: half at equal level, by the level gap, never under a tenth (ResurrectSpellHandler.cs:68)', () => {
+        expect(resurrectCost(1000, 20, 20)).toBe(500);
+        expect(resurrectCost(1000, 20, 25)).toBe(750);
+        expect(resurrectCost(1000, 20, 5)).toBe(100);
+        expect(resurrectCost(1000, 20, 1)).toBe(100);
+    });
+
+    test('resurrectSpell knows a rez by its type, and takes the strongest', () => {
+        const { bot } = world({ skills: skills() });
+        expect(bot.resurrectSpell()?.name).toBe('Revive');
+        const raise = makeSpell({ name: 'Raise Fallen', level: 15, internalId: 1361, spellIndex: 4 });
+        const both = world({ skills: { ...skills(), spells: [revive, raise] } });
+        expect(both.bot.resurrectSpell()?.name).toBe('Raise Fallen');
+        expect(world().bot.resurrectSpell()).toBeNull();
+    });
+
+    test('success: the target shows health again', async () => {
+        const { w, bot } = scene();
+        finishes(w);
+        w.onTick = world => {
+            if (world.sentOf('castSpell').length) { const c = world.state.nearbyPlayers[0]!; c.isDead = false; c.healthPercent = 10; c.x = world.player.x; c.y = world.player.y; }
+        };
+        const r = await bot.resurrect(301);
+        expect(r).toMatchObject({ success: true, cast: { success: true } });
+        expect(w.sentOf('setTarget')[0]).toMatchObject({ objectId: 301 });
+    });
+
+    test('a release in view is no success: alive, but at its bind point', async () => {
+        const { w, bot } = scene();
+        finishes(w);
+        w.onTick = world => {
+            if (world.sentOf('castSpell').length) { const c = world.state.nearbyPlayers[0]!; c.isDead = false; c.healthPercent = 100; c.x = world.player.x + 4000; }
+        };
+        expect(await bot.resurrect(301, { answerMs: 80 })).toMatchObject({ success: false, reason: 'not_dead' });
+    });
+
+    test('another corpse\'s yes tells nothing about this one: the realm points name nobody (:201)', async () => {
+        const { w, bot } = scene();
+        w.handlers.castSpell = (_a, world) => {
+            setTimeout(() => world.message('You cast a Revive spell!', { type: 'spell' }), 10);
+            setTimeout(() => world.message('The player you resurrected was not worth realm points on death.'), 30);
+        };
+        expect(await bot.resurrect(301, { answerMs: 80 })).toMatchObject({ success: false, reason: 'no_answer' });
+    });
+
+    test('a finished cast with no answer is no success', async () => {
+        const { w, bot } = scene();
+        finishes(w);
+        expect(await bot.resurrect(301, { answerMs: 50 })).toMatchObject({ success: false, reason: 'no_answer', cast: { success: true } });
+    });
+
+    test('refuses without casting: not dead, another realm, no spell, unknown target, too little power', async () => {
+        const check = async (made: ReturnType<typeof scene>, reason: string, target: number = 301) => {
+            expect(await made.bot.resurrect(target)).toMatchObject({ success: false, reason });
+            expect(made.w.sentOf('castSpell')).toHaveLength(0);
+        };
+        await check(scene({ isDead: false, healthPercent: 50 }), 'not_dead');
+        await check(scene({ realm: 'midgard' }), 'invalid_target');
+        await check(world({ nearbyPlayers: [corpse()] }), 'spell_not_found');
+        await check(scene(), 'not_found', 999);
+        await check(scene({}, { mana: 400 }), 'no_power');
+        await check(scene({}, { isDead: true }), 'dead');
+    });
+
+    test('the cost follows the target\'s level', async () => {
+        const low = scene({ level: 5 }, { mana: 400 });
+        finishes(low.w);
+        expect(await low.bot.resurrect(301, { answerMs: 20 })).toMatchObject({ reason: 'no_answer' });
+    });
+
+    test.each([
+        ['This spell only works on dead members of your realm!', 'not_dead'],
+        ['Your target is already considering a resurrection!', 'already_considering'],
+    ])('the server\'s refusal: %s', async (text, reason) => {
+        const { w, bot } = scene();
+        w.handlers.castSpell = (_a, world) => { setTimeout(() => world.message(text), 10); };
+        expect(await bot.resurrect(301)).toMatchObject({ success: false, reason });
+    });
+
+    const offered = { isOpen: true, code: 6, data: [7, 1, 0, 0] as [number, number, number, number], type: 1, text: 'Do you allow Nimue to resurrected you\n with 30 percent hits/power?', receivedAt: 1, resurrection: { caster: 'Nimue', healthPercent: 30 } };
+    const dead = () => makePlayer({ isDead: true, healthPercent: 0 });
+
+    test('getResurrectionOffer reads the open box only', () => {
+        expect(world({ dialog: offered }).sdk.getResurrectionOffer()).toEqual({ caster: 'Nimue', healthPercent: 30 });
+        expect(world({ dialog: { ...offered, isOpen: false } }).sdk.getResurrectionOffer()).toBeNull();
+        expect(world({ dialog: { ...offered, resurrection: undefined } }).sdk.getResurrectionOffer()).toBeNull();
+    });
+
+    test('acceptResurrection says yes and sees the revive', async () => {
+        const { w, bot } = world({ dialog: offered, player: dead() });
+        w.handlers.respondDialog = (_a, world) => {
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            setTimeout(() => { world.player.isDead = false; world.player.x += 400; }, 10);
+        };
+        expect(await bot.acceptResurrection()).toMatchObject({ success: true, offer: { caster: 'Nimue' } });
+        expect(w.sentOf('respondDialog')[0]).toMatchObject({ accept: true });
+    });
+
+    test('acceptResurrection waits for an offer, and gives up', async () => {
+        const later = world({ player: dead() });
+        later.w.handlers.respondDialog = (_a, world) => { setTimeout(() => { world.player.isDead = false; }, 10); };
+        setTimeout(() => { later.w.state.dialog = offered; }, 30);
+        expect(await later.bot.acceptResurrection({ timeout: 2000 })).toMatchObject({ success: true });
+        const none = world({ player: dead() });
+        expect(await none.bot.acceptResurrection({ timeout: 20 })).toMatchObject({ success: false, reason: 'timeout' });
+    });
+
+    test('acceptResurrection: alive, or the offer gone', async () => {
+        expect(await world({ dialog: offered }).bot.acceptResurrection()).toMatchObject({ success: false, reason: 'not_dead' });
+        const { w, bot } = world({ dialog: offered, player: dead() });
+        w.handlers.respondDialog = (_a, world) => { setTimeout(() => world.message('No one is currently trying to resurrect you.'), 10); };
+        expect(await bot.acceptResurrection()).toMatchObject({ success: false, reason: 'expired' });
+    });
+
+    test('another box is not taken for an offer', async () => {
+        const { w, bot } = world({ dialog: { ...offered, resurrection: undefined, text: 'Do you accept?' }, player: dead() });
+        expect(await bot.acceptResurrection({ timeout: 20 })).toMatchObject({ success: false, reason: 'timeout' });
+        expect(w.sentOf('respondDialog')).toHaveLength(0);
+    });
+});
+
 // ── Enemy players ───────────────────────────────────────────────────────────
 
 /** An enemy (Midgard) player next to us; we are Albion. */
@@ -1394,6 +1621,31 @@ describe('attack / castSpell / attackers against players', () => {
             expect(await bot.castSpell(drain, 301)).toMatchObject({ success: false, reason: 'crowd_controlled', retryAfterMs: 2000, message: text });
             expect(Date.now() - started).toBeLessThan(1500);
         }
+    });
+
+    test('castSpell: a spell with its own line says whether it landed, and on whom: an enemy player by its real name', async () => {
+        const row = getSpells().find(x => x.name === 'Diversion')!;
+        const mezz = { name: 'Diversion', level: 10, internalId: row.id, lineName: 'Pacification', lineIndex: 2, spellIndex: 0, cooldownRemaining: 0 };
+        const { w, bot } = world({ skills: { ...skills, spells: [mezz] }, nearbyPlayers: [enemy()] });
+        const answer = (...lines: [string, GameMessage['type']][]) => {
+            w.handlers.castSpell = (_a, world) => {
+                setTimeout(() => world.combat({ kind: 'spellCast', attackerObjectId: world.player.objectId, targetObjectId: null, castTimeMs: 50 }), 10);
+                setTimeout(() => {
+                    world.message('You cast a Diversion spell!', { type: 'spell' });
+                    for (const [text, type] of lines) world.message(text, { type });
+                }, 70);
+            };
+        };
+        expect(row.effectStarts).toBe('{0} is entranced!');
+        answer(['Oisin is entranced!', 'spell']);
+        expect(await bot.castSpell(mezz, 301)).toMatchObject({ success: true, effectLanded: true, landedOn: 'Oisin', effectImmune: false, alreadyOn: false });
+        answer(['Oisin already has that effect. Wait until it expires. Spell failed.', 'spell']);
+        const again = await bot.castSpell(mezz, 301);
+        expect(again).toMatchObject({ success: true, alreadyOn: true, effectLanded: false });
+        expect(again.message).toBe('Cast Diversion on Norseman (already has it)');
+        // Nothing about it from the server: the cast went off, and no more than that.
+        answer();
+        expect(await bot.castSpell(mezz, 301)).toMatchObject({ success: true, effectLanded: false });
     });
 
     test('castSpell: "Your target is immune to this effect!" after "You cast" is a cast with effectImmune, not resisted', async () => {
@@ -1729,7 +1981,7 @@ describe('items', () => {
     });
 
     describe('useItem on the ranged slot: its lines name no item (GamePlayer.cs:6564, :6640-6705)', () => {
-        const bow = { slot: 13, name: 'rowan bow', level: 1, count: 1, model: 3, objectType: 9, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0 };
+        const bow = { slot: 13, name: 'rowan bow', level: 1, count: 1, model: 3, objectType: 9, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0, hand: 0 };
         const answers = (w: FakeWorld, line: string) => { w.handlers.useItem = (_a, world) => { setTimeout(() => world.message(line, { type: 'youHit' }), 5); }; };
 
         test.each([
@@ -1823,6 +2075,123 @@ describe('items', () => {
         const r = await bot.equipItem(ring, { slot: 36 });
         expect(r.success).toBeFalse();
         expect(r.reason).toBe('timeout');
+    });
+
+    describe('a swap with an equal-named item', () => {
+        // As the wire has them: condition and durability in whole percents.
+        const helm = { slot: 50, name: 'Speedy Reinforced Helm', level: 14, condition: 97, durability: 100, quality: 98, value1: 28, value2: 19, model: 1234, weight: 24 };
+        const swaps = (w: FakeWorld, worn: InventoryItem, target: number, says?: string) => {
+            w.handlers.moveItem = (a, world) => {
+                if (a.type !== 'moveItem') return;
+                const s = world.state;
+                const item = s.inventory.find(i => i.slot === a.fromSlot)!;
+                s.inventory = [...s.inventory.filter(i => i !== item), { ...worn, slot: a.fromSlot }];
+                s.equipment = [...s.equipment.filter(e => e.slot !== target), { ...item, slot: target }];
+                if (says) world.message(says);
+            };
+        };
+        const setup = (differ: Partial<InventoryItem>) => {
+            const { w, bot } = world();
+            const pack = { ...w.state.inventory[0]!, ...helm };
+            const worn = { ...pack, ...differ, slot: 21 };
+            w.state.inventory = [...w.state.inventory, pack];
+            w.state.equipment = [...w.state.equipment, worn];
+            w.publish();
+            return { w, bot, pack, worn };
+        };
+        const FLOWS = 'The magic of the Speedy Reinforced Helm flows through you.';
+
+        test.each([
+            ['another level', { level: 15 }],
+            ['another condition', { condition: 90 }],
+            ['another durability', { durability: 97 }],
+            ['another quality', { quality: 95 }],
+            ['another armour factor', { value1: 30 }],
+            ['another absorption', { value2: 27 }],
+            ['another model', { model: 822 }],
+            ['another weight', { weight: 30 }],
+        ])('is a success, with %s, through the paper doll and into a named slot', async (_what, differ) => {
+            for (const options of [{}, { slot: 21 }]) {
+                const { w, bot, pack, worn } = setup(differ);
+                swaps(w, worn, 21);
+                expect((await bot.equipItem(pack, options)).success).toBeTrue();
+                expect(w.state.equipment.find(e => e.slot === 21)).toMatchObject({ level: 14, condition: 97, durability: 100, quality: 98, value1: 28, value2: 19, model: 1234, weight: 24 });
+                expect(w.state.inventory.find(i => i.slot === 50)).toMatchObject(differ);
+            }
+        });
+
+        test.each([
+            ['another level, through the paper doll', { level: 15 }, {}],
+            ['another level, into a named slot', { level: 15 }, { slot: 21 }],
+            ['the same level, through the paper doll', { condition: 90 }, {}],
+            ['the same level, into a named slot', { condition: 90 }, { slot: 21 }],
+        ])('that the server refuses without a word is no success, with %s', async (_what, differ, options) => {
+            const { bot, pack } = setup(differ);
+            const r = await bot.equipItem(pack, options);
+            expect(r.success).toBeFalse();
+            expect(r.reason).toBe('timeout');
+        });
+
+        test('with one that reads the same, a magical piece is a success on what the server says as it goes on', async () => {
+            const { w, bot, pack, worn } = setup({});
+            swaps(w, worn, 21, FLOWS);
+            const started = Date.now();
+            const r = await bot.equipItem(pack);
+            expect(r.success).toBeTrue();
+            expect(Date.now() - started).toBeLessThan(2500);
+            expect(r.messages?.map(m => m.text)).toContain(FLOWS);
+        });
+
+        test('with one that reads the same, a message about another piece says nothing about this one', async () => {
+            const { w, bot, pack, worn } = setup({});
+            swaps(w, worn, 21, 'The magic of the Adroit Ring flows through you.');
+            expect((await bot.equipItem(pack)).reason).toBe('timeout');
+        });
+
+        test('with one that reads the same, a plain piece has nothing to go by', async () => {
+            const { w, bot, pack, worn } = setup({});
+            swaps(w, worn, 21);
+            expect((await bot.equipItem(pack)).reason).toBe('timeout');
+        });
+
+        test('with another piece worn the slots decide, whatever the server says', async () => {
+            const { w, bot, pack } = setup({ level: 15 });
+            w.handlers.moveItem = (_a, world) => { world.message(FLOWS); };
+            expect((await bot.equipItem(pack)).reason).toBe('timeout');
+        });
+
+        test('its twin going to an empty slot, a second ring, is a success', async () => {
+            const { w, bot } = world();
+            const ring = { ...w.state.inventory[0]!, ...helm, name: 'Adroit Ring', slot: 45 };
+            w.state.inventory = [...w.state.inventory, ring];
+            w.state.equipment = [...w.state.equipment, { ...ring, slot: 35 }];
+            w.publish();
+            w.handlers.moveItem = (a, world) => {
+                if (a.type !== 'moveItem') return;
+                const s = world.state;
+                s.inventory = s.inventory.filter(i => i.slot !== a.fromSlot);
+                s.equipment = [...s.equipment, { ...ring, slot: 36 }];
+            };
+            expect((await bot.equipItem(ring)).success).toBeTrue();
+            expect(w.state.equipment.filter(e => e.name === 'Adroit Ring').map(e => e.slot)).toEqual([35, 36]);
+        });
+    });
+
+    test.each([
+        ['You have no skill in using this weapon type!'],
+        ['You have no skill in wearing this armor type!'],
+        ["The great axe can't go there!"],
+    ])('a slot refusal comes back at once: %s', async text => {
+        const { w, bot } = world();
+        const axe = { ...w.state.inventory[0]!, slot: 45, name: 'great axe' };
+        w.state.inventory = [...w.state.inventory, axe];
+        w.publish();
+        w.handlers.moveItem = (_a, world) => { world.message(text); };
+        const started = Date.now();
+        const r = await bot.equipItem(axe, { slot: 10 });
+        expect(r.reason).toBe('refused');
+        expect(r.message).toBe(text);
+        expect(Date.now() - started).toBeLessThan(2500);
     });
 
     test('drop, destroy and use', async () => {
@@ -2046,12 +2415,228 @@ describe('merchants', () => {
     });
 });
 
+describe('smiths', () => {
+    const smith = makeNpc({ objectId: 210, name: 'Judan Hammerfel', guildName: 'Smith', role: 'smith', realm: 'albion', isPeaceful: true, x: 560050, y: 511000 });
+    const worn: InventoryItem = { slot: 10, name: 'long sword', level: 5, count: 1, model: 3, objectType: 3, hand: 0, condition: 88, durability: 100, quality: 90, weight: 30, value1: 27, value2: 30 };
+    const box = (text: string) => ({ isOpen: true, code: 6, data: [5, 1, 0, 0] as [number, number, number, number], type: 1, text, receivedAt: Date.now() });
+
+    /** A smith that asks `price` for what it's given, and on a yes takes the money and restores the item. */
+    function atSmith(price: string, copper: number, overrides: Partial<BotWorldState> = {}) {
+        const r = world({ nearbyNpcs: [smith], equipment: [worn], ...overrides });
+        r.w.handlers.moveItem = (a, w) => {
+            if (a.type !== 'moveItem') return;
+            setTimeout(() => { w.state.dialog = box(`It will cost ${price} to repair the long sword. Do you accept?`); }, 10);
+        };
+        r.w.handlers.respondDialog = (a, w) => {
+            if (a.type !== 'respondDialog') return;
+            w.state.dialog = { ...w.state.dialog!, isOpen: false };
+            if (!a.accept) { w.message('You decline to have your long sword repaired.'); return; }
+            setTimeout(() => {
+                w.player.money = { ...w.player.money, totalCopper: w.player.money.totalCopper - copper };
+                w.message(`You pay Judan Hammerfel ${price}.`);
+                w.message('Judan Hammerfel says, "There, the long sword is ready for combat."', { type: 'say' });
+                w.state.equipment = [{ ...worn, condition: 100, durability: 88 }];
+            }, 10);
+        };
+        return r;
+    }
+
+    test('repairItem hands a worn item to the smith, says yes and reports the price', async () => {
+        const { w, bot } = atSmith('1 gold, 24 silver', 12_400, { player: makePlayer({ money: { copper: 0, silver: 0, gold: 2, mithril: 0, platinum: 0, totalCopper: 20_000 } }) });
+        const r = await bot.repairItem(smith, worn);
+        expect(r).toMatchObject({ success: true, cost: 12_400, item: { condition: 88 }, repaired: { condition: 100, durability: 88 } });
+        expect(w.sentOf('moveItem')).toEqual([{ type: 'moveItem', fromSlot: 10, toSlot: 1210, count: undefined, reason: 'SDK' } as any]);
+        expect(w.sentOf('respondDialog').map(a => a.accept)).toEqual([true]);
+    });
+
+    test('repairItem walks within reach of the smith first: a hand-over is 128 in 3D', async () => {
+        const far = { ...smith, x: 561000 };
+        const { w, bot } = atSmith('5 copper', 5, { nearbyNpcs: [far] });
+        expect((await bot.repairItem('Judan', 10)).success).toBeTrue();
+        expect(Math.hypot(far.x - w.player.x, far.y - w.player.y)).toBeLessThanOrEqual(128);
+    });
+
+    test('a price over maxCost or the purse is declined, and nothing is paid', async () => {
+        const { w, bot } = atSmith('48 silver', 4800);
+        expect(await bot.repairItem(smith, worn, { maxCost: 4799 })).toMatchObject({ success: false, reason: 'too_expensive', cost: 0 });
+        expect(w.sentOf('respondDialog').map(a => a.accept)).toEqual([false]);
+        w.player.money = { ...w.player.money, totalCopper: 100 };
+        w.publish();
+        expect((await bot.repairItem(smith, worn)).reason).toBe('insufficient_funds');
+        expect(w.player.money.totalCopper).toBe(100);
+    });
+
+    test('a free repair is still a yes: starter gear has no price', async () => {
+        const { w, bot } = atSmith('0 copper pieces', 0);
+        expect(await bot.repairItem(smith, worn)).toMatchObject({ success: true, cost: 0 });
+        expect(w.sentOf('respondDialog').map(a => a.accept)).toEqual([true]);
+    });
+
+    test.each([
+        ['Your long sword is already in perfect condition.', 'no_need'],
+        ['Judan Hammerfel says, "I can\'t repair that."', 'not_repairable'],
+        ['Judan Hammerfel doesn\'t want stacked items.', 'not_repairable'],
+        ['You are too far away to give anything to Judan Hammerfel.', 'out_of_range'],
+    ])('no box comes after "%s"', async (line, reason) => {
+        const { w, bot } = world({ nearbyNpcs: [smith], equipment: [worn] });
+        w.handlers.moveItem = (_a, world) => { setTimeout(() => world.message(line), 10); };
+        expect(await bot.repairItem(smith, worn)).toMatchObject({ success: false, reason, message: line });
+        expect(w.sentOf('respondDialog')).toEqual([]);
+    });
+
+    test('a box already open is not the smith\'s answer: it stays unanswered', async () => {
+        const { w, bot } = world({ nearbyNpcs: [smith], equipment: [worn], dialog: box('Otherguy has invited you to join his group.') });
+        w.handlers.moveItem = () => undefined;
+        expect((await bot.repairItem(smith, worn)).reason).toBe('no_response');
+        expect(w.sentOf('respondDialog')).toEqual([]);
+    });
+
+    test('a repair box left open by a cut-off run gets a no first: answered late, it would make the smith forget the new item', async () => {
+        const { w, bot } = atSmith('5 copper', 5);
+        w.state.dialog = box('It will cost 9 gold to repair the old axe. Do you accept?');
+        w.publish();
+        expect(await bot.repairItem(smith, worn)).toMatchObject({ success: true, cost: 5 });
+        expect(w.sentOf('respondDialog').map(a => a.accept)).toEqual([false, true]);
+    });
+
+    test('a yes the smith can no longer honour is his answer, not silence', async () => {
+        const { w, bot } = atSmith('5 copper', 5);
+        w.handlers.respondDialog = (_a, world) => {
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            setTimeout(() => world.message('Judan Hammerfel says, "I can\'t repair that."', { type: 'say' }), 10);
+        };
+        expect(await bot.repairItem(smith, worn)).toMatchObject({ success: false, reason: 'not_repairable', cost: 0 });
+    });
+
+    test('an NPC that takes nothing, or an unknown target, is a failure', async () => {
+        const { w, bot } = world({ nearbyNpcs: [smith], equipment: [worn] });
+        w.handlers.moveItem = () => undefined;
+        expect((await bot.repairItem(smith, worn)).reason).toBe('no_response');
+        expect((await bot.repairItem('nobody', worn)).reason).toBe('not_found');
+        expect((await bot.repairItem(smith, 'no such item')).reason).toBe('not_found');
+    });
+
+    test('repairAll takes the box from a whisper and says when nothing needs it', async () => {
+        const { w, bot } = world({ nearbyNpcs: [smith], equipment: [worn] });
+        w.handlers.whisper = (_a, world) => { setTimeout(() => { world.state.dialog = box('It will cost 1 silver, 44 copper to repair everything. Do you accept?'); }, 10); };
+        w.handlers.respondDialog = (_a, world) => {
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            setTimeout(() => {
+                world.player.money = { ...world.player.money, totalCopper: world.player.money.totalCopper - 144 };
+                world.message('Judan Hammerfel says, "There, the long sword is ready for combat."', { type: 'say' });
+            }, 10);
+        };
+        expect(await bot.repairAll(smith)).toMatchObject({ success: true, cost: 144 });
+        w.state.dialog = null;
+        expect(await bot.repairAll(smith, { maxCost: 10 })).toMatchObject({ success: false, reason: 'too_expensive', cost: 0 });
+        w.handlers.whisper = (_a, world) => { setTimeout(() => world.message('Judan Hammerfel says, "All items are fully repaired already."', { type: 'say' }), 10); };
+        expect(await bot.repairAll(smith)).toMatchObject({ success: true, cost: 0 });
+    }, 20_000);
+});
+
+describe('the vault', () => {
+    const keeper = makeNpc({ objectId: 211, name: 'Lord Urqhart', guildName: 'Vault Keeper', role: 'vault', realm: 'albion', isPeaceful: true, x: 560050, y: 511000 });
+    const axe: InventoryItem = { slot: 40, name: 'Dragonmight', level: 51, count: 1, model: 3, objectType: 17, hand: 0, condition: 100, durability: 100, quality: 100, weight: 30, value1: 165, value2: 37 };
+
+    /** A keeper that opens the window, and moves that go where the server would put them. */
+    function atKeeper(overrides: Partial<BotWorldState> = {}) {
+        const r = world({ nearbyNpcs: [keeper], inventory: [axe], vault: [], vaultOpenedAt: null, ...overrides });
+        r.w.handlers.interact = (_a, w) => { setTimeout(() => { w.state.vaultOpenedAt = Date.now(); }, 10); };
+        r.w.handlers.moveItem = (a, w) => {
+            if (a.type !== 'moveItem' || a.toSlot !== 601) return;
+            setTimeout(() => {
+                const from = [...w.state.inventory, ...w.state.vault].find(i => i.slot === a.fromSlot)!;
+                if (a.fromSlot < 110) {
+                    w.state.inventory = w.state.inventory.filter(i => i.slot !== a.fromSlot);
+                    w.state.vault = [...w.state.vault, { ...from, slot: 110 + w.state.vault.length }];
+                } else {
+                    w.state.vault = w.state.vault.filter(i => i.slot !== a.fromSlot);
+                    w.state.inventory = [...w.state.inventory, { ...from, slot: 40 + w.state.inventory.length }];
+                }
+            }, 10);
+        };
+        return r;
+    }
+
+    test('openVault succeeds on an empty vault: the window itself is the answer', async () => {
+        const { bot, sdk } = atKeeper();
+        expect(await bot.openVault(keeper)).toMatchObject({ success: true, items: [], keeper: { name: 'Lord Urqhart' } });
+        expect(sdk.getState()?.vaultOpenedAt).toBeGreaterThan(0);
+    });
+
+    test('openVault waits past a keeper that speaks first: Jarl Yuliwyf has a line before the window', async () => {
+        const jarl = { ...keeper, name: 'Jarl Yuliwyf' };
+        const { w, bot } = atKeeper({ nearbyNpcs: [jarl] });
+        w.handlers.interact = (_a, world) => {
+            setTimeout(() => {
+                world.state.npcDialog = { npcObjectId: jarl.objectId, npcName: jarl.name, text: 'As you entrust your precious belongings to me, I shall guard them with my life.', keywords: [], receivedAt: Date.now() };
+                world.message('Jarl Yuliwyf says, "As you entrust your precious belongings to me, I shall guard them with my life."', { type: 'say' });
+            }, 10);
+            setTimeout(() => { world.state.vaultOpenedAt = Date.now(); }, 80);
+        };
+        expect(await bot.openVault(jarl)).toMatchObject({ success: true, items: [] });
+    });
+
+    test('openVault fails for an NPC that doesn\'t open one, and on a client too old to say', async () => {
+        const { w, bot } = atKeeper();
+        w.handlers.interact = (_a, world) => { setTimeout(() => world.message('Lord Urqhart says, "Hail."', { type: 'say' }), 10); };
+        expect((await bot.openVault(keeper)).reason).toBe('not_a_vault_keeper');
+        expect((await bot.openVault('nobody')).reason).toBe('not_found');
+        const old = world({ nearbyNpcs: [keeper] });
+        expect((await old.bot.openVault(keeper)).reason).toBe('unknown_action');
+    });
+
+    test('depositItem puts it in through the server-chosen slot, and withdrawItem takes it back', async () => {
+        const { w, bot, sdk } = atKeeper();
+        expect((await bot.depositItem(keeper, 'Dragonmight')).success).toBeTrue();
+        expect(w.sentOf('moveItem').map(a => [a.fromSlot, a.toSlot])).toEqual([[40, 601]]);
+        expect(sdk.getInventory().map(i => i.name)).toEqual([]);
+        expect(sdk.getVault().map(i => [i.slot, i.name])).toEqual([[110, 'Dragonmight']]);
+        expect((await bot.withdrawItem(keeper, /Dragon/)).success).toBeTrue();
+        expect(w.sentOf('moveItem').map(a => [a.fromSlot, a.toSlot])[1]).toEqual([110, 601]);
+        expect(sdk.getVault()).toEqual([]);
+        expect(sdk.getInventory().map(i => i.name)).toEqual(['Dragonmight']);
+    });
+
+    test('a full vault, a full backpack and a missing item are refused without moving anything', async () => {
+        const full = Array.from({ length: 40 }, (_, i) => ({ ...axe, slot: 110 + i, name: `relic ${i}` }));
+        const a = atKeeper({ vault: full });
+        expect((await a.bot.depositItem(keeper, axe)).reason).toBe('vault_full');
+        expect((await a.bot.depositItem(keeper, 'banana')).reason).toBe('not_found');
+        expect((await a.bot.withdrawItem(keeper, 'banana')).reason).toBe('not_found');
+        const bags = Array.from({ length: 40 }, (_, i) => ({ ...axe, slot: 40 + i, name: `loot ${i}` }));
+        const b = atKeeper({ inventory: bags, vault: [{ ...axe, slot: 110 }] });
+        expect((await b.bot.withdrawItem(keeper, 110)).reason).toBe('inventory_full');
+        expect([...a.w.sentOf('moveItem'), ...b.w.sentOf('moveItem')]).toEqual([]);
+    });
+
+    test('a stack can still merge into a full vault or a full backpack', async () => {
+        const arrows = { ...axe, slot: 41, name: 'arrows', count: 10, objectType: 43 };
+        const full = Array.from({ length: 39 }, (_, i) => ({ ...axe, slot: 110 + i, name: `relic ${i}` }));
+        const a = atKeeper({ inventory: [arrows], vault: [...full, { ...arrows, slot: 149, count: 15 }] });
+        a.w.handlers.moveItem = (_m, world) => {
+            setTimeout(() => {
+                world.state.inventory = [{ ...arrows, count: 5 }];
+                world.state.vault = [...full, { ...arrows, slot: 149, count: 20 }];
+            }, 10);
+        };
+        expect((await a.bot.depositItem(keeper, arrows)).success).toBeTrue();
+        expect(a.sdk.getInventory().map(i => i.count)).toEqual([5]);
+    });
+
+    test('a silent refusal runs out the clock instead of reporting a deposit', async () => {
+        const { w, bot } = atKeeper();
+        w.handlers.moveItem = () => undefined;
+        expect((await bot.depositItem(keeper, axe)).reason).toBe('timeout');
+    }, 8000);
+});
+
 describe('trainSpec', () => {
     test('trains through the trainer window and observes the level', async () => {
         const trainer = makeNpc({ objectId: 210, name: 'Master Graent', role: 'trainer', realm: 'albion', x: 560080, y: 511000 });
         const { w, bot } = world({ nearbyNpcs: [trainer] });
         w.handlers.openTrainer = (_a, world) => {
-            world.state.trainer = { isOpen: true, specPoints: 3, specs: [{ index: 0, name: 'Slash', level: 2, nextLevelCost: 3 }] };
+            world.state.trainer = { isOpen: true, specPoints: 3, receivedAt: world.state.tick, specs: [{ index: 0, name: 'Slash', level: 2, nextLevelCost: 3 }] };
         };
         w.handlers.trainSpec = (a, world) => {
             if (a.type !== 'trainSpec') return;
@@ -2064,6 +2649,708 @@ describe('trainSpec', () => {
         expect(r).toMatchObject({ success: true, spec: 'Slash', fromLevel: 2, toLevel: 3, specPointsLeft: 0 });
         expect(w.sentOf('setTarget')[0]!.objectId).toBe(210);
         expect((await bot.trainSpec('Graent', 'Polearm')).reason).toBe('spec_not_found');
+    });
+
+    const spec = (name: string, internalId: number) => ({ name, level: 1, internalId, bonus: 0 });
+    const raise = (world: FakeWorld, name: string, level: number) => {
+        world.state.skills = { ...world.state.skills, specializations: world.state.skills.specializations.map(s => (s.name === name ? { ...s, level } : s)) };
+    };
+    /** A trainer in reach and these lines; `window` is what the trainer window lists (the server sends display names). */
+    const atTrainer = (lines: string[], window = lines) => {
+        const trainer = makeNpc({ objectId: 210, name: 'Master Graent', role: 'trainer', realm: 'albion', x: 560080, y: 511000 });
+        const { w, bot } = world({ nearbyNpcs: [trainer], skills: { ...makeState().skills, specializations: lines.map(spec) } });
+        w.handlers.openTrainer = (_a, world) => {
+            world.state.trainer = { isOpen: true, specPoints: 90, receivedAt: world.state.tick, specs: window.map((name, index) => ({ index, name, level: 1, nextLevelCost: 2 })) };
+        };
+        return { w, bot };
+    };
+
+    test('a window from before a promotion is not trained by: a new one is asked for and its index used', async () => {
+        const lines = ['Mending', 'Subterranean', 'Augmentation'];
+        const { w, bot } = atTrainer(lines);
+        // What a Seer's window showed at Korgan, still open after the whisper: a promotion sends none.
+        w.state.trainer = { isOpen: true, specPoints: 33, receivedAt: 1, trainerObjectId: 210, specs: [{ index: 0, name: 'Mending', level: 1, nextLevelCost: 2 }, { index: 1, name: 'Augmentation', level: 2, nextLevelCost: 3 }] };
+        w.handlers.openTrainer = (_a, world) => {
+            setTimeout(() => { world.state.trainer = { isOpen: true, specPoints: 33, receivedAt: 2, specs: lines.map((name, index) => ({ index, name, level: name === 'Augmentation' ? 2 : 1, nextLevelCost: 2 })) }; }, 30);
+        };
+        w.handlers.trainSpec = (a, world) => { if (a.type === 'trainSpec') setTimeout(() => raise(world, lines[a.specIndex]!, 5), 10); };
+        raise(w, 'Augmentation', 2);
+        w.publish();
+        const r = await bot.trainSpec('Graent', 'Augmentation', 3);
+        expect(w.sentOf('trainSpec')).toEqual([expect.objectContaining({ specIndex: 2, levels: 3 })]);
+        expect(r).toMatchObject({ success: true, spec: 'Augmentation', fromLevel: 2, toLevel: 5 });
+        expect(w.state.skills.specializations.find(s => s.name === 'Subterranean')!.level).toBe(1);
+    });
+
+    test('no new window: /train, by name, and never the old one\'s index', async () => {
+        const { w, bot } = atTrainer(['Mending', 'Augmentation']);
+        w.state.trainer = { isOpen: true, specPoints: 33, receivedAt: 1, specs: [{ index: 0, name: 'Augmentation', level: 1, nextLevelCost: 2 }] };
+        w.handlers.openTrainer = () => undefined;
+        w.handlers.command = (a, world) => { if (a.type === 'command') setTimeout(() => raise(world, 'Augmentation', 2), 10); };
+        const r = await bot.trainSpec('Graent', 'Augmentation');
+        expect(w.sentOf('trainSpec')).toEqual([]);
+        expect(w.sentOf('command').map(a => a.command)).toEqual(['/train Augmentation 2']);
+        expect(r).toMatchObject({ success: true, toLevel: 2 });
+    }, 8000);
+
+    describe('with no trainer', () => {
+        /** Where it stands, with no NPC about, on a server with allow_train_anywhere on (train.cs:143) or off (:150). */
+        const standing = (lines: string[], anywhere = true) => {
+            const { w, bot } = world({ skills: { ...makeState().skills, specializations: lines.map(spec) } });
+            const wanted = 'You must select a valid trainer for your class.';
+            w.handlers.openTrainer = (_a, world) => {
+                if (!anywhere) { setTimeout(() => world.message(wanted), 10); return; }
+                world.state.trainer = { isOpen: true, specPoints: 90, receivedAt: world.state.tick, specs: lines.map((name, index) => ({ index, name, level: 1, nextLevelCost: 2 })) };
+            };
+            w.handlers.trainSpec = (a, world) => { if (a.type === 'trainSpec') setTimeout(() => raise(world, lines[a.specIndex]!, 1 + (a.levels ?? 1)), 10); };
+            return { w, bot };
+        };
+
+        test('it trains where it stands, by the window, with no target and no walk', async () => {
+            const { w, bot } = standing(['Slash', 'Polearm']);
+            const r = await bot.trainSpec(null, 'Polearm', 4);
+            expect(r).toMatchObject({ success: true, spec: 'Polearm', fromLevel: 1, toLevel: 5 });
+            expect(w.sentOf('trainSpec')).toEqual([expect.objectContaining({ specIndex: 1, levels: 4 })]);
+            expect(w.sentOf('setTarget')).toEqual([]);
+            expect(w.sentOf('moveTo')).toEqual([]);
+        });
+
+        test('a server with allow_train_anywhere off: needs_trainer, at once, and no /train after it', async () => {
+            const { w, bot } = standing(['Slash', 'Polearm'], false);
+            const started = Date.now();
+            const r = await bot.trainSpec(null, 'Polearm');
+            expect(r).toMatchObject({ success: false, reason: 'needs_trainer', message: 'You must select a valid trainer for your class.', spec: 'Polearm', toLevel: 1 });
+            expect(Date.now() - started).toBeLessThan(2000);
+            expect(w.sentOf('trainSpec')).toEqual([]);
+            expect(w.sentOf('command')).toEqual([]);
+        });
+
+        test('a trainer named and not of the class, the same words, stays refused', async () => {
+            const { w, bot } = atTrainer(['Slash']);
+            w.handlers.openTrainer = (_a, world) => { setTimeout(() => world.message('You must select a valid trainer for your class.'), 10); };
+            expect(await bot.trainSpec('Graent', 'Slash')).toMatchObject({ success: false, reason: 'refused' });
+            expect(w.sentOf('command')).toEqual([]);
+        });
+
+        test('a name that is no NPC is still not_found: only null means no trainer', async () => {
+            const { w, bot } = standing(['Slash']);
+            expect(await bot.trainSpec('Nobody', 'Slash')).toMatchObject({ success: false, reason: 'not_found' });
+            expect(w.sent).toEqual([]);
+        });
+    });
+
+    test.each([
+        ['Shield', 'Shield', 2], ['Shields', 'Shield', 2], ['shields', 'Shield', 2],
+        ['Light', 'Light Magic', 0], ['Light Magic', 'Light Magic', 0], ['Mana', 'Mana Magic', 2],
+        ['Cave Magic', 'Subterranean', 1], ['Subterranean', 'Subterranean', 1],
+    ])('%s trains %s by its window index', async (asked, shown, index) => {
+        const lines = shown === 'Shield' ? ['Slash', 'Thrust', 'Shield', 'Parry'] : shown === 'Subterranean' ? ['Mending', 'Subterranean', 'Augmentation'] : ['Light Magic', 'Mentalism', 'Mana Magic'];
+        const { w, bot } = atTrainer(lines);
+        w.handlers.trainSpec = (a, world) => { if (a.type === 'trainSpec') setTimeout(() => raise(world, lines[a.specIndex]!, 2), 10); };
+        const r = await bot.trainSpec('Graent', asked);
+        expect(r).toMatchObject({ success: true, spec: shown, fromLevel: 1, toLevel: 2 });
+        expect(w.sentOf('trainSpec')).toEqual([expect.objectContaining({ specIndex: index, levels: 1 })]);
+        expect(w.sentOf('command')).toEqual([]);
+    });
+
+    // train.cs:57-66: the first KeyName with this prefix, else "could not be found". So 'Light Magic' finds nothing.
+    const KEYS = ['Light', 'LightTankCareer', 'Mana', 'Mentalism', 'Shields', 'Void'];
+    test.each([
+        ['Light Magic', '/train Light 2'], ['Light', '/train Light 2'],
+        ['Mana Magic', '/train Mana 2'], ['Void Magic', '/train Void 2'],
+        ['Shield', '/train Shields 2'], ['Shields', '/train Shields 2'],
+    ])('with the line missing from the window, %s goes to /train under its key', async (asked, command) => {
+        const line = asked.startsWith('Shield') ? 'Shield' : asked.startsWith('Light') ? 'Light Magic' : asked.startsWith('Mana') ? 'Mana Magic' : 'Void Magic';
+        const { w, bot } = atTrainer([line], ['Slash']);
+        w.handlers.command = (a, world) => {
+            if (a.type !== 'command') return;
+            const [, name, level] = /^\/train (.+) (\d+)$/.exec(a.command)!;
+            const key = KEYS.find(k => k.toLowerCase().startsWith(name!.toLowerCase()));
+            setTimeout(() => (key ? raise(world, line, Number(level)) : world.message('The provided skill could not be found.')), 10);
+        };
+        const r = await bot.trainSpec('Graent', asked);
+        expect(w.sentOf('command').map(a => a.command)).toEqual([command]);
+        expect(r).toMatchObject({ success: true, spec: line, toLevel: 2 });
+    });
+
+    test('a name no line answers to says which lines there are, and sends nothing', async () => {
+        const { w, bot } = atTrainer(['Darkness', 'Suppression', 'Runecarving']);
+        const r = await bot.trainSpec('Graent', 'Runes of Darkness');
+        expect(r.reason).toBe('spec_not_found');
+        expect(r.message).toContain('Darkness, Suppression, Runecarving');
+        expect(w.sentOf('openTrainer')).toEqual([]);
+        expect(w.sentOf('command')).toEqual([]);
+        expect((await bot.trainSpec('Graent', 'constructor')).reason).toBe('spec_not_found');
+    });
+});
+
+/** Lines at these levels, as the skill list names them. */
+const specLines = (lines: Record<string, number>) => Object.entries(lines).map(([name, level], i) => ({ name, level, internalId: i, bonus: 0 }));
+const graent = (x = 560080) => makeNpc({ objectId: 210, name: 'Master Graent', role: 'trainer', realm: 'hibernia', x, y: 511000 });
+/** What a server's 0x7B does: the window as things stand, with a stamp a fresh one can be told by. */
+let windowStamp = 0;
+const openWindow = (world: FakeWorld) => {
+    world.state.trainer = {
+        isOpen: true, specPoints: world.player.specPoints, receivedAt: ++windowStamp,
+        specs: world.state.skills.specializations.map((s, index) => ({ index, name: s.name, level: s.level, nextLevelCost: s.level + 1 })),
+    };
+};
+
+describe('trainBuild', () => {
+    const NUKER: Build = {
+        className: 'Enchanter', name: 'Test nuker',
+        targets: [{ level: 24, specs: { Mana: 16, Light: 7, Enchantments: 5 } }, { level: 50, specs: { Mana: 44, Light: 20, Enchantments: 5 } }],
+    };
+    const ENCHANTER_LINES = { 'Light Magic': 1, 'Mana Magic': 12, Enchantments: 1 };
+    const enchanter = (points: number, level = 20) => ({ className: 'Enchanter', realm: 'hibernia' as const, level, specPoints: points });
+
+    /** A trainer in reach and a server pricing as train.cs:115 does: a level costs its number, and nothing up to `free` on a line. */
+    const atTrainer = (player: Partial<PlayerState>, lines: Record<string, number>, free: Record<string, number> = {}, trainer = graent()) => {
+        const { w, bot } = world({ player: makePlayer(player), nearbyNpcs: [trainer], skills: { ...makeState().skills, specializations: specLines(lines) } });
+        w.handlers.openTrainer = (_a, world) => openWindow(world);
+        w.handlers.trainSpec = (a, world) => {
+            if (a.type !== 'trainSpec') return;
+            setTimeout(() => {
+                const spec = world.state.skills.specializations[a.specIndex]!;
+                const to = spec.level + (a.levels ?? 1);
+                let cost = 0;
+                for (let l = spec.level + 1; l <= to; l++) if (l > (free[spec.name] ?? 0)) cost += l;
+                if (cost > world.player.specPoints) return world.message(`That specialization costs ${spec.level + 1} specialization points! You don't have that many specialization points left for this level.`);
+                world.player.specPoints -= cost;
+                world.state.skills = { ...world.state.skills, specializations: world.state.skills.specializations.map(s => (s === spec ? { ...s, level: to } : s)) };
+                openWindow(world);
+                world.message('Training complete!');
+            }, 10);
+        };
+        return { w, bot };
+    };
+
+    test('raises the lines in the listed order, several levels at once, under the KeyName', async () => {
+        const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        const r = await bot.trainBuild('Graent', NUKER);
+        expect(w.sentOf('trainSpec')).toEqual([
+            expect.objectContaining({ specIndex: 1, levels: 4 }),
+            expect.objectContaining({ specIndex: 0, levels: 6 }),
+            expect.objectContaining({ specIndex: 2, levels: 4 }),
+        ]);
+        expect(r).toMatchObject({
+            success: true, build: 'Test nuker', done: true, waiting: null, over: [], specPointsLeft: 1,
+            trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 16 }, { spec: 'Light', fromLevel: 1, toLevel: 7 }, { spec: 'Enchantments', fromLevel: 1, toLevel: 5 }],
+            message: 'Mana 12 → 16, Light 1 → 7, Enchantments 1 → 5, on target for level 20',
+        });
+    });
+
+    test('out of points on a line it waits there, and a cheaper line further down stays as it is', async () => {
+        const { w, bot } = atTrainer(enchanter(45), ENCHANTER_LINES);
+        const r = await bot.trainBuild('Graent', NUKER);
+        expect(w.sentOf('trainSpec')).toEqual([expect.objectContaining({ specIndex: 1, levels: 3 })]);
+        expect(r).toMatchObject({ success: true, done: false, waiting: { spec: 'Mana', cost: 16, points: 3 }, specPointsLeft: 3, message: 'Mana 12 → 15, saving for Mana 16: 3/16 points' });
+        expect(w.state.skills.specializations.map(s => s.level)).toEqual([1, 15, 1]);
+    });
+
+    test('with nothing it can pay for, nothing is sent and no trainer is needed', async () => {
+        const { w, bot } = atTrainer(enchanter(3), ENCHANTER_LINES);
+        const r = await bot.trainBuild('Nobody', NUKER);
+        expect(r).toMatchObject({ success: true, done: false, trained: [], waiting: { spec: 'Mana', cost: 13, points: 3 }, message: 'Saving for Mana 13: 3/13 points' });
+        expect(w.sent).toEqual([]);
+    });
+
+    test('done: every line at its target, or as high as the level goes', async () => {
+        const { w, bot } = atTrainer(enchanter(40, 10), { 'Light Magic': 7, 'Mana Magic': 10, Enchantments: 5 });
+        const r = await bot.trainBuild('Nobody', NUKER);
+        expect(r).toMatchObject({ success: true, done: true, waiting: null, trained: [], specPointsLeft: 40, message: 'On target for level 10' });
+        expect(w.sent).toEqual([]);
+    });
+
+    describe('points the server has not sent yet (a promotion sends none, GameTrainer.cs:335-349)', () => {
+        const AT_TARGET = { 'Light Magic': 7, 'Mana Magic': 16, Enchantments: 5 };
+        /** Talking to the trainer sends the real number (GameTrainer.cs:134). */
+        const talkBrings = (w: FakeWorld, points: number) => {
+            w.handlers.interact = (_a, world) => { setTimeout(() => { world.player.specPoints = points; }, 10); };
+        };
+
+        test('a wait on stale points: it talks to the trainer, reads the real number and trains', async () => {
+            const { w, bot } = atTrainer(enchanter(0), ENCHANTER_LINES);
+            talkBrings(w, 45);
+            const r = await bot.trainBuild('Graent', NUKER);
+            expect(w.sentOf('interact')).toEqual([expect.objectContaining({ objectId: 210 })]);
+            expect(w.sent.findIndex(a => a.type === 'interact')).toBeLessThan(w.sent.findIndex(a => a.type === 'trainSpec'));
+            expect(r).toMatchObject({ success: true, trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 15 }], specPointsLeft: 3, message: 'Mana 12 → 15, saving for Mana 16: 3/16 points' });
+        });
+
+        test('a real wait: one interact, nothing trained, and no second one on this call', async () => {
+            const { w, bot } = atTrainer(enchanter(3), ENCHANTER_LINES);
+            const r = await bot.trainBuild('Graent', NUKER);
+            expect(w.sent.map(a => a.type)).toEqual(['interact']);
+            expect(r).toMatchObject({ success: true, done: false, trained: [], waiting: { spec: 'Mana', cost: 13, points: 3 }, message: 'Saving for Mana 13: 3/13 points' });
+        });
+
+        test('a new number that still falls short is what the wait reports, after one interact', async () => {
+            const { w, bot } = atTrainer(enchanter(0), ENCHANTER_LINES);
+            talkBrings(w, 5);
+            const r = await bot.trainBuild('Graent', NUKER);
+            expect(w.sent.map(a => a.type)).toEqual(['interact']);
+            expect(r).toMatchObject({ trained: [], waiting: { spec: 'Mana', cost: 13, points: 5 }, specPointsLeft: 5 });
+        });
+
+        test('a trainer out of reach gets nothing, and the number stands', async () => {
+            const { w, bot } = atTrainer(enchanter(3), ENCHANTER_LINES, {}, graent(561500));
+            expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ success: true, trained: [], waiting: { spec: 'Mana', cost: 13, points: 3 } });
+            expect(w.sent).toEqual([]);
+        });
+
+        test('done sends nothing, with a trainer in reach', async () => {
+            const { w, bot } = atTrainer(enchanter(3), AT_TARGET);
+            expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ success: true, done: true, trained: [] });
+            expect(w.sent).toEqual([]);
+        });
+
+        test('a wait reached after training something needs no interact: the raise brought the number', async () => {
+            const { w, bot } = atTrainer(enchanter(45), ENCHANTER_LINES);
+            expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ waiting: { spec: 'Mana', cost: 16, points: 3 }, trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 15 }] });
+            expect(w.sentOf('interact')).toEqual([]);
+        });
+    });
+
+    test('stops at a failed trainSpec with its reason, and says what it raised first', async () => {
+        const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        const honest = w.handlers.trainSpec!;
+        w.handlers.trainSpec = (a, world) => {
+            if (a.type === 'trainSpec' && a.specIndex === 0) setTimeout(() => world.message('You must select a valid trainer for your class.'), 10);
+            else return honest(a, world);
+        };
+        const r = await bot.trainBuild('Graent', NUKER);
+        expect(r).toMatchObject({
+            success: false, reason: 'refused', done: false, waiting: null, specPointsLeft: 42,
+            trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 16 }],
+            message: 'Mana 12 → 16, then: You must select a valid trainer for your class.',
+        });
+        expect(w.sentOf('trainSpec')).toHaveLength(2);
+    });
+
+    test('a line the server raised only part of the way still counts as raised', async () => {
+        const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        // train.cs:107-124 trains what the points allow, then says it can't go on.
+        w.handlers.trainSpec = (a, world) => {
+            if (a.type !== 'trainSpec') return;
+            setTimeout(() => {
+                world.state.skills = { ...world.state.skills, specializations: world.state.skills.specializations.map((l, i) => (i === a.specIndex ? { ...l, level: l.level + 2 } : l)) };
+                world.message("That specialization costs 15 specialization points! You don't have that many specialization points left for this level.");
+            }, 10);
+        };
+        expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ success: false, reason: 'refused', trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 14 }] });
+    });
+
+    describe('with no trainer, where it stands', () => {
+        test('spends as far as the points reach, with no target and no walk', async () => {
+            const { w, bot } = atTrainer(enchanter(45), ENCHANTER_LINES, {}, graent(561500));
+            const r = await bot.trainBuild(null, NUKER);
+            expect(r).toMatchObject({ success: true, trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 15 }], specPointsLeft: 3, waiting: { spec: 'Mana', cost: 16, points: 3 } });
+            expect(w.sentOf('setTarget')).toEqual([]);
+            expect(w.sentOf('moveTo')).toEqual([]);
+        });
+
+        test('a wait sends nothing: there is nobody to talk to', async () => {
+            const { w, bot } = atTrainer(enchanter(3), ENCHANTER_LINES);
+            expect(await bot.trainBuild(null, NUKER)).toMatchObject({ success: true, trained: [], waiting: { spec: 'Mana', cost: 13, points: 3 } });
+            expect(w.sent).toEqual([]);
+        });
+
+        test('a server that wants a trainer: needs_trainer, for trainAtClassTrainer to walk on', async () => {
+            const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+            w.handlers.openTrainer = (_a, world) => { setTimeout(() => world.message('You must select a valid trainer for your class.'), 10); };
+            expect(await bot.trainBuild(null, NUKER)).toMatchObject({ success: false, reason: 'needs_trainer', trained: [] });
+            expect(w.sentOf('trainSpec')).toEqual([]);
+        });
+    });
+
+    test('a trainer that is not there fails only when there is something to train', async () => {
+        const { bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        expect(await bot.trainBuild('Nobody', NUKER)).toMatchObject({ success: false, reason: 'not_found', trained: [], build: 'Test nuker' });
+    });
+
+    test('no_build: no build passed and none in the bot folder', async () => {
+        const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        expect(await bot.trainBuild('Graent')).toMatchObject({ success: false, reason: 'no_build', build: null, trained: [], done: false, specPointsLeft: 100 });
+        expect(w.sent).toEqual([]);
+    });
+
+    describe('the bot\'s own file', () => {
+        let root = '';
+        let cwd: { mockRestore(): void } | null = null;
+        const ownBuild = (source: string) => {
+            root = mkdtempSync(join(tmpdir(), 'daoc-trainbuild-'));
+            mkdirSync(join(root, 'bots', 'tester'), { recursive: true });
+            writeFileSync(join(root, 'bots', 'tester', 'bot.env'), '');
+            writeFileSync(join(root, 'bots', 'tester', 'build.ts'), source);
+            cwd = spyOn(process, 'cwd').mockReturnValue(root);
+        };
+        afterEach(() => {
+            cwd?.mockRestore();
+            cwd = null;
+            rmSync(root, { recursive: true, force: true });
+        });
+
+        test('without a build it trains the one in bots/<bot>/build.ts', async () => {
+            ownBuild(`export default { className: 'Enchanter', name: 'Own', targets: [{ level: 24, specs: { Light: 3 } }] };`);
+            const { bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+            const r = await bot.trainBuild('Graent');
+            expect(r).toMatchObject({ success: true, build: 'Own', done: true, trained: [{ spec: 'Light', fromLevel: 1, toLevel: 3 }] });
+            expect(r.over).toEqual([{ spec: 'Mana', level: 12, target: 1 }]);
+        });
+
+        test('a broken file throws, naming it and the problem', async () => {
+            ownBuild(`export default { className: 'Armsman', name: 'Typo', targets: [{ level: 24, specs: { Shield: 3 } }] };`);
+            const { bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+            const failure = await bot.trainBuild('Graent').catch(e => e as Error);
+            expect(failure).toBeInstanceOf(Error);
+            expect((failure as Error).message).toContain('build.ts');
+            expect((failure as Error).message).toContain('Shield: use the KeyName Shields');
+        });
+    });
+
+    test('invalid_build: a build passed in is checked as a file would be', async () => {
+        const { w, bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        const typo: Build = { className: 'Armsman', name: 'Typo', targets: [{ level: 24, specs: { Shield: 3 } }] };
+        const r = await bot.trainBuild('Graent', typo);
+        expect(r).toMatchObject({ success: false, reason: 'invalid_build', build: 'Typo' });
+        expect(r.message).toContain('Shield: use the KeyName Shields');
+        expect((await bot.trainBuild('Graent', { className: 'Armsman', name: 'Empty', targets: [] })).reason).toBe('invalid_build');
+        expect(w.sent).toEqual([]);
+    });
+
+    test.each([
+        ['another class', { className: 'Armsman', realm: 'albion' as const }, NUKER],
+        ['the base class of another', { className: 'Fighter', realm: 'albion' as const }, NUKER],
+        ['a name two realms share', { className: 'Rogue', realm: 'midgard' as const }, { className: 'Infiltrator', name: 'Sneak', targets: [{ level: 24, specs: { Stealth: 10 } }] }],
+    ])('wrong_class: %s', async (_what, player, build) => {
+        const { w, bot } = atTrainer(player, ENCHANTER_LINES);
+        const r = await bot.trainBuild('Graent', build);
+        expect(r).toMatchObject({ success: false, reason: 'wrong_class', build: build.name, trained: [] });
+        expect(r.message).toContain(player.className);
+        expect(w.sent).toEqual([]);
+    });
+
+    test('a base class trains the lines it has of its advanced class\'s build', async () => {
+        const { bot } = atTrainer({ className: 'Magician', realm: 'hibernia', level: 3, specPoints: 12 }, { 'Light Magic': 1, 'Mana Magic': 1 });
+        expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({
+            success: true, done: true, specPointsLeft: 2,
+            trained: [{ spec: 'Mana', fromLevel: 1, toLevel: 3 }, { spec: 'Light', fromLevel: 1, toLevel: 3 }],
+        });
+    });
+
+    describe('a build named by a class two realms share', () => {
+        const SWORD: Build = { className: 'Rogue', name: 'K2', targets: [{ level: 4, specs: { Sword: 4 } }] };
+        const STEALTH: Build = { className: 'MidgardRogue', name: 'K3', targets: [{ level: 4, specs: { Stealth: 2 } }] };
+        const rogue = (realm: 'albion' | 'midgard') => atTrainer({ className: 'Rogue', realm, level: 4, specPoints: 9 }, { Sword: 1, Stealth: 1 });
+
+        test('a Midgard Rogue\'s own build, named Rogue, goes by Midgard\'s Rogue', async () => {
+            expect(await rogue('midgard').bot.trainBuild('Graent', SWORD)).toMatchObject({ success: true, done: true, trained: [{ spec: 'Sword', fromLevel: 1, toLevel: 4 }] });
+        });
+
+        test('its key says the same', async () => {
+            expect(await rogue('midgard').bot.trainBuild('Graent', STEALTH)).toMatchObject({ success: true, done: true, trained: [{ spec: 'Stealth', fromLevel: 1, toLevel: 2 }] });
+        });
+
+        test('an Albion Rogue has no Sword, and no use for Midgard\'s key', async () => {
+            expect(await rogue('albion').bot.trainBuild('Graent', SWORD)).toMatchObject({ success: false, reason: 'invalid_build' });
+            expect(await rogue('albion').bot.trainBuild('Graent', STEALTH)).toMatchObject({ success: false, reason: 'wrong_class' });
+        });
+    });
+
+    test('a base class of a realm that shares its name', async () => {
+        const { bot } = atTrainer({ className: 'Rogue', realm: 'albion', level: 3, specPoints: 5 }, { Stealth: 1 });
+        const build: Build = { className: 'Infiltrator', name: 'Sneak', targets: [{ level: 24, specs: { Stealth: 10 } }] };
+        expect(await bot.trainBuild('Graent', build)).toMatchObject({ success: true, done: true, trained: [{ spec: 'Stealth', fromLevel: 1, toLevel: 3 }] });
+    });
+
+    test('a female class name is the same class', async () => {
+        const { bot } = atTrainer({ ...enchanter(100), className: 'Enchantress' }, ENCHANTER_LINES);
+        expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ success: true, done: true, specPointsLeft: 1 });
+    });
+
+    describe('autotrain', () => {
+        const SLASHER: Build = { className: 'Armsman', name: 'Slasher', targets: [{ level: 24, specs: { Slash: 6 } }] };
+
+        test.each(['Armsman', 'Armswoman'])('an %s pays only above its free levels', async className => {
+            const { bot } = atTrainer({ className, realm: 'albion', level: 20, specPoints: 6 }, { Slash: 1 }, { Slash: 5 });
+            expect(await bot.trainBuild('Graent', SLASHER)).toMatchObject({ success: true, done: true, specPointsLeft: 0, trained: [{ spec: 'Slash', fromLevel: 1, toLevel: 6 }] });
+        });
+
+        test('its base class has none yet and pays for every level', async () => {
+            const { bot } = atTrainer({ className: 'Fighter', realm: 'albion', level: 20, specPoints: 6 }, { Slash: 1 });
+            expect(await bot.trainBuild('Graent', SLASHER)).toMatchObject({
+                success: true, done: false, specPointsLeft: 1, waiting: { spec: 'Slash', cost: 4, points: 1 }, trained: [{ spec: 'Slash', fromLevel: 1, toLevel: 3 }],
+            });
+        });
+    });
+
+    test('over: what is spent beyond the target, and a line left out has target 1', async () => {
+        const build: Build = { className: 'Enchanter', name: 'Mana only', targets: [{ level: 24, specs: { Mana: 16, Light: 7 } }] };
+        const { bot } = atTrainer(enchanter(0), { 'Light Magic': 12, 'Mana Magic': 16, Enchantments: 3 });
+        const r = await bot.trainBuild('Graent', build);
+        expect(r.over).toEqual([{ spec: 'Light', level: 12, target: 7 }, { spec: 'Enchantments', level: 3, target: 1 }]);
+        expect(r).toMatchObject({ success: true, done: true });
+        expect(r.message).toBe('On target for level 20. Over target: Light 12 (target 7), Enchantments 3 (target 1)');
+    });
+
+    test('over leaves free levels alone', async () => {
+        const build: Build = { className: 'Armsman', name: 'Polearms', targets: [{ level: 24, specs: { Polearm: 2 } }] };
+        const { bot } = atTrainer({ className: 'Armsman', realm: 'albion', level: 20, specPoints: 0 }, { Slash: 5, Polearm: 2 });
+        expect((await bot.trainBuild('Graent', build)).over).toEqual([]);
+    });
+
+    test('a trainSpec that claims success and raises nothing cannot loop forever', async () => {
+        const { bot } = atTrainer(enchanter(100), ENCHANTER_LINES);
+        const train = spyOn(bot, 'trainSpec').mockResolvedValue({ success: true, message: 'ok', spec: 'Mana Magic', fromLevel: 12, toLevel: 12, specPointsLeft: 100 });
+        const r = await bot.trainBuild('Graent', NUKER);
+        expect(r).toMatchObject({ success: false, reason: 'too_many_steps', trained: [] });
+        expect(train.mock.calls.length).toBe(32);
+    });
+
+    test('not in game', async () => {
+        const { bot } = world({ player: null });
+        expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ success: false, reason: 'not_in_game', build: 'Test nuker' });
+    });
+});
+
+describe('respec', () => {
+    const OFFER = 'CAUTION: All respec changes are final with no second chance. Proceed carefully!';
+    const ENCHANTER_LINES = { 'Light Magic': 7, 'Mana Magic': 12, Enchantments: 5 };
+    const box = (over: Partial<NonNullable<BotWorldState['dialog']>> = {}) => ({ isOpen: true, code: 7, data: [0, 0, 0, 0] as [number, number, number, number], type: 1, text: OFFER, receivedAt: Date.now(), ...over });
+    const lineOf = (world: FakeWorld, name: string) => world.state.skills.specializations.find(s => s.name === name)!;
+
+    /**
+     * A trainer and a server answering as respec.cs does. /respec <line> takes the KeyName alone (GamePlayer.cs:3102).
+     * On a yes the lines fall to `floor` (else 1) and their points come back, and the skills, the points and the window go out in that order.
+     */
+    const atTrainer = (player: Partial<PlayerState>, lines: Record<string, number>, floor: Record<string, number> = {}, trainer = graent()) => {
+        const { w, bot } = world({ player: makePlayer(player), nearbyNpcs: [trainer], skills: { ...makeState().skills, specializations: specLines(lines) } });
+        let line: string | null = null;
+        w.handlers.command = (a, world) => {
+            if (a.type !== 'command') return;
+            const asked = /^\/respec (.+)$/.exec(a.command)![1]!;
+            line = asked === 'all' ? null : asked;
+            if (line && !world.state.skills.specializations.some(s => specKey(s.name).toLowerCase() === line!.toLowerCase())) {
+                setTimeout(() => world.message(`No line with name '${line}' found.`), 10);
+                return;
+            }
+            setTimeout(() => { world.state.dialog = box(); }, 10);
+        };
+        w.handlers.respondDialog = (a, world) => {
+            if (a.type !== 'respondDialog') return;
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            if (!a.accept) return;
+            setTimeout(() => {
+                let regained = 0;
+                const specializations = world.state.skills.specializations.map(s => {
+                    if (line && specKey(s.name).toLowerCase() !== line.toLowerCase()) return s;
+                    const to = floor[s.name] ?? 1;
+                    for (let l = to + 1; l <= s.level; l++) regained += l;
+                    return { ...s, level: to };
+                });
+                world.message(`You regain ${regained} specialization points!`);
+                world.state.skills = { ...world.state.skills, specializations };
+                world.player.specPoints += regained;
+                openWindow(world);
+                world.message('Your character has been saved.');
+            }, 10);
+        };
+        return { w, bot };
+    };
+    const enchanter = { className: 'Enchanter', realm: 'hibernia' as const, level: 22, specPoints: 0 };
+
+    test('all: targets the trainer, says yes and reports what came back', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        const r = await bot.respec('Graent');
+        expect(w.sentOf('command').map(a => a.command)).toEqual(['/respec all']);
+        expect(w.sentOf('setTarget')[0]!.objectId).toBe(210);
+        expect(w.sent.findIndex(a => a.type === 'setTarget')).toBeLessThan(w.sent.findIndex(a => a.type === 'command'));
+        expect(w.sentOf('respondDialog')).toEqual([expect.objectContaining({ accept: true })]);
+        expect(r).toEqual({
+            success: true, message: 'Regained 118 points: Light Magic 7 → 1, Mana Magic 12 → 1, Enchantments 5 → 1',
+            regained: 118, specPointsLeft: 118,
+            specs: [{ name: 'Light Magic', level: 1 }, { name: 'Mana Magic', level: 1 }, { name: 'Enchantments', level: 1 }],
+        });
+    });
+
+    test.each([
+        ['Mana', 'Mana Magic', '/respec Mana'], ['Mana Magic', 'Mana Magic', '/respec Mana'], ['mana magic', 'Mana Magic', '/respec Mana'], [/^mana/i, 'Mana Magic', '/respec Mana'],
+        ['Light', 'Light Magic', '/respec Light'], ['Light Magic', 'Light Magic', '/respec Light'], ['Void Magic', 'Void Magic', '/respec Void'],
+        ['Shield', 'Shield', '/respec Shields'], ['Shields', 'Shield', '/respec Shields'],
+        ['Cave Magic', 'Subterranean', '/respec Subterranean'], ['Enchantment', 'Enchantments', '/respec Enchantments'],
+    ])('one line by %s goes out under its KeyName', async (asked, shown, command) => {
+        const { w, bot } = atTrainer(enchanter, { Other: 3, [shown]: 6 });
+        const r = await bot.respec('Graent', asked);
+        expect(w.sentOf('command').map(a => a.command)).toEqual([command]);
+        expect(r).toMatchObject({ success: true, regained: 20, specPointsLeft: 20, specs: [{ name: 'Other', level: 3 }, { name: shown, level: 1 }] });
+        expect(r.message).toBe(`Regained 20 points: ${shown} 6 → 1`);
+    });
+
+    test('regained is what the points rose by, whatever the server says', async () => {
+        const { w, bot } = atTrainer({ ...enchanter, specPoints: 40 }, ENCHANTER_LINES);
+        w.handlers.respondDialog = (_a, world) => {
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            world.message('You regain 999 specialization points!');
+            setTimeout(() => {
+                world.player.specPoints += 5;
+                openWindow(world);
+            }, 10);
+        };
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained: 5, specPointsLeft: 45 });
+    });
+
+    test.each([
+        ['nothing trained', enchanter, { 'Light Magic': 1, 'Mana Magic': 1 }, undefined],
+        ['that line untrained', enchanter, { 'Light Magic': 1, 'Mana Magic': 9 }, 'Light Magic'],
+        // RespecSingleLine puts an autotrain line at Level / 4 (GamePlayer.cs:3052-3056): nothing comes back from there.
+        ['an autotrain line at its free levels', { className: 'Armsman', realm: 'albion' as const, level: 20 }, { Slash: 5, Thrust: 4, Crush: 1 }, undefined],
+        ['that autotrain line at its free levels', { className: 'Armsman', realm: 'albion' as const, level: 20 }, { Slash: 5, Crush: 6 }, 'Slash'],
+    ])('no_need: %s, and nothing is sent', async (_what, player, lines, line) => {
+        const { w, bot } = atTrainer(player, lines);
+        const r = await bot.respec('Graent', line);
+        expect(r).toMatchObject({ success: false, reason: 'no_need', regained: 0 });
+        expect(w.sent).toEqual([]);
+    });
+
+    test.each([
+        ['an autotrain line above its free levels', { className: 'Armsman', realm: 'albion' as const, level: 20, specPoints: 0 }, { Slash: 6 }, { Slash: 5 }, 6],
+        ['a line of a class with no autotrain', { ...enchanter, level: 20 }, { 'Light Magic': 2 }, {}, 2],
+        // Level >= 8 at GamePlayer.cs:3052; a Fighter is no Armsman yet.
+        ['an autotrain line below level 8', { className: 'Armsman', realm: 'albion' as const, level: 7, specPoints: 0 }, { Slash: 2 }, {}, 2],
+        ['a base class line at any level', { className: 'Fighter', realm: 'albion' as const, level: 20, specPoints: 0 }, { Slash: 2 }, {}, 2],
+    ])('not no_need: %s', async (_what, player, lines, floor, regained) => {
+        const { bot } = atTrainer(player, lines, floor);
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained });
+    });
+
+    test.each([
+        'You must be speaking with your trainer to respec.',
+        "You don't seem to have any full skill respecs available.",
+        "You don't seem to have any single-line respecs available.",
+        "No line with name 'Mana' found.",
+        'Level of Mana Magic line is less than 2. ',
+    ])('refused: %s', async text => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.handlers.command = (_a, world) => { setTimeout(() => world.message(text), 10); };
+        expect(await bot.respec('Graent')).toMatchObject({ success: false, reason: 'refused', message: text, regained: 0, specPointsLeft: 0 });
+        expect(w.sentOf('respondDialog')).toEqual([]);
+    });
+
+    test.each([
+        ['no box at all', undefined],
+        ['the last box, closed', box({ isOpen: false, receivedAt: 1 })],
+        ['a box about something else', box({ text: 'Bob has invited you to join\nhis group. Do you wish to join?', receivedAt: 1 })],
+    ])('timeout: %s gets no answer', async (_what, dialog) => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        if (dialog) w.state.dialog = dialog;
+        w.handlers.command = () => {};
+        const r = await bot.respec('Graent');
+        expect(r).toMatchObject({ success: false, reason: 'timeout', regained: 0 });
+        expect(w.sentOf('respondDialog')).toEqual([]);
+    }, 8000);
+
+    test.each([
+        ['about something else', { text: 'Bob has invited you to join\nhis group. Do you wish to join?' }],
+        ['closed already', { isOpen: false }],
+    ])('timeout: a new box %s gets no answer', async (_what, over) => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.handlers.command = (_a, world) => { setTimeout(() => { world.state.dialog = box(over); }, 10); };
+        expect(await bot.respec('Graent')).toMatchObject({ success: false, reason: 'timeout', regained: 0 });
+        expect(w.sentOf('respondDialog')).toEqual([]);
+    }, 8000);
+
+    test('a box that opens while another stays open is the one answered', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.state.dialog = box({ text: 'Bob has invited you to join\nhis group. Do you wish to join?', receivedAt: 1 });
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained: 118 });
+        expect(w.sentOf('respondDialog')).toHaveLength(1);
+    });
+
+    test('a respec box left open by a cut-off run gets a no, then ours a yes', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.state.dialog = box({ receivedAt: 1 });
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained: 118 });
+        expect(w.sent.flatMap<string | boolean>(a => (a.type === 'respondDialog' ? [a.accept] : a.type === 'command' ? [a.command] : []))).toEqual([false, '/respec all', true]);
+    });
+
+    test('the old box still reads open for a moment after its no: the yes waits for the new one', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.state.dialog = box({ receivedAt: 1 });
+        const honest = w.handlers.respondDialog!;
+        const answered: number[] = [];
+        w.handlers.respondDialog = (a, world) => {
+            answered.push(world.state.dialog!.receivedAt);
+            if (a.type === 'respondDialog' && !a.accept) setTimeout(() => { world.state.dialog = { ...world.state.dialog!, isOpen: false }; }, 60);
+            else return honest(a, world);
+        };
+        const open = w.handlers.command!;
+        w.handlers.command = (a, world) => { setTimeout(() => open(a, world), 120); };
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained: 118 });
+        expect(answered).toHaveLength(2);
+        expect(answered[0]).toBe(1);
+        expect(answered[1]).toBeGreaterThan(1);
+    });
+
+    test('timeout: the yes went out and no points came back', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        w.handlers.respondDialog = (_a, world) => { world.state.dialog = { ...world.state.dialog!, isOpen: false }; };
+        const r = await bot.respec('Graent');
+        expect(r).toMatchObject({ success: false, reason: 'timeout', regained: 0, specPointsLeft: 0 });
+        expect(r.message).toContain('no points came back');
+    }, 8000);
+
+    test('waits for the window that follows the points: trainSpec counts levels from it', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        openWindow(w);
+        w.handlers.respondDialog = (_a, world) => {
+            world.state.dialog = { ...world.state.dialog!, isOpen: false };
+            setTimeout(() => {
+                world.state.skills = { ...world.state.skills, specializations: world.state.skills.specializations.map(l => ({ ...l, level: 1 })) };
+                world.player.specPoints += 118;
+            }, 10);
+            setTimeout(() => openWindow(world), 200);
+        };
+        await bot.respec('Graent');
+        expect(w.sdk.getTrainer()!.specs.map(l => l.level)).toEqual([1, 1, 1]);
+    });
+
+    test('walks to a trainer out of reach first', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES, {}, graent(561500));
+        expect(await bot.respec('Graent')).toMatchObject({ success: true, regained: 118 });
+        expect(w.sent.findIndex(a => a.type === 'moveTo')).toBeLessThan(w.sent.findIndex(a => a.type === 'setTarget'));
+    });
+
+    test('not_found and spec_not_found send nothing', async () => {
+        const { w, bot } = atTrainer(enchanter, ENCHANTER_LINES);
+        expect(await bot.respec('Nobody')).toMatchObject({ success: false, reason: 'not_found', regained: 0 });
+        const r = await bot.respec('Graent', 'Runes of Darkness');
+        expect(r).toMatchObject({ success: false, reason: 'spec_not_found', regained: 0 });
+        expect(r.message).toContain('Light Magic, Mana Magic, Enchantments');
+        expect(w.sent).toEqual([]);
+    });
+
+    test('not in game', async () => {
+        const { bot } = world({ player: null });
+        expect(await bot.respec('Graent')).toMatchObject({ success: false, reason: 'not_in_game' });
+    });
+
+    test('a respec then a trainBuild: the build goes up again from the floor', async () => {
+        const { w, bot } = atTrainer({ ...enchanter, level: 20 }, { 'Light Magic': 12, 'Mana Magic': 3 });
+        await bot.respec('Graent');
+        expect(lineOf(w, 'Light Magic').level).toBe(1);
+        w.handlers.openTrainer = (_a, world) => openWindow(world);
+        w.handlers.trainSpec = (a, world) => {
+            if (a.type !== 'trainSpec') return;
+            setTimeout(() => {
+                const spec = world.state.skills.specializations[a.specIndex]!;
+                world.state.skills = { ...world.state.skills, specializations: world.state.skills.specializations.map(s => (s === spec ? { ...s, level: spec.level + a.levels! } : s)) };
+                world.player.specPoints -= 2;
+                openWindow(world);
+            }, 10);
+        };
+        const build: Build = { className: 'Enchanter', name: 'Mana', targets: [{ level: 24, specs: { Mana: 2 } }] };
+        expect(await bot.trainBuild('Graent', build)).toMatchObject({ success: true, done: true, over: [], trained: [{ spec: 'Mana', fromLevel: 1, toLevel: 2 }] });
     });
 });
 
@@ -2311,6 +3598,62 @@ describe('grind', () => {
             expect(ticks).toBeGreaterThan(5);
         });
     });
+
+    test('a caster hitting us comes before a nearer mob', async () => {
+        const mobs = [
+            makeNpc({ objectId: 501, name: 'spirit hound', level: 5, x: 560300, y: 511000, distance: 100 }),
+            makeNpc({ objectId: 502, name: 'dergan enchanter', level: 5, x: 560600, y: 511000, distance: 400 }),
+        ];
+        const { w, bot } = world({ nearbyNpcs: mobs, nearbyObjects: [] });
+        fightSim(w, { dmg: 50 });
+        w.combat({ kind: 'spellEffect', attackerObjectId: 502, targetObjectId: w.player.objectId, effectId: 5208 });
+        w.publish();
+        const r = await bot.grind({ maxKills: 1, durationMs: 5000, loot: false });
+        expect(r.killLog.map(k => k.name)).toEqual(['dergan enchanter']);
+    });
+
+    /** A mob on a ledge that goes on casting: every fight with it fails, and each tick its spell lands again. */
+    const onALedge = (over: Partial<NearbyNpc>) => {
+        const { w, bot } = world({ nearbyNpcs: [makeNpc({ objectId: 501, name: 'dergan enchanter', level: 5, x: 560600, y: 511000, ...over })], nearbyObjects: [] });
+        w.onTick = world => world.combat({ kind: 'spellEffect', attackerObjectId: 501, targetObjectId: world.player.objectId, effectId: 5208 });
+        const tried: number[] = [];
+        bot.killNpc = (async (t: NearbyNpc) => {
+            tried.push(t.objectId);
+            await Bun.sleep(20);
+            return { success: false, killed: false, reason: 'out_of_reach', message: 'too high', xpGained: 0 };
+        }) as unknown as typeof bot.killNpc;
+        return { w, bot, tried };
+    };
+
+    test('a caster it cannot reach is tried once, not over and over', async () => {
+        const { bot, tried } = onALedge({ targetObjectId: null });
+        await bot.grind({ durationMs: 300, loot: false });
+        expect(tried).toEqual([501]);
+    });
+
+    test('nor when its spells show as its target, as a hit does until the mob\'s next update', async () => {
+        const { bot, tried } = onALedge({ targetObjectId: 100 });
+        await bot.grind({ durationMs: 300, loot: false });
+        expect(tried).toEqual([501]);
+    });
+
+    test('a failed fight does not rule out a mob in melee range', async () => {
+        const { bot, tried } = onALedge({ x: 560050 });
+        // A failure that spent no time waits GRIND_RETRY_MS before the next pass.
+        await bot.grind({ durationMs: 1500, loot: false });
+        expect(tried.length).toBeGreaterThan(1);
+    });
+
+    test('hurt under fire from a mob ruled out, it neither sits nor pulls, and stops at no_targets', async () => {
+        const { w, bot, tried } = onALedge({ targetObjectId: null });
+        w.state.nearbyNpcs.push(makeNpc({ objectId: 502, name: 'spirit hound', level: 5, x: 560900, y: 511000 }));
+        w.player.health = 30;
+        w.player.healthPercent = 30;
+        const r = await bot.grind({ durationMs: 3000, noTargetTimeoutMs: 200, loot: false });
+        expect(r.stopReason).toBe('no_targets');
+        expect(tried).toEqual([501]);
+        expect(w.sentOf('sit')).toEqual([]);
+    });
 });
 
 describe('useZonePoint', () => {
@@ -2473,7 +3816,7 @@ describe('static data', () => {
 // ── Player trade: two bots and the server between them ──────────────────────
 
 const tradeItem = (slot: number, name: string, count = 1): InventoryItem =>
-    ({ slot, name, level: 1, count, model: 99, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 5, value1: 0, value2: 0 });
+    ({ slot, name, level: 1, count, model: 99, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 5, value1: 0, value2: 0, hand: 0 });
 
 /**
  * Plays the server over two FakeWorlds: the first add opens both windows, every change is a 0xEA on both
@@ -5171,6 +6514,20 @@ describe('pets', () => {
 
     describe('grind with a pet', () => {
         const KILL = 'You command the amber simulacrum to kill your target!';
+
+        test('a mob on the pet, at 100 and with its DoT ticking on us: the pet goes on, and we don\'t walk in and swing at it', async () => {
+            const { w, bot } = petWorld({ skills: skillsWith(simulacrum), pet: petWindow({ targetObjectId: 701 }), nearbyNpcs: [petNpc(), mob({ objectId: 701, x: 560100, targetObjectId: PET_ID })] });
+            orders(w, (a, world) => { if (a.command === 'attack') world.message(KILL); });
+            const killNpc = spyOn(bot, 'killNpc');
+            w.combat({ kind: 'melee', attackerObjectId: 701, targetObjectId: w.player.objectId, result: 'other', targetHealthPercent: 90 });
+            w.publish();
+            setTimeout(() => dies(w, 701), 300);
+            await bot.grind({ pet: true, maxKills: 1, durationMs: 3000, loot: false });
+            expect(killNpc).not.toHaveBeenCalled();
+            expect(w.sentOf('attack')).toEqual([]);
+            expect(w.sentOf('moveTo')).toEqual([]);
+        });
+
         const summoning = (w: FakeWorld) => {
             let id = PET_ID;
             w.handlers.castSpell = (_a, world) => {
@@ -6900,7 +8257,7 @@ describe('pets', () => {
         });
 
         describe("fight 'both' with nothing to swing", () => {
-            const item = (slot: number, name: string, objectType: number): InventoryItem => ({ slot, name, level: 1, count: 1, model: 3, objectType, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0 });
+            const item = (slot: number, name: string, objectType: number): InventoryItem => ({ slot, name, level: 1, count: 1, model: 3, objectType, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0, hand: 0 });
             const sword = item(10, 'training sword', 3);
             const shield = item(11, 'small shield', 42);
             const bow = item(13, 'rowan bow', 9);
@@ -7473,6 +8830,20 @@ describe('pets', () => {
                 expect(rests.mock.calls[0]![0]!.manaPercent).toBe(percent as number);
             });
 
+            test('under fire from a mob a failed fight ruled out it only waits for the next try: no rest, which would refuse, and no error', async () => {
+                const { w, bot } = tired(10, 200);
+                noPower(w);
+                w.state.nearbyNpcs.push(mob({ objectId: 701, x: 560700 }));
+                w.combat({ kind: 'spellEffect', attackerObjectId: 701, targetObjectId: w.player.objectId, effectId: 5208 });
+                w.publish();
+                w.onTick = world => world.combat({ kind: 'spellEffect', attackerObjectId: 701, targetObjectId: world.player.objectId, effectId: 5208 });
+                const rests = spyOn(bot, 'rest');
+                bot.killNpc = (async () => ({ success: false, killed: false, reason: 'out_of_reach', message: 'too high', xpGained: 0 })) as unknown as typeof bot.killNpc;
+                const r = await bot.grind({ pet: true, durationMs: 4000, minEngageMs: 0, loot: false });
+                expect(r.stopReason).toBe('duration');
+                expect(rests).not.toHaveBeenCalled();
+            });
+
             test('a run that ends with no pet because of it says so, once', async () => {
                 const { w, bot } = tired(10, 200);
                 noPower(w);
@@ -7687,6 +9058,18 @@ describe('pets', () => {
                 const { w, bot } = petWorld({ player: off(), skills: skillsWith(turret), nearbyNpcs: [petNpc(), mob({ objectId: 701, x: 561450, targetObjectId: 100 })] });
                 orders(w);
                 fightSim(w, { dmg: 50 });
+                const r = await bot.grind({ pet: true, maxKills: 1, durationMs: 5000, loot: false });
+                expect(r).toMatchObject({ kills: 1 });
+                expect(w.sentOf('petCommand')).toEqual([]);
+                expect(w.sentOf('attack').map(a => a.on)).toContain(true);
+            });
+
+            test('so is one hitting us from there that names nobody, as a caster does: no order, and the refusal does not come straight back', async () => {
+                const { w, bot } = petWorld({ player: off(), skills: skillsWith(turret), nearbyNpcs: [petNpc(), mob({ objectId: 701, x: 561450 })] });
+                orders(w);
+                fightSim(w, { dmg: 50 });
+                w.combat({ kind: 'spellEffect', attackerObjectId: 701, targetObjectId: w.player.objectId, effectId: 5208 });
+                w.publish();
                 const r = await bot.grind({ pet: true, maxKills: 1, durationMs: 5000, loot: false });
                 expect(r).toMatchObject({ kills: 1 });
                 expect(w.sentOf('petCommand')).toEqual([]);
@@ -8093,7 +9476,7 @@ describe('pets', () => {
             });
 
             describe('the clock on our own swing is the weapon\'s: its full interval holds a cast (SPD_ABS, value2 on the wire, PacketLib1124.cs:893-896)', () => {
-                const worn = (slot: number, name: string, speed: number, objectType = 3): InventoryItem => ({ slot, name, level: 1, count: 1, model: 3, objectType, condition: 100, durability: 100, quality: 85, weight: 30, value1: 16, value2: speed });
+                const worn = (slot: number, name: string, speed: number, objectType = 3): InventoryItem => ({ slot, name, level: 1, count: 1, model: 3, objectType, condition: 100, durability: 100, quality: 85, weight: 30, value1: 16, value2: speed, hand: 0 });
                 const staff = worn(12, 'trimmed staff', 44, 8);
 
                 test('a 4.4 s staff, 3.2 s after its last swing: the pet stays, and the message says how long', async () => {
@@ -10136,6 +11519,13 @@ describe('pets', () => {
             expect(await bot.petKill(700)).toMatchObject({ reason: 'attacked', message: 'water beetle is on us while our pet fights young wolf' });
         });
 
+        test('a second mob on the pet, with its DoT ticking on us, isn\'t on us: the fight goes on', async () => {
+            const { w, bot } = petWorld({ pet: petWindow({ targetObjectId: 700 }), nearbyNpcs: [petNpc(), mob(), mob({ objectId: 701, x: 560100, targetObjectId: PET_ID })] });
+            w.combat({ kind: 'melee', attackerObjectId: 701, targetObjectId: w.player.objectId, result: 'other', targetHealthPercent: 90 });
+            w.publish();
+            expect((await bot.petKill(700, { timeout: 200 })).reason).not.toBe('attacked');
+        });
+
         test('two mobs with one name read by level and id', async () => {
             const { w, bot } = petWorld({ nearbyNpcs: [petNpc(), mob({ objectId: 23155, name: 'bandit', level: 7 }), mob({ objectId: 23108, name: 'bandit', level: 5 })] });
             orders(w, (_a, world) => {
@@ -10243,7 +11633,7 @@ describe('pets', () => {
     describe('killNpc with no weapon', () => {
         const KILL = 'You command the amber simulacrum to kill your target!';
         const bare: Partial<BotWorldState> = { equipment: [] };
-        const armour = { slot: 25, name: 'quilted vest', level: 1, count: 1, model: 3, objectType: 32, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0 };
+        const armour = { slot: 25, name: 'quilted vest', level: 1, count: 1, model: 3, objectType: 32, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0, hand: 0 };
 
         test('refused at once, with no walk and no swing (the server says so only at the first swing, AttackComponent.cs:548)', async () => {
             const { w, bot } = world({ equipment: [armour], pet: null, nearbyNpcs: [mob({ x: 561300 })] });
@@ -10331,7 +11721,7 @@ describe('pets', () => {
 
     describe('killNpc with a bow in hand: the server answers every attack request with a line and nothing else (PlayerAttackRequestHandler.cs:12-18)', () => {
         const RANGED = "You can't enter melee combat mode with a ranged weapon!";
-        const item = (slot: number, name: string, objectType: number): InventoryItem => ({ slot, name, level: 1, count: 1, model: 3, objectType, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0 });
+        const item = (slot: number, name: string, objectType: number): InventoryItem => ({ slot, name, level: 1, count: 1, model: 3, objectType, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0, hand: 0 });
         const sword = item(10, 'training sword', 3);
         const staff = item(12, 'oak staff', 8);
         const shield = item(11, 'small shield', 42);
@@ -10784,7 +12174,7 @@ describe('pets', () => {
 
                 test('a bow and the recast running: the same wait', async () => {
                     // d2b: "0 kills, +0 xp, 0 deaths in 31s (duration); waiting on Hunter's Pet (58s)", failures 27, 54 lines of "You can't enter melee combat mode with a ranged weapon!".
-                    const bow = { slot: 13, name: 'rowan bow', level: 1, count: 1, model: 3, objectType: 9, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0 };
+                    const bow = { slot: 13, name: 'rowan bow', level: 1, count: 1, model: 3, objectType: 9, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0, hand: 0 };
                     const { w, bot } = world({ equipment: [bow], pet: null, skills: skillsWith({ ...hunters, cooldownRemaining: 60 }), nearbyNpcs: [mob({ objectId: 701, x: 560050, targetObjectId: ME })], nearbyObjects: [] });
                     const r = await bot.grind({ pet: true, durationMs: 300, minEngageMs: 0, killTimeout: 100, loot: false });
                     expect(r.failures).toBe(0);
@@ -11327,7 +12717,7 @@ describe('pets', () => {
 
         describe('H: hands', () => {
             const RANGED = "You can't enter melee combat mode with a ranged weapon!";
-            const item = (slot: number, name: string, objectType: number): InventoryItem => ({ slot, name, level: 1, count: 1, model: 3, objectType, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0 });
+            const item = (slot: number, name: string, objectType: number): InventoryItem => ({ slot, name, level: 1, count: 1, model: 3, objectType, condition: 100, durability: 100, quality: 85, weight: 30, value1: 0, value2: 0, hand: 0 });
             const sword = item(10, 'training sword', ObjectType.Sword);
             const spear = item(12, 'training spear', ObjectType.Spear);
             const bow = item(13, 'rowan bow', ObjectType.CompositeBow);
@@ -11521,6 +12911,12 @@ describe('pets', () => {
                         const byStyle = world({ equipment: [sword, spear], skills: { specializations: specs(5, 5), abilities: [], styles: [style('Engage', 'Spear')], spells: [] } });
                         bowInHand(byStyle.w);
                         expect(await byStyle.bot.takeMeleeSlot({ styles: ['Engage'], keepOnTie: true })).toMatchObject({ success: true, slot: 12 });
+                    });
+
+                    test('claws are a line of their own: a Savage on Hand to Hand 24 keeps them over a two-hander at Sword 1, what a Viking starts with', async () => {
+                        const skills = { specializations: [{ name: 'Hand to Hand', level: 24, internalId: 1, bonus: 0 }, { name: 'Sword', level: 1, internalId: 2, bonus: 0 }], abilities: [], styles: [], spells: [] };
+                        const { bot } = world({ equipment: [item(10, 'moon claw', ObjectType.HandToHand), item(11, 'moon claw', ObjectType.HandToHand), item(12, 'great sword', ObjectType.Sword)], skills });
+                        expect((await bot.takeMeleeSlot({ keepOnTie: true })).slot).toBe(10);
                     });
 
                     test('one weapon alone is no tie', async () => {

@@ -159,7 +159,7 @@ describe('decideRvr: fights', () => {
         d = decideRvr(ctx(picture(team(), [foe(51, { healer: true }), foe(52, { cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 20_000 } })])));
         expect(d.cc).toEqual([]);
         // Immune to crowd control for now (a member's mezz got "immune to this effect"): nobody is sent at it.
-        d = decideRvr(ctx(picture(team(), [foe(51, { healer: true }), foe(52, { ccImmuneUntil: Date.now() + 30_000 })])));
+        d = decideRvr(ctx(picture(team(), [foe(51, { healer: true }), foe(52, { ccImmune: { mezz: Date.now() + 30_000, root: Date.now() + 30_000 } })])));
         expect(d.cc).toEqual([]);
     });
 
@@ -553,7 +553,7 @@ describe('safePath avoid circles', () => {
 
 describe('rvrRoaming', () => {
     test('role lists without a town healer visit; tank list as specified', () => {
-        expect(rvrRoaming.behaviors.tank.map(b => b.name)).toEqual(['release', 'hand', 'sprint', 'retreat', 'tank', 'guard', 'shedLoad', 'holdFormation', 'buff', 'rest']);
+        expect(rvrRoaming.behaviors.tank.map(b => b.name)).toEqual(['release', 'hand', 'sprint', 'retreat', 'rejoinFight', 'rez', 'tank', 'guard', 'shedLoad', 'holdFormation', 'buff', 'rest']);
         expect(Object.values(rvrRoaming.behaviors).flat().some(b => b.name === 'healer')).toBe(false);
         expect(rvrRoaming.board).toEqual({ staleAfterMs: 4000, forgetAfterMs: 30_000, hostileMs: 6000 });
     });

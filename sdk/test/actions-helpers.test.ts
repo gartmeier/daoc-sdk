@@ -1,14 +1,46 @@
 import { describe, expect, test } from 'bun:test';
 import { BotSDK } from '../index';
 import { ChatHistory } from '../chat-history';
-import { ATTACK_REFUSALS, CAST_REFUSALS, conColor, conLevel, diffInventory, experienceFromMessages, firstReasonLine, isCrowdControlled, isFatalAttackRefusal, isKillable, isPvpImmunity, isResistOf, isDeadLineOf, isFocusCaster, isServantCast, nameOf, worstPowerCost, isServantQueued, MessageWatch, PET_ANSWERS, PET_REFUSALS, PET_UNDER_CONTROL, petSpellKind, RETRYABLE_ATTACK_REFUSALS, SUMMON_FAILURES, USE_ITEM_REFUSALS } from '../actions-helpers';
+import { ATTACK_REFUSALS, CAST_REFUSALS, conColor, conLevel, diffInventory, experienceFromMessages, firstReasonLine, isCrowdControlled, isFatalAttackRefusal, isKillable, isPvpImmunity, isResistOf, isDeadLineOf, isFocusCaster, isServantCast, nameOf, worstPowerCost, isServantQueued, MessageWatch, parseMoneyText, PET_ANSWERS, PET_REFUSALS, PET_UNDER_CONTROL, petSpellKind, REPAIR_ANSWERS, REPAIR_OFFER, REPAIR_REFUSALS, RETRYABLE_ATTACK_REFUSALS, SUMMON_FAILURES, USE_ITEM_REFUSALS } from '../actions-helpers';
 import { castFailureReason } from '../actions';
 import { StraightLinePathProvider, getDefaultPathProvider, setDefaultPathProvider } from '../pathfinding';
-import type { InventoryItem } from '../types';
+import type { GameMessage, InventoryItem } from '../types';
 import { makeMessage, makeNpc, makePlayer, makeState } from './fixtures';
 
 const item = (slot: number, name: string, count = 1): InventoryItem => ({
-    slot, name, count, level: 1, model: 1, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 1, value1: 0, value2: 0,
+    slot, name, count, level: 1, model: 1, objectType: 0, condition: 100, durability: 100, quality: 85, weight: 1, value1: 0, value2: 0, hand: 0,
+});
+
+describe('parseMoneyText', () => {
+    test.each([
+        ['0 copper pieces', 0], ['48 silver', 4800], ['3 gold, 24 silver', 32_400], ['1 gold, 24 silver, 5 copper', 12_405],
+        ['2 platinum, 1 gold', 20_010_000], ['1 mithril', 10_000_000_000],
+    ])('%s is %i copper', (text, copper) => {
+        expect(parseMoneyText(text)).toBe(copper);
+    });
+});
+
+describe('repair lines', () => {
+    test.each([
+        ['It will cost 3 gold, 24 silver to repair the alloy axe. Do you accept?', '3 gold, 24 silver'],
+        ['It will cost 0 copper pieces to repair the Matterbender Sword. Do you accept?', '0 copper pieces'],
+        ['It will cost 1 silver, 44 copper to repair everything. Do you accept?', '1 silver, 44 copper'],
+    ])('the price in %s', (text, price) => {
+        expect(REPAIR_OFFER.exec(text)?.[1]).toBe(price);
+    });
+
+    test('speech can\'t pass for a refusal or an answer', () => {
+        const refusal = (text: string) => firstReasonLine([{ text } as GameMessage], REPAIR_REFUSALS)?.reason;
+        expect(refusal('Your alloy axe is already in perfect condition.')).toBe('no_need');
+        expect(refusal('Morlin Caan says, "I can\'t repair that."')).toBe('not_repairable');
+        expect(refusal('Otherguy says, "your alloy axe is already in perfect condition."')).toBeUndefined();
+        const answer = (text: string) => firstReasonLine([{ text } as GameMessage], REPAIR_ANSWERS)?.reason;
+        expect(answer('Morlin Caan says, "There, the alloy axe is ready for combat."')).toBe('done');
+        expect(answer('Morlin Caan says, "Uhh, the alloy axe is rather old. I won\'t be able to repair it again, so be careful!"')).toBe('done');
+        expect(answer('Morlin Caan says, "It costs 3 gold to repair the alloy axe. You don\'t have that much."')).toBe('insufficient_funds');
+        // Repair all's broken text, placeholders and all (Blacksmith.cs:266-268).
+        expect(answer('Morlin Caan says, "{0} says, "It costs {1} to repair {2}. You don\'t have that much.""')).toBe('insufficient_funds');
+    });
 });
 
 describe('conLevel (ConLevelGrid.cs)', () => {

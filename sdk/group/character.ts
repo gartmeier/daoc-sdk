@@ -25,6 +25,11 @@ export interface Character<S = any> {
     react?: Behavior<S>[];
     fight?: Behavior<S>[];
     chores?: Behavior<S>[];
+    /**
+     * Its pet. `false`: it plays without one in any run, as pet.enabled false does for a whole group (no pet behaviours on its list, none in its capabilities, and the run's end leaves one that is up alone).
+     * `fnfFloor`: a floor of power for fnfPet of its own, which binds with the run's pet.fnfFloor, the higher going (a kit that saves its power saves it from its pets too).
+     */
+    pet?: false | { fnfFloor?: number };
 }
 
 /** The behaviours a role's list fights with. */
@@ -65,5 +70,6 @@ export async function loadCharacter(bot: string): Promise<Character | null> {
     for (const k of ['react', 'fight', 'chores'] as const) {
         if (c[k] !== undefined && !Array.isArray(c[k])) throw new Error(`${path}: ${k} must be a list of behaviours`);
     }
+    if (c.pet !== undefined && c.pet !== false && (typeof c.pet !== 'object' || c.pet === null)) throw new Error(`${path}: pet must be false or { fnfFloor }`);
     return c;
 }

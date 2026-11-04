@@ -12,13 +12,16 @@ import {
     buildGenerated, GENERATED_DIR, GENERATED_FILES, isStale,
     type AbilityInfo, type BindPoint, type ClassesFile, type ClassInfo, type CompactTable, type ItemTemplate,
     type MerchantEntry, type MerchantsFile, type NpcSpawn, type RaceInfo, type SpecializationInfo, type SpellInfo,
-    type SpellLineInfo, type StarterEquipment, type StartupLocation, type StatName, type StyleInfo, type Teleport, type ZonePoint,
+    type SpellLineInfo, type StarterEquipment, type StartupLocation, type StatName, type StyleInfo, type StyleProc, type Teleport, type ZonePoint,
 } from './build';
+import { specKey } from './spec-names';
 
 export * from './zones';
+export * from './spec-names';
+export * from './skills';
 export type {
     AbilityInfo, BindPoint, ClassesFile, ClassInfo, ItemTemplate, MerchantEntry, NpcSpawn, RaceInfo,
-    SpecializationInfo, SpellInfo, SpellLineInfo, StarterEquipment, StartupLocation, StatName, StyleInfo, Teleport, ZonePoint,
+    SpecializationInfo, SpellInfo, SpellLineInfo, StarterEquipment, StartupLocation, StatName, StyleInfo, StyleProc, Teleport, ZonePoint,
 };
 
 // ── Loading ─────────────────────────────────────────────────────────────────
@@ -179,21 +182,31 @@ export function getTeleportsForRealm(realm: Realm | number): Teleport[] {
 }
 
 /**
+ * The class a new character has once the server has created it. With start_as_base_class on, the
+ * server's default, an advanced class is reverted to its base class (StartAsBaseClass.cs:84).
+ */
+export function classAfterCreation(classId: number, startAsBaseClass = true): number {
+    return startAsBaseClass ? getClass(classId)?.baseClassId ?? classId : classId;
+}
+
+/**
  * Where a freshly created character spawns, mirroring
  * StartupLocations.GetAllStartupLocationForCharacter (scripts/gameevents/StartupLocations.cs:142).
- * classId is the class sent at creation: StartupLocations registers its CharacterCreated handler on
- * ScriptLoadedEvent (StartupLocations.cs:30), before StartAsBaseClass does on GameServerStartedEvent
- * (StartAsBaseClass.cs:46), so it sees the class before start_as_base_class reverts it. Every DB row
- * has ClassID and RaceID set, so the class matters.
+ * classId is the class sent at creation, but the server looks up classAfterCreation: its handler chain
+ * runs the newest handler first (DOLEventHandlerChain.cs), and StartAsBaseClass registers its
+ * CharacterCreated handler on GameServerStartedEvent (StartAsBaseClass.cs:46), after StartupLocations
+ * does on ScriptLoadedEvent (StartupLocations.cs:30). Every DB row has ClassID and RaceID set, so the
+ * class matters. Pass startAsBaseClass: false for a server with that property off.
  */
 export function getStartupLocation(opts: {
-    realm: Realm | number; raceId: number; classId: number; clientVersion?: number; clientRegionId?: number;
+    realm: Realm | number; raceId: number; classId: number; clientVersion?: number; clientRegionId?: number; startAsBaseClass?: boolean;
 }): StartupLocation | undefined {
     const realm = realmId(opts.realm);
     const ver = opts.clientVersion ?? 1127;
     const region = opts.clientRegionId ?? 0;
+    const classId = classAfterCreation(opts.classId, opts.startAsBaseClass);
     const list = getStartupLocations().filter(s => s.minVersion <= ver
-        && (s.classId === 0 || s.classId === opts.classId)
+        && (s.classId === 0 || s.classId === classId)
         && (s.raceId === 0 || s.raceId === opts.raceId)
         && (s.realm === 0 || s.realm === realm)
         && (s.clientRegionId === 0 || s.clientRegionId === region));
@@ -268,8 +281,8 @@ const ARMOUR_SLOTS = new Set([21, 22, 23, 25, 27, 28]);
 /**
  * What a new character of this class really starts with: the armour pieces it
  * gets, and the template ids the server skips because they are missing. An
- * empty `armour` with a non-empty `missing` means the class starts unarmoured
- * (Guardian: its leaf_tacuil_* rows point at templates that do not exist).
+ * empty `armour` with a non-empty `missing` means the class starts unarmoured,
+ * as Guardian did in upstream's dump (learnings/classes-and-races.md).
  */
 export function getStarterArmour(cls: number | string, realm?: Realm | number): { armour: ItemTemplate[]; missing: string[] } {
     const armour: ItemTemplate[] = [];
@@ -296,14 +309,26 @@ export function getSpellLine(keyName: string): SpellLineInfo | undefined {
     return lineIndex().get(keyName.toLowerCase());
 }
 
-/** Styles for a class (style.ClassId), optionally one spec line, sorted by spec level. */
-export function getStylesFor(classId: number, specKeyName?: string): StyleInfo[] {
-    const spec = specKeyName?.toLowerCase();
+/** Styles for a class (style.ClassId), optionally one spec line under any of its names, sorted by spec level. */
+export function getStylesFor(classId: number, specName?: string): StyleInfo[] {
+    const spec = specName === undefined ? undefined : specKey(specName).toLowerCase();
     return getStyles().filter(s => s.classId === classId && (spec === undefined || s.specKeyName.toLowerCase() === spec));
 }
 
-export function getSpecialization(keyName: string): SpecializationInfo | undefined {
-    return specIndex().get(keyName.toLowerCase());
+/**
+ * What a style procs for a class: the rows of that class, else the rows of class 0 (StyleProcessor.cs:396-423,
+ * and the delve at :818-834). A character only uses a style row of its own class or of class 0, so the
+ * server's third case, a row of the style's class, adds nothing here. No style has RandomProc set today.
+ */
+export function getStyleProcs(style: StyleInfo, classId: number): StyleProc[] {
+    const procs = style.procs ?? [];
+    const own = procs.filter(p => p.classId === classId);
+    return own.length ? own : procs.filter(p => p.classId === 0);
+}
+
+/** A specialization under any of its names; `keyName` and `name` then give the line's key and display name. */
+export function getSpecialization(specName: string): SpecializationInfo | undefined {
+    return specIndex().get(specKey(specName).toLowerCase());
 }
 
 export function getAbility(keyName: string): AbilityInfo | undefined {
@@ -359,13 +384,13 @@ export function getRacesForClass(cls: number | string, realm?: Realm | number): 
 
 /**
  * Races a character of this class can be created as AND start with: the
- * server-valid races minus the pairs without a startuplocation row
- * (Inconnu Acolyte, Saracen Disciple; StartupLocations.cs:87 leaves them at 0,0,0).
+ * server-valid races minus the pairs without a startuplocation row (Inconnu Acolyte,
+ * Saracen Disciple, and Saracen Necromancer, which starts as a Disciple; see validateCharacter).
  */
-export function getPlayableRacesForClass(cls: number | string, realm?: Realm | number): RaceInfo[] {
+export function getPlayableRacesForClass(cls: number | string, realm?: Realm | number, startAsBaseClass?: boolean): RaceInfo[] {
     const c = getClass(cls, realm);
     if (!c) return [];
-    return getRacesForClass(c.id, c.realm).filter(r => validateCharacter({ realm: c.realm, class: c.id, race: r.id }).warnings.length === 0);
+    return getRacesForClass(c.id, c.realm).filter(r => validateCharacter({ realm: c.realm, class: c.id, race: r.id, startAsBaseClass }).warnings.length === 0);
 }
 
 /** Creatable races of a realm. */
@@ -381,12 +406,14 @@ export interface CharacterChoice {
     gender?: 'male' | 'female';
     /** When given, also checks the 30-point budget (CharacterStatValidator.cs). */
     stats?: Partial<Record<StatName, number>>;
+    /** The server's start_as_base_class property (default on); decides which start row the class gets. */
+    startAsBaseClass?: boolean;
 }
 
 export interface CharacterValidation {
     valid: boolean;
     errors: string[];
-    /** Server-valid but unplayable choices (e.g. no startup location: Inconnu Acolyte, Saracen Disciple). */
+    /** Server-valid but unplayable choices (e.g. no startup location: Inconnu Acolyte, Saracen Disciple, Saracen Necromancer). */
     warnings: string[];
     realmId: number;
     /** Gender to send (choice.gender, else what the race/class requires, else male). */
@@ -419,10 +446,14 @@ export function validateCharacter(choice: CharacterChoice): CharacterValidation 
         if (cost === null) errors.push('a stat is below the race minimum or missing');
         else if (cost !== classesFile().statPointBudget) errors.push(`stat points used ${cost}, must be exactly ${classesFile().statPointBudget}`);
     }
-    // The server accepts these, but StartupLocations.cs:87 then leaves the character at 0,0,0.
+    // The server accepts these, but StartupLocations.cs:88 then leaves the character at 0,0,0 in region 0,
+    // and loading it throws (GuildMgr.cs:37), so the client never gets a position.
     const warnings: string[] = [];
-    if (errors.length === 0 && c && race && !getStartupLocation({ realm: r, raceId: race.id, classId: c.id }))
-        warnings.push(`no startuplocation row for ${race.name} ${c.name}: the character would spawn at 0,0,0`);
+    if (errors.length === 0 && c && race && !getStartupLocation({ realm: r, raceId: race.id, classId: c.id, startAsBaseClass: choice.startAsBaseClass })) {
+        const startAs = getClass(classAfterCreation(c.id, choice.startAsBaseClass)) ?? c;
+        const looked = startAs.id === c.id ? '' : ` (a ${c.name} starts as one)`;
+        warnings.push(`no startuplocation row for ${race.name} ${startAs.name}${looked}: the character stays at 0,0,0 in region 0 and can't enter the world`);
+    }
     return { valid: errors.length === 0, errors, warnings, realmId: r, gender: g, classInfo: c, raceInfo: race };
 }
 

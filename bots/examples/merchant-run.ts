@@ -4,9 +4,11 @@
 //   bun bots/<bot>/merchant-run.ts [sell-pattern]                (a copy next to bot.env)
 //   MCP: execute_code({ bot_name, script: 'bots/examples/merchant-run.ts', args: { pattern: 'staff' } })
 //
-// Junk = every backpack item except KEEP below (or only items matching
-// sell-pattern). Merchants pay half the shop price; zero-value items are refused.
+// Junk = every backpack item except KEEP below and gear too high to wear yet, which belongs in the
+// vault (bots/examples/gear-care.ts), or only items matching sell-pattern. Merchants pay half the
+// shop price; zero-value items are refused.
 
+import { keepForLater } from '../../sdk/group/gear-care';
 import { runScript, type ScriptContext } from '../../sdk/runner';
 import type { NearbyNpc } from '../../sdk/types';
 import { scriptArgs } from '../examples/script-args';
@@ -17,7 +19,8 @@ interface Args { pattern?: string }
 
 const main = async ({ bot, sdk, args = {} }: ScriptContext & { args?: Args }) => {
     const pattern = args.pattern;
-    const junk = sdk.getInventory().filter(i => pattern ? new RegExp(pattern, 'i').test(i.name) : !KEEP.test(i.name));
+    const me = sdk.getPlayer()!;
+    const junk = sdk.getInventory().filter(i => pattern ? new RegExp(pattern, 'i').test(i.name) : !KEEP.test(i.name) && !keepForLater(i, me));
     if (!junk.length) return { sold: 0, why: 'nothing to sell', backpack: sdk.getInventory().map(i => i.name) };
     console.log(`junk: ${junk.map(i => `${i.count > 1 ? `${i.count}× ` : ''}${i.name}`).join(', ')}`);
 

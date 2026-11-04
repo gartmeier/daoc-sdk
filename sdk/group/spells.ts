@@ -6,6 +6,7 @@ import type { BotActions } from '../actions';
 import { petSpellKind, worstPowerCost } from '../actions-helpers';
 import type { BotSDK } from '../index';
 import type { Spell } from '../types';
+import type { CcKind } from './cc';
 import { songKind, type SongKind } from './songs';
 import type { BuffSlot, Capabilities } from './types';
 
@@ -30,6 +31,8 @@ export interface SpellPick {
     damage: number;
     /** Shared by every rank of one spell (Illusory Ache..Anguish are all 4611); 0 when the DB has none. */
     spellGroup: number;
+    /** eDamageType (13 heat). A resist debuff's names the resist it lowers. */
+    damageType: number;
     /** Server stacking keys: DoTs conflict by effect group, else (same type) by tick frequency. */
     effectGroup: number;
     frequency: number;
@@ -52,6 +55,15 @@ const NOT_AUTOMATIC = new Set(['SummonNecroPet', 'SummonAnimistFnF']);
 const isSummon = (s: SpellPick, kind: 'main' | 'fnf') => petSpellKind(s.type) === kind && !NOT_AUTOMATIC.has(s.type);
 // A pet buff worth keeping up lasts. That leaves out the 5-8 s pulsing damage shields.
 const PET_BUFF_MIN_SECONDS = 60;
+const isRez = (s: SpellPick) => s.type === 'Resurrect';
+/** A window pet below this share of its owner's level is no pet to keep up: a Druid or a Hunter with no points in the line has one capped at L7, at a quarter of the pool a summon, and at 24 it is three cons below what a fight has. */
+const WEAK_PET_SHARE = 0.5;
+
+/** The level of a summon's pet for an owner of `level`: a percent of that where its damage is negative, capped at its value (GameSummonedPet.cs:34-52). */
+export function summonedLevel(s: Pick<SpellPick, 'damage' | 'value'>, level: number): number {
+    const raw = s.damage >= 0 ? s.damage : Math.floor(level * -s.damage / 100);
+    return Math.max(1, s.value > 0 ? Math.min(raw, s.value) : raw);
+}
 
 /** The buff slot of a spell handler type, or null when it isn't a buff we keep up. */
 export function slotOf(type: string): BuffSlot | null {
@@ -79,7 +91,7 @@ export function slotOf(type: string): BuffSlot | null {
 export function toPick(spell: Spell, info: SpellInfo): SpellPick {
     return {
         spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, recast: info.recastDelay ?? 0, concentration: info.concentration,
-        pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0, value: info.value ?? 0, damage: info.damage ?? 0, spellGroup: info.spellGroup ?? 0,
+        pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0, value: info.value ?? 0, damage: info.damage ?? 0, spellGroup: info.spellGroup ?? 0, damageType: info.damageType ?? 0,
         effectGroup: info.effectGroup ?? 0, frequency: info.frequency ?? 0, icon: info.icon ?? 0,
     };
 }
@@ -111,6 +123,8 @@ export interface NukeOptions {
     dotAbove?: number;
     /** Allow area spells (they break mezz on nearby adds). */
     aoe?: boolean;
+    /** The hardest hit instead of the highest spell level: a spec line's rank can beat a later baseline one (Glittering Visions 102 at 22, Sun Streak 88 at 24). */
+    byDamage?: boolean;
     /** Castable now (power, cooldown); default: every spell. */
     ready?: (s: SpellPick) => boolean;
 }
@@ -131,7 +145,8 @@ export function pickNuke(picks: SpellPick[], opts: NukeOptions = {}): SpellPick 
     const top = best(ok.filter(s => !isDot(s)));
     const dot = best(ok.filter(s => isDot(s) && ready(s) && !opts.dotted?.has(dotFamily(s)) && (!top || s.damage >= DOT_MIN_SHARE * top.damage)));
     if (dot && (opts.targetHp ?? 100) > (opts.dotAbove ?? 40)) return dot;
-    return best(ok.filter(s => !isDot(s) && ready(s)));
+    const left = ok.filter(s => !isDot(s) && ready(s));
+    return opts.byDamage ? [...left].sort((a, b) => b.damage - a.damage || b.spell.level - a.spell.level)[0] ?? null : best(left);
 }
 
 /** Hit points a heal restores: a negative value is a percent of the caster's own full health, whoever it lands on (HealSpellHandler.cs:33). */
@@ -168,19 +183,23 @@ export class Spellbook {
 
     /**
      * The same on our pet: a Pet-target heal, and nothing else in here casts those. With none, a heal on a friend at the pet's id (a Druid's: a Realm heal lands on a pet, live). capabilities().heal is about members and takes no notice.
+     * Of those never one on a timer: Nature's Blessing is 15 minutes, and `heal` counts on it past what her others restore.
      */
     petHeal(missing?: number): SpellPick | null {
         const need = { missing, casterMaxHp: this.sdk.getPlayer()?.maxHealth ?? 0 };
         const single = this.all().filter(s => HEAL_TYPES.test(s.type) && !s.pulse && s.radius === 0 && this.ready(s));
-        return pickHeal(single.filter(s => s.target === 'Pet'), need) ?? pickHeal(single.filter(s => s.target === 'Realm' || s.target === 'Group'), need);
+        return pickHeal(single.filter(s => s.target === 'Pet'), need) ?? pickHeal(single.filter(s => (s.target === 'Realm' || s.target === 'Group') && !s.recast), need);
     }
 
     /**
      * The window pet we summon by ourselves, the top rank (a commander counts; its minions are never ours to summon).
      * Paid for or not, on its timer or not: a percent cost passes ready() at any power, so the caller weighs powerOf and cooldownRemaining.
+     * None for one capped far below us (WEAK_PET_SHARE): the group doesn't count on it, nothing keeps it up, and a pet already there is still ordered (PetKit.window).
      */
     summon(): SpellPick | null {
-        return best(this.all().filter(s => isSummon(s, 'main')));
+        const top = best(this.all().filter(s => isSummon(s, 'main')));
+        const level = this.sdk.getPlayer()?.level;
+        return top && level && summonedLevel(top, level) < level * WEAK_PET_SHARE ? null : top;
     }
 
     /** A Theurgist's pet, which fights its target alone: the top rank over its lines, weighed like summon(). */
@@ -213,16 +232,37 @@ export class Spellbook {
         return best(ok.filter(s => s.radius === 0)) ?? (opts.aoe ? best(ok) : null);
     }
 
+    /** The strongest area mezz that reaches from where we stand (not a point-blank one), for a group of enemies. */
+    areaMezz(): SpellPick | null {
+        return best(this.all().filter(s => isMezz(s) && s.target === 'Enemy' && s.range > 0 && s.radius > 0 && this.ready(s)));
+    }
+
+    /**
+     * Instant single-target spells that stop a cast, ready now, farthest reach first: a Lullaby (Amnesia, which
+     * clears the target's cast, AmnesiaSpellHandler.cs:50-51) and a shout (damage interrupts, GameLiving.StartInterruptTimer).
+     * Area Lullabies are left out: anything hostile but a mezz wakes a mezzed neighbour (GameLiving.cs:1716-1727).
+     */
+    interrupts(): SpellPick[] {
+        return this.all().filter(s => s.target === 'Enemy' && s.castTime === 0 && s.range > 0 && s.radius === 0 && (s.type === 'Amnesia' || s.type === 'DirectDamage') && this.ready(s))
+            .sort((a, b) => b.range - a.range || b.spell.level - a.spell.level);
+    }
+
+    /** A Confusion spell: it interrupts on landing, and being timed, also when resisted (ConfusionSpellHandler.cs:46, SpellHandler.StartSpellNegatedInterruptTimer). */
+    confuse(): SpellPick | null {
+        return best(this.all().filter(s => s.type === 'Confusion' && s.target === 'Enemy' && s.range > 0 && s.radius === 0 && this.ready(s)));
+    }
+
     /** A root ready now: what an NPC under 75 % takes where a mezz can't (CCSpellHandler.cs:174). */
     root(): (SpellPick & { kind: 'root' }) | null {
         const r = best(this.all().filter(s => isRoot(s) && s.target === 'Enemy' && this.ready(s)));
         return r ? { ...r, kind: 'root' } : null;
     }
 
-    /** Crowd control for an add: a mezz when one is ready (area ones only with `aoe`), else a root. */
-    cc(opts: { aoe?: boolean } = {}): (SpellPick & { kind: 'mezz' | 'root' }) | null {
-        const m = this.mezz(opts);
-        return m ? { ...m, kind: 'mezz' } : this.root();
+    /** Crowd control for an add: a mezz when one is ready (area ones only with `aoe`), else a root. Not of the kinds in `except` (it is immune to those). */
+    cc(opts: { aoe?: boolean; except?: readonly CcKind[] } = {}): (SpellPick & { kind: 'mezz' | 'root' }) | null {
+        const m = opts.except?.includes('mezz') ? null : this.mezz(opts);
+        if (m) return { ...m, kind: 'mezz' };
+        return opts.except?.includes('root') ? null : this.root();
     }
 
     /**
@@ -231,6 +271,11 @@ export class Spellbook {
      */
     nuke(opts: Omit<NukeOptions, 'ready'> = {}): SpellPick | null {
         return pickNuke(this.all(), { ...opts, ready: s => this.ready(s) });
+    }
+
+    /** The strongest resurrection spell. What it costs depends on the target (resurrectCost), not on its power column. */
+    rez(): SpellPick | null {
+        return best(this.all().filter(isRez));
     }
 
     /** Buffs worth keeping up: the top rank per slot and target, no pet or enemy spells. */
@@ -278,7 +323,12 @@ export class Spellbook {
             // What cc() casts at an add without aoe (crowd control is assigned by this): a single-target mezz or a root.
             cc: all.some(s => s.target === 'Enemy' && s.range > 0 && ((isMezz(s) && s.radius === 0) || isRoot(s))),
             ...(all.some(s => s.target === 'Enemy' && s.range > 0 && isRoot(s)) ? { root: true } : {}),
+            ccKinds: [
+                ...(all.some(s => s.target === 'Enemy' && s.range > 0 && isMezz(s) && s.radius === 0) ? ['mezz' as const] : []),
+                ...(all.some(s => s.target === 'Enemy' && s.range > 0 && isRoot(s)) ? ['root' as const] : []),
+            ],
             nuke: all.some(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type)),
+            rez: all.some(isRez),
             buffs: buffs.map(s => s.spell.name),
             buffSpells: buffs.map(s => ({ name: s.spell.name, slot: s.slot, target: s.target, concentration: s.concentration })),
             pet: this.summon() ? 'main' : this.fnf() ? 'fnf' : null,

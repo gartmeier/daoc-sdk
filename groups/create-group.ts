@@ -68,3 +68,4 @@ if (!tanks) console.warn(`\nWarning: no member is a tank. A PvE hunt pulls only 
 console.log(`\nStart the clients:  bun client/swarm.ts ${bots.join(' ')}`);
 console.log(`Look:               bun sdk/group/cli.ts ${group}`);
 console.log(`Hunt for a minute:  bun groups/${group}/hunt.ts 60`);
+console.log(`Spend spec points:  bun groups/${group}/train.ts`);

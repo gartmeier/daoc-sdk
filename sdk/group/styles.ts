@@ -12,6 +12,9 @@ export const ANYTIME_STYLE = 0x100;
 
 type Worn = Pick<InventoryItem, 'slot' | 'objectType'>;
 
+/** The tables live with the SDK's own choice of melee slot (actions-helpers.ts); the gear code reads them from here. */
+export { DUAL_LINES, WEAPON_LINES };
+
 /**
  * Whether what we wear can swing this style (StyleProcessor.CheckWeaponType). A style the server hasn't described
  * yet: no. The state doesn't say which weapon is out, so a one-hander and a two-hander both count.

@@ -34,7 +34,7 @@ Research notes (protocol specs with file and line references) are in [docs/resea
 
 ```
 sdk/types.ts          shared contract (BotWorldState, BotAction, ActionResult). Additive changes only.
-data/                 static world data from server/db SQL dumps: sql.ts (parser), zones.ts (zone lookup), index.ts (other loaders), generated/ (gitignored JSON cache)
+data/                 static world data from server/db SQL dumps: sql.ts (parser), zones.ts (zone lookup), spec-names.ts (a line's key, display and item names; no imports), index.ts (other loaders), generated/ (gitignored JSON cache)
 client/               headless DAoC client
   net/                framing (C→S 12-byte header + checksum, S→C 3-byte header stream decoder), TCP connection
   protocol/           PacketReader/PacketWriter, opcodes, outgoing encoders, incoming decoders (pure functions)
