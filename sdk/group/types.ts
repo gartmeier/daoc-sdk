@@ -4,7 +4,7 @@
 // Everything here is plain JSON, so the same shapes can later travel between
 // processes (a gateway channel) instead of living in one process's blackboard.
 
-import type { Realm } from '../types';
+import type { PetAggression, PetWalk, Realm } from '../types';
 
 /** What a member is for. Roles pick a behaviour list; capabilities come from its spells. */
 export type Role = 'tank' | 'healer' | 'support' | 'nuker' | 'melee';
@@ -44,11 +44,15 @@ export interface BuffSpell {
 export interface Capabilities {
     heal: boolean;
     cc: boolean;
+    /** Of `cc`, it holds a root, which takes an NPC under 75 % where a mezz can't (assignCc). Absent otherwise. */
+    root?: boolean;
     nuke: boolean;
     /** Buff spell names it can cast. */
     buffs: string[];
     /** The same buffs with slot, target and concentration (who buffs whom: buffs.ts). */
     buffSpells: BuffSpell[];
+    /** The pet the group has it keep up: 'main' one in the pet window, 'fnf' a Theurgist's, which fights alone; null none; absent in reports from before pets. */
+    pet?: 'main' | 'fnf' | null;
 }
 
 /** One member's view of itself, built from its own snapshots. */
@@ -60,6 +64,34 @@ export interface MemberCombat {
     styles: Record<string, number>;
     /** "You fail to execute your X perfectly!": the opening was gone by the swing. */
     missedStyles: number;
+    /** Damage its pets dealt; absent until they have, so a group with no pets reads as before. */
+    petDealt?: number;
+    /** "The spirit soldier steps in front of you and takes the blow!", from its own window pet: a blow at this member, and the swing's 0xBC names the pet (AttackComponent.cs:1900). Absent until one has. */
+    petIntercepts?: number;
+}
+
+/**
+ * A member's window pet, for the others. Pets stay out of `members`: level, ready, formation and heal
+ * targets all iterate that, and a pet's object id changes per login and is reused fast.
+ */
+export interface PetReport {
+    objectId: number;
+    /** '' until its client has had an entry for it. */
+    name: string;
+    /** These five are its NPC entry's, null while that is out of view: the window (state.pet) outlives it. */
+    level: number | null;
+    x: number | null;
+    y: number | null;
+    z: number | null;
+    hp: number | null;
+    /** Who it is fighting, from the window's PetState: a caster pet's entry reads 0 while casting, a walking one's 65535. */
+    targetId: number | null;
+    /** Its entry's; false out of view. */
+    inCombat: boolean;
+    aggression: PetAggression;
+    walk: PetWalk;
+    /** Effect icons on it, at most 8 (PacketLib181.cs:157-166). */
+    icons: number[];
 }
 
 export interface MemberReport {
@@ -99,6 +131,10 @@ export interface MemberReport {
     activity: Activity;
     /** Snapshot time (ms epoch). */
     at: number;
+    /** Its window pet; null without one, absent from an older runner or client. */
+    pet?: PetReport | null;
+    /** Object ids of its pets with no window (state.summons: a Theurgist's, minions), so what fights them fights us; absent without any. */
+    summons?: number[];
 }
 
 /** A monster (or enemy player) as one member saw it in one snapshot. */
@@ -114,6 +150,8 @@ export interface Sighting {
     hp: number;
     targetId: number | null;
     inCombat: boolean;
+    /** Monsters: units/s, from its latest position update. */
+    speed?: number;
     /** It swung at someone in the last ~2 s (a mezz on it is broken). */
     swinging: boolean;
     /**
@@ -124,6 +162,10 @@ export interface Sighting {
     casting?: boolean;
     /** Players: it cast a spell on a player of its own realm in the last few seconds (a heal or buff). */
     helped?: boolean;
+    /** An enemy realm's pet. Its owner can't be known: the server sends every client the pet flag and the owner's realm, never the owner (PacketLib1124.cs:186-187). */
+    isPet?: boolean;
+    /** Players: a Necromancer in shade (NearbyPlayer.isShade). No attack and no pet order lands on it (AbstractServerRules.cs:449-455): what can be fought is its servant. */
+    isShade?: boolean;
 }
 
 /** The group's merged knowledge of one enemy. May be outdated: check lastSeen / stale. */
@@ -135,10 +177,16 @@ export interface Contact extends Sighting {
      * of reach), the last known target and targetId are kept.
      */
     target: string | null;
+    /** The owner's name while it targets a member's pet, kept like `target` while it runs; `target` is null then. */
+    targetPet?: string | null;
     /** When it started targeting `target` (how long the tank has held it). */
     targetSince: number;
     /** When the coordinator first ordered engage with it as the focus; 0 until then. */
     engagedAt: number;
+    /** Its first health loss since engagedAt, which is when the fight's damage starts: a carried pull's first hit came long before. Absent until then, and again back at full health. */
+    lossSince?: number;
+    /** Its health just before lossSince. */
+    lossFromHp?: number;
     /** The last sighting before engagedAt that kept the target while it ran (a carried pull); 0 if none. */
     movedAt: number;
     /** Members that see it in their latest snapshot. */
@@ -148,8 +196,8 @@ export interface Contact extends Sighting {
     /** Not seen by anyone for staleAfterMs: position and health are old. */
     stale: boolean;
     /**
-     * Fighting the group: it targeted a member, swung, or a member attacked it within
-     * the last hostileMs. Sticky on purpose: a mob's target field flickers between snapshots.
+     * Fighting the group: it targeted a member or a member's pet, swung, or one of them attacked it
+     * within the last hostileMs. Sticky on purpose: a mob's target field flickers between snapshots.
      */
     threat: boolean;
     /** Start of the current hostile streak (0 when not a threat). */
@@ -162,6 +210,8 @@ export interface Contact extends Sighting {
      * immunity is the server's separate snare immunity and stays with the member who cast it.
      */
     ccImmuneUntil?: number;
+    /** A member's attack on it was answered `You can't attack a shadowed necromancer!`, so it can't be attacked before this (ms epoch): for a client with no models to go by, or anything isShade misses. */
+    unattackableUntil?: number;
     /** Players: seen helping its own realm (Sighting.helped) since the group first saw it. Sticky: a healer to focus first. */
     healer?: boolean;
     /** Players: seen casting (Sighting.casting) since the group first saw it. Sticky: a caster, not a melee fighter. */
@@ -215,7 +265,9 @@ export interface GroupEvent {
      * 'level' a member levelled, 'note' free text.
      */
     kind: 'orders' | 'activity' | 'result' | 'death' | 'kill' | 'level' | 'note';
-    // 'kill' data: { name, level, kind: 'npc' | 'player', realm }. 'death' data: { killer: { name, kind: 'npc' | 'player', realm } | null }.
+    // 'kill' data: { name, level, kind: 'npc' | 'player', realm, pet?: true }. 'death' data: { killer: { name, kind: 'npc' | 'player', realm, isPet?: true } | null }.
+    // A 'note' with data { pet: 'lost', name, cause }: a member's window pet went, cause a PetLossCause or null.
+    // A 'note' with data { petBrokeCc: true, kind, by }: a member's pet broke the cc `by` put on targetId.
     member?: string;
     targetId?: number | null;
     text: string;

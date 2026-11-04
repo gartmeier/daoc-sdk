@@ -9,16 +9,18 @@
 
 import { findNpcSpawns } from '../../data/index';
 import { styleQueue, type StyleChoice, type StyleChooser } from '../actions';
+import { STYLE_NEEDS_WEAPON } from '../actions-helpers';
 import { ANYTIME_STYLE, fighterStyle, tankStyles } from './styles';
 import { abortable, executionContext } from '../execution-context';
-import { isAlive } from './blackboard';
+import { diedLately, isAlive } from './blackboard';
 import { clearOf, keepDangers, type KeepSettings } from './keeps';
 import { type BuffTask, nextBuff, planBuffs, surplusConcentration } from './buffs';
 import { combatSpot, dangerStops, effectiveLimits, focusSettled, safeSpot, trackFocus } from './positioning';
 import { dotFamily } from './spells';
 import { chooseSong, SONG_SETTINGS, type SongSettings } from './songs';
 import type { Behavior, MemberContext } from './member';
-import { safePath } from './terrain';
+import { petOffForCc, type PetSettings } from './pets';
+import { keepOnMap, onMap, safePath } from './terrain';
 import type { BotWorldState, NearbyNpc, NearbyPlayer, PlayerState, Style } from '../types';
 import type { BuffSlot, Contact, Point, Role } from './types';
 
@@ -78,6 +80,8 @@ export interface TacticsSettings {
      * 192 "ran beyond 3000 units".
      */
     chaseLeash?: number;
+    /** What the group does with pets: petControl and the rest of pets.ts (default PET_SETTINGS). */
+    pet?: PetSettings;
 }
 
 /**
@@ -92,6 +96,11 @@ export function beyondLeash(ctx: MemberContext<TacticsSettings>, foe: Contact): 
     return !clearOf(foe, keepCircles(ctx));
 }
 
+/** An enemy player standing under the guards of a keep not ours, here. */
+export function underGuards(ctx: MemberContext<TacticsSettings>, foe: Contact): boolean {
+    return foe.kind === 'player' && foe.regionId === ctx.me().regionId && !clearOf(foe, keepCircles(ctx));
+}
+
 /** The circles round the keeps whose guards attack us, here (none outside a battleground). */
 function keepCircles(ctx: MemberContext<TacticsSettings>) {
     const me = ctx.me();
@@ -99,28 +108,64 @@ function keepCircles(ctx: MemberContext<TacticsSettings>) {
 }
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
-const QUIET_PHASES = new Set(['recover', 'gather', 'idle']);
+/** The phases the group waits in, between fights. */
+export const QUIET_PHASES: ReadonlySet<string> = new Set(['recover', 'gather', 'idle']);
 /** During a fight, holdFormation walks a member back to the anchor only from farther than this (tank and melee: the chase leash, if shorter). */
 const FIGHT_REJOIN = 3000;
 /** A member walking back to a fight it stands beyond the leash of goes in legs this long, so its fight behaviours get a turn on the way. */
 const LEASH_REJOIN_LEG = 1000;
+/**
+ * How far from where it stood a target may run before the tank's kill ends in out_of_reach and the next turn takes it up from there
+ * (KillOptions.maxChaseDistance). Against a monster that is all it does: nothing else ends that chase but the orders. Against a player
+ * the leash ends it, so with a leash this much more: a player inside the leash of an anchor can have moved twice the leash, and it's the
+ * leash that should let it go.
+ */
+const CHASE_LIMIT = 3000;
 /** An enemy player this close to a member can be hitting it in melee (melee range plus position lag). */
 const MELEE_REACH = 400;
 /** A target that answered "Your target is immune to this effect!" stays so this long (IMMUNITY_TIMER_FLAT_LENGTH, NpcImmunityEffect). */
 const CC_IMMUNE_MS = 60_000;
+/** rest answered in_combat (our pet in a fight, seen by nothing above): that is a fact for a while, not something to ask again every turn. */
+const REST_BUSY_MS = 2000;
+/** In a member's memory: the power % a chore above rest waits for (summonPet), for this turn's rest to stop at. */
+export const REST_MANA_UP_TO = 'restManaUpTo';
+/** What a member low on power with no pet up says it is doing: rest's activity detail, which the coordinator reads for Orders.waiting. */
+export const SAVING_POWER = 'pet: saving power';
+/** A nuke's walk into range goes in steps this long, with a turn in between, so a heal above it on the list (petHeal, a member's) waits no longer than that. */
+const ASSIST_STEP_MS = 2500;
+/** An NPC under this health takes no mezz: "Your target is enraged and resists the spell!", with the power spent (CCSpellHandler.cs:174-178). Only a mezz, and no player. */
+const MEZZ_MIN_HP = 75;
+/** Whether a mezz at this contact can only be refused like that. */
+export const mezzRefuses = (c: Pick<Contact, 'kind' | 'hp'>): boolean => c.kind === 'npc' && c.hp < MEZZ_MIN_HP;
 
 /**
  * Whether `t` is on member `m` the way an add is: it targets `m` and isn't crowd-controlled, and an
  * enemy player also stands in melee reach. A player's target is inferred from its latest swing or
  * hostile spell (observeState), so a caster nuking `m` from 1500 targets it too; but players have no
  * aggro table, so running to the tank or a taunt doesn't take that one off. flee() drew casters into
- * the melee with every nuke on them.
+ * the melee with every nuke on them. An enemy pet goes the same way: a taunt doesn't move an ordered
+ * pet (ControlledMobBrain.cs:549-552), and a caster pet nukes from range.
  */
 export function onMember(t: Contact, m: Point & { name: string }): boolean {
-    return t.target === m.name && !t.cc && (t.kind !== 'player' || dist(t, m) <= MELEE_REACH);
+    return t.target === m.name && !t.cc && ((t.kind !== 'player' && !t.isPet) || dist(t, m) <= MELEE_REACH);
 }
 
 const alive = isAlive;
+
+/**
+ * Whether crowd control on `c` keeps our hands off it. A mezz always: any swing breaks one, a miss too (GameLiving.cs:1700-1704). A root on an add, or on a focus with something else free in the fight, while the coordinator moves the focus.
+ * With nothing else free, a root has done its job: live a sole rooted Celt stood untouched from +4.2 to +32.3 while its pet killed a member (run 20261103-174453).
+ */
+export function ccHolds(ctx: MemberContext, c: Contact): boolean {
+    if (!c.cc) return false;
+    if (c.cc.kind === 'mezz' || c.objectId !== ctx.orders().focus) return true;
+    return ctx.threats().some(t => t.objectId !== c.objectId && !t.cc && !t.stale && alive(t));
+}
+
+/** A leg of a longer walk: its own timeout is how it hands the next turn the decision, so only a real failure (stuck, no way there) is one. */
+function reportLeg(ctx: MemberContext, w: { success: boolean; reason?: string; message?: string }): void {
+    if (!w.success && w.reason !== 'timeout') ctx.result('walk', w);
+}
 
 /** Not under a crowd-control assignment, or under one for longer than peelAfterMs (the mezz didn't land). */
 function uncontrolled(ctx: MemberContext<TacticsSettings>, t: Contact, now: number): boolean {
@@ -132,8 +177,15 @@ export function foeInView(ctx: MemberContext, id: number): NearbyNpc | NearbyPla
     return ctx.sdk.getNearbyNpc(id) ?? ctx.sdk.getNearbyPlayer(id);
 }
 
-/** Dead in our own client: a player by its dead flag or death event only (see alive), a monster at 0 %. */
-const isDown = (f: NearbyNpc | NearbyPlayer) => (f.kind === 'player' ? f.isDead : f.healthPercent <= 0);
+/**
+ * Dead in our own client: a player by its dead flag, a monster at 0 % with a fresh death event.
+ * Under 1 % reads 0 alive (GameLiving.cs:2621): stopping on that loses the kill's last seconds.
+ */
+export function isDown(ctx: MemberContext, f: NearbyNpc | NearbyPlayer): boolean {
+    if (f.kind === 'player') return f.isDead;
+    const state = ctx.sdk.getState();
+    return f.healthPercent <= 0 && !!state && diedLately(state, f.objectId);
+}
 
 /**
  * An action refused because we are mezzed or stunned (reason 'crowd_controlled': "You can't attack when
@@ -147,7 +199,7 @@ async function waitOutSelfCc(r: { success: boolean; reason?: string; retryAfterM
     return true;
 }
 
-async function stopSwinging(ctx: MemberContext): Promise<void> {
+export async function stopSwinging(ctx: MemberContext): Promise<void> {
     if (ctx.me().attacking) await ctx.sdk.sendAttack(false);
 }
 
@@ -165,7 +217,7 @@ export function pickStyleFromSeen(pick: StylePick, seen: Parameters<StylePick>[0
 }
 
 /** Members (by name) busy with `kind` on `targetId`, started within `withinMs`. */
-function claimedBy(ctx: MemberContext, kind: string, targetId: number, withinMs: number): string[] {
+export function claimedBy(ctx: MemberContext, kind: string, targetId: number, withinMs: number): string[] {
     const now = Date.now();
     return ctx.members().filter(m => m.name !== ctx.name && m.activity.kind === kind && m.activity.targetId === targetId && now - m.activity.since < withinMs).map(m => m.name);
 }
@@ -175,7 +227,7 @@ export function formationSlot(ctx: MemberContext<TacticsSettings>, anchor: Point
     const same = ctx.members().filter(m => m.role === ctx.role).map(m => m.name);
     const away = facing && dist(anchor, facing) > 1 ? Math.atan2(anchor.y - facing.y, anchor.x - facing.x) : 0;
     const o = formationOffset(ctx.settings.formation, ctx.role, Math.max(0, same.indexOf(ctx.name)), away);
-    return { x: Math.round(anchor.x + o.x), y: Math.round(anchor.y + o.y) };
+    return keepOnMap(ctx.me().regionId, anchor, { x: Math.round(anchor.x + o.x), y: Math.round(anchor.y + o.y) });
 }
 
 /** Offset of the `index`-th member of `role` from the anchor, with `away` the angle from the facing point to the anchor. */
@@ -298,6 +350,7 @@ export const retreat = (): Behavior<TacticsSettings> => ({
 /**
  * Not the tank and a monster is on us, or an enemy player in melee reach (onMember): run to the tank
  * so it can take it back (peelTarget). A player nuking us from range is left to crowd control and the focus.
+ * A rooted one with us in its reach too: it swings on, and can't follow. The tank leaves it be, so this is all it takes.
  */
 export const flee = (): Behavior => ({
     name: 'flee',
@@ -305,11 +358,12 @@ export const flee = (): Behavior => ({
         if (ctx.isTank()) return false;
         const tank = ctx.tank();
         const me = ctx.me();
-        if (!tank || !ctx.threats().some(t => onMember(t, me))) return false;
+        const rootedOnUs = (t: Contact) => t.cc?.kind === 'root' && t.target === me.name && dist(t, me) <= MELEE_REACH;
+        if (!tank || !ctx.threats().some(t => onMember(t, me) || rootedOnUs(t))) return false;
         if (dist(me, tank) < 150) return ctx.skip('attacked, already at the tank');
         await stopSwinging(ctx);
         ctx.doing('flee', null, `to ${tank.name}`);
-        await ctx.bot.walkTo(tank.x, tank.y, { z: tank.z, tolerance: 60, timeout: 6000 });
+        reportLeg(ctx, await ctx.bot.walkTo(tank.x, tank.y, { z: tank.z, tolerance: 60, timeout: 6000 }));
         return true;
     },
 });
@@ -335,7 +389,8 @@ export const heal = (opts: { emergencyOnly?: boolean; limits?: Partial<TacticsSe
             .sort((a, b) => a.hp - b.hp)[0];
         if (!hurt) return false;
         const sp = ctx.spells.heal(hurt.maxHp ? hurt.maxHp * (100 - hurt.hp) / 100 : undefined);
-        if (!sp) return ctx.skip('heal: not enough power');
+        // None at all is no shortage of power (spells.heal reads null for both).
+        if (!sp) return ctx.spells.capabilities().heal ? ctx.skip('heal: not enough power') : false;
         await stopSwinging(ctx);
         ctx.doing('heal', hurt.objectId, sp.spell.name);
         const c = await ctx.bot.castSpell(sp.spell, hurt.objectId);
@@ -346,7 +401,7 @@ export const heal = (opts: { emergencyOnly?: boolean; limits?: Partial<TacticsSe
 });
 
 /**
- * Mezz (or, without a mezz, root) our crowd-control assignment; without `assignedOnly`,
+ * Mezz (or, without a mezz or at an NPC a mezz can't take, root) our crowd-control assignment; without `assignedOnly`,
  * also any add (not the focus) attacking the group that nobody controls or is mezzing yet.
  */
 export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<TacticsSettings> => ({
@@ -363,20 +418,27 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         const immuneNow = (c: Contact) => immune.has(ckey(c)) || (c.ccImmuneUntil ?? 0) > Date.now();
         const live = (id: number) => { const c = ctx.contact(id); return c && !c.stale && alive(c) && !c.cc && !immuneNow(c) ? c : undefined; };
         const assigned = o.cc.filter(a => a.by === ctx.name).map(a => live(a.targetId)).filter(c => !!c);
+        // Not an enemy pet: a mezz is worth more on its owner, and a Theurgist's are immune (MezzImmunity in npctemplate.sql).
         const extra = opts.assignedOnly ? [] : ctx.threats()
-            .filter(t => t.objectId !== o.focus && !t.cc && !immuneNow(t) && !o.cc.some(a => a.targetId === t.objectId) && !claimedBy(ctx, 'cc', t.objectId, 4000).length);
+            .filter(t => t.objectId !== o.focus && !t.cc && !t.isPet && !immuneNow(t) && !o.cc.some(a => a.targetId === t.objectId) && !claimedBy(ctx, 'cc', t.objectId, 4000).length);
+        const ready = assigned.length || extra.length ? ctx.spells.cc({ aoe: ctx.settings.aoe }) : null;
+        // A mezz at an NPC under 75 % only costs the power (a6: six casts at 68-63 %), and a root takes it all the same. An assignment can be older than the health: the coordinator's next tick drops one we can't carry out (assignCc).
+        const spellFor = (c: Contact) => (ready?.kind === 'mezz' && mezzRefuses(c) ? ctx.spells.root() : ready);
+        const takes = (c: Contact) => !ready || !!spellFor(c);
+        const mine = assigned.filter(takes), others = extra.filter(takes);
         // Others see some, we don't (an assignment while we walk back from a release): the first we can cast on.
         const visible = (c: Contact) => !!foeInView(ctx, c.objectId);
-        const target = assigned.find(visible) ?? extra.find(visible);
-        if (!target) return assigned.length || extra.length ? ctx.skip('cc: target not in view') : false;
-        const sp = ctx.spells.cc({ aoe: ctx.settings.aoe });
+        const target = mine.find(visible) ?? others.find(visible);
+        if (!target) return mine.length || others.length ? ctx.skip('cc: target not in view') : false;
+        const sp = spellFor(target);
         if (!sp) return ctx.skip('cc: no mezz or root ready');
         await stopSwinging(ctx);
         ctx.doing('cc', target.objectId, sp.spell.name);
+        await petOffForCc(ctx, target);
         const c = await ctx.bot.castSpell(sp.spell, target.objectId);
         ctx.result('cc', c, target.objectId);
         // The cast went off, but the target is already mezzed or still immune from the last one (a player for 60 s
-        // after a mezz ends, a mob after repeated ones: CCSpellHandler.CheckSpellResist): not controlled, and
+        // after a mezz ends, a mob after repeated ones: CCSpellHandler.CheckSpellResist), or fell under 75 % during the cast: not controlled, and
         // recasting on it would only repeat that.
         if (c.effectImmune) {
             immune.set(ckey(target), Date.now() + CC_IMMUNE_MS);
@@ -386,12 +448,46 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
             if (sp.kind === 'mezz') ctx.markCcImmune(target.objectId, CC_IMMUNE_MS);
         }
         else if (c.success && !c.resisted) ctx.markCc(target.objectId, sp.kind, Math.max(3000, sp.duration * 900));
+        // castSpell knows without a send that this can't land (a peace flag, our realm, ourselves): the next add gets the turn.
+        else if (c.reason === 'invalid_target' || c.reason === 'not_attackable' || c.reason === 'no_target') immune.set(ckey(target), Date.now() + CC_IMMUNE_MS);
         else if (await waitOutSelfCc(c)) return true;
         // PvP immunity (reason 'immune': up to 10 s after a port, login or release) and "You must wait": try again shortly.
         else if (c.retryAfterMs) await Bun.sleep(Math.min(c.retryAfterMs, 3000));
         // The spell list's power cost can trail the server's ("You don't have enough power"): don't retry every turn.
         else if (c.reason === 'no_power') await Bun.sleep(2000);
         return true;
+    },
+});
+
+/**
+ * A melee or tank member's weapon. As the run starts its best melee slot goes in hand, once (bot.takeMeleeSlot): the state can't say which is active, a login leaves whichever was last, and a Hunter with Sword 1 and Spear 10 fought with the sword.
+ * For a tank that goes by the style it will open with. Two weapons that style and spec don't tell apart stay as the owner left them (keepOnTie): one of them can be a two-hander it equipped on purpose, which comes out by itself, and no style line would bring it back. Later, on "This style requires a X weapon!", which a style picked by what is worn can earn (styles.ts canWield), the slot holding X, once for each X: killNpc does the same in its fight, and assist's melee has only this. It takes no turn.
+ */
+export const hand = (): Behavior<TacticsSettings> => ({
+    name: 'hand',
+    async run(ctx) {
+        const me = ctx.me();
+        if (!me || me.isDead) return false;
+        const messages = ctx.sdk.getGameMessages();
+        const seen: number | undefined = ctx.memory.get('handSeen');
+        ctx.memory.set('handSeen', messages.at(-1)?.id ?? seen ?? 0);
+        if (seen === undefined) {
+            const { taunt, damage } = ctx.isTank() ? tankStyles(ctx.sdk.getSkills().styles ?? [], ctx.sdk.getState()?.equipment ?? []) : { taunt: null, damage: null };
+            const opener = damage ?? taunt;
+            const r = await ctx.bot.takeMeleeSlot({ ...(opener ? { styles: [opener] } : {}), keepOnTie: true });
+            ctx.note(`hand: ${r.message}`);
+            return false;
+        }
+        const took: Set<string> = ctx.memory.get('handTook') ?? new Set();
+        ctx.memory.set('handTook', took);
+        for (const m of messages) {
+            const weapon = m.id > seen ? STYLE_NEEDS_WEAPON.exec(m.text)?.[1] : undefined;
+            if (!weapon || took.has(weapon)) continue;
+            took.add(weapon);
+            const r = await ctx.bot.takeMeleeSlot({ weapon });
+            ctx.note(`hand: ${r.message}`);
+        }
+        return false;
     },
 });
 
@@ -412,18 +508,22 @@ export const pull = (): Behavior<TacticsSettings> => ({
             if (!o.anchor || dist(me, o.anchor) < 120) return ctx.skip('pull: waiting for it at the anchor');
             await stopSwinging(ctx);
             ctx.doing('pull', mob.objectId, 'back to the anchor');
-            await ctx.bot.walkTo(o.anchor.x, o.anchor.y, { tolerance: 80, timeout: 20_000 });
+            const w = await ctx.bot.walkTo(o.anchor.x, o.anchor.y, { tolerance: 80, timeout: 20_000 });
+            if (!w.success) ctx.result('walk', w);
             return true;
         }
         if (!ctx.sdk.getNearbyNpc(mob.objectId)) {
+            // Already there and it isn't: a walk would "arrive" every turn until the coordinator gives up on the pull.
+            if (dist(me, mob) <= 300) return ctx.skip('pull: focus not at its last position');
             ctx.doing('pull', mob.objectId, 'to its last position');
-            await ctx.bot.walkTo(mob.x, mob.y, { z: mob.z, tolerance: 300, timeout: 20_000 });
+            const w = await ctx.bot.walkTo(mob.x, mob.y, { z: mob.z, tolerance: 300, timeout: 20_000 });
+            if (!w.success) ctx.result('walk', w);
             return true;
         }
         ctx.doing('pull', mob.objectId, mob.name);
         const a = await ctx.bot.attack(mob.objectId, { timeout: 15_000 });
         ctx.result('pull', a, mob.objectId);
-        if (!a.success) return true;
+        if (!a.success) { await waitOutSelfCc(a); return true; }
         await ctx.sdk.waitForCondition(() => ctx.sdk.getNearbyNpc(mob.objectId)?.targetObjectId === ctx.me().objectId, 6000).catch(() => null);
         if (far) await stopSwinging(ctx);
         return true;
@@ -531,8 +631,10 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
         if (!mob) return ctx.skip('tank: focus unknown');
         if (mob === focus && away) return ctx.skip('tank: focus beyond the chase leash, no enemy inside it');
         if (!foeInView(ctx, mob.objectId)) {
+            // Already there and it isn't: a walk would "arrive" every turn until the board drops it.
+            if (dist(ctx.me(), mob) <= 200) return ctx.skip('tank: target not at its last position');
             ctx.doing('move', mob.objectId, add ? `to the add on ${add.target}` : stand ? 'to the nearest enemy inside the leash' : 'to the focus');
-            await ctx.bot.walkTo(mob.x, mob.y, { z: mob.z, tolerance: 200, timeout: 10_000 });
+            reportLeg(ctx, await ctx.bot.walkTo(mob.x, mob.y, { z: mob.z, tolerance: 200, timeout: 10_000 }));
             return true;
         }
         const { taunt, damage } = tankStyles(ctx.sdk.getSkills().styles ?? [], ctx.sdk.getState()?.equipment ?? []);
@@ -545,12 +647,11 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
                 const c = ctx.contact(mob.objectId);
                 return !c || !!c.cc || (c.target === ctx.name && Date.now() - c.targetSince > 1500);
             };
-            // Let it go the moment it runs beyond the leash, measured from the anchor every 500 ms. The chase
-            // limit counts from where WE started, so it stays a wide backstop: capped at the leash, a focus
-            // inside the leash of a moved anchor but 2000+ from us failed out_of_reach before the first step.
+            // Let it go the moment it runs beyond the leash, measured from the anchor every 500 ms (the anchor can move,
+            // CHASE_LIMIT only counts from where it stood): that ends the chase, and the limit stays a wide backstop.
             const gone = () => { const c = ctx.contact(mob.objectId); return !!c && beyondLeash(ctx, c); };
             const k = await until(add ? () => held() || gone() : () => peelTarget(ctx) !== null || gone() || focusBack(),
-                () => ctx.bot.killPlayer(mob.objectId, { useStyle: seen => opts.style ? opts.style(seen) : damage, timeout: add || stand ? 20_000 : 90_000, maxChaseDistance: 3000 + (ctx.settings.chaseLeash ?? 0) }));
+                () => ctx.bot.killPlayer(mob.objectId, { useStyle: seen => opts.style ? opts.style(seen) : damage, timeout: add || stand ? 20_000 : 90_000, maxChaseDistance: CHASE_LIMIT + (ctx.settings.chaseLeash ?? 0) }));
             if (k) ctx.result('kill', k, mob.objectId);
             if (k?.reason === 'immune') await Bun.sleep(1500);
             await waitOutSelfCc(k);
@@ -579,13 +680,14 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
                 const c = ctx.contact(add.objectId);
                 return !c || !!c.cc || (c.target === ctx.name && Date.now() - c.targetSince > 1500);
             };
-            const k = await until(held, () => ctx.bot.killNpc(add.objectId, { force: true, useStyle, timeout: 20_000, maxChaseDistance: 3000 }));
+            // usePet false, here and below: in a group petControl is the one authority over the pet (pets.ts).
+            const k = await until(held, () => ctx.bot.killNpc(add.objectId, { force: true, useStyle, timeout: 20_000, maxChaseDistance: CHASE_LIMIT, usePet: false }));
             if (k) ctx.result('kill', k, add.objectId);
             await waitOutSelfCc(k);
             return true;
         }
         ctx.doing('melee', mob.objectId, 'tank');
-        const k = await until(() => peelTarget(ctx) !== null || focusBack(), () => ctx.bot.killNpc(mob.objectId, { force: true, useStyle, timeout: 90_000, maxChaseDistance: 3000 }));
+        const k = await until(() => peelTarget(ctx) !== null || focusBack(), () => ctx.bot.killNpc(mob.objectId, { force: true, useStyle, timeout: 90_000, maxChaseDistance: CHASE_LIMIT, usePet: false }));
         if (k) ctx.result('kill', k, mob.objectId);
         await waitOutSelfCc(k);
         return true;
@@ -617,8 +719,8 @@ export const guard = (): Behavior<TacticsSettings> => ({
             if (Date.now() - (ctx.memory.get(`${ability}At`) ?? 0) < 10_000) continue;
             ctx.memory.set(`${ability}At`, Date.now());
             await stopSwinging(ctx);
-            await ctx.sdk.sendSetTarget(m.objectId);
             ctx.doing('guard', null, `${ability} ${m.name}`);
+            await ctx.sdk.sendSetTarget(m.objectId);
             const r = await ctx.bot.useAbility(new RegExp(`^${ability}`, 'i'));
             // "You are now guarding Brigid, but you must stand closer." is a success (it works once we are near).
             const on = r.messages.find(x => /You are now (guarding|protecting)/.test(x.text));
@@ -634,19 +736,23 @@ export const guard = (): Behavior<TacticsSettings> => ({
  * counted from the engage order for a mob that ran there (a body pull carried home: the server
  * hides a running mob's target, so its targetSince only starts when it stops), or once it has
  * fought for assistAfterMs whoever it hits. Without a living tank: at once.
+ *
+ * A mob on a pet counts the same, for casters and pets alike: on the tank's own pet it is held by the tank, and on another member's it is
+ * held once it has read on that pet for holdMs. A nuke can pull it off that one, but it no longer waits 6 s with the mob safe (a defensive pet takes a mob in ~33 ms, unordered: ControlledMobBrain.cs:614-638).
+ * The report's tank hold % stays strict: only the tank itself (observer.ts).
  */
-export function holdState(mob: Pick<Contact, 'target' | 'targetSince' | 'movedAt' | 'engagedAt' | 'hostileSince'>, tankName: string | null, holdMs: number, assistAfterMs: number, now: number): { held: boolean; dueAt: number } {
+export function holdState(mob: Pick<Contact, 'target' | 'targetPet' | 'targetSince' | 'movedAt' | 'engagedAt' | 'hostileSince'>, tankName: string | null, holdMs: number, assistAfterMs: number, now: number): { held: boolean; dueAt: number } {
     if (!tankName) return { held: true, dueAt: now };
     // A carried mob keeps its last target (and so stays hostile) all the way home: both clocks start at the engage order.
     const floor = (t: number) => (mob.movedAt > 0 ? Math.max(t, mob.engagedAt || now) : t);
-    const dueAt = Math.min(mob.target === tankName ? floor(mob.targetSince) + holdMs : Infinity, mob.hostileSince > 0 ? floor(mob.hostileSince) + assistAfterMs : Infinity);
+    const dueAt = Math.min(mob.target === tankName || mob.targetPet ? floor(mob.targetSince) + holdMs : Infinity, mob.hostileSince > 0 ? floor(mob.hostileSince) + assistAfterMs : Infinity);
     return { held: now >= dueAt, dueAt };
 }
 
 /**
  * Damage dealer: once the tank has held the focus (holdState, holdMs or opts.holdMs; a holdMs of 0
  * doesn't wait at all), nuke it (the best DoT family once, then direct damage), or melee with `melee`.
- * Never touches crowd-controlled mobs.
+ * Never touches a mezzed mob, nor a rooted one while anything else in the fight is free (ccHolds).
  * Melee leaves a focus beyond the chase leash for the nearest enemy inside it (leashFallback).
  * `style` picks the styles of its melee (fighterStyle, or a character's own); without one it swings plain.
  */
@@ -658,12 +764,14 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
         if (o.phase !== 'engage' || o.focus === null) return false;
         const focus = ctx.focus();
         if (!focus || !alive(focus)) return ctx.skip('assist: focus unknown');
-        if (focus.cc) return ctx.skip('assist: focus is crowd-controlled');
+        // Ids are per region (Region.cs:151, :779): what holds it in our view here is something else, and its position means nothing here. holdFormation brings us back.
+        if (focus.regionId !== ctx.me().regionId) return ctx.skip('assist: focus in another region');
+        if (ccHolds(ctx, focus)) return ctx.skip('assist: focus is crowd-controlled');
         const mob = opts.melee && beyondLeash(ctx, focus) ? leashFallback(ctx) : focus;
         if (!mob) return ctx.skip('assist: focus beyond the chase leash, no enemy inside it');
         // The picture can trail a death by a snapshot; our own client knows first.
         const seen = foeInView(ctx, mob.objectId);
-        if (seen && isDown(seen)) return ctx.skip('assist: focus just died');
+        if (seen && isDown(ctx, seen)) return ctx.skip('assist: focus just died');
         if (!seen) {
             // Others see it, we don't (beyond our view): close in on where the group last saw it.
             const me0 = ctx.me();
@@ -672,7 +780,7 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
             if (d <= stop) return ctx.skip('assist: focus not in view');
             const f = (d - stop) / d;
             ctx.doing('move', mob.objectId, 'toward the focus');
-            await ctx.bot.walkTo(me0.x + (mob.x - me0.x) * f, me0.y + (mob.y - me0.y) * f, { tolerance: 100, timeout: 6000 });
+            reportLeg(ctx, await ctx.bot.walkTo(me0.x + (mob.x - me0.x) * f, me0.y + (mob.y - me0.y) * f, { tolerance: 100, timeout: 6000 }));
             return true;
         }
         const tankM = ctx.tank();
@@ -690,6 +798,12 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
             const sp = ctx.spells.nuke({ dotted, targetHp: mob.hp, aoe: ctx.settings.aoe });
             if (sp) {
                 await stopSwinging(ctx);
+                // castSpell would walk this and cast in one turn, up to 15 s live with a pet going from 49 % to 9 % behind it. A step instead, back to the list; a cast itself is never cut.
+                if (seen.distance > sp.range) {
+                    ctx.doing('move', mob.objectId, `into range for ${sp.spell.name}`);
+                    reportLeg(ctx, await ctx.bot.walkToObject(seen, { range: Math.max(100, sp.range * 0.85), timeout: ASSIST_STEP_MS }));
+                    return true;
+                }
                 ctx.doing('nuke', mob.objectId, sp.spell.name);
                 const c = await ctx.bot.castSpell(sp.spell, mob.objectId);
                 ctx.result('nuke', c, mob.objectId);
@@ -719,6 +833,11 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
         return true;
     },
 });
+
+/** Not off the map either, as far as there is one to go by where we stand (onMap, keepOnMap). */
+function inBounds(me: PlayerState, safe: (p: Point) => boolean): (p: Point) => boolean {
+    return onMap(me.regionId, me) ? p => safe(p) && onMap(me.regionId, p) : safe;
+}
 
 /**
  * Stay within our role's limits from the fight (combatRange, narrowed by the spell we cast;
@@ -751,7 +870,7 @@ export const position = (): Behavior<TacticsSettings> => ({
             me, anchor: o.anchor, stops: dangerStops(around, ctx.members(), me, now),
             focus: { x: at.x, y: at.y, d3: live?.distance ?? dist(me, at) },
             settled: focusSettled({ focus: mob, at, tank: ctx.tank(), speed: live?.kind === 'npc' ? live.speed : undefined, trail, now }),
-            min, max, safe: safeSpot(me.regionId, me.level, ctx.settings.aggroTolerance ?? -3),
+            min, max, safe: inBounds(me, safeSpot(me.regionId, me.level, ctx.settings.aggroTolerance ?? -3)),
         });
         if (!spot) return false;
         if (!spot.to) return ctx.skip('position: no safe spot');
@@ -821,11 +940,13 @@ export function needsSlot(o: { dSlot: number; dAnchor: number; phase: string; sl
     return !(o.dSlot < o.slack && o.dAnchor < (o.gatherRadius ?? 1200) - 100 && o.safe);
 }
 
-/** While the group waits: sit until rest.hp / rest.mana. */
+/** While the group waits: sit until rest.hp / rest.mana, or until the power summonPet above asks for (REST_MANA_UP_TO), which gets the next turn. */
 export const rest = (): Behavior<TacticsSettings> => ({
     name: 'rest',
     async run(ctx) {
         if (!QUIET_PHASES.has(ctx.orders().phase) || ctx.threats().length) return false;
+        const busy: { until: number; why: string } | undefined = ctx.memory.get('restBusy');
+        if (busy && Date.now() < busy.until) return ctx.skip(busy.why);
         const me = ctx.me();
         const r = ctx.settings.rest;
         const caster = me.maxMana > 0;
@@ -833,8 +954,17 @@ export const rest = (): Behavior<TacticsSettings> => ({
         // rest() refuses while any NPC in view targets us, even one leashing home far away.
         const on = ctx.bot.getAttackers()[0] ?? ctx.bot.getPlayerAttackers()[0];
         if (on) return ctx.skip(`rest: ${on.name} targets us (${Math.round(on.distance)} away)`);
-        ctx.doing('rest');
-        const res = await ctx.bot.rest({ healthPercent: r.hp, manaPercent: caster ? r.mana : undefined, timeout: 120_000 });
+        const upTo: number | undefined = ctx.memory.get(REST_MANA_UP_TO);
+        ctx.doing('rest', null, upTo !== undefined ? SAVING_POWER : '');
+        const res = await ctx.bot.rest(caster && upTo !== undefined && upTo < r.mana
+            ? { healthPercent: 0, manaPercent: upTo, timeout: 120_000 }
+            : { healthPercent: r.hp, manaPercent: caster ? r.mana : undefined, timeout: 120_000 });
+        // No failure, as for a mob on us above, and it cost no send. The line says who.
+        if (res.reason === 'in_combat') {
+            const why = `rest: ${res.message}`;
+            ctx.memory.set('restBusy', { until: Date.now() + REST_BUSY_MS, why });
+            return ctx.skip(why);
+        }
         if (!res.success) { ctx.result('rest', res); return ctx.skip(`rest: ${res.reason}`); }
         return true;
     },
@@ -889,7 +1019,7 @@ export const song = (): Behavior<TacticsSettings> => ({
 });
 
 /** How long to leave a (buff, target) alone after a cast, by its outcome. */
-function buffRetryMs(c: { success: boolean; reason?: string; message?: string }): number {
+export function buffRetryMs(c: { success: boolean; reason?: string; message?: string }): number {
     if (c.success) return 20_000;   // the effect shows up in the target's report within a few snapshots
     if (/concentration/i.test(c.message ?? '')) return 300_000;
     if (c.reason === 'out_of_range' || c.reason === 'interrupted' || c.reason === 'must_wait') return 8_000;
@@ -980,11 +1110,11 @@ export const meleeFight = () => assist({ melee: true, holdMs: 0, style: fighterS
 /** The behaviour lists the default strategies use, by role. */
 export function defaultBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
-        tank: [release(), healer(), sprint(), retreat(), pull(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
+        tank: [release(), hand(), healer(), sprint(), retreat(), pull(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
         healer: [release(), healer(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
         support: [release(), healer(), sprint(), retreat(), heal({ emergencyOnly: true }), flee(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
         nuker: [release(), healer(), sprint(), retreat(), flee(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
-        melee: [release(), healer(), sprint(), retreat(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
+        melee: [release(), hand(), healer(), sprint(), retreat(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
     };
 }
 

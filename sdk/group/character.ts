@@ -28,7 +28,7 @@ export interface Character<S = any> {
 }
 
 /** The behaviours a role's list fights with. */
-const ROLE_FIGHT = new Set(['tank', 'assist', 'assistMelee']);
+export const ROLE_FIGHT: ReadonlySet<string> = new Set(['tank', 'assist', 'assistMelee']);
 
 /**
  * A role's list with a character's behaviours in it. A list without a fight (a healer's) takes them

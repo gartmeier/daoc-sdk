@@ -109,6 +109,34 @@ export function decodeTradeWindow(p: Uint8Array): TradePacket | null {
     return { mySlots, myMoney, partnerMoney, partnerItems, partnerName: /^Trading with (.+)$/.exec(r.pascal())?.[1] ?? null };
 }
 
+/** action: 2 open, 1 update, 0 close. aggro: 1 aggressive, 2 defensive, 3 passive. walk: 1 follow, 2 stay, 3 go to target, 4 come here. */
+export interface PetWindowPacket {
+    objectId: number;
+    action: number;
+    aggro: number;
+    walk: number;
+    icons: number[];
+}
+
+/**
+ * 0x88 PetWindow (PacketLib181.cs:102-176; no later lib overrides it): u16 pet, 2 x 0, u8 action, u8 aggro, u8 walk,
+ * u8 0, u8 n, n x u16 icon. A close is sent as (null, Close, 0, 0), and enum 0 is Aggressive and Follow
+ * (CharacterClassBase.cs:305, IControlledBrain.cs:8-30): it names no pet and its aggro and walk read 1, 1. Never read them from one.
+ */
+export function decodePetWindow(p: Uint8Array): PetWindowPacket {
+    const r = new PacketReader(p);
+    const objectId = r.u16();
+    r.skip(2);
+    const action = r.u8();
+    const aggro = r.u8();
+    const walk = r.u8();
+    r.skip(1);
+    const count = r.u8();
+    const icons: number[] = [];
+    for (let i = 0; i < count; i++) icons.push(r.u16());
+    return { objectId, action, aggro, walk, icons };
+}
+
 /** 0x70 GroupMemberUpdate (PacketLib168.cs:1644-1690, writers PacketLib1125.cs:418-480): records ending in 0x00. */
 export type GroupRecord =
     | { kind: 'status'; groupIndex: number; healthPercent: number; manaPercent: number; endurancePercent: number; status: number }

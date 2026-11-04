@@ -14,6 +14,7 @@ import { BotDisconnectedError, BotPreemptedError, runScript, type ScriptContext 
 import { Blackboard } from './blackboard';
 import { MemberAgent, type Behavior, type Member } from './member';
 import { withCharacter } from './character';
+import { leftPassive, petAfterRun, petHoldOf, petKit, petLeftAlone, petsAllowed, withPets } from './pets';
 import { formatReport, GroupObserver, saveReport, stampOf, type Finding, type RunReport } from './observer';
 import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type PublisherDeps } from './publish';
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
@@ -88,12 +89,19 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     const startedAt = Date.now();
     // The strategy's own rules join the observer's, in the live score and the saved report.
     const strategyFindings = strategy.findings && ((r: RunReport) => strategy.findings!(r, settings));
-    const behaviorsOf = (m: Member) => strategy.memberBehaviors?.[m.bot] ?? withCharacter(strategy.behaviors[m.role] ?? strategy.behaviors.melee, m.character);
+    const petsOn = petsAllowed(settings);
+    // Once per member: what it has a use for is decided by its spells and window as the run starts.
+    const lists = new Map<string, Behavior<S>[]>();
+    const behaviorsOf = (m: Member) => {
+        let list = lists.get(m.bot);
+        if (!list) lists.set(m.bot, list = withPets(strategy.memberBehaviors?.[m.bot] ?? withCharacter(strategy.behaviors[m.role] ?? strategy.behaviors.melee, m.character), petsOn ? petKit(m.sdk, m.actions) : null));
+        return list;
+    };
     const routines = Object.fromEntries(members.map(m => [m.bot, {
         from: strategy.memberBehaviors?.[m.bot] ? 'strategy' as const : m.character ? 'character' as const : 'role' as const,
         behaviors: behaviorsOf(m).map(b => b.name),
     }]));
-    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name, startedAt, findings: strategyFindings, routines });
+    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name, startedAt, findings: strategyFindings, routines, petHoldMs: petHoldOf(settings) });
     const graceMs = opts.graceMs ?? 60_000;
     // Planned until the main loop starts; a wind-down from the viewer only moves them earlier.
     let deadline = startedAt + opts.seconds * 1000;
@@ -114,6 +122,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     let started = false;
     // Set just before the normal end's own abort, so the abort below can tell it from a failure.
     let finished = false;
+    let loops: Promise<unknown>[] = [];
     try {
         // In here, so the finally always ends it (its timer would publish 'starting' for as long as the process lives).
         publisher = groupPublisher(opts, def, members, { settings, startedAt, graceMs, behaviorsOf }, {
@@ -137,9 +146,10 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         board.onEvent(e => {
             if (isLoggedEvent(e)) log(`${e.member ? `${e.member}: ` : ''}${e.kind === 'orders' ? '» ' : ''}${e.text}`);
         });
-        for (const m of members) agents.push(new MemberAgent(m, board, behaviorsOf(m), settings, strategy.agent));
+        // The observer first: what an agent's first reports set off counts ("15:46:02 Pettan: Pettan died", and the report said deaths 0).
         observer.start();
         started = true;
+        for (const m of members) agents.push(new MemberAgent(m, board, behaviorsOf(m), settings, strategy.agent));
         const coordinator = new Coordinator(board, strategy, settings);
         // A wind-down from the viewer is the timed end, sooner.
         const applyWindDown = (now: number) => {
@@ -157,7 +167,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         // One asked for while starting (the page allows it): before the first tick, which could start a pull.
         applyWindDown(Date.now());
         publisher?.running(() => coordinator.memory, () => ({ windingDown: coordinator.windingDown, deadline, hardStop }));
-        const loops = [coordinator.run(run.signal), ...agents.map(a => a.run(run.signal))].map(p => p.catch(e => { if (!run.signal.aborted) run.abort(e); }));
+        loops = [coordinator.run(run.signal), ...agents.map(a => a.run(run.signal))].map(p => p.catch(e => { if (!run.signal.aborted) run.abort(e); }));
 
         while (!run.signal.aborted) {
             await abortable(Bun.sleep(500), run.signal).catch(() => {});
@@ -180,10 +190,18 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         parent?.removeEventListener('abort', onParent);
         for (const off of offConn) off();
         for (const a of agents) a.dispose();
+        // An agent's run has ended its side tick by the time it settles: nothing orders a pet after the last orders below.
+        await Promise.allSettled(loops);
         // Outside any aborted execution: leave nobody running or swinging.
         await executionContext.exit(() => Promise.allSettled(members.map(async m => {
-            if (!m.sdk.isConnected()) return;
+            const agent = agents.find(a => a.member === m);
+            // The connection another controller cut can't send what lifts it. Pre-empted in a retreat: "pethun pet now hunter's pet passive/follow tgt=null".
+            if (!m.sdk.isConnected()) {
+                if (petsOn && agent && leftPassive(m.sdk, agent.ctx.memory)) log(`${agent.ctx.name}'s pet left passive: the next run lifts it`);
+                return;
+            }
             if (m.sdk.getPlayer()?.attacking) await m.sdk.sendAttack(false);
+            if (petsOn) await petAfterRun(m.sdk, agent?.ctx.memory, petLeftAlone(m.sdk, m.actions));
             await m.sdk.sendStop();
         })));
     }

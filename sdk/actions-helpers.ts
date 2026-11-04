@@ -4,6 +4,8 @@
 
 import { BotSDK, bestNameMatch, distanceBetween, isAttackable, nameMatcher, type NamePattern } from './index';
 import { executionContext, executionWait, throwIfExecutionAborted } from './execution-context';
+import { getClass, getSpells, type StatName } from '../data/index';
+import { EquipmentSlot, isWeapon, ObjectType } from './types';
 import type {
     BotWorldState,
     GameMessage,
@@ -11,7 +13,9 @@ import type {
     NearbyNpc,
     NearbyObject,
     NearbyPlayer,
+    PetCommand,
     PlayerState,
+    Stats,
     Vec3,
 } from './types';
 
@@ -76,13 +80,23 @@ export function isCrowdControlled(text: string): boolean {
  */
 export const PLAYER_AIM_MS = 6000;
 
+/** How long a pet's last swing or spell says who it fights: past a slow pet's swing (4-5 s, or a 3.5 s cast and a 600 ms think). */
+const PET_AIM_MS = 10_000;
+
+/**
+ * The answer to every attack request with the ranged weapon active, and all it does: no attack mode comes, and fight() would resend until its timeout (PlayerAttackRequestHandler.cs:12-18).
+ * An off gets it too, as encodeAttack always says the user asked. Using a melee slot with type 0 switches (GamePlayer.cs:6622-6637).
+ */
+export const RANGED_IN_HAND = "you can't enter melee combat mode with a ranged weapon";
+
 /** Melee refusals: GamePlayer.Attack.*, Skill.Ability.*, AbstractServerRules. */
 export const ATTACK_REFUSALS = [
     ...PVP_IMMUNE_REFUSALS,
     "can't see your target",
     'is not in view',
     'target is not in view',
-    'is too far away to attack',
+    // With its "!": "Your target is too far away to attack with your pet!" answers a pet order and says nothing of our swing.
+    'is too far away to attack!',
     'you are too far away to attack',
     "you can't attack",
     'you cannot attack',
@@ -91,13 +105,16 @@ export const ATTACK_REFUSALS = [
     "can't attack when you are",
     "you can't do that while dead",
     'you have not selected a valid',
+    // A Necromancer in shade (ClassDisciple.cs:91, GamePlayer.txt:39): fight() would resend attack until its timeout.
+    'you cannot enter combat',
+    RANGED_IN_HAND,
 ] as const;
 
 /** Refusals that mean "turn / step closer and try again". */
 export const RETRYABLE_ATTACK_REFUSALS = [
     "can't see your target",
     'is not in view',
-    'is too far away to attack',
+    'is too far away to attack!',
     'you are too far away to attack',
 ] as const;
 
@@ -106,6 +123,116 @@ export function isFatalAttackRefusal(text: string): boolean {
     const t = text.toLowerCase();
     return ATTACK_REFUSALS.some(r => t.includes(r)) && !RETRYABLE_ATTACK_REFUSALS.some(r => t.includes(r));
 }
+
+/** The lines whose styles need a weapon in each hand; the tooltip names the line (Style.GetRequiredWeaponName). */
+export const DUAL_LINES: ReadonlySet<string> = new Set(['Dual Wield', 'Left Axe', 'Hand to Hand', 'Celtic Dual']);
+
+/** The spec a weapon type swings with, in the words of a style's tooltip (SkillBase.m_objectTypeToSpec); a left axe counts as an axe (StyleProcessor.CheckWeaponType). */
+export const WEAPON_LINES: Partial<Record<number, string>> = {
+    [ObjectType.CrushingWeapon]: 'Crush', [ObjectType.SlashingWeapon]: 'Slash', [ObjectType.ThrustWeapon]: 'Thrust',
+    [ObjectType.TwoHandedWeapon]: 'Two Handed', [ObjectType.PolearmWeapon]: 'Polearm', [ObjectType.Staff]: 'Staff', [ObjectType.Flexible]: 'Flexible',
+    [ObjectType.Sword]: 'Sword', [ObjectType.Hammer]: 'Hammer', [ObjectType.Axe]: 'Axe', [ObjectType.LeftAxe]: 'Axe', [ObjectType.Spear]: 'Spear',
+    [ObjectType.Blades]: 'Blades', [ObjectType.Blunt]: 'Blunt', [ObjectType.Piercing]: 'Piercing', [ObjectType.LargeWeapons]: 'Large Weapons',
+    [ObjectType.CelticSpear]: 'Celtic Spear', [ObjectType.Scythe]: 'Scythe',
+};
+
+/** A style that the weapon in hand can't do (StyleProcessor.cs:175; language/EN/GameObjects/GamePlayer.txt:56). The state can't say what is in hand, so this is how we find out. */
+export const STYLE_NEEDS_WEAPON = /^This style requires an? (.+) weapon!$/;
+
+/**
+ * The melee slot that takes in hand what a style needs, by the name its tooltip and "This style requires a X weapon!" give it (Style.GetRequiredWeaponName, StyleProcessor.cs:175), or null when nothing worn is that. A shield or a second weapon goes with the right hand (GamePlayer.cs:6622-6630). 'Any' names no slot.
+ */
+export function slotHolding(need: string, equipment: readonly Pick<InventoryItem, 'slot' | 'objectType'>[]): number | null {
+    const inSlot = (slot: number) => equipment.find(i => i.slot === slot);
+    const right = inSlot(EquipmentSlot.RightHand);
+    const hasRight = !!right && isWeapon(right.objectType);
+    const left = inSlot(EquipmentSlot.LeftHand);
+    if (need === 'Shield') return hasRight && left?.objectType === ObjectType.Shield ? EquipmentSlot.RightHand : null;
+    if (need === 'Hand to Hand') return hasRight && right.objectType === ObjectType.HandToHand && left?.objectType === ObjectType.HandToHand ? EquipmentSlot.RightHand : null;
+    if (DUAL_LINES.has(need)) return hasRight && !!left && left.objectType !== ObjectType.Shield ? EquipmentSlot.RightHand : null;
+    return [right, inSlot(EquipmentSlot.TwoHand)].find(w => w && WEAPON_LINES[w.objectType] === need)?.slot ?? null;
+}
+
+/**
+ * Refusals of a summon, a charm or a spell on a pet, with their reason. Many come only after the whole cast time
+ * (CheckEndCast: the plain pets' "already have", SummonDruidPet.cs:46; a capital, SpellHandler.cs:866-873; every charm
+ * line), so each needs its own reason here: at that point an unknown refusal reads as an interrupt. Sources:
+ * language/EN/Spells.txt:76-85, :109, :132, :135-146, :162-163, SpellHandler.cs:653, SummonTheurgistPet.cs:69,
+ * SummonAnimistFnF.cs:49, SummonMinionHandler.cs:68. A line with nothing of its own here reads 'refused'; the charm that stops
+ * only while the mob fights has its own reason in castFailureReason, since it names the mob. The servant's own come from its side of a
+ * cast we already paid for (AI.txt:5-6, PowerTransfer.cs:29), and nothing else follows: they would read as no answer.
+ */
+export const PET_CAST_REFUSALS: ReadonlyArray<readonly [string, string]> = [
+    ['you already have a charmed creature', 'pet_exists'],
+    ['you must cast this spell on a creature you are controlling', 'no_pet'],
+    ['you must have a pet summoned', 'no_pet'],
+    ["you can't do that here", 'refused'],
+    ['you have too many controlled creatures', 'refused'],
+    ["you can't charm", 'refused'],
+    ['this spell does not charm', 'refused'],
+    ['is too strong for you to charm', 'refused'],
+    ['is currently being controlled', 'refused'],
+    ["can't be charmed", 'refused'],
+    ['you have to set a ground target', 'no_ground_target'],
+    ["you can't summon a turret without a ground target", 'no_ground_target'],
+    ['your ground target is not visible', 'refused'],
+    ['your ground target is not in view', 'refused'],
+    ['you have to select a closer ground target', 'out_of_range'],
+    ["you can't summon a turret", 'refused'],
+    ["you can't summon any more turrets", 'refused'],
+    ['you cannot control any more turrets', 'refused'],
+    ['cannot summon a turret', 'refused'],
+    ['you must have a controlled leader monster', 'refused'],
+    ['your general already has as many followers', 'refused'],
+    ['your commander is not powerful enough', 'refused'],
+    ['you are already a shade', 'refused'],
+    ['your servant is too far away from your target', 'out_of_range'],
+    ["can't see its target", 'out_of_range'],
+    ['you cannot transfer power to yourself', 'invalid_target'],
+];
+
+/** What the server says to a ground target it dropped: over 16 units off the mesh (PlayerGroundTargetHandler.cs:21-33, :63-85). */
+export const GROUND_TARGET_DROPPED = 'your ground target is not visible';
+
+/** That line with what it means: it says nothing of the mesh. With no z passed the height was the client's own already. */
+export function offMeshMessage(line: string, zPassed: boolean): string {
+    return `${line} The spot is off the walkable surface: ${zPassed ? "pass no z to take the ground's, or an NPC's coordinates" : "try another spot, or an NPC's coordinates"}`;
+}
+
+/** Base classes whose spells cost by focus, and so 1.2 down to 0.8 times the price (ClassDisciple.cs:41, ClassElementalist.cs:46, ClassForester.cs:46, ClassMage.cs:46, ClassMagician.cs:46, ClassMystic.cs:46). */
+const FOCUS_BASE_CLASSES = new Set(['Disciple', 'Elementalist', 'Forester', 'Mage', 'Magician', 'Mystic']);
+const STATS_KEY: Record<StatName, keyof Stats> = { STR: 'strength', DEX: 'dexterity', CON: 'constitution', QUI: 'quickness', INT: 'intelligence', PIE: 'piety', EMP: 'empathy', CHR: 'charisma' };
+
+/** Whether this player's spells cost by focus (ClassValewalker.cs:24 is none). With no class to read, yes: that errs towards the larger cost. */
+export function isFocusCaster(p: PlayerState): boolean {
+    const cls = getClass(p.className, p.realm);
+    return !cls || (FOCUS_BASE_CLASSES.has(cls.baseClassName) && cls.name !== 'Valewalker');
+}
+
+/**
+ * The most a spell can cost this player, for what a release has to go by: refusing wrongly costs seconds of regen, passing wrongly the pet (the server knows the real cost).
+ * A positive power is a flat cost, a negative one a percent of the pool without items: level * (mana stat + 145) / 41 + 5, the stat without items too
+ * (SpellHandler.cs:1190-1199, GamePlayer.cs:2478). A focus caster pays 120 % of that with no focus item, and down to 80 % with one (:1204-1221), by items we can't see.
+ * With no such stat yet, or from an older client, maxMana stands in: the most the pool can be, with the items in it (and the pool itself for a class with no mana stat, :1200-1201).
+ */
+export function worstPowerCost(power: number, p: PlayerState): number {
+    const cls = getClass(p.className, p.realm);
+    const stat = cls?.manaStat ? p.statsWithoutItems?.[STATS_KEY[cls.manaStat]] : undefined;
+    const pool = stat === undefined ? p.maxMana : Math.floor(p.level * (stat + 145) / 41) + 5;
+    return Math.floor((power < 0 ? pool * -power / 100 : power) * (isFocusCaster(p) ? 1.2 : 1));
+}
+
+/**
+ * Casting a pulsing spell that is running ends it and casts nothing (CastingComponent.cs:349-366, SpellHandler.cs:501-513).
+ * The first line is for a spell without an instrument, a charm's among them.
+ */
+export const PULSE_CANCELLED = ['you cancel your effect', 'you stop playing your song'] as const;
+
+/** A Corpse spell at the living, or at anyone of another realm (SpellHandler.cs:759-766). */
+export const CORPSE_ONLY = 'This spell only works on dead members of your realm!';
+
+/** Of those below, what only an attack can earn: a spell's own target goes through IsAllowedToAttack for ENEMY alone (SpellHandler.cs:754, :969; a Realm spell's is quiet, :771-775), so beside any other spell they answer something else: a pet's attack order. */
+export const ATTACK_ONLY_REFUSALS: readonly string[] = ["you can't attack", 'you cannot attack', ...PVP_IMMUNE_REFUSALS];
 
 /** Spell refusals and interruptions (SpellHandler.cs, CastingComponent.cs). */
 export const CAST_REFUSALS = [
@@ -129,9 +256,100 @@ export const CAST_REFUSALS = [
     'is interrupted',
     'this spell requires',
     'you cannot cast this spell directly',
-    'you must have a pet summoned',
     "you're phaseshifted",
+    CORPSE_ONLY.toLowerCase(),
+    ...PET_CAST_REFUSALS.map(([text]) => text),
+    ...PULSE_CANCELLED,
 ] as const;
+
+/** "{0} is dead!" to a spell at the dead (SpellHandler.cs:783, HealSpellHandler.cs:78). All before it is a name, so it goes by its end. */
+export const TARGET_IS_DEAD = / is dead!$/;
+
+/** GameLiving.IN_COMBAT_DURATION (GameLiving.cs:31). */
+const MOB_IN_COMBAT_MS = 10_000;
+
+interface MobEffects {
+    /** A mez's or a stun's effect, with the longest it can run in ms. */
+    holds: Map<number, number>;
+    charms: Set<number>;
+}
+
+let mobEffectTable: MobEffects | null = null;
+
+/** A 0x1B's effect is the spell's ClientEffect (SpellHandler.cs:1284-1291), and no spell of another type shares one with these (spell.sql). */
+function mobEffects(): MobEffects {
+    if (mobEffectTable) return mobEffectTable;
+    const table: MobEffects = { holds: new Map(), charms: new Set() };
+    try {
+        for (const sp of getSpells()) {
+            if (sp.type === 'Charm') table.charms.add(sp.clientEffect);
+            else if (sp.type === 'Mesmerize' || sp.type === 'Stun' || sp.type === 'StyleStun') table.holds.set(sp.clientEffect, Math.max(table.holds.get(sp.clientEffect) ?? 0, sp.duration * 1000));
+        }
+    } catch {
+        // No spell table on this install: fights count, and a hold for no longer than one.
+    }
+    return mobEffectTable = table;
+}
+
+/**
+ * Whether the server still calls this mob in combat, by what we saw of it: a fight in the last 10 s, or a mez or a stun on it, which leaves 10 s more behind when it ends
+ * (GameLiving.cs:31, :227, :444; CrowdControlECSEffect.cs:35-46). Its entry can't tell: an 0xA1 names a target only while it attacks and can turn (PacketLib168.cs:820). A charm is no harm to the server (Spell.cs:301-306),
+ * and a death gives the id to the next spawn (Region.cs:955). It errs towards yes, as a hold counts for its whole run: a resisted or a broken mez reads the same.
+ */
+export function mobInCombatLately(s: BotWorldState, mobId: number, now: number = Date.now()): boolean {
+    const { holds, charms } = mobEffects();
+    for (let i = s.combatEvents.length - 1; i >= 0; i--) {
+        const e = s.combatEvents[i]!;
+        if (e.kind === 'death' && e.targetObjectId === mobId) return false;
+        if ((e.kind !== 'melee' && e.kind !== 'spellCast' && e.kind !== 'spellEffect') || (e.attackerObjectId !== mobId && e.targetObjectId !== mobId)) continue;
+        if (e.effectId !== undefined && charms.has(e.effectId)) continue;
+        const hold = e.kind === 'spellEffect' && e.targetObjectId === mobId ? holds.get(e.effectId ?? 0) ?? 0 : 0;
+        if (now - e.receivedAt <= MOB_IN_COMBAT_MS + hold) return true;
+    }
+    return false;
+}
+
+/** Whether that line is about `target` (null: an enemy player, whose real name we don't have). A pet's cast gets it too, relayed to us (SpellHandler.cs:2450-2455). */
+export function isDeadLineOf(text: string, target: string | null): boolean {
+    const who = /^(.+) is dead!$/.exec(text)?.[1]?.toLowerCase();
+    if (who === undefined) return false;
+    return target === null || who.replace(/^the /, '') === target.toLowerCase();
+}
+
+/** A mezz at an NPC under 75 % health: no roll, and the power is spent (CCSpellHandler.cs:174-178). */
+export const ENRAGED_REFUSAL = /your target is enraged and resists the spell/i;
+
+/**
+ * Whether a resist line is about a cast at `target` (null: none named, an area spell say, or an enemy player: the line has the real
+ * name, and we know them by race, NormalServerRules.cs:292-297). Text is all there is, and the server sends us others': a spell our
+ * pet resisted ("Your wolf cub resists the effect!", SpellHandler.cs:2383), our pet's own spell resisted, relayed with its target's
+ * name (:2390, :2446-2456), and one we resisted (:2387). A pet's spell at the same target reads like ours. "Your target is enraged and resists the spell!" is none: nothing was rolled (ENRAGED_REFUSAL).
+ */
+export function isResistOf(text: string, target: string | null): boolean {
+    const who = /^(.+?) resists? the\b/i.exec(text)?.[1]?.toLowerCase();
+    if (who === undefined) return false;
+    if (who === 'you' || who.startsWith('your ')) return false;
+    return target === null || who.replace(/^the /, '') === target.toLowerCase();
+}
+
+/**
+ * Whether a line shows a Necromancer's servant casting a spell of ours: "{0} begins casting a {1} spell!", "{0} cast a
+ * {1} spell!" (Spells.txt:7-8) and "The {0} begins casting the spell!" (AI.txt:7). The sub-spell has the name of the owner's (spell.sql).
+ */
+export function isServantCast(text: string, spellName: string): boolean {
+    if (text.includes('"')) return false; // speech
+    const t = text.toLowerCase();
+    if (/ begins casting the spell!$/.test(t)) return true;
+    return [' begins casting a ', ' begins casting an ', ' cast a ', ' cast an '].some(verb => t.includes(`${verb}${spellName.toLowerCase()} spell!`));
+}
+
+/**
+ * "The {0} will begin casting this spell after its current action is finished." (AI.txt:4). No promise: a later cast replaces the spell, the last one wins and
+ * each is paid (NecromancerPetBrain.cs:50-58, :124, CastingComponent.cs:383-386), and an attack round ending says it with no spell at all, at a death or a release too (NpcAttackAction.cs:238-239, NecromancerPetBrain.cs:113-116).
+ */
+export function isServantQueued(text: string): boolean {
+    return !text.includes('"') && / will begin casting this spell /i.test(text);
+}
 
 /** Style refusals (StyleProcessor.TryToUseStyle.*). */
 export const STYLE_REFUSALS = [
@@ -168,8 +386,12 @@ export const USE_ITEM_REFUSALS = [
     'more second before using another potion',
     "you can't use this item",
     "you can't use ",
+    'cannot use this item', // a recall stone in combat (GatewayPersonalBind.cs:105), a class's armour (GamePlayerInventory.cs:731)
+    'you must be standing still', // a recall stone on the move (GatewayPersonalBind.cs:32, :57, :110)
+    'you move and interrupt your focus', // and the same stone's cast, spell 5998 a focus spell, at our next step (spell.sql, PlayerCastingComponent.cs:70)
     'you need to finish your current action',
     'you must dismount first',
+    'you are already casting', // any item with a spell during a cast, after its attempt line (GamePlayer.cs:7169-7173)
     ...CAST_REFUSALS,
 ] as const;
 
@@ -227,19 +449,53 @@ export const TRADE_COMMIT_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
 /** PlayerTradeWindow.cs:676-677. It comes before the close, after the inventory changes. */
 export const TRADE_COMPLETED = /^Trade Completed\. \d+ items for \d+ items\.$/;
 
-export interface TradeLine {
+export interface ReasonLine {
     reason: string;
     text: string;
 }
 
-/** The first message on one of those tables, with its reason. */
-export function firstTradeLine(messages: readonly GameMessage[], table: ReadonlyArray<readonly [RegExp, string]>): TradeLine | null {
+/** The first message on a table of lines with their reasons (trade, pets). */
+export function firstReasonLine(messages: readonly GameMessage[], table: ReadonlyArray<readonly [RegExp, string]>): ReasonLine | null {
     for (const m of messages) {
         const hit = table.find(([pattern]) => pattern.test(m.text));
         if (hit) return { reason: hit[1], text: m.text };
     }
     return null;
 }
+
+/** The server's answer to each pet order (language/EN/GameObjects/GameLiving.txt:54-62): a repeat sends no 0x88, so this is the evidence. A release has its own: the window closes. */
+export const PET_ANSWERS: Readonly<Record<Exclude<PetCommand, 'release'>, RegExp>> = {
+    attack: /^You command .+ to kill your target!$/,
+    follow: /^You command .+ to follow you!$/,
+    stay: /^You command .+ to stay in this position!$/,
+    comeHere: /^You command .+ to come to you\.$/,
+    goTarget: /^You command .+ to go to your target\.$/,
+    passive: /^You command .+ to disengage from combat!$/,
+    aggressive: /^You command .+ to attack all enemies!$/,
+    defensive: /^You command .+ to defend you!$/,
+};
+
+/**
+ * Refusals of a pet order, with their reason. Sources: GameLiving.txt:36, :53, GamePlayer.cs:12263-12265, and
+ * IsAllowedToAttack(player, target, quiet: false) for an attack (GamePlayer.cs:12182): AbstractServerRules.cs:350-375,
+ * :450-455, NormalServerRules.cs:38-72. That one says nothing about a dead target or a peace flag.
+ */
+export const PET_REFUSALS: ReadonlyArray<readonly [RegExp, string]> = [
+    [/^Your target is too far away to attack with your pet!$/, 'out_of_range'],
+    [/^Your target is too far away for your pet to reach!$/, 'out_of_range'],
+    [/^You must select a destination for your controlled creature\.$/, 'no_target'],
+    [new RegExp(PVP_IMMUNE_REFUSALS.join('|'), 'i'), 'immune'],
+    [/^You can't attack /, 'not_attackable'],
+];
+
+/** "The {0} is now under your control." (SummonSpellHandler.cs:66), or the charm's "{0} is now ..." with its article already (CharmECSEffect.cs:34-36). The group is the pet's name. */
+export const PET_UNDER_CONTROL = /^(?:The )?(.+) is now under your control\.$/;
+
+/** What can still stop a summon or a charm after "You cast a ... spell!" (SpellHandler.cs:1337): the charm's roll and its range (CharmSpellHandler.cs:419-436, Spells.txt:77, GameLiving.txt:69). */
+export const SUMMON_FAILURES: ReadonlyArray<readonly [RegExp, string]> = [
+    [/ resists the charm! \(/, 'resisted'],
+    [/^Your controlled creature is too far away!$/, 'out_of_range'],
+];
 
 export const PICKUP_REFUSALS = [
     "that loot doesn't belong to you",
@@ -265,6 +521,12 @@ export const RELEASE_REFUSALS = [
     'you must wait',
     "you can't release",
 ] as const;
+
+/** A /release inside the server's 10 s wait has armed the automatic one, N seconds off, wherever it goes (GamePlayer.cs:1450-1474, PlayerCommands.txt:591-596). */
+export const AUTO_RELEASE_ARMED = /^You will now release .*\bin (\d+) more seconds!/;
+
+/** The same request with one armed already: it is off again, and nothing tells us who armed it (GamePlayer.cs:1442-1448, PlayerCommands.txt:588). */
+export const AUTO_RELEASE_DISARMED = /^You will no longer release automatically/;
 
 // ── Con levels (gameutils/ConLevelGrid.cs, data from capnbry.net/daoc/concolors.html) ─
 
@@ -317,9 +579,9 @@ export function conColor(level: number): ConColor {
 /** NPC roles that are never fight targets. */
 const NON_COMBAT_ROLES = new Set(['merchant', 'trainer', 'guard', 'healer', 'stablemaster', 'vault', 'teleporter', 'service']);
 
-/** A monster we can fight for XP: attackable, realm 'none', not a townsperson. */
+/** A monster we can fight for XP: attackable, realm 'none', not a townsperson, not a pet (killing one is worth nothing, GameNPC.cs:2731-2732). */
 export function isKillable(npc: NearbyNpc, player: PlayerState | null): boolean {
-    if (!isAttackable(npc, player)) return false;
+    if (npc.isPet || !isAttackable(npc, player)) return false;
     if (npc.realm !== 'none') return false;
     // The role is guessed from name text, so "wood-eater royal guard" or "wood-eater soldier" reads as
     // a town guard. Monster names are lowercase; townspeople ("Sentinel Glynis", "Guard Ulf") are not.
@@ -331,6 +593,30 @@ export function isKillable(npc: NearbyNpc, player: PlayerState | null): boolean 
 function isMonsterName(name: string): boolean {
     const c = name.charAt(0);
     return c !== '' && c === c.toLowerCase() && c !== c.toUpperCase();
+}
+
+// ── Pet spells ─────────────────────────────────────────────────────────────
+
+/**
+ * What a summon gives. main: a pet in the window. turret: an Animist's main pet, in the window too, on a ground target.
+ * fnf: a Theurgist's pet or a fire-and-forget turret, outside the window. bomber: one that flies at its target and is
+ * gone, outside the window too. minion: a Bonedancer's, under its commander. charm: a mob taken over, in the window.
+ */
+export type PetSpellKind = 'main' | 'turret' | 'fnf' | 'bomber' | 'minion' | 'charm';
+
+const PET_SPELL_KINDS = new Map<string, PetSpellKind>([
+    ['SummonSimulacrum', 'main'], ['SummonSpiritFighter', 'main'], ['SummonUnderhill', 'main'], ['SummonDruidPet', 'main'],
+    ['SummonHunterPet', 'main'], ['SummonCommander', 'main'], ['SummonNecroPet', 'main'],
+    ['SummonAnimistPet', 'turret'],
+    ['SummonTheurgistPet', 'fnf'], ['SummonAnimistFnF', 'fnf'],
+    ['Bomber', 'bomber'],
+    ['SummonMinion', 'minion'],
+    ['Charm', 'charm'],
+]);
+
+/** The kind of a spell's static type (SpellInfo.type, eSpellType.cs), or null when it is none of these. */
+export function petSpellKind(type: string): PetSpellKind | null {
+    return PET_SPELL_KINDS.get(type) ?? null;
 }
 
 // ── Money / inventory deltas ───────────────────────────────────────────────
@@ -392,12 +678,22 @@ export type LivingTarget = NearbyNpc | NearbyPlayer | NamePattern | number;
 export type ObjectTarget = NearbyNpc | NearbyPlayer | NearbyObject | NamePattern | number;
 export type Point = { x: number; y: number; z?: number };
 
+/** What a message calls an object: some NPCs have no name, and the line would start with nothing. */
+export function nameOf(o: { name: string; objectId: number }): string {
+    return o.name || `#${o.objectId}`;
+}
+
 export function describeTarget(target: unknown): string {
     if (typeof target === 'number') return `#${target}`;
     if (typeof target === 'string') return `"${target}"`;
     if (target instanceof RegExp) return String(target);
     if (target && typeof target === 'object' && 'name' in target) return `"${(target as { name: string }).name}"`;
     return String(target);
+}
+
+/** A monster's name with the article the server gives it (GameObject.GetName): "the ruby simulacrum", but "Spore Spewer". */
+export function theName(name: string): string {
+    return isMonsterName(name) ? `the ${name}` : name;
 }
 
 // ── Message watch ──────────────────────────────────────────────────────────
@@ -435,9 +731,10 @@ export class MessageWatch {
         return this.collected;
     }
 
-    /** First message containing one of `phrases` (lowercase substrings or RegExps). */
-    find(phrases: readonly (string | RegExp)[]): GameMessage | null {
+    /** First message containing one of `phrases` (lowercase substrings or RegExps), of those `where` accepts. */
+    find(phrases: readonly (string | RegExp)[], where?: (m: GameMessage) => boolean): GameMessage | null {
         for (const m of this.messages()) {
+            if (where && !where(m)) continue;
             const text = m.text.toLowerCase();
             if (phrases.some(p => typeof p === 'string' ? text.includes(p) : p.test(m.text))) return m;
         }
@@ -445,8 +742,8 @@ export class MessageWatch {
     }
 
     /** Text of the first matching message, or null. */
-    findText(phrases: readonly (string | RegExp)[]): string | null {
-        return this.find(phrases)?.text ?? null;
+    findText(phrases: readonly (string | RegExp)[], where?: (m: GameMessage) => boolean): string | null {
+        return this.find(phrases, where)?.text ?? null;
     }
 
     dispose(): void {
@@ -547,11 +844,16 @@ export class ActionHelpers {
         return Math.hypot(a.x - b.x, a.y - b.y);
     }
 
+    /** A name match that prefers what isn't a pet, else our own "wolf cub" beats a hostile "young wolf" on length (npctemplate.sql:12736). */
+    private bestNonPetMatch<T extends { name: string; distance?: number }>(items: readonly T[], pattern: NamePattern): T | null {
+        return bestNameMatch(items.filter(o => !('isPet' in o && o.isPet)), pattern) ?? bestNameMatch(items, pattern);
+    }
+
     resolveNpc(target: NpcTarget, opts: { maxDistance?: number } = {}): NearbyNpc | null {
         const npcs = this.sdk.getNearbyNpcs();
         if (typeof target === 'number') return npcs.find(n => n.objectId === target) ?? null;
         if (typeof target === 'string' || target instanceof RegExp) {
-            return bestNameMatch(npcs.filter(n => opts.maxDistance === undefined || n.distance <= opts.maxDistance), target);
+            return this.bestNonPetMatch(npcs.filter(n => opts.maxDistance === undefined || n.distance <= opts.maxDistance), target);
         }
         // A stale snapshot object: prefer its fresh copy.
         return npcs.find(n => n.objectId === target.objectId) ?? null;
@@ -580,7 +882,7 @@ export class ActionHelpers {
         if (typeof target === 'string' || target instanceof RegExp) {
             const s = this.sdk.getState();
             if (!s) return null;
-            return bestNameMatch<NearbyNpc | NearbyPlayer | NearbyObject>([...s.nearbyNpcs, ...s.nearbyPlayers, ...s.nearbyObjects], target);
+            return this.bestNonPetMatch<NearbyNpc | NearbyPlayer | NearbyObject>([...s.nearbyNpcs, ...s.nearbyPlayers, ...s.nearbyObjects], target);
         }
         return this.sdk.getObject(target.objectId);
     }
@@ -592,11 +894,110 @@ export class ActionHelpers {
             ?? this.sdk.findInventoryItem(target.name);
     }
 
-    /** NPCs whose current target is us. */
+    /** NPCs whose current target is us. One reading 0 % still is one: the percent is truncated (GameLiving.cs:2621), and a dead one leaves the list. */
     attackers(state: BotWorldState | null = this.sdk.getState()): NearbyNpc[] {
         const me = state?.player?.objectId;
         if (!me) return [];
-        return (state?.nearbyNpcs ?? []).filter(n => n.targetObjectId === me && n.healthPercent > 0);
+        return (state?.nearbyNpcs ?? []).filter(n => n.targetObjectId === me);
+    }
+
+    /** Our pets by object id: the window pet and the summons. */
+    ownPets(state: BotWorldState | null): Set<number> {
+        const ids = new Set(state?.summons ?? []);
+        if (state?.pet) ids.add(state.pet.objectId);
+        return ids;
+    }
+
+    /** NPCs whose current target is our window pet or a summon. */
+    petAttackers(state: BotWorldState | null = this.sdk.getState()): NearbyNpc[] {
+        const pets = this.ownPets(state);
+        return (state?.nearbyNpcs ?? []).filter(n => n.targetObjectId !== null && pets.has(n.targetObjectId));
+    }
+
+    /**
+     * Who one of our pets last swung or cast at, while that is recent and it hasn't died: the server gives a dead mob's
+     * id to the next object it adds (Region.cs:955, :779). A swing has a target; a bow draw in an older client's events has none.
+     */
+    private lastPetAim(state: BotWorldState, petId: number): number | null {
+        const pets = this.ownPets(state);
+        const me = state.player?.objectId;
+        const last = state.combatEvents.findLast(e => (e.kind === 'melee' || e.kind === 'spellEffect') && e.attackerObjectId === petId && e.targetObjectId !== null && e.targetObjectId !== me && !pets.has(e.targetObjectId));
+        if (!last || last.receivedAt < state.timestamp - PET_AIM_MS) return null;
+        return state.combatEvents.some(e => e.id > last.id && e.kind === 'death' && e.targetObjectId === last.targetObjectId) ? null : last.targetObjectId;
+    }
+
+    /** Who our summons aim at: what a summon's own 0xA1 names, and the last one each swung or cast at. They have no PetState to hold it. */
+    private summonAims(state: BotWorldState): number[] {
+        const aims: number[] = [];
+        for (const id of state.summons ?? []) {
+            const named = state.nearbyNpcs.find(n => n.objectId === id)?.targetObjectId;
+            if (named) aims.push(named);
+            const last = this.lastPetAim(state, id);
+            if (last !== null) aims.push(last);
+        }
+        return aims;
+    }
+
+    private livingInView(state: BotWorldState, objectId: number): NearbyNpc | NearbyPlayer | undefined {
+        return state.nearbyNpcs.find(n => n.objectId === objectId) ?? state.nearbyPlayers.find(pl => pl.objectId === objectId && !pl.isDead);
+    }
+
+    /**
+     * Who our pets are fighting, or null: the window pet's target (the model holds it between casts and through a run-in,
+     * and an order calling it off clears it), else a mob on it or on a summon, else what a summon aims at, if that is an enemy.
+     * Only one in view counts: the model keeps the target of a pet out of view until the pet's next 0xA1, and a pet can stay out of view for a long time.
+     */
+    petFoe(state: BotWorldState | null = this.sdk.getState()): NearbyNpc | NearbyPlayer | null {
+        const id = state?.pet?.targetObjectId;
+        const foe = (state && id ? this.livingInView(state, id) : undefined) ?? this.petAttackers(state)[0];
+        if (foe || !state) return foe ?? null;
+        const realm = state.player?.realm;
+        for (const aim of this.summonAims(state)) {
+            const summonFoe = this.livingInView(state, aim);
+            if (summonFoe && summonFoe.realm !== realm) return summonFoe;
+        }
+        return null;
+    }
+
+    /**
+     * A pet of ours in a fight, in words, or null: who it fights (petFoe), else one whose entry reads in combat with nobody
+     * to name, such as one running at a mob: its 0xA1 reads 0xFFFF (PacketLib168.cs:820-828). That can trail a kill by a moment: a pet on the move has its next 0xA1 at once (NpcMovementComponent.cs:145-149). The model clears one that named the mob, and the window pet's at the death of its target, whatever it read.
+     * Standing still it counts only while our own combat clock runs: a minion of a passive commander can go on reading 0xFFFF after its mob's death, for as long as nothing
+     * changes, and the server repeats that every 5 s (ClientService.cs:820, ControlledMobState.cs:124). The window pet's aim the model knows, so that one standing still with none is in no fight, our clock or not:
+     * a turret is still IsAttacking after its kill and reads 0xFFFF until its next update, about 5 s on (PacketLib168.cs:820-828, ClientService.cs:816-823). An order sets that aim, a swing too.
+     */
+    petFightLine(state: BotWorldState | null = this.sdk.getState()): string | null {
+        const foe = this.petFoe(state);
+        if (foe) return `our pet is fighting ${foe.name}`;
+        const pets = this.ownPets(state);
+        const noAim = (n: NearbyNpc): boolean => n.objectId === state?.pet?.objectId && state.pet.targetObjectId === null;
+        const busy = state?.nearbyNpcs.find(n => n.inCombat && pets.has(n.objectId) && (n.speed > 0 || (state.player?.inCombat && !noAim(n))));
+        return busy ? `our ${busy.name} is in a fight` : null;
+    }
+
+    /** A summon of ours in its first moments, in words, or null: one that fights by itself is in its fight from the start, with nothing to show for it yet (BotWorldState.freshSummons). */
+    freshSummonLine(state: BotWorldState | null = this.sdk.getState()): string | null {
+        const fresh = state?.nearbyNpcs.find(n => state.freshSummons?.includes(n.objectId));
+        return fresh ? `our ${fresh.name} has just come` : null;
+    }
+
+    /**
+     * Object ids in a fight with our pets, window pet or summons: the mobs on one, the one the window pet aims at, what a
+     * summon aims at, and the last one any of them swung or cast at (a caster pet that isn't swinging reads target 0 in
+     * 0xA1, PacketLib168.cs:745, :820), while that is recent and it hasn't died.
+     */
+    petMobIds(state: BotWorldState | null = this.sdk.getState()): Set<number> {
+        const ids = new Set<number>();
+        if (!state) return ids;
+        for (const n of this.petAttackers(state)) ids.add(n.objectId);
+        const pet = state.pet;
+        if (pet) {
+            if (pet.targetObjectId !== null) ids.add(pet.targetObjectId);
+            const last = this.lastPetAim(state, pet.objectId);
+            if (last !== null) ids.add(last);
+        }
+        for (const id of this.summonAims(state)) ids.add(id);
+        return ids;
     }
 
     /**

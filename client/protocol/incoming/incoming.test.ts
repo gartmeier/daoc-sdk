@@ -5,11 +5,11 @@ import { describe, expect, test } from 'bun:test';
 import { PacketWriter, decodeCp1252, encodeCp1252, PacketReader } from '../buffer';
 import { decodeCharacterOverview, decodeCryptKey, decodeDupNameCheckReply, decodeLoginDenied, decodeLoginGranted, decodePingReply, decodeRealm, decodeSessionId } from './login';
 import { decodeCharacterJump, decodeEncumbrance, decodeLosRequest, decodeMaxSpeed, decodePositionAndObjectId, decodeQuit, decodeRegionChanged, decodeTime } from './world';
-import { decodeNpcCreate, decodeObjectCreate, decodeObjectDataUpdate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate, decodePlayerHeading, decodePlayerPosition, decodeRemoveObject } from './objects';
+import { decodeModelChange, decodeNpcCreate, decodeObjectCreate, decodeObjectDataUpdate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate, decodePlayerHeading, decodePlayerPosition, decodeRemoveObject } from './objects';
 import { decodeInventoryUpdate, decodeMoney, decodePointsUpdate, decodeStatsUpdate, decodeStatusUpdate, decodeVariousUpdate } from './player';
 import { decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseSpeech, chatTypeName } from './chat';
 import { decodeAttackMode, decodeChangeGroundTarget, decodeChangeTarget, decodeCombatAnimation, decodeConcentrationList, decodeDisableSkills, decodeInterrupt, decodePlayerDeath, decodeSpellCastAnimation, decodeSpellEffect, decodeUpdateIcons } from './combat';
-import { decodeGroupMemberUpdate, decodeMerchantWindow, decodeTradeWindow, decodeTrainerWindow } from './windows';
+import { decodeGroupMemberUpdate, decodeMerchantWindow, decodePetWindow, decodeTradeWindow, decodeTrainerWindow } from './windows';
 import { ObjectType } from '../../../sdk/types';
 
 const W = () => new PacketWriter();
@@ -421,6 +421,25 @@ describe('window packets', () => {
         expect(decodeTradeWindow(new Uint8Array(40))).toBeNull();
     });
 
+    test('0x88 PetWindow open, defensive and following, no icons (PacketLib181.cs:102-176)', () => {
+        expect(decodePetWindow(Uint8Array.of(0x1A, 0x2B, 0, 0, 2, 2, 1, 0, 0))).toEqual({ objectId: 0x1A2B, action: 2, aggro: 2, walk: 1, icons: [] });
+    });
+
+    test('0x88 PetWindow update with icons: u16 each, big-endian', () => {
+        const p = Uint8Array.of(0x1A, 0x2B, 0, 0, 1, 1, 2, 0, 2, 0x0E, 0x02, 0x14, 0x83);
+        expect(decodePetWindow(p)).toEqual({ objectId: 0x1A2B, action: 1, aggro: 1, walk: 2, icons: [3586, 5251] });
+        expect(W().u16(0x1A2B).u8(0).u8(0).u8(1).u8(1).u8(2).u8(0).u8(2).u16(3586).u16(5251).toBytes()).toEqual(p);
+    });
+
+    test('0x88 PetWindow passive with go to target and come here', () => {
+        expect(decodePetWindow(Uint8Array.of(0x1A, 0x2B, 0, 0, 1, 3, 3, 0, 0))).toMatchObject({ aggro: 3, walk: 3 });
+        expect(decodePetWindow(Uint8Array.of(0x1A, 0x2B, 0, 0, 1, 3, 4, 0, 0))).toMatchObject({ aggro: 3, walk: 4 });
+    });
+
+    test('0x88 PetWindow close names no pet, and its aggro and walk read 1, 1 (CharacterClassBase.cs:305)', () => {
+        expect(decodePetWindow(Uint8Array.of(0, 0, 0, 0, 0, 1, 1, 0, 0))).toEqual({ objectId: 0, action: 0, aggro: 1, walk: 1, icons: [] });
+    });
+
     test('0x70 GroupMemberUpdate records', () => {
         const p = W().u8(0x20 | 1).u8(50).u8(40).u8(30).u8(0x01).u8(0x80 | 0).u8(1).u8(0).u16(99).u8(0).toBytes();
         expect(decodeGroupMemberUpdate(p).records).toEqual([
@@ -431,6 +450,13 @@ describe('window packets', () => {
 });
 
 describe('decoders without a model test (golden layouts)', () => {
+    test('0xDB ModelChange, the C#\'s bytes (PacketLib168.cs:990-998): WriteShort(objectId), WriteShort(newModel), WriteIntLowEndian(newSize)', () => {
+        // A player: SendModelChange sends size 0 (:982). Briton#427 going into shade, model 822 (GamePlayer.cs:12345-12346).
+        expect(decodeModelChange(Uint8Array.of(0x01, 0xAB, 0x03, 0x36, 0x00, 0x00, 0x00, 0x00))).toEqual({ objectId: 427, model: 822, size: 0 });
+        // An NPC: with its size (:980).
+        expect(decodeModelChange(Uint8Array.of(0x00, 0x34, 0x04, 0x00, 0x28, 0x00, 0x00, 0x00))).toEqual({ objectId: 52, model: 1024, size: 40 });
+    });
+
     test('0xFE Realm (PacketLib1125.cs:61-69) and 0xCC DupNameCheckReply (PacketLib1126.cs:35-45)', () => {
         expect(decodeRealm(W().u8(2).fill(0, 12).toBytes())).toEqual({ realm: 2 });
         // Results: 0 ok, 1 invalid, 2 taken (DuplicateNameCheckRequestHandler.cs:17-24).

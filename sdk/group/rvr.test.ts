@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'bun:test';
+import { makePlayer, makePlayerObj, makeState } from '../test/fixtures';
+import type { CombatEvent } from '../types';
+import { Blackboard, observeState } from './blackboard';
 import { contact, enemy, picture, report } from './fixtures';
 import type { RunReport } from './observer';
 import { memoryView } from './publish';
 import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, homeOf, keepDangers, pickRvrFocus, RVR_SETTINGS, rvrFindings, rvrRoaming, type RvrSettings } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { aggroZones, safePath } from './terrain';
-import type { Contact, GroupPicture, MemberReport, Orders, Point } from './types';
+import type { Contact, GroupPicture, MemberReport, Orders, Point, Role } from './types';
 
 // Region 9999 has no spawns and no battleground: no aggro zones, keeps or home get in the way.
 const R = 9999;
@@ -550,7 +553,7 @@ describe('safePath avoid circles', () => {
 
 describe('rvrRoaming', () => {
     test('role lists without a town healer visit; tank list as specified', () => {
-        expect(rvrRoaming.behaviors.tank.map(b => b.name)).toEqual(['release', 'sprint', 'retreat', 'tank', 'guard', 'shedLoad', 'holdFormation', 'buff', 'rest']);
+        expect(rvrRoaming.behaviors.tank.map(b => b.name)).toEqual(['release', 'hand', 'sprint', 'retreat', 'tank', 'guard', 'shedLoad', 'holdFormation', 'buff', 'rest']);
         expect(Object.values(rvrRoaming.behaviors).flat().some(b => b.name === 'healer')).toBe(false);
         expect(rvrRoaming.board).toEqual({ staleAfterMs: 4000, forgetAfterMs: 30_000, hostileMs: 6000 });
     });
@@ -569,5 +572,172 @@ describe('rvrRoaming', () => {
         expect(trades.map(f => f.topic)).toEqual(['trades']);
         expect(trades[0]!.evidence).toBe('killed by player:midgard 3, npc:mature boar 1');
         expect(topics(run({}, '23→24'))).toEqual(['level']);
+    });
+});
+
+describe('decideRvr: pets', () => {
+    const mob = (over: Partial<Contact> = {}) => contact(60, { regionId: R, x: 11_000, y: 10_000, threat: true, ...over });
+
+    test('a monster on a member\'s pet is a monster on us: the group fights it', () => {
+        const d = decideRvr(ctx(picture(team(), [mob({ target: null, targetId: 500, targetPet: 'Menta' })])));
+        expect(d).toMatchObject({ phase: 'engage', focus: 60 });
+    });
+
+    test('a monster on nobody of ours is left alone, as before', () => {
+        const d = decideRvr(ctx(picture(team(), [mob({ target: null, targetId: 500, targetPet: null })])));
+        expect(d.phase).not.toBe('engage');
+    });
+
+    test('on the pet of a member far from the main body it counts only near that body, as on the member', () => {
+        const far = { x: 40_000, y: 10_000 };
+        const d = decideRvr(ctx(picture(team({ Menta: far }), [mob({ ...far, target: null, targetId: 500, targetPet: 'Menta' })])));
+        expect(d.phase).not.toBe('engage');
+    });
+
+    test('an enemy pet on a member is fought only when no player is about, and is never mezzed or the focus over a player', () => {
+        const pet = (over: Partial<Contact> = {}) => enemy(70, 'midgard', { kind: 'npc', name: 'spirit soldier', isPet: true, regionId: R, x: 10_500, y: 10_000, threat: true, target: 'Tank', ...over });
+        expect(decideRvr(ctx(picture(team(), [pet()])))).toMatchObject({ phase: 'engage', focus: 70, cc: [] });
+        const withPlayers = decideRvr(ctx(picture(team(), [pet(), foe(71, { x: 10_600 }), foe(72, { x: 10_700 })])));
+        expect(withPlayers.focus).not.toBe(70);
+        expect((withPlayers.cc ?? []).map(a => a.targetId)).not.toContain(70);
+    });
+
+    test('an enemy pet nobody fights is no fight', () => {
+        const pet = enemy(70, 'midgard', { kind: 'npc', name: 'spirit soldier', isPet: true, regionId: R, x: 10_500, y: 10_000 });
+        expect(decideRvr(ctx(picture(team(), [pet]))).phase).not.toBe('engage');
+    });
+
+    test('power: a member whose only spell is its pet counts, one with none does not', () => {
+        const waiting = (over: Partial<MemberReport>) => decideRvr(ctx(picture(team({ Tank: over })))).waiting ?? [];
+        expect(waiting({ capabilities: { ...caps(false, false, false), pet: 'fnf' }, mana: 10 })).toContainEqual({ name: 'Tank', why: 'power' });
+        expect(waiting({ capabilities: { ...caps(false, false, false), pet: null }, mana: 10 })).not.toContainEqual({ name: 'Tank', why: 'power' });
+    });
+});
+
+describe('decideRvr: a Necromancer in shade (AbstractServerRules.cs:449-455)', () => {
+    // Run 20261103-174011: Orders held "fight Briton#427 (albion L20, 100%)" for 25 s, "nuke:refused (16)", Damage dealt 0 and 0.
+    const shade = (over: Partial<Contact> = {}) => foe(51, { name: 'Briton', realm: 'albion', isShade: true, threat: false, ...over });
+    const servant = (over: Partial<Contact> = {}) => enemy(52, 'albion', { kind: 'npc', name: 'necroservant', level: 17, isPet: true, regionId: R, x: 10_500, y: 10_000, threat: true, target: 'Tank', ...over });
+
+    test('it is no focus: with its servant on us the servant is, like any enemy pet', () => {
+        expect(decideRvr(ctx(picture(team(), [shade(), servant()])))).toMatchObject({ phase: 'engage', focus: 52 });
+    });
+
+    test('the focus moves off it at once, to an enemy player beside it', () => {
+        const d = decideRvr(ctx(picture(team(), [shade(), foe(53, { x: 10_900 })], { phase: 'engage', focus: 51 })));
+        expect(d).toMatchObject({ phase: 'engage', focus: 53 });
+    });
+
+    test('alone it is no fight: no engage, no hunt', () => {
+        expect(decideRvr(ctx(picture(team(), [shade()], { phase: 'engage', focus: 51 })))).toMatchObject({ focus: null });
+        expect(decideRvr(ctx(picture(team(), [shade()], { phase: 'engage', focus: 51 }))).phase).not.toBe('engage');
+        const far = decideRvr(ctx(picture(team(), [shade({ x: 13_680 })])));
+        expect(far.objective ?? '').not.toContain('hunt');
+    });
+
+    test('it is left out of crowd control and of the count', () => {
+        const d = decideRvr(ctx(picture(team(), [shade(), foe(53, { x: 10_900 }), foe(54, { x: 10_950 })])));
+        expect((d.cc ?? []).map(a => a.targetId)).not.toContain(51);
+        expect(d.reason).toContain('2 enemies vs 5');
+        // Seven with it: six to retreat from at margin 2 is under seven.
+        const six = [53, 54, 55, 56, 57, 58].map(id => foe(id, { x: 10_900 }));
+        expect(decideRvr(ctx(picture(team(), [shade(), ...six]))).phase).toBe('engage');
+    });
+
+    test('marked by a refused attack it counts the same while the mark holds', () => {
+        const now = Date.now();
+        const marked = foe(51, { x: 10_900, target: 'Tank', unattackableUntil: now + 30_000 });
+        expect(decideRvr(ctx(picture(team(), [marked], { phase: 'engage', focus: 51 }, now), { now })).phase).not.toBe('engage');
+        expect(decideRvr(ctx(picture(team(), [marked, foe(53, { x: 10_900 })], { phase: 'engage', focus: 51 }, now), { now })).focus).toBe(53);
+    });
+});
+
+describe('decideRvr: an enemy pet\'s fire', () => {
+    // Run 20261103-175746: "00:00 travel", "00:16 recover: waiting for Pethun's health", "00:36 engage on grove's hunter", "00:37 recover", "00:38 engage", "00:39 Pethun died".
+    const turret = (over: Partial<Contact> = {}) => enemy(70, 'hibernia', { kind: 'npc', name: "grove's hunter", level: 17, isPet: true, regionId: R, x: 10_700, y: 10_000, threat: true, target: null, targetId: null, ...over });
+
+    test('with its target unknown for the moment, a threat near the main body is a fight all the same', () => {
+        expect(decideRvr(ctx(picture(team(), [turret()])))).toMatchObject({ phase: 'engage', focus: 70 });
+    });
+
+    test('not one that is no threat, nor one far off', () => {
+        expect(decideRvr(ctx(picture(team(), [turret({ threat: false })]))).phase).not.toBe('engage');
+        expect(decideRvr(ctx(picture(team(), [turret({ x: 14_000 })]))).phase).not.toBe('engage');
+    });
+
+    test('an enemy player in the fight still goes first', () => {
+        expect(decideRvr(ctx(picture(team(), [turret(), foe(71, { x: 10_600 })]))).focus).toBe(71);
+    });
+
+    test('it stays the fight when winding down, as anything fighting us does', () => {
+        expect(decideRvr(ctx(picture(team(), [turret()]), { windingDown: true }))).toMatchObject({ phase: 'engage', focus: 70 });
+    });
+});
+
+describe('decideRvr: a rooted enemy', () => {
+    const rooted = { cc: { by: 'Druid', kind: 'root', until: Date.now() + 20_000 } };
+    const onUs = (over: Partial<Contact> = {}) => enemy(70, 'hibernia', { kind: 'npc', name: "grove's hunter", level: 17, isPet: true, regionId: R, x: 10_700, y: 10_000, threat: true, target: 'Druid', ...over });
+
+    // Run 20261103-174453: "00:08 engage on Celt: fight Celt#428 (hibernia L20, 100%): 0 of 1 enemy vs 2", "idle assist: focus is crowd-controlled"; Petbon 72 % at +9.4 to dead at +29 from turret hits.
+    test('with every player cc\'d a free candidate on us comes before the cc\'d player', () => {
+        const d = decideRvr(ctx(picture(team(), [foe(51, rooted), onUs()], { phase: 'engage', focus: 51 })));
+        expect(d).toMatchObject({ phase: 'engage', focus: 70 });
+        expect(pickRvrFocus([foe(51, rooted), onUs()], { centre: BASE, members: team(), settings: RVR_SETTINGS })?.objectId).toBe(70);
+    });
+
+    test('a free player beside them is still first', () => {
+        expect(decideRvr(ctx(picture(team(), [foe(51, rooted), onUs(), foe(53, { x: 10_900 })]))).focus).toBe(53);
+    });
+
+    test('with nothing else it stays the focus: that\'s for the members to hit (behaviors.ts ccHolds)', () => {
+        expect(decideRvr(ctx(picture(team(), [foe(51, rooted)])))).toMatchObject({ phase: 'engage', focus: 51 });
+    });
+});
+
+describe('decideRvr: a player under the enemy keep\'s guards', () => {
+    // Run r8: Celt under the keep at (35930,38271), 2841 from Thidranki Faste's centre, 5 s spell cooldown: "00:06 travel", "00:07 engage", "to defend you!" at +6.8, "disengage from combat!" at +7.3.
+    const THIDRANKI_ID = 252;
+    const under = (over: Partial<Contact> = {}) => enemy(51, 'albion', { regionId: THIDRANKI_ID, x: 35_930, y: 38_271, ...over });
+    const decide = (c: Contact, orders: Partial<Orders> = {}) => decideRvr(ctx(picture(team({}, { x: 37_500, y: 38_271 }, THIDRANKI_ID), [c], orders)));
+
+    test('the focus goes from the fight with its 6 s aim lapsed, threat or no: our own nukes keep it a threat, and a fight on it would feed itself (petControl holds the stance)', () => {
+        expect(decide(under({ threat: true, target: null }), { phase: 'engage', focus: 51 }).phase).not.toBe('engage');
+        expect(decide(under({ threat: false, target: null }), { phase: 'engage', focus: 51 }).phase).not.toBe('engage');
+    });
+
+    test('on the real board: a nuke every 3 s for a minute doesn\'t hold a fight it stopped answering', () => {
+        // Hit the tank once at t 0, and never again. Each landed nuke is in the nuker's obs.hits for 6 s, which refreshes lastHostile (blackboard.ts), so threat lasted hostileMs past every landed spell.
+        const T = 1_800_000_000_000;
+        const THE_TANK = 500, NUKER = 501, CELT = 51;
+        const board = new Blackboard({ hostileMs: 6000 });
+        const self = (role: Role) => ({ bot: role, role, activity: { kind: 'idle', targetId: null, detail: '', since: 0 }, capabilities: { heal: false, cc: false, nuke: true, buffs: [], buffSpells: [] } });
+        const celt = makePlayerObj({ objectId: CELT, name: 'Celt', realm: 'hibernia', x: 35_930, y: 38_271, level: 20 });
+        const events: CombatEvent[] = [{ id: 1, kind: 'melee', attackerObjectId: CELT, targetObjectId: THE_TANK, result: 'hit', receivedAt: T }];
+        const look = (now: number, objectId: number, name: string, role: Role, x: number) => observeState(makeState({
+            timestamp: now, inGame: true, player: makePlayer({ objectId, name, realm: 'midgard', className: 'Warrior', regionId: THIDRANKI_ID, x, y: 38_271, level: 20 }), nearbyNpcs: [], nearbyPlayers: [celt], combatEvents: events.filter(e => now - e.receivedAt < 15_000),
+        }), self(role), 5000)!;
+        const memory: Record<string, any> = {};
+        const settings = { ...RVR_SETTINGS, patrol: [{ x: 37_500, y: 38_271, z: 0 }], keepOwners: {}, retreat: { ...RVR_SETTINGS.retreat, enabled: false } };
+        const phases: string[] = [];
+        for (let at = 0; at <= 60_000; at += 250) {
+            const now = T + at;
+            if (at > 0 && at % 3000 === 0) events.push({ id: 100 + at, kind: 'spellEffect', attackerObjectId: NUKER, targetObjectId: CELT, receivedAt: now });
+            board.publish(look(now, THE_TANK, 'Tank', 'tank', 37_500), now);
+            board.publish(look(now, NUKER, 'Nuker', 'nuker', 37_300), now);
+            const d = decideRvr({ picture: board.picture(now), orders: board.getOrders(), memory, settings, now, windingDown: false });
+            board.setOrders(d, now);
+            phases.push(d.phase ?? '');
+            if (at === 0) expect(d).toMatchObject({ phase: 'engage', focus: CELT });
+        }
+        // Its aim lapsed at 6 s (PLAYER_TARGET_MS), and there the fight ends: HEAD's rule.
+        expect(phases.slice(Math.round(8000 / 250))).not.toContain('engage');
+    });
+
+    test('one that fights someone else near us doesn\'t pull us in: threat by a swing is no attack on us', () => {
+        expect(decide(under({ threat: true, target: null })).phase).not.toBe('engage');
+    });
+
+    test('one attacking us, as before', () => {
+        expect(decide(under({ threat: true, target: 'Tank' }))).toMatchObject({ phase: 'engage', focus: 51 });
     });
 });

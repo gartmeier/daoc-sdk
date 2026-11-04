@@ -5,7 +5,7 @@
 // panel. Control mode opens a second, control-mode socket only when ticked.
 
 import { CON_HEX, conColor } from './con-level';
-import { authHeaders, shouldLoadRegion } from './logic';
+import { authHeaders, isOwnPet, petPanel, shouldLoadRegion, unseenTarget } from './logic';
 import type { GroupBadge } from '../group-types';
 import type {
     ActionResult, BotAction, BotWorldState, CombatEvent, GameMessage, InventoryItem,
@@ -511,8 +511,9 @@ function drawEntity(e: Entity, p: PlayerState | null) {
 
     if (e.kind === 'npc') {
         const npc = e as NearbyNpc;
-        color = p ? CON_HEX[conColor(p.level, num(npc.level))] : CON_HEX.yellow;
-        r = npc.isPet ? 4 : 5.5;
+        const mine = isOwnPet(state, npc);
+        color = mine ? '#ffffff' : p ? CON_HEX[conColor(p.level, num(npc.level))] : CON_HEX.yellow;
+        r = npc.isPet || mine ? 4 : 5.5;
         const dead = num(npc.healthPercent, 100) <= 0;
         ctx.beginPath();
         ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
@@ -540,6 +541,14 @@ function drawEntity(e: Entity, p: PlayerState | null) {
             ctx.beginPath();
             ctx.arc(s.x, s.y, r + 3, 0, Math.PI * 2);
             ctx.stroke();
+        }
+        if (p && mine && !dead) {
+            const ps = toScreen(p.x, p.y);
+            ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 4]);
+            ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(ps.x, ps.y); ctx.stroke();
+            ctx.setLineDash([]);
         }
         if (p && npc.targetObjectId != null && npc.targetObjectId === p.objectId && !dead) {
             const ps = toScreen(p.x, p.y);
@@ -740,7 +749,7 @@ function showTooltip(e: Entity | null, sx: number, sy: number) {
         rows.push(`<div>NPC · level ${esc(npc.level)}${con ? ` · <span style="color:${CON_HEX[con]}">${con}</span>` : ''}</div>`);
         if (npc.guildName) rows.push(`<div class="muted">&lt;${esc(npc.guildName)}&gt;${npc.role ? ` · ${esc(npc.role)}` : ''}</div>`);
         else if (npc.role) rows.push(`<div class="muted">${esc(npc.role)}</div>`);
-        rows.push(`<div>HP ${esc(num(npc.healthPercent, 100))}%${npc.inCombat ? ' · <span class="bad">in combat</span>' : ''}${npc.isPeaceful ? ' · peaceful' : ''}${npc.hasQuest ? ' · quest' : ''}${npc.isPet ? ' · pet' : ''}</div>`);
+        rows.push(`<div>HP ${esc(num(npc.healthPercent, 100))}%${npc.inCombat ? ' · <span class="bad">in combat</span>' : ''}${npc.isPeaceful ? ' · peaceful' : ''}${npc.hasQuest ? ' · quest' : ''}${isOwnPet(state, npc) ? ' · your pet' : npc.isPet ? ' · pet' : ''}</div>`);
         if (npc.targetObjectId) rows.push(`<div class="muted">targeting ${esc(entityName(npc.targetObjectId))}</div>`);
     } else if (e.kind === 'player') {
         const pl = e as NearbyPlayer;
@@ -988,9 +997,20 @@ function renderPanel() {
     };
     let targetHtml = '';
     if (target) targetHtml += describe(target, 'Target');
-    else if (p?.targetObjectId) targetHtml += `<h3>Target</h3><div class="muted">#${esc(p.targetObjectId)} (not in view)</div>`;
+    else if (p?.targetObjectId) targetHtml += `<h3>Target</h3><div class="muted">${esc(unseenTarget(p.targetObjectId, p.objectId))}</div>`;
     if (selected) targetHtml += `<div style="margin-top:${target ? 8 : 0}px">${describe(selected, 'Selected')}</div>`;
     setSection('s-target', targetHtml);
+
+    // Pet
+    const pets = petPanel(s, entityName);
+    const w = pets?.pet;
+    setSection('s-pet', pets ? `
+        <h3>Pet${w ? ` <span>#${esc(w.objectId)}</span>` : ''}</h3>
+        ${w ? `<div><b>${esc(w.name)}</b>${w.level !== null ? ` · L${esc(w.level)}` : ''}${w.inCombat ? ' · <span class="bad">in combat</span>' : ''}</div>
+        ${w.hp !== null ? bar('HP', w.hp, 100, 'var(--hp)', `${w.hp}%`) : '<div class="muted">out of view</div>'}
+        <div class="muted">${esc(w.orders)}${w.target ? ` · targeting ${esc(w.target)}` : ''}${w.icons ? ` · ${esc(w.icons)} effects` : ''}</div>` : ''}
+        ${pets.summons.length ? `<div class="muted">No window: ${esc(pets.summons.join(', '))}</div>` : ''}
+        ${pets.lost ? `<div class="muted">None. Last one, ${esc(pets.lost.name)}: ${esc(pets.lost.cause)} ${esc(ago(pets.lost.at))}</div>` : ''}` : '');
 
     // Dialog box
     const dialog = s?.dialog;

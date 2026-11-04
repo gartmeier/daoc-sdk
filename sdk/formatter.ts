@@ -4,6 +4,7 @@
 
 import type { BotWorldState, GameMessage, InventoryItem, NearbyNpc, NearbyObject, NearbyPlayer, PlayerState } from './types';
 import { isOwnMessage, isPlayerChat } from './chat-history';
+import { nameOf } from './actions-helpers';
 
 function formatAge(ms: number): string {
     if (ms < 1000) return 'just now';
@@ -42,6 +43,24 @@ function targetOf(state: BotWorldState): NearbyNpc | NearbyPlayer | NearbyObject
         ?? state.nearbyPlayers.find(o => o.objectId === id)
         ?? state.nearbyObjects.find(o => o.objectId === id)
         ?? null;
+}
+
+/** We have ourselves selected. The nearby lists targetOf searches never hold us. */
+function targetsSelf(state: BotWorldState): boolean {
+    const p = state.player;
+    return !!p && p.targetObjectId === p.objectId;
+}
+
+/** Our window pet, one line; null without one. */
+function petLine(state: BotWorldState): string | null {
+    const pet = state.pet;
+    if (!pet) return null;
+    const npc = state.nearbyNpcs.find(n => n.objectId === pet.objectId);
+    const who = npc ? `${npc.name} L${npc.level} ${npc.healthPercent}% (${r(npc.distance)}u)` : `${pet.name ?? `oid ${pet.objectId}`} (not in view)`;
+    // Its target holds between casts and through a run-in (PetState), so this reads true for a caster pet too. As in helpers.petFoe, a mob on it counts.
+    const target = pet.targetObjectId === null ? null : state.nearbyNpcs.find(n => n.objectId === pet.targetObjectId) ?? state.nearbyPlayers.find(pl => pl.objectId === pet.targetObjectId);
+    const foe = target ?? state.nearbyNpcs.find(n => n.targetObjectId === pet.objectId && n.healthPercent > 0);
+    return `Pet: ${who} - ${pet.aggression}, ${pet.walk}${foe ? `, fighting ${foe.name}` : ''}`;
 }
 
 function vitals(p: PlayerState): string {
@@ -88,7 +107,7 @@ export function formatWorldStateSummary(state: BotWorldState, stateAgeMs?: numbe
     const p = state.player;
     if (p) {
         const combat = p.inCombat ? ' | IN COMBAT' : '';
-        lines.push(`${p.name} L${p.level} ${p.className} @ ${p.zoneName || `zone ${p.zoneId}`} (r${p.regionId} ${r(p.x)}, ${r(p.y)}, ${r(p.z)})${combat}${stale}`);
+        lines.push(`${p.name} L${p.level} ${p.className}${p.isShade ? ' (shade)' : ''} @ ${p.zoneName || `zone ${p.zoneId}`} (r${p.regionId} ${r(p.x)}, ${r(p.y)}, ${r(p.z)})${combat}${stale}`);
         lines.push(vitals(p) + (p.isDead ? ' | DEAD' : '') + (p.isSitting ? ' | sitting' : ''));
         const b = options?.baseline;
         if (b) {
@@ -110,19 +129,24 @@ export function formatWorldStateSummary(state: BotWorldState, stateAgeMs?: numbe
     if (target) {
         const hp = 'healthPercent' in target ? ` ${target.healthPercent}%` : '';
         lines.push(`Target: ${target.name}${hp} (${r(target.distance)}u)`);
+    } else if (targetsSelf(state)) {
+        lines.push('Target: self');
     }
+    const pet = petLine(state);
+    if (pet) lines.push(pet);
 
     const inv = state.inventory ?? [];
     const entries = inv.map(itemLabel);
     lines.push(`Inv ${inv.length}/40: ${entries.length ? entries.slice(0, 8).join(', ') + (entries.length > 8 ? `, +${entries.length - 8} more` : '') : '(empty)'}`);
 
-    const nearbyLine = (label: string, items: { name: string; distance: number }[], limit = 5): string | null => {
+    const nearbyLine = (label: string, items: { name: string; objectId: number; distance: number }[], limit = 5): string | null => {
         if (items.length === 0) return null;
         const byName = new Map<string, { count: number; distance: number }>();
         for (const e of items) {
-            const existing = byName.get(e.name);
+            const name = nameOf(e);
+            const existing = byName.get(name);
             if (existing) { existing.count++; existing.distance = Math.min(existing.distance, e.distance); }
-            else byName.set(e.name, { count: 1, distance: e.distance });
+            else byName.set(name, { count: 1, distance: e.distance });
         }
         const sorted = [...byName].sort((a, b) => a[1].distance - b[1].distance);
         const shown = sorted.slice(0, limit).map(([name, d]) => `${name}${d.count > 1 ? ` x${d.count}` : ''} (${r(d.distance)}u)`);
@@ -166,7 +190,7 @@ export function formatWorldState(state: BotWorldState, stateAgeMs?: number, opti
     const p = state.player;
     if (p) {
         lines.push('', '## Player');
-        lines.push(`${p.name}${p.lastName ? ` ${p.lastName}` : ''}${p.guildName ? ` <${p.guildName}>` : ''} - level ${p.level} ${p.raceName} ${p.className} (${capitalize(p.realm)})`);
+        lines.push(`${p.name}${p.lastName ? ` ${p.lastName}` : ''}${p.guildName ? ` <${p.guildName}>` : ''} - level ${p.level} ${p.raceName} ${p.className} (${capitalize(p.realm)})${p.isShade ? ' (shade)' : ''}`);
         lines.push(`Position: region ${p.regionId}, ${p.zoneName || `zone ${p.zoneId}`} (${r(p.x)}, ${r(p.y)}, ${r(p.z)}) heading ${p.heading}`);
         lines.push(vitals(p));
         lines.push(`XP: ${p.experience.toLocaleString()} / ${p.experienceForNextLevel.toLocaleString()} (${(p.levelPermill / 10).toFixed(1)}%) | RP ${p.realmPoints} | Money ${formatMoney(p.money.totalCopper)}`);
@@ -188,9 +212,13 @@ export function formatWorldState(state: BotWorldState, stateAgeMs?: number, opti
             const hp = 'healthPercent' in target ? ` ${target.healthPercent}%` : '';
             const lvl = 'level' in target ? ` L${target.level}` : '';
             lines.push(`Target: ${target.name}${lvl}${hp} - ${r(target.distance)}u (oid ${target.objectId})`);
+        } else if (targetsSelf(state)) {
+            lines.push('Target: self');
         } else if (p.targetObjectId !== null) {
             lines.push(`Target: oid ${p.targetObjectId} (not in view)`);
         }
+        const pet = petLine(state);
+        if (pet) lines.push(pet);
     }
 
     if (state.dialog?.isOpen) {
@@ -251,7 +279,7 @@ export function formatWorldState(state: BotWorldState, stateAgeMs?: number, opti
         lines.push('', '## Nearby NPCs');
         const sorted = [...state.nearbyNpcs].sort((a, b) => a.distance - b.distance);
         for (const n of sorted.slice(0, npcLimit)) {
-            const tags = [n.role, n.inCombat ? 'in combat' : null, n.isPeaceful ? 'peaceful' : null, n.realm !== 'none' ? n.realm : null].filter(Boolean);
+            const tags = [n.isPet ? 'pet' : null, n.role, n.inCombat ? 'in combat' : null, n.isPeaceful ? 'peaceful' : null, n.realm !== 'none' ? n.realm : null].filter(Boolean);
             lines.push(`- ${n.name} L${n.level} ${n.healthPercent}%${tags.length ? ` [${tags.join(', ')}]` : ''} - ${r(n.distance)}u (oid ${n.objectId})`);
         }
         if (sorted.length > npcLimit) lines.push(`  ... and ${sorted.length - npcLimit} more`);
@@ -310,6 +338,8 @@ export interface WorldSummary {
         isDead: boolean; isSitting: boolean; inCombat: boolean; attacking: boolean; moving: boolean; targetObjectId: number | null;
     } | null;
     target: { objectId: number; kind: string; name: string; level: number | null; healthPercent: number | null; distance: number } | null;
+    /** Our window pet. name, level, healthPercent and distance are null while it is out of view. */
+    pet: { objectId: number; name: string | null; level: number | null; healthPercent: number | null; distance: number | null; aggression: string; walk: string; targetObjectId: number | null } | null;
     inventory: { freeSlots: number; items: { slot: number; name: string; count: number; level: number }[] };
     equipment: { slot: number; name: string }[];
     effects: { name: string; remainingSeconds: number; isNegative: boolean }[];
@@ -343,6 +373,7 @@ export function summarizeWorldState(state: BotWorldState, stateAgeMs?: number, o
     const fresh = (state.gameMessages ?? []).filter(m => m.id > (options?.sinceMessageId ?? -1));
     const target = targetOf(state);
     const rd = (n: number) => Math.round(n * 10) / 10;
+    const petNpc = state.pet ? state.nearbyNpcs?.find(n => n.objectId === state.pet!.objectId) : undefined;
 
     return {
         tick: state.tick,
@@ -364,6 +395,16 @@ export function summarizeWorldState(state: BotWorldState, stateAgeMs?: number, o
             level: 'level' in target ? target.level : null,
             healthPercent: 'healthPercent' in target ? target.healthPercent : null,
             distance: rd(target.distance),
+        } : null,
+        pet: state.pet ? {
+            objectId: state.pet.objectId,
+            name: petNpc?.name ?? null,
+            level: petNpc?.level ?? null,
+            healthPercent: petNpc?.healthPercent ?? null,
+            distance: petNpc ? rd(petNpc.distance) : null,
+            aggression: state.pet.aggression,
+            walk: state.pet.walk,
+            targetObjectId: state.pet.targetObjectId,
         } : null,
         inventory: {
             freeSlots: 40 - (state.inventory ?? []).length,

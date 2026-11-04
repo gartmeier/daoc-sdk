@@ -22,13 +22,15 @@ nuke.details;                                   // from the server: castTimeMs, 
 
 ```typescript
 const c = await bot.castSpell(nuke, mob);       // target: NPC, player, name, object id, or omitted (current target)
-// c.completed, c.damage, c.resisted, c.castTimeMs, c.reason, c.retryAfterMs
+// c.completed, c.damage, c.resisted, c.effectImmune, c.castTimeMs, c.reason, c.retryAfterMs
 ```
 
 1. Walks into range (85 % of the spell's range from the DB, else 1500) unless `approach: false`.
 2. Selects the target every time, even when the state already shows it: the server drops our target when we die and doesn't tell the client, so the snapshot can show a stale one after a release. On "You must select a target" it selects again and retries once. Then it stops moving, stands up if sitting, and faces the target.
 3. Casts, then waits for "You begin casting a X spell!".
 4. Waits for completion. "You cast a X spell!" (SpellHandler.cs:1337) counts at once. Weaker evidence counts only once the cast time is up: a spell effect, a resist, "Your X hits" for this spell, or a bare "You hit the Y for N damage!". "Extra damage" and "additional" lines (damage adds, procs, crits) never count, and an interrupt after weak evidence still wins. `c.damage` sums only this spell's hits.
+
+**A cast that goes off and can't land** succeeds with `effectImmune`, power spent and nothing rolled: "Your target is immune to this effect!" (a player already mezzed or within its immunity, an NPC's mezz immunity), and "Your target is enraged and resists the spell!": a mezz takes no NPC under 75 % health (`CCSpellHandler.cs:174-178`), which the message reads as `(target enraged)`. A root has no such floor, and a player none. Don't cast again: it would repeat that.
 
 **Self** spells keep the current target. **Realm/Group** spells (heals, buffs) target ourselves when no target is given. Casting one on an enemy is refused with `invalid_target`; the server would give no answer at all.
 

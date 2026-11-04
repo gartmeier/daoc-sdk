@@ -52,7 +52,7 @@ bun groups/create-group.ts <group> <bot> <bot> ...    # groups/<group>/: group.j
 bun client/swarm.ts <bot> <bot> ...                   # one process with every member's client
 bun sdk/group/cli.ts <group>                          # shared picture, observe only (--watch=60 scores whatever runs)
 bun groups/<group>/hunt.ts 180                        # coordinated hunt; report in groups/<group>/runs/<stamp>.md
-bun sdk/group/cli.ts <group> --live                   # the running hunt as the gateway sees it: phase, orders, members, events
+bun sdk/group/cli.ts <group> --live                   # the running hunt as the gateway sees it: phase, orders, members, contacts, events
 bun sdk/group/cli.ts <group> --wind-down              # end the hunt after the current fight (report saved)
 bun groups/<group>/battleground.ts [--via=x,y,z]      # into Thidranki (levels 20-24): portal keep, bind, medallion, port
 bun groups/<group>/rvr.ts 300                         # roam the battleground and fight the other realms (learnings/rvr.md)
@@ -113,6 +113,7 @@ A new call for the same bot cancels the one still running. Every result includes
 | `openMerchant` / `buyItem` / `sellItem` / `sellItems(m, filter)` / `delveMerchantItem(m, item)` | Shops (sell price is 50 % of value); `shop.items` carry type, hand, DPS and speed |
 | `trainSpec(trainer, spec, levels)` | Spend specialization points |
 | `equipItem` / `unequipItem` / `useItem` / `dropItem` / `destroyItem` | Items |
+| `takeMeleeSlot({styles, weapon})` | The best melee weapon in hand: `attack` and `killNpc` do this for themselves on a bow's refusal or a style's "requires a X weapon" |
 | `delveItem(item \| name \| slot)` | An item's real bonuses: `lines`, `bonuses`, `unknown`; reason `empty_slot`, `not_found`, `no_response` (learnings/looting.md) |
 | `trade(player, {give, money, accept})` / `offerTrade` / `acceptTrade` / `cancelTrade` | Trade with a player: both sides call, in any order, within 128 units, between hunts; reports `gave`, `received`, `moneyGiven`, `moneyReceived`; reason `cancelled`, `busy`, `inventory_full`, `partner_no_accept`, ...; an add that opens a window waits for its slot on the clock, up to 750 ms (learnings/trading.md) |
 | `invite` / `acceptGroupInvite` / `groupSay` / `follow` / `say` / `send` | Social |
@@ -134,6 +135,7 @@ From `sdk.*`, the common calls are `getState`, `getPlayer`, `getInventory`, `fin
   - `killNpc`/`walkToObject` adopt the target's z (with navmeshes: the layer nearest it at the target's spot; a target on a ledge with no layer under us stays out of 3D range and returns `out_of_reach`).
 - **Walks cut through walls and cliffs:** without navmeshes, walking is in straight lines and the server doesn't check collisions. A route that looks fine on the map can still fail with `stuck` (no progress for 8 s). Build navmeshes (`bun run navmesh:build`, see above) or add waypoints with `followPath`. In a zone without a `.nav`, `walkTo` still falls back to straight lines.
 - **Walking onto a zone exit does nothing:** the server uses a zone point only when the client sends 0x90 PlayerRegionChangeRequest. Use `bot.useZonePoint(idOrZonePoint)` (`getZonePointsFrom(regionId)` lists them), which walks there, asks and observes the jump. Teleporters (`bot.whisper('Master Visur', 'Camelot')`) also change regions. Zone boundaries inside a region work by walking. See learnings/regions-and-zones.md.
+- **A teleporter answered and no jump came:** `bot.whisper` reads success on the NPC's answer, and the port can still refuse for combat (`You can't use this item in combat!`). The server's `InCombat` counts the pet and lasts 2 s longer than `player.inCombat`: wait 10 s after the fight, whisper again and watch the position.
 - **Line of sight is not real:** the client answers every server LoS check with "clear", so spells and aggro behave as if nothing blocks the view.
 - **Casters get interrupted:** every melee hit interrupts casting ("your spell is interrupted"). Pull from range and fall back to melee (`bots/examples/caster.ts`). There is no kiting helper yet.
 - **An NPC "did not answer" a whisper:** NPCs silently ignore a whisper within 1.5 s of the last one they accepted from you, and the server refuses whispers < 500 ms apart ("Slow down! ..."). `bot.whisper` spaces its own whispers and retries; after a raw `sdk.sendWhisper`, wait 1.6 s yourself.

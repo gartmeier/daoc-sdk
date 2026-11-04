@@ -3,7 +3,7 @@
 //
 //   bun sdk/group/cli.ts <group>              members, the enemies they see, group membership
 //   bun sdk/group/cli.ts <group> --watch=60   observe 60 s, then print (and save) the observer's report
-//   bun sdk/group/cli.ts <group> --live       the gateway's group page as text: the run, members, events, deaths
+//   bun sdk/group/cli.ts <group> --live       the gateway's group page as text: the run, members, contacts, events, deaths
 //   bun sdk/group/cli.ts <group> --wind-down [--reason=...]
 //                                             ask the live run to finish its fight and end (report saved)
 //
@@ -16,6 +16,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import type { ControlAnswer, GroupFrame } from '../../gateway/group-types';
+import { contactAim, contactLine, CURRENT_STATES, listedContacts, memberPetRow, noWindowPet, petLine } from '../../gateway/viewer/group-logic';
 import { BotActions } from '../actions';
 import { deriveGatewayUrl, findBotEnv, gatewayHttpBase, parseEnvFile, REPO_ROOT } from '../index';
 import { Blackboard, observeState } from './blackboard';
@@ -72,17 +73,19 @@ if (watch > 0) {
     await Bun.sleep(600);
     const p = board.picture();
     const leader = p.members[0];
+    const nameOf = (id: number) => p.contacts.find(c => c.objectId === id)?.name ?? p.members.find(m => m.objectId === id)?.name ?? `#${id}`;
     console.log(`Group ${def.name} (${p.members.length}/${def.members.length} members reporting)`);
     for (const m of p.members) {
         const d = leader ? Math.round(Math.hypot(m.x - leader.x, m.y - leader.y)) : 0;
         const grouped = conns.find(c => c.sdk.getPlayer()?.name === m.name)?.sdk.getGroup().map(g => g.name) ?? [];
         console.log(`  ${m.name.padEnd(12)} ${m.className.padEnd(10)} L${String(m.level).padEnd(3)} ${m.role.padEnd(7)} hp ${String(m.hp).padStart(3)}% mana ${String(m.mana).padStart(3)}% load ${String(m.load).padStart(3)}%`
             + `${m.isDead ? ' DEAD' : ''}${m.isSitting ? ' sitting' : ''}${m.inCombat ? ' in combat' : ''}  region ${m.regionId} (${m.x}, ${m.y}) ${d ? `${d} from ${leader!.name}` : ''}`
-            + `  group: ${grouped.length ? grouped.join(',') : 'none'}  can: ${['heal', 'cc', 'nuke'].filter(k => (m.capabilities as any)[k]).join('/') || '-'}`);
+            + `  group: ${grouped.length ? grouped.join(',') : 'none'}  can: ${['heal', 'cc', 'nuke', 'pet'].filter(k => (m.capabilities as any)[k]).join('/') || '-'}`
+            + (m.pet ? `  pet: ${petLine(m.pet, nameOf)}` : `  ${noWindowPet(m.summons?.length ?? 0, m.capabilities.pet) ?? ''}`.trimEnd()));
     }
     console.log(`Enemies the group knows (${p.contacts.length}):`);
-    for (const c of p.contacts.sort((a, b) => (b.target ? 1 : 0) - (a.target ? 1 : 0) || a.level - b.level).slice(0, 25)) {
-        console.log(`  ${c.name.padEnd(22)} L${String(c.level).padEnd(3)} hp ${String(c.hp).padStart(3)}% (${c.x}, ${c.y})${c.target ? ` attacking ${c.target}` : ''}${c.stale ? ' stale' : ''}  seen by ${c.seenBy.join(', ') || 'nobody now'}`);
+    for (const c of p.contacts.sort((a, b) => (b.target || b.targetPet ? 1 : 0) - (a.target || a.targetPet ? 1 : 0) || a.level - b.level).slice(0, 25)) {
+        console.log(`  ${c.name.padEnd(22)} L${String(c.level).padEnd(3)} hp ${String(c.hp).padStart(3)}% (${c.x}, ${c.y})${c.isPet ? ' (pet)' : ''}${c.target ? ` attacking ${c.target}` : c.targetPet ? ` attacking ${c.targetPet}'s pet` : ''}${c.stale ? ' stale' : ''}  seen by ${c.seenBy.join(', ') || 'nobody now'}`);
     }
 }
 for (const c of conns) await c.sdk.disconnect();
@@ -147,6 +150,7 @@ async function viaGateway(mode: 'live' | 'wind-down'): Promise<number> {
         // UTC, like the run log (runs/<stamp>.log).
         const time = (ms: number) => new Date(ms).toISOString().slice(11, 19);
         const contact = (objectId: number) => frame.world.filter(w => w.objectId === objectId).sort((a, b) => (b.board ? 1 : 0) - (a.board ? 1 : 0))[0];
+        const nameOf = (objectId: number) => contact(objectId)?.name ?? frame.members.find(m => m.player?.objectId === objectId)?.player?.name ?? `#${objectId}`;
         console.log(`Group ${frame.name} (${id}), leader ${frame.leader.bot}, gateway ${base}`);
         if (!run) {
             console.log('No run has published since the gateway started; members below are from their own clients.');
@@ -157,7 +161,8 @@ async function viaGateway(mode: 'live' | 'wind-down'): Promise<number> {
             console.log(`  reason:    ${o.reason}`);
             if (o.focus !== null) {
                 const f = contact(o.focus);
-                console.log(`  focus:     ${f ? `${f.name} L${f.level}, hp ${f.hp}%${f.target ? `, on ${f.target}` : ''}` : `#${o.focus}`}`);
+                const on = f ? contactAim(f) : null;
+                console.log(`  focus:     ${f ? `${f.name} L${f.level}, hp ${f.hp}%${on ? `, on ${on}` : ''}` : `#${o.focus}`}`);
             }
             if (o.puller) console.log(`  puller:    ${o.puller}`);
             if (o.cc.length) console.log(`  cc:        ${o.cc.map(c => `${c.by} → ${contact(c.targetId)?.name ?? `#${c.targetId}`}`).join(', ')}`);
@@ -181,7 +186,15 @@ async function viaGateway(mode: 'live' | 'wind-down'): Promise<number> {
             const doing = a ? `${a.kind}${a.detail ? ` ${a.detail}` : ''}` : p ? `passive${p.isDead ? '' : p.isSitting ? ': resting' : p.inCombat ? ': fighting' : ''}` : '';
             const stats = p ? `L${String(p.level).padEnd(3)} ${p.className.padEnd(12)} hp ${String(p.hp).padStart(3)}% mana ${String(p.mana).padStart(3)}%${p.isDead ? ' DEAD' : ''}` : 'not in game';
             const client = `client ${m.client.status}${m.client.stateAge !== null ? ` (${ago(m.client.stateAge)})` : ''}, ctl ${m.client.controllers}`;
-            console.log(`  ${(p?.name ?? m.charName ?? m.bot).padEnd(12)} ${(m.role ?? '-').padEnd(7)} ${stats}  ${doing}${doing ? '  ' : ''}${client}`);
+            const pet = memberPetRow(m, nameOf);
+            console.log(`  ${(p?.name ?? m.charName ?? m.bot).padEnd(12)} ${(m.role ?? '-').padEnd(7)} ${stats}  ${doing}${doing ? '  ' : ''}${client}${pet ? `  ${pet.text}` : ''}`);
+        }
+        const listed = listedContacts(frame.world, frame.members);
+        if (listed.length) {
+            const focus = run && CURRENT_STATES.has(run.state) ? run.orders.focus : null;
+            console.log(`Contacts (${listed.length} of ${frame.world.length} seen; threats, what the group could fight, enemy players and their pets):`);
+            for (const c of listed.slice(0, 40)) console.log(`  ${contactLine(c, focus)}`);
+            if (listed.length > 40) console.log(`  40 of ${listed.length} shown`);
         }
         if (run && run.eventSeq > 0) {
             // A frame carries the run's oldest events first: ask again for the newest 15.

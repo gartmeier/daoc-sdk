@@ -35,7 +35,7 @@ What it does:
 | `timeout` | over `timeout` (60 s); attack and chase are stopped |
 | `target_lost` | the mob vanished above 20 % health |
 | `out_of_reach` | it ran beyond `maxChaseDistance` |
-| `not_attackable` | `isKillable` said no; `force: true` overrides |
+| `not_attackable` | `isKillable` said no and it is no enemy realm's pet; `force: true` overrides |
 | `refused` | the server refused the attack (message in `k.message`) |
 
 `bot.attack(npc)` only starts melee: it approaches, targets, faces and swings, then returns. Use it when you want to manage the fight yourself.
@@ -103,4 +103,4 @@ A mob that failed is avoided for 60 s. A death stops the grind unless `respawn: 
 - **Melee range is 128 in 3D,** plus 32 for each side that is moving. A wrong z breaks melee; `killNpc` adopts the mob's z, but raw `sdk.sendAttack` doesn't.
 - **Facing:** a swing needs the target within a 120° arc in front of you. `killNpc` re-faces automatically. `bot.face(n)` with a bare number always turns to heading `n`; face an object by passing the object, a name pattern or `{ objectId }`.
 - **"IN COMBAT"** in the state summary right after a kill is normal. The server's in-combat flag lingers for a few seconds.
-- **Guards and other realm NPCs are never killable targets:** `isKillable` rejects any NPC whose realm isn't `'none'`. `force: true` skips that check, but the server still decides whether the attack is allowed.
+- **Guards and other realm NPCs are never killable targets:** `isKillable` rejects any NPC whose realm isn't `'none'`. `force: true` skips that check, but the server still decides whether the attack is allowed. An enemy realm's pet needs no `force`: `killNpc` takes it, for no XP (`GameNPC.cs:2731-2732`), and `findKillableNpc` leaves it out.

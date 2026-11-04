@@ -117,6 +117,7 @@ describe('BotSDK.sendAction dispatch failures', () => {
             useSkill: s => s.sendUseSkill(3),
             castSpell: s => s.sendCastSpell(1, 2),
             setGroundTarget: s => s.sendSetGroundTarget(1, 2, 3),
+            petCommand: s => s.sendPetCommand('attack', 7),
             useItem: s => s.sendUseItem(40, 1),
             moveItem: s => s.sendMoveItem(40, 41, 2),
             dropItem: s => s.sendDropItem(40),
@@ -148,7 +149,7 @@ describe('BotSDK.sendAction dispatch failures', () => {
             moveTo: { x: 1, y: 2, z: 3, tolerance: 5, speedFactor: 0.5, waypoints: [{ x: 0, y: 0, z: 0 }] },
             face: { heading: 1024 }, faceObject: { objectId: 7 }, setTarget: { objectId: null }, interact: { objectId: 7 },
             whisper: { objectId: 7, text: 'kw' }, pickup: { objectId: 7 }, attack: { on: false }, useSkill: { skillIndex: 3 },
-            castSpell: { lineIndex: 1, spellIndex: 2 }, setGroundTarget: { x: 1, y: 2, z: 3 }, useItem: { slot: 40, useType: 1 },
+            castSpell: { lineIndex: 1, spellIndex: 2 }, setGroundTarget: { x: 1, y: 2, z: 3 }, petCommand: { command: 'attack', targetObjectId: 7 }, useItem: { slot: 40, useType: 1 },
             moveItem: { fromSlot: 40, toSlot: 41, count: 2 }, dropItem: { slot: 40 }, destroyItem: { slot: 40 }, delve: { slot: 40 }, delveMerchantItem: { page: 0, slot: 3 },
             tradeOfferItem: { partnerObjectId: 7, slot: 40 }, tradeOfferMoney: { partnerObjectId: 7, copper: 5 }, tradeAccept: { revision: 3 },
             buy: { page: 0, slot: 1, count: 2 }, sell: { slot: 40 }, trainSpec: { specIndex: 0, levels: 2 },
@@ -206,6 +207,36 @@ describe('BotSDK state reads', () => {
         expect(sdk.getTrade()).toEqual(trade);
         feed(sdk, makeState({ trade: null }));
         expect(sdk.getTrade()).toBeNull();
+    });
+
+    test('getPetState holds the window, getPet its entry in view; a client without the field reads as no pet', () => {
+        const { sdk } = stubSdk(5000);
+        feed(sdk, makeState());
+        expect(sdk.getPetState()).toBeNull();
+        expect(sdk.getPet()).toBeNull();
+        const pet = { objectId: 600, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null } as const;
+        const copy = { ...pet, icons: [] };
+        feed(sdk, makeState({ pet: copy, nearbyNpcs: [makeNpc({ objectId: 600, name: 'wolf', isPet: true })] }));
+        expect(sdk.getPetState()).toEqual(copy);
+        expect(sdk.getPet()?.name).toBe('wolf');
+        feed(sdk, makeState({ pet: copy, nearbyNpcs: [] })); // out of view: the window stays
+        expect(sdk.getPetState()).toEqual(copy);
+        expect(sdk.getPet()).toBeNull();
+        feed(sdk, makeState({ pet: null }));
+        expect(sdk.getPetState()).toBeNull();
+    });
+
+    test('getSummons: the entries in view, nearest first; a client without the field reads as none', () => {
+        const { sdk } = stubSdk(5000);
+        feed(sdk, makeState());
+        expect(sdk.getSummons()).toEqual([]);
+        const near = makeNpc({ objectId: 610, name: 'air spirit', isPet: true, distance: 50 });
+        const far = makeNpc({ objectId: 611, name: 'ice spirit', isPet: true, distance: 300 });
+        feed(sdk, makeState({ summons: [611, 610, 612], nearbyNpcs: [near, far, makeNpc()] }));
+        expect(sdk.getSummons().map(n => n.objectId)).toEqual([610, 611]);
+        feed(sdk, makeState({ summons: [611, 610], nearbyNpcs: [makeNpc()] }));
+        expect(sdk.getSummons()).toEqual([]);
+        expect(sdk.getPetState()).toBeNull();
     });
 
     test('getTarget resolves the target object', () => {
@@ -343,7 +374,14 @@ describe('helpers', () => {
         expect(isAttackable(makeNpc({ realm: 'albion' }), p)).toBe(false);
         expect(isAttackable(makeNpc({ realm: 'midgard' }), p)).toBe(true);
         expect(isAttackable(makeNpc({ isPeaceful: true }), p)).toBe(false);
-        expect(isAttackable(makeNpc({ healthPercent: 0 }), p)).toBe(false);
+        // A dead one leaves the list: at 0 % it is alive, the percent is truncated (GameLiving.cs:2621).
+        expect(isAttackable(makeNpc({ healthPercent: 0 }), p)).toBe(true);
         expect(isAttackable(makeNpc({ isPet: true }), p)).toBe(false);
+        // A pet has its owner's realm: ours no, an enemy's yes (AbstractServerRules.cs:344-348), and with no player to compare, no.
+        expect(isAttackable(makeNpc({ isPet: true, realm: 'albion' }), p)).toBe(false);
+        expect(isAttackable(makeNpc({ isPet: true, realm: 'midgard' }), p)).toBe(true);
+        expect(isAttackable(makeNpc({ isPet: true, realm: 'midgard', isPeaceful: true }), p)).toBe(false);
+        expect(isAttackable(makeNpc({ isPet: true, realm: 'midgard' }), null)).toBe(false);
+        expect(isAttackable(makeNpc({ realm: 'midgard' }), null)).toBe(true);
     });
 });

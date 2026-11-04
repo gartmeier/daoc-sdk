@@ -336,6 +336,10 @@ export const EXECUTE_CODE_OUTPUT_SCHEMA = obj({
             isDead: bool, isSitting: bool, inCombat: bool, attacking: bool, moving: bool, targetObjectId: nullable(num),
         })),
         target: nullable(obj({ objectId: num, kind: str, name: str, level: nullable(num), healthPercent: nullable(num), distance: num })),
+        pet: nullable(obj({
+            objectId: num, name: nullable(str), level: nullable(num), healthPercent: nullable(num), distance: nullable(num),
+            aggression: str, walk: str, targetObjectId: nullable(num),
+        }, 'Our window pet; name, level, healthPercent and distance are null while it is out of view.')),
         inventory: obj({ freeSlots: num, items: arr(obj({ slot: num, name: str, count: num, level: num })) }),
         equipment: arr(obj({ slot: num, name: str })),
         effects: arr(obj({ name: str, remainingSeconds: num, isNegative: bool })),

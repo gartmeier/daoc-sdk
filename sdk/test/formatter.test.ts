@@ -47,6 +47,68 @@ describe('formatWorldState', () => {
         expect(formatWorldState(makeState(), 0)).not.toContain('trading with');
     });
 
+    test('shows our pet in both views', () => {
+        const pet = { objectId: 600, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: 200 } as const;
+        const npcs = [makeNpc(), makeNpc({ objectId: 600, name: 'wolf cub', level: 4, healthPercent: 70, distance: 64, realm: 'albion', isPet: true })];
+        const line = 'Pet: wolf cub L4 70% (64u) - defensive, follow, fighting rat';
+        const state = makeState({ pet: { ...pet, icons: [] }, nearbyNpcs: npcs });
+        expect(formatWorldState(state, 0)).toContain(line);
+        expect(formatWorldStateSummary(state, 0)).toContain(line);
+        const away = makeState({ pet: { ...pet, icons: [], targetObjectId: null, walk: 'stay' }, nearbyNpcs: [] });
+        expect(formatWorldStateSummary(away, 0)).toContain('Pet: oid 600 (not in view) - defensive, stay');
+        const named = makeState({ pet: { ...pet, name: 'lynx cub', icons: [], targetObjectId: null, walk: 'stay' }, nearbyNpcs: [] });
+        expect(formatWorldStateSummary(named, 0)).toContain('Pet: lynx cub (not in view) - defensive, stay');
+        expect(formatWorldState(makeState({ pet: null }), 0)).not.toContain('Pet:');
+        expect(formatWorldStateSummary(makeState(), 0)).not.toContain('Pet:');
+    });
+
+    test('the pet line: a mob on it reads as its fight too, one of them out of view or dead no', () => {
+        const pet = { objectId: 600, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null } as const;
+        const petNpc = makeNpc({ objectId: 600, name: 'wolf cub', level: 4, healthPercent: 70, distance: 64, realm: 'albion', isPet: true });
+        const onIt = makeState({ pet: { ...pet, icons: [] }, nearbyNpcs: [petNpc, makeNpc({ targetObjectId: 600 })] });
+        expect(formatWorldStateSummary(onIt, 0)).toContain('Pet: wolf cub L4 70% (64u) - defensive, follow, fighting rat');
+        const idle = makeState({ pet: { ...pet, icons: [] }, nearbyNpcs: [petNpc, makeNpc()] });
+        expect(formatWorldStateSummary(idle, 0)).toContain('Pet: wolf cub L4 70% (64u) - defensive, follow');
+        expect(formatWorldStateSummary(idle, 0)).not.toContain('fighting');
+        const gone = makeState({ pet: { ...pet, icons: [] }, nearbyNpcs: [petNpc, makeNpc({ targetObjectId: 600, healthPercent: 0 })] });
+        expect(formatWorldStateSummary(gone, 0)).not.toContain('fighting');
+    });
+
+    test('a pet is tagged in the NPC list, a fire-and-forget one too, and it has no role', () => {
+        const text = formatWorldState(makeState({ nearbyNpcs: [makeNpc({ objectId: 610, name: 'air spirit', level: 8, realm: 'albion', isPet: true, inCombat: true, distance: 130 })] }), 0);
+        expect(text).toContain('- air spirit L8 100% [pet, in combat, albion] - 130u (oid 610)');
+    });
+
+    test('an NPC with no name reads by its id in the summary, one line each', () => {
+        const text = formatWorldStateSummary(makeState({ nearbyNpcs: [makeNpc({ objectId: 15905, name: '', distance: 82 }), makeNpc({ objectId: 15906, name: '', distance: 90 })] }), 0);
+        expect(text).toContain('NPCs: #15905 (82u), #15906 (90u)');
+    });
+
+    test('a shade shows in the state line of both views, and only then', () => {
+        const shade = makeState({ player: makePlayer({ isShade: true }) });
+        expect(formatWorldStateSummary(shade, 0)).toContain('Testbot L5 Fighter (shade) @ Camelot Hills');
+        expect(formatWorldState(shade, 0)).toContain('Testbot - level 5 Briton Fighter (Albion) (shade)');
+        for (const state of [makeState(), makeState({ player: makePlayer({ isShade: false }) })]) {
+            expect(formatWorldStateSummary(state, 0)).not.toContain('(shade)');
+            expect(formatWorldState(state, 0)).not.toContain('(shade)');
+        }
+    });
+
+    test('our own id as the target reads self, in both views: nearby lists never hold us', () => {
+        const self = makeState({ player: makePlayer({ objectId: 100, targetObjectId: 100 }) });
+        expect(formatWorldState(self, 0)).toContain('Target: self');
+        expect(formatWorldState(self, 0)).not.toContain('not in view');
+        expect(formatWorldStateSummary(self, 0)).toContain('Target: self');
+        // Anyone else out of view still reads as that.
+        const away = makeState({ player: makePlayer({ objectId: 100, targetObjectId: 999 }) });
+        expect(formatWorldState(away, 0)).toContain('Target: oid 999 (not in view)');
+        expect(formatWorldStateSummary(away, 0)).not.toContain('Target:');
+        for (const none of [makeState({ player: makePlayer({ targetObjectId: null }) })]) {
+            expect(formatWorldState(none, 0)).not.toContain('Target:');
+            expect(formatWorldStateSummary(none, 0)).not.toContain('Target:');
+        }
+    });
+
     test('not in game', () => {
         const text = formatWorldState(makeState({ inGame: false, player: null, connection: { phase: 'charScreen', serverName: '', clientVersion: '1.127', lastError: 'AccountIsInLogoutProcedure' } }), 9000);
         expect(text).toContain('Phase: charScreen');
@@ -96,9 +158,19 @@ describe('summarizeWorldState', () => {
         expect(s.merchant).toBeNull();
     });
 
+    test('our pet: the window, and its entry while in view', () => {
+        const pet = { objectId: 600, aggression: 'passive', walk: 'stay', icons: [], targetObjectId: 200 } as const;
+        const inView = summarizeWorldState(makeState({ pet: { ...pet, icons: [] }, nearbyNpcs: [makeNpc({ objectId: 600, name: 'wolf cub', level: 4, healthPercent: 70, distance: 64 })] }), 0);
+        expect(inView.pet).toEqual({ objectId: 600, name: 'wolf cub', level: 4, healthPercent: 70, distance: 64, aggression: 'passive', walk: 'stay', targetObjectId: 200 });
+        const away = summarizeWorldState(makeState({ pet: { ...pet, icons: [] }, nearbyNpcs: [] }), 0);
+        expect(away.pet).toEqual({ objectId: 600, name: null, level: null, healthPercent: null, distance: null, aggression: 'passive', walk: 'stay', targetObjectId: 200 });
+        expect(summarizeWorldState(makeState(), 0).pet).toBeNull();
+    });
+
     test('summary keys match the MCP output schema', () => {
         const state = makeState({
             player: makePlayer({ targetObjectId: 200 }),
+            pet: { objectId: 200, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null },
             dialog: { isOpen: true, code: 5, data: [0, 0, 0, 0], type: 1, text: 'x', receivedAt: 0 },
             npcDialog: { npcObjectId: 1, npcName: 'n', text: 't', keywords: [], receivedAt: 0 },
             merchant: { isOpen: true, merchantObjectId: 1, windowType: 0, items: [{ page: 0, slot: 0, name: 'b', level: 1, price: 1, model: 1, usable: true, objectType: 0, hand: 0, damageType: null, value1: 0, spdAbs: 0 }] },

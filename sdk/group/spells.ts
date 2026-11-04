@@ -3,6 +3,7 @@
 
 import type { SpellInfo } from '../../data/index';
 import type { BotActions } from '../actions';
+import { petSpellKind, worstPowerCost } from '../actions-helpers';
 import type { BotSDK } from '../index';
 import type { Spell } from '../types';
 import { songKind, type SongKind } from './songs';
@@ -32,6 +33,8 @@ export interface SpellPick {
     /** Server stacking keys: DoTs conflict by effect group, else (same type) by tick frequency. */
     effectGroup: number;
     frequency: number;
+    /** The icon its effect shows: how a pet buff is seen on the pet (PetState.icons). */
+    icon: number;
 }
 
 const NUKE_TYPES = /^(DirectDamage|Bolt|Lifedrain|DamageOverTime|DirectDamageWithDebuff|DamageSpeedDecrease)$/;
@@ -44,6 +47,11 @@ const ROOT_TYPES = /^(SpeedDecrease|UnbreakableSpeedDecrease)$/;
 const isMezz = (s: SpellPick) => MEZZ_TYPES.test(s.type);
 const isRoot = (s: SpellPick) => ROOT_TYPES.test(s.type) && s.value >= 99 && s.radius === 0;
 const HEAL_TYPES = /^(Heal|CombatHeal)$/;
+// Of the kinds petSpellKind names, left to their own tactics: a Necromancer's servant (he goes into shade) and an Animist's fire-and-forget turret.
+const NOT_AUTOMATIC = new Set(['SummonNecroPet', 'SummonAnimistFnF']);
+const isSummon = (s: SpellPick, kind: 'main' | 'fnf') => petSpellKind(s.type) === kind && !NOT_AUTOMATIC.has(s.type);
+// A pet buff worth keeping up lasts. That leaves out the 5-8 s pulsing damage shields.
+const PET_BUFF_MIN_SECONDS = 60;
 
 /** The buff slot of a spell handler type, or null when it isn't a buff we keep up. */
 export function slotOf(type: string): BuffSlot | null {
@@ -72,7 +80,7 @@ export function toPick(spell: Spell, info: SpellInfo): SpellPick {
     return {
         spell, type: info.type, target: info.target, range: info.range, radius: info.radius, power: info.power, castTime: info.castTime, duration: info.duration, recast: info.recastDelay ?? 0, concentration: info.concentration,
         pulse: (info.pulse ?? 0) > 0 && (info.frequency ?? 0) > 0, value: info.value ?? 0, damage: info.damage ?? 0, spellGroup: info.spellGroup ?? 0,
-        effectGroup: info.effectGroup ?? 0, frequency: info.frequency ?? 0,
+        effectGroup: info.effectGroup ?? 0, frequency: info.frequency ?? 0, icon: info.icon ?? 0,
     };
 }
 
@@ -159,6 +167,42 @@ export class Spellbook {
     }
 
     /**
+     * The same on our pet: a Pet-target heal, and nothing else in here casts those. With none, a heal on a friend at the pet's id (a Druid's: a Realm heal lands on a pet, live). capabilities().heal is about members and takes no notice.
+     */
+    petHeal(missing?: number): SpellPick | null {
+        const need = { missing, casterMaxHp: this.sdk.getPlayer()?.maxHealth ?? 0 };
+        const single = this.all().filter(s => HEAL_TYPES.test(s.type) && !s.pulse && s.radius === 0 && this.ready(s));
+        return pickHeal(single.filter(s => s.target === 'Pet'), need) ?? pickHeal(single.filter(s => s.target === 'Realm' || s.target === 'Group'), need);
+    }
+
+    /**
+     * The window pet we summon by ourselves, the top rank (a commander counts; its minions are never ours to summon).
+     * Paid for or not, on its timer or not: a percent cost passes ready() at any power, so the caller weighs powerOf and cooldownRemaining.
+     */
+    summon(): SpellPick | null {
+        return best(this.all().filter(s => isSummon(s, 'main')));
+    }
+
+    /** A Theurgist's pet, which fights its target alone: the top rank over its lines, weighed like summon(). */
+    fnf(): SpellPick | null {
+        return best(this.all().filter(s => isSummon(s, 'fnf')));
+    }
+
+    /** Whether a window pet of ours stands where it was put: an Animist's main pets (TurretBrain.cs:100-108), by the rule killNpc and petKill go by. */
+    knowsTurret(): boolean {
+        return this.all().some(s => petSpellKind(s.type) === 'turret');
+    }
+
+    /**
+     * The most a spell can cost us (worstPowerCost): a flat cost or a percent of the pool without items, 1.2 × for a focus caster with no
+     * focus. The server checks that before the cast (SpellHandler.cs:794) and takes it at the end: live, an interrupted summon cost nothing.
+     */
+    powerOf(s: Pick<SpellPick, 'power'>): number {
+        const p = this.sdk.getPlayer();
+        return p ? worstPowerCost(s.power, p) : Math.max(0, s.power);
+    }
+
+    /**
      * A mezz cast at a target: single-target first; an area mezz (it also mezzes the focus next to
      * the add) only with `aoe`; never a point-blank one (range 0, centred on us: the Spiritmaster's
      * Dark Wave, the Cleric's Heavenly Visions). The highest level used to win, so live RvR runs
@@ -169,12 +213,16 @@ export class Spellbook {
         return best(ok.filter(s => s.radius === 0)) ?? (opts.aoe ? best(ok) : null);
     }
 
+    /** A root ready now: what an NPC under 75 % takes where a mezz can't (CCSpellHandler.cs:174). */
+    root(): (SpellPick & { kind: 'root' }) | null {
+        const r = best(this.all().filter(s => isRoot(s) && s.target === 'Enemy' && this.ready(s)));
+        return r ? { ...r, kind: 'root' } : null;
+    }
+
     /** Crowd control for an add: a mezz when one is ready (area ones only with `aoe`), else a root. */
     cc(opts: { aoe?: boolean } = {}): (SpellPick & { kind: 'mezz' | 'root' }) | null {
         const m = this.mezz(opts);
-        if (m) return { ...m, kind: 'mezz' };
-        const r = best(this.all().filter(s => isRoot(s) && s.target === 'Enemy' && this.ready(s)));
-        return r ? { ...r, kind: 'root' } : null;
+        return m ? { ...m, kind: 'mezz' } : this.root();
     }
 
     /**
@@ -199,6 +247,17 @@ export class Spellbook {
         return [...top.values()];
     }
 
+    /** Buffs worth keeping up on our pet: the top rank per slot. Never a conversion (it has no slot, and sacrifices the pet). */
+    petBuffs(): (SpellPick & { slot: BuffSlot })[] {
+        const top = new Map<BuffSlot, SpellPick & { slot: BuffSlot }>();
+        for (const s of this.all()) {
+            const slot = slotOf(s.type);
+            if (!slot || s.target !== 'Pet' || s.pulse || s.duration < PET_BUFF_MIN_SECONDS) continue;
+            if (!top.has(slot) || top.get(slot)!.spell.level < s.spell.level) top.set(slot, { ...s, slot });
+        }
+        return [...top.values()];
+    }
+
     /** Friendly songs we can play, the top rank per kind (only one plays at a time). */
     songs(): (SpellPick & { kind: SongKind })[] {
         const top = new Map<SongKind, SpellPick & { kind: SongKind }>();
@@ -214,12 +273,15 @@ export class Spellbook {
         const all = this.all();
         const buffs = this.buffs();
         return {
-            heal: all.some(s => HEAL_TYPES.test(s.type) && s.target !== 'Enemy'),
+            // On friends: a Cabalist with a Pet-target heal is no healer.
+            heal: all.some(s => HEAL_TYPES.test(s.type) && s.target !== 'Enemy' && s.target !== 'Pet'),
             // What cc() casts at an add without aoe (crowd control is assigned by this): a single-target mezz or a root.
             cc: all.some(s => s.target === 'Enemy' && s.range > 0 && ((isMezz(s) && s.radius === 0) || isRoot(s))),
+            ...(all.some(s => s.target === 'Enemy' && s.range > 0 && isRoot(s)) ? { root: true } : {}),
             nuke: all.some(s => s.target === 'Enemy' && NUKE_TYPES.test(s.type)),
             buffs: buffs.map(s => s.spell.name),
             buffSpells: buffs.map(s => ({ name: s.spell.name, slot: s.slot, target: s.target, concentration: s.concentration })),
+            pet: this.summon() ? 'main' : this.fnf() ? 'fnf' : null,
         };
     }
 }

@@ -61,6 +61,17 @@ export interface RegionBot {
     realmPoints: number;
     /** The group it plays in (gateway/groups.ts badge). */
     group: { id: string; name: string } | null;
+    /** Its window pet: null without one, absent from an older client. */
+    pet?: RegionPet | null;
+}
+
+/** A bot's window pet. Place and health are its entry's, null while that is out of view. */
+export interface RegionPet {
+    objectId: number;
+    name: string;
+    x: number | null;
+    y: number | null;
+    hp: number | null;
 }
 
 /** RunReport.totals so far (the live report, else the result); the RvR numbers only when the run sent them. */
@@ -215,9 +226,18 @@ function runsHere(runs: readonly ActiveRun[], here: Here[]): ActiveRun[] {
     return runs.filter(r => arr(r.usernames).some(u => names.has(lower(u))));
 }
 
+function petView(state: BotWorldState): RegionPet | null | undefined {
+    const pet: unknown = state.pet;
+    if (pet === undefined) return undefined;
+    if (!isObj(pet) || !Number.isFinite(pet.objectId)) return null;
+    const n = arr(state.nearbyNpcs).find(o => isObj(o) && o.objectId === pet.objectId);
+    return { objectId: pet.objectId, name: str(n?.name ?? pet.name, 64), x: numOrNull(n?.x), y: numOrNull(n?.y), hp: numOrNull(n?.healthPercent) };
+}
+
 function botView(h: Here, src: RegionSources, now: number): RegionBot {
     const p = h.p;
     const badge = src.groupOf?.(h.username) ?? null;
+    const pet = petView(h.state);
     return {
         username: h.username, status: src.sessionStatus(h.session),
         stateAge: h.session.lastStateReceivedAt ? Math.max(0, now - h.session.lastStateReceivedAt) : null,
@@ -227,6 +247,7 @@ function botView(h: Here, src: RegionSources, now: number): RegionBot {
         isDead: bool(p.isDead), isSitting: bool(p.isSitting), inCombat: bool(p.inCombat), attacking: bool(p.attacking),
         targetObjectId: numOrNull(p.targetObjectId), realmPoints: num(p.realmPoints),
         group: badge ? { id: badge.id, name: badge.name } : null,
+        ...(pet !== undefined ? { pet } : {}),
     };
 }
 

@@ -29,6 +29,8 @@ export const GROUND_TUNING = {
     swimDepth: 40,
     /** Swimming z below the river surface. */
     swimBelowSurface: 40,
+    /** The mesh's plane in water, below the river surface. */
+    meshBelowSurface: 16,
 };
 
 export interface Ground {
@@ -36,6 +38,8 @@ export interface Ground {
     /** terrain: exact heightmap; navmesh: mesh minus meshBias; water: swimming height. */
     source: 'terrain' | 'navmesh' | 'water';
     swimming: boolean;
+    /** The river surface over this terrain cell (TerrainSample.waterZ), if any: the point is under water when it is above z. Not on a mesh layer, a deck over the river say. */
+    waterZ?: number;
 }
 
 export interface GroundSources {
@@ -76,8 +80,29 @@ export function groundAt(regionId: number, x: number, y: number, zHint: number, 
         if (above < t.bandBelow && Math.abs(zHint - tight) < Math.abs(zHint - terrain.navZ)) return onMesh(tight);
     }
     const { waterZ } = terrain;
-    if (waterZ !== null && waterZ - terrain.z >= t.swimDepth) return { z: waterZ - t.swimBelowSurface, source: 'water', swimming: true };
-    return { z: terrain.z, source: 'terrain', swimming: false };
+    if (waterZ !== null && waterZ - terrain.z >= t.swimDepth) return { z: waterZ - t.swimBelowSurface, source: 'water', swimming: true, waterZ };
+    return { z: terrain.z, source: 'terrain', swimming: false, ...(waterZ !== null && { waterZ }) };
+}
+
+/**
+ * The z for a ground target on this ground: the server drops one over 16 off the mesh (PlayerGroundTargetHandler.cs:63-85). Under a river the mesh is the plane 16 below its surface at any depth
+ * (Heightmap.cs WATER_SURFACE_DEPTH), so the swimming height is 24 off it and the bed can be 23. Live, on 5 spots 20-39 deep: the bed dropped, the plane kept.
+ */
+export function groundTargetZ(ground: { z: number; swimming: boolean; waterZ?: number }): number {
+    if (ground.swimming) return ground.z + GROUND_TUNING.swimBelowSurface - GROUND_TUNING.meshBelowSurface;
+    return ground.waterZ !== undefined && ground.waterZ > ground.z ? ground.waterZ - GROUND_TUNING.meshBelowSurface : ground.z;
+}
+
+/** ground_target_snap_max_distance as it reaches the mesh: a search box of this half size per axis (ServerProperties.cs:2208, LocalPathfindingMgr.cs:341-349). */
+const GROUND_TARGET_BOX: Vec3 = { x: 16, y: 16, z: 16 };
+
+/**
+ * Where the server would put a ground target it takes: the closest point on the nearest poly its box touches, kept with no further test (PlayerGroundTargetHandler.cs:81-86, LocalPathfindingMgr.cs:301-306).
+ * On open ground that is the mesh's height, a few units off; beside a gap in the mesh the poly can reach well outside the box, 90-166 units at the worst measured. Null with no mesh here or nothing in the box. The same meshes as the gameserver's (docs/SERVER.md),
+ * and over deep water the server snaps nothing, which this can't tell (PlayerGroundTargetHandler.cs:76-77).
+ */
+export function groundTargetSnap(regionId: number, spot: Vec3, sources: GroundSources = {}): Vec3 | null {
+    return (sources.navmesh ?? getNavmeshStore()).at(regionId, spot.x, spot.y)?.closestPoint(spot, GROUND_TARGET_BOX) ?? null;
 }
 
 /**

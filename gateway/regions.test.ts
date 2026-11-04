@@ -7,10 +7,10 @@ import { composeRegion, listRegions, regionFrame, regionLayout, type RegionRun, 
 import type { ActiveRun } from './groups';
 import type { GroupBadge } from './group-types';
 import type { ViewerBotSession } from './viewer/routes';
-import { makePlayer, makePlayerObj, makeState } from '../sdk/test/fixtures';
+import { makeNpc, makePlayer, makePlayerObj, makeState } from '../sdk/test/fixtures';
 import { enemy, picture, report } from '../sdk/group/fixtures';
 import { BATTLEGROUND_LAYOUTS, THIDRANKI } from '../sdk/group/rvr';
-import type { BotWorldState, PlayerState } from './types';
+import type { BotWorldState, PetState, PlayerState } from './types';
 import type { LiveReport } from '../sdk/group/wire';
 
 const NOW = 1_800_000_000_000;
@@ -92,6 +92,24 @@ describe('composeRegion', () => {
         expect(f.bots.find(b => b.username === 'brigid')).toMatchObject({ status: 'stale', stateAge: 9000, group: { id: 'hibernia' } });
         expect(composeRegion(1, sources(), NOW).bots.map(b => b.username)).toEqual(['lancelot']);
         expect(composeRegion(999, sources(), NOW).bots).toEqual([]);
+    });
+
+    test('a bot\'s window pet: its entry\'s place and health, null out of view; null without one; absent from an older client', () => {
+        const window: PetState = { objectId: 600, name: 'old name', aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null };
+        const entry = makeNpc({ objectId: 600, name: 'spirit warrior', x: 30010, y: 40010, healthPercent: 84, isPet: true });
+        const sess = new Map<string, ViewerBotSession>([
+            ['galahad', session({ name: 'Galahad', objectId: 11, realm: 'albion' }, { pet: window, nearbyNpcs: [entry] })],
+            ['nimue', session({ name: 'Nimue', objectId: 12, realm: 'albion' }, { pet: window })],
+            ['sigrid', session({ name: 'Sigrid', objectId: 22, realm: 'midgard' }, { pet: null })],
+            ['thorgrim', session({ name: 'Thorgrim', objectId: 21, realm: 'midgard' }, { pet: { objectId: 'x' } as any })],
+            ['brigid', session({ name: 'Brigid', objectId: 31, realm: 'hibernia' })],
+        ]);
+        const bots = new Map(composeRegion(BG, sources({ sessions: sess }), NOW).bots.map(b => [b.username, b]));
+        expect(bots.get('galahad')!.pet).toEqual({ objectId: 600, name: 'spirit warrior', x: 30010, y: 40010, hp: 84 });
+        expect(bots.get('nimue')!.pet).toEqual({ objectId: 600, name: 'old name', x: null, y: null, hp: null });
+        expect(bots.get('sigrid')!.pet).toBeNull();
+        expect(bots.get('thorgrim')!.pet).toBeNull();
+        expect('pet' in bots.get('brigid')!).toBe(false);
     });
 
     test('enemy players: other realms only, none of our bots, one marker per object id seen by every bot that sees it', () => {
