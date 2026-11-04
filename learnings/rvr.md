@@ -216,6 +216,15 @@ Deaths are the clear result: every pack round lost fewer than the best roaming r
 
 Against p1-p3 (17 kills, 1 death, 117 RP, 8 Midgard kills a round; spread 545-910): 15 kills, 0 deaths, 141 RP, 11.5 Midgard kills a round; spread 239-332, none strayed. The tighter pack and the Midgard kills are more than the rounds before varied, but three things changed at once: both fixes, and the opponents came back from their own guild trip. Oisin's idle turns fell (97 to 33 over the rounds compared by length), his mezz count didn't rise (6-8 against 6-13): cc:immune and cc:resisted now take up the gain. So it's the parking fix, 5 raids opened by it, and less idling; not more mezzes.
 
+**Raid length,** three rounds each:
+
+| Raid | Kills / deaths | RP | Midgard kills | Hero's damage | Rounds (kills) |
+|---|---|---|---|---|---|
+| 12 s | 47 / 1 | 425 | 32 | 4712 | 16, 18, 13 |
+| 8 s | 42 / 0 | 465 | 26 | 2747 | 10, 20, 12 |
+
+Alternating, 10 minutes each. The Hero's damage rose in two of three pairs (he reaches the focus before the clock is up), but kills, Midgard kills and realm points are within the noise, and the one death came on 12 s. The default stays 8 s; `--pack.raidMs=12000` to try it.
+
 **Within the noise so far:** Brigid's acuity and giving up a healed focus. Before the give-up the pack went 17/0, 16/0, 21/0 and 6/5; with it 8/2, 17/0, 13/1, 19/1, 18/1. It did stop the 5 minutes on one Troll, but single deaths now show up where the rounds before it had none. The early comparison (63/0 in 45 minutes against 20/10 in 22) overstated the gain: opponents get absent or farmed, and s17 and s18 (18/0, 11/1, 0 RP) had no Midgard at all, so count those out. c3, 12/0, was also the pack and no control.
 
 **Not done:** Oisin's mezz cure (Clarifying Harmonies): a member's report doesn't say it's mezzed. The Hero's post-block stuns. A member rezzed in the field isn't told apart from a released one for the rebuff.
