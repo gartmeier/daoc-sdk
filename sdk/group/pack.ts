@@ -411,13 +411,16 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     if (onUsNow || d <= k.openAt) return startRaid(`${crowd} enemies round the nearest, ${main.length} of us`);
     if (d <= k.standoff) {
         mem.holdSince ??= now;
+        // The centre can't get the last few units: formation slack parked a live round 1469 from a Briton for 5 minutes. Casters step in.
+        if (now - mem.holdSince >= k.idleMs) { mem.holdSince = undefined; return startRaid(`parked ${Math.round(d)} away, ${main.length} of us`); }
         const moving = now - mem.holdSince >= k.waitMs;
         const f = Math.max(0, d - (k.openAt - 100)) / d;
         const to = moving ? { x: Math.round(centre.x + (lead.x - centre.x) * f), y: Math.round(centre.y + (lead.y - centre.y) * f) } : stay;
         return say({ ...none, phase: 'travel', anchor: { ...to, z: zAt(to) }, ...(facing ? { facing } : {}), objective: 'stand off', reason: `${moving ? 'closing in on' : 'standing off from'} ${tag(lead)}, ${Math.round(d)} away` });
     }
     mem.holdSince = undefined;
-    const f = (d - k.standoff) / d;
+    // Past the stand-off, or a pack that arrives a little short stays out of it for good.
+    const f = (d - (k.openAt - 100)) / d;
     const goal = { x: centre.x + (lead.x - centre.x) * f, y: centre.y + (lead.y - centre.y) * f };
     stepLeg(trip, 'stalk', goal, { from: centre, movers: main, replan: 800 });
     return say({ ...none, phase: 'travel', anchor: mem.leg, ...(facing ? { facing } : {}), objective: `stalk ${seen.length} round (${Math.round(lead.x)}, ${Math.round(lead.y)})`, reason: `stalk ${tag(lead)}, ${Math.round(d)} away, ${crowd} together` });

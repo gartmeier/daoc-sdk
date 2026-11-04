@@ -145,6 +145,18 @@ describe('decidePack: prey', () => {
 describe('decidePack: raid, pull back, kill, leave', () => {
     const raid = (over: object = {}) => ({ pack: 'raid', raidAt: 1000, packAnchor: { x: 10_000, y: 10_000, z: 0 }, ...over });
 
+    test('parked just outside the opening distance from enemies that stand still: opens after idleMs', () => {
+        const m: any = { pack: 'stalk' };
+        const pic = picture(team(), fiveAt(BASE.x + 1360));
+        expect(decidePack(ctx(pic, { memory: m, now: 1000 })).phase).toBe('travel');
+        expect(decidePack(ctx(pic, { memory: m, now: 1000 + PACK_SETTINGS.pack.idleMs })).phase).toBe('engage');
+    });
+
+    test('a stalk aims inside the opening distance', () => {
+        const u = decidePack(ctx(picture(team(), fiveAt(BASE.x + 2500)), { memory: { pack: 'stalk' } }));
+        expect(distTo(u.anchor!, { x: BASE.x + 2500, y: BASE.y })).toBeLessThanOrEqual(PACK_SETTINGS.pack.openAt);
+    });
+
     test('the burst ends by the clock and pulls back away from them', () => {
         const m: any = raid();
         const u = decidePack(ctx(picture(team(), fiveAt(11_300)), { memory: m, now: 1000 + PACK_SETTINGS.pack.raidMs }));
