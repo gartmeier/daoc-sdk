@@ -173,7 +173,7 @@ export interface WorldContact {
      * for an enemy's, as the server sends every client the flag and the realm but never who (PacketLib1124.cs:186-187).
      */
     npc: { isPeaceful: boolean; isTargetable: boolean; isPet: boolean; role: string | null; owner?: string } | null;
-    /** A player of another realm. */
+    /** A player or a pet of another realm. */
     enemy: boolean;
     /** Character names of the members whose last state shows it, freshest first. */
     seenBy: string[];

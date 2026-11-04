@@ -485,8 +485,21 @@ describe('the passive group frame', () => {
 
         test('an enemy pet has no owner: the server sends every client the flag and the realm, never who', () => {
             const view = compose({ tankuser: tankState({ nearbyNpcs: [makeNpc({ objectId: 800, name: 'spirit warrior', realm: 'midgard', isPet: true, x: 1100, y: 1000 })] }) });
-            expect(view.world[0]).toMatchObject({ realm: 'midgard', enemy: false, npc: { isPet: true } });
+            expect(view.world[0]).toMatchObject({ realm: 'midgard', enemy: true, npc: { isPet: true } });
             expect('owner' in view.world[0]!.npc!).toBe(false);
+        });
+
+        test('enemy is another realm\'s player or pet: not a monster\'s pet, nor one of our realm, nor a member\'s', () => {
+            const view = compose({ tankuser: tankState({ pet: { ...WINDOW, icons: [] }, nearbyNpcs: [
+                pet({ isPet: true }),
+                makeNpc({ objectId: 801, name: 'friend\'s wolf', realm: 'albion', isPet: true, x: 1100, y: 1000 }),
+                makeNpc({ objectId: 802, name: 'bone servant', realm: 'none', isPet: true, x: 1100, y: 1000 }),
+                makeNpc({ objectId: 803, name: 'guard', realm: 'midgard', x: 1100, y: 1000 }),
+                makeNpc({ objectId: 804, name: 'spirit warrior', realm: 'midgard', isPet: true, x: 1100, y: 1000 }),
+            ] }) });
+            const enemy = (id: number) => view.world.find((w: any) => w.objectId === id)!.enemy;
+            expect([enemy(801), enemy(802), enemy(803), enemy(804)]).toEqual([false, false, false, true]);
+            expect(view.world.find((w: any) => w.npc?.owner)!.enemy).toBe(false);
         });
 
         test('a mob on a member\'s pet names its owner, a window pet\'s or one with no window\'s; on the member itself `target` says so', () => {

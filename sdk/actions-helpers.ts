@@ -239,6 +239,11 @@ export const CORPSE_ONLY = 'This spell only works on dead members of your realm!
 /** Of those below, what only an attack can earn: a spell's own target goes through IsAllowedToAttack for ENEMY alone (SpellHandler.cs:754, :969; a Realm spell's is quiet, :771-775), so beside any other spell they answer something else: a pet's attack order. */
 export const ATTACK_ONLY_REFUSALS: readonly string[] = ["you can't attack", 'you cannot attack', ...PVP_IMMUNE_REFUSALS];
 
+/** The server's answer to a cast with a cast time during another (CastingComponent.cs:433-441). No refusal: castSpell reads it apart. */
+export const ALREADY_CASTING = 'you are already casting a spell';
+/** ... and how it goes on with the spell queue on, as it is unless a player turns it off: the spell starts by itself when the running one ends, unless another replaces it or the running one fails at its end (CastingComponent.cs:224-228). */
+export const FOLLOW_UP = 'as a follow up';
+
 /** Spell refusals and interruptions (SpellHandler.cs, CastingComponent.cs). */
 export const CAST_REFUSALS = [
     "you can't cast while sitting",

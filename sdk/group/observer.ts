@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } fr
 import { dirname, join } from 'path';
 import { findBotEnv } from '../index';
 import { isAlive, type Blackboard } from './blackboard';
+import { CC_WALK } from './cc';
 import type { GroupEvent, GroupPicture, MemberCombat, MemberReport, Phase } from './types';
 import type { LiveReport } from './wire';
 
@@ -216,6 +217,8 @@ interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outc
     engageAt: number | null; engaged: Set<string>; firstNuke: Map<string, number>;
     /** Enemy players among the focus and attackers: realm by region:objectId. */
     enemies: Map<string, string>;
+    /** Enemy pets killed: not in kills, though they can be all the fight was won by. */
+    petsDown: number;
 }
 
 const pct = (a: number, b: number) => b > 0 ? Math.round(100 * a / b) : 0;
@@ -425,7 +428,7 @@ export class GroupObserver {
         this.calm = fighting ? 0 : this.calm + 1;
         if (fighting && !this.fight) {
             this.fight = {
-                start: Math.round((p.at - this.started) / 1000), at: p.at, focus: [], kills: [], maxAttackers: 0, deaths: [], retreated: false, attackers: new Set(), holdSamples: 0, heldSamples: 0,
+                start: Math.round((p.at - this.started) / 1000), at: p.at, focus: [], kills: [], petsDown: 0, maxAttackers: 0, deaths: [], retreated: false, attackers: new Set(), holdSamples: 0, heldSamples: 0,
                 engageAt: null, engaged: new Set(), firstNuke: new Map(), enemies: new Map(),
             };
         }
@@ -464,7 +467,8 @@ export class GroupObserver {
             // Idle and moving count while engaged only: during a pull, waiting at the base is the job.
             if (phase === 'engage') t.engageSamples++;
             if (phase === 'engage' && m.activity.kind === 'idle') { t.idle++; inc(t.idleReasons, m.activity.detail || 'nothing to do'); }
-            if (phase === 'engage' && m.activity.kind === 'move') t.moving++;
+            // A walk to a crowd-control target is the way to a cast at something else: combatRange's limits, round the focus, have nothing to say about it.
+            if (phase === 'engage' && m.activity.kind === 'move' && !m.activity.detail?.startsWith(CC_WALK)) t.moving++;
             if (ordered) f.engaged.add(m.name);
             // The activity's start is exact; a nuke begun before this fight is a leftover.
             if (m.activity.kind === 'nuke') {
@@ -486,7 +490,7 @@ export class GroupObserver {
         if (!f) return;
         this.fight = null;
         const alive = p ? p.members.filter(m => !m.isDead).length : 1;
-        const outcome = p && alive === 0 ? 'wiped' : f.retreated ? 'retreated' : f.kills.length ? 'won' : at === Infinity ? 'unfinished' : 'lost';
+        const outcome = p && alive === 0 ? 'wiped' : f.retreated ? 'retreated' : f.kills.length || f.petsDown ? 'won' : at === Infinity ? 'unfinished' : 'lost';
         // The sampler trails the engage order by up to a sample, so a nuke can come first: 0.
         const openerMs: Record<string, number | null> = {};
         if (f.engageAt !== null) {
@@ -546,10 +550,14 @@ export class GroupObserver {
         if (t) this.credit(t, e);
         else if (e.member && CREDITED.has(e.kind)) this.early.push(e);
         if (e.kind === 'kill') {
-            // An enemy pet is worth nothing (GameNPC.cs:2731-2732): no kill in the totals, though its death can end a fight.
-            if (!e.data?.pet) this.kills++;
+            // An enemy pet is worth nothing (GameNPC.cs:2731-2732): no kill in the totals or the fight's line, though its death can end a fight, and that fight was won.
+            if (e.data?.pet) {
+                if (this.fight) this.fight.petsDown++;
+            } else {
+                this.kills++;
+                this.fight?.kills.push(String(e.data?.name ?? e.text));
+            }
             if (e.data?.kind === 'player') this.playerKills++;
-            this.fight?.kills.push(String(e.data?.name ?? e.text));
         }
         if (e.kind === 'death') {
             if (deathBy(e).enemyRealm) this.deathsToPlayers++;

@@ -317,6 +317,7 @@ export class BotSDK {
     private intentionalDisconnect = false;
     /** Gateway's error text when another control connection took this bot over, else null. */
     private preemptedReason: string | null = null;
+    private petAttackSentAt: number | null = null;
 
     constructor(config: SDKConfig) {
         this.config = {
@@ -1120,7 +1121,13 @@ export class BotSDK {
 
     /** Order our pet; with `targetObjectId`, target that first (our target stays moved). Success means dispatched: bot.* observes the answer. */
     async sendPetCommand(command: PetCommand, targetObjectId?: number): Promise<ActionResult> {
+        if (command === 'attack') this.petAttackSentAt = Date.now();
         return this.sendAction({ type: 'petCommand', command, targetObjectId, reason: 'SDK' });
+    }
+
+    /** When the last attack order went to our pet (Date.now()), null before any. Its refusal comes on the one line stream with everything else, and castSpell has to tell it from its own. */
+    getPetAttackSentAt(): number | null {
+        return this.petAttackSentAt ?? null;
     }
 
     /** Use an item in a slot (potions, charged items). */
