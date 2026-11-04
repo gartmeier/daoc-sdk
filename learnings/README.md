@@ -7,6 +7,7 @@ Notes from live runs against the local OpenDAoC server. Each topic file says wha
 | [walking.md](walking.md) | walkTo, waypoints, z estimation, stuck/corrections |
 | [combat.md](combat.md) | finding targets, con colours, killNpc, grind, styles |
 | [spells.md](spells.md) | castSpell, buffs, interrupts, caster tactics |
+| [pets.md](pets.md) | which class has what, summoning, orders and stances, reading a pet's state, a lost pet's mob coming for its owner, shade, turrets, what hasn't been seen live |
 | [npc-dialog.md](npc-dialog.md) | talkTo, [keywords], whisper, trainers, promotion, teleporters |
 | [builds.md](builds.md) | a character's own build: the buying rule, choosing, writing and adding one, points and costs, respec, static data against the trainer window |
 | [merchants.md](merchants.md) | open, buy, sell, better weapons, merchant data offline |
@@ -82,4 +83,4 @@ if (import.meta.main) await runScript(main, { args: { pattern: scriptArgs()[0] }
   - Classes: `classSheet`, `classSpecs`, `classSpellLines` from `data/class-sheet.ts`. Spec points: `earnedSpecPoints`, `specCost`, `buildPath` from `data/builds` ([builds.md](builds.md)).
   - Characters: `validateCharacter`, `getStartingClasses`, `getPlayableRacesForClass`, `getStarterArmour` (what a new character really gets).
   - The data says where things spawn; `sdk.getNearbyNpcs()` says what is actually there now.
-- `bots/examples/` holds working scripts for grinding, selling, casting, exploring and grouping.
+- `bots/examples/` holds working scripts for grinding, selling, casting, exploring and grouping, and `pet.ts`, a grind with a pet that hasn't run live yet.

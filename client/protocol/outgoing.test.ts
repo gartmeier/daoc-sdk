@@ -158,6 +158,18 @@ describe('targeting / combat / interaction encoders', () => {
         expect(H(o.encodeSit(false))).toBe('00');
     });
 
+    test('0x8A PetWindow: u8 aggro, u8 walk, u8 command, one order per packet', () => {
+        expect(H(o.encodePetWindow(1, 0, 0))).toBe('01 00 00');
+        expect(H(o.encodePetWindow(2, 0, 0))).toBe('02 00 00');
+        expect(H(o.encodePetWindow(3, 0, 0))).toBe('03 00 00');
+        expect(H(o.encodePetWindow(0, 1, 0))).toBe('00 01 00');
+        expect(H(o.encodePetWindow(0, 2, 0))).toBe('00 02 00');
+        expect(H(o.encodePetWindow(0, 3, 0))).toBe('00 03 00');
+        expect(H(o.encodePetWindow(0, 4, 0))).toBe('00 04 00');
+        expect(H(o.encodePetWindow(0, 0, 1))).toBe('00 00 01');
+        expect(H(o.encodePetWindow(0, 0, 2))).toBe('00 00 02');
+    });
+
     test('0xD0 LoS response: src, tgt, 0x0100 clear', () => {
         expect(H(o.encodeLosResponse(0x0102, 0x0304))).toBe('01 02 03 04 01 00 00 00');
         expect(H(o.encodeLosResponse(1, 2, false))).toBe('00 01 00 02 00 00 00 00');

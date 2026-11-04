@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { decodeTerrain, encodeTerrain, getTerrainStore, NO_WATER, sampleTerrain, type TerrainGrid, type TerrainSample, type TerrainStore } from '../terrain';
-import { GROUND_TUNING, groundAt, moverGround } from '../ground';
+import { GROUND_TUNING, groundAt, groundTargetSnap, groundTargetZ, moverGround } from '../ground';
 import { getNavmeshStore, type NavmeshStore } from '../navmesh';
 import type { Vec3 } from '../types';
 
@@ -92,14 +92,34 @@ describe('groundAt', () => {
         expect(groundAt(1, 0, 0, 100, { navmesh: roofOnly(526), terrain: noTerrain })!.z).toBe(526 - GROUND_TUNING.meshBias);
     });
 
+    test('a ground target in deep water goes on the mesh\'s plane, 16 under the surface; anywhere else it is the ground itself', () => {
+        const deep = groundAt(1, 0, 0, 0, { navmesh: meshAt(1813), terrain: flat(1700, { navZ: 1813, waterZ: 1829 }) })!;
+        expect(deep.swimming).toBe(true);
+        expect(groundTargetZ(deep)).toBe(1813);
+        expect(groundTargetZ({ z: 4573, swimming: true })).toBe(4597); // Shannon Estuary: the server kept 4598 and dropped 4573
+        expect(groundTargetZ({ z: 4727, swimming: false })).toBe(4727);
+    });
+
+    test('in shallower water too the target goes on that plane: the bed is up to 23 off it, over the 16 the server allows (PlayerGroundTargetHandler.cs:63-85; live, depth 33-39 and some of 20-28: dropped)', () => {
+        const wading = groundAt(1, 0, 0, 0, { navmesh: meshAt(4597), terrain: flat(4577, { navZ: 4597, waterZ: 4613 }) })!;
+        expect(wading).toEqual({ z: 4577, source: 'terrain', swimming: false, waterZ: 4613 });
+        expect(groundTargetZ(wading)).toBe(4597);
+        // Shallow: buildnav lays every vertex under a river on that plane, banks down as well as beds up.
+        expect(groundTargetZ(groundAt(1, 0, 0, 0, { navmesh: meshAt(4597), terrain: flat(4610, { navZ: 4597, waterZ: 4613 }) })!)).toBe(4597);
+        // A dry point in a cell the river touches: its waterZ is a corner's, and the ground is the ground.
+        expect(groundTargetZ(groundAt(1, 0, 0, 0, { navmesh: meshAt(4620), terrain: flat(4618, { navZ: 4618, waterZ: 4613 }) })!)).toBe(4618);
+        // A deck above the water is what the target stands on.
+        expect(groundTargetZ(groundAt(1, 0, 0, 0, { navmesh: meshAt(4700), terrain: flat(4577, { navZ: 4597, waterZ: 4613 }) })!)).toBe(4700 - GROUND_TUNING.meshBias);
+    });
+
     test('a cave floor below the surface at our height is ground', () => {
         expect(groundAt(1, 0, 0, 40, { navmesh: meshAt(42), terrain: flat(100) })).toMatchObject({ z: 42 - GROUND_TUNING.meshBias, source: 'navmesh' });
     });
 
     test('deep water swims under the surface; shallow water wades on the bed; a deck above the water is ground', () => {
         const deep = flat(1700, { navZ: 1813, waterZ: 1829 });
-        expect(groundAt(1, 0, 0, 0, { navmesh: meshAt(1814), terrain: deep })).toEqual({ z: 1829 - GROUND_TUNING.swimBelowSurface, source: 'water', swimming: true });
-        expect(groundAt(1, 0, 0, 0, { navmesh: meshAt(1813), terrain: flat(1810, { navZ: 1813, waterZ: 1829 }) })).toEqual({ z: 1810, source: 'terrain', swimming: false });
+        expect(groundAt(1, 0, 0, 0, { navmesh: meshAt(1814), terrain: deep })).toEqual({ z: 1829 - GROUND_TUNING.swimBelowSurface, source: 'water', swimming: true, waterZ: 1829 });
+        expect(groundAt(1, 0, 0, 0, { navmesh: meshAt(1813), terrain: flat(1810, { navZ: 1813, waterZ: 1829 }) })).toEqual({ z: 1810, source: 'terrain', swimming: false, waterZ: 1829 });
         expect(groundAt(1, 0, 0, 0, { navmesh: meshAt(1850), terrain: deep })).toMatchObject({ source: 'navmesh', swimming: false });
     });
 
@@ -119,6 +139,27 @@ describe('groundAt', () => {
         seen.length = 0;
         groundAt(1, 0, 0, 0, { navmesh: meshAt(null, seen), terrain: noTerrain });
         expect(seen).toEqual([{ x: 2, y: 2, z: 64 }, { x: 32, y: 32, z: 64 }, { x: 2, y: 2, z: 512 }, { x: 32, y: 32, z: 512 }]);
+    });
+
+    describe('groundTargetSnap: where the server would put a ground target', () => {
+        const spot = { x: 100, y: 200, z: 300 };
+
+        test('the closest point in its box of 16 per axis, from the zone\'s own mesh (LocalPathfindingMgr.cs:301-306, :341-349)', () => {
+            const seen: unknown[] = [];
+            const navmesh = {
+                at: (region: number, x: number, y: number) => {
+                    seen.push([region, x, y]);
+                    return { closestPoint: (p: Vec3, ext: Vec3) => { seen.push(p, ext); return { x: 122, y: 200, z: 301 }; } };
+                },
+            } as unknown as NavmeshStore;
+            expect(groundTargetSnap(1, spot, { navmesh })).toEqual({ x: 122, y: 200, z: 301 });
+            expect(seen).toEqual([[1, 100, 200], spot, { x: 16, y: 16, z: 16 }]);
+        });
+
+        test('null with no mesh there, or nothing in the box: nothing to go by', () => {
+            expect(groundTargetSnap(1, spot, { navmesh: { at: () => null } as unknown as NavmeshStore })).toBeNull();
+            expect(groundTargetSnap(1, spot, { navmesh: { at: () => ({ closestPoint: () => null }) } as unknown as NavmeshStore })).toBeNull();
+        });
     });
 
     describe('moverGround', () => {
@@ -156,6 +197,6 @@ describe.skipIf(!haveData)('ground on the generated zones', () => {
 
     test('Llyn Barfog (zone 7, water 1829): swimming under the surface', () => {
         const g = groundAt(1, 447076, 408704, 1814)!;
-        expect(g).toEqual({ z: 1829 - GROUND_TUNING.swimBelowSurface, source: 'water', swimming: true });
+        expect(g).toEqual({ z: 1829 - GROUND_TUNING.swimBelowSurface, source: 'water', swimming: true, waterZ: 1829 });
     });
 });

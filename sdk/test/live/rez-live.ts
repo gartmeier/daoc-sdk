@@ -61,7 +61,8 @@ await withBots([gm, healer, victim, second], gw, async () => {
     const alive = await healer.bot.resurrect(me(victim).objectId);
     check('refuses the living', alive.reason === 'not_dead', brief(alive));
     const raw = await healer.bot.castSpell(spell, me(victim).objectId);
-    check('the server refuses the living: not_dead', raw.reason === 'not_dead', brief(raw));
+    // Refused before anything is sent (castTargetRefusal); the server's own line for that reads the same reason (castFailureReason), and bot.resurrect's check above says not_dead.
+    check('castSpell refuses the living: invalid_target', raw.reason === 'invalid_target', brief(raw));
 
     await kill(victim);
     const corpse = healer.sdk.getNearbyPlayer(me(victim).objectId);

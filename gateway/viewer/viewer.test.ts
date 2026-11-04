@@ -3,18 +3,20 @@ import { copyFileSync, mkdtempSync, readdirSync, rmSync, utimesSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createGateway, type Gateway, type GatewayOptions } from '../gateway';
-import { makeState } from '../../sdk/test/fixtures';
+import { makeNpc, makeState } from '../../sdk/test/fixtures';
 import { conColor, conLevel } from './con-level';
 import {
-    appendBySeq, canWindDown, ccSeen, conReference, contactListed, deathContext, enemyTags, eventVisible, gatewayRestarted, isGroupFrame, isThreat,
-    listedContacts, logLineKind, mapRegion, mergeEvents, npcShown, phaseClass, retryRuns, roleLetter, runFailed, runPill, runRegion, timeLeft,
+    appendBySeq, canWindDown, ccSeen, conReference, contactAim, contactListed, deathContext, enemyTags, eventVisible, gatewayRestarted, isGroupFrame, isThreat,
+    contactLine, listedContacts, logLineKind, mapLabel, mapRegion, memberPetRow, memberRealms, mergeEvents, npcShown, petLine, petSide, petTitle, phaseClass, retryRuns, roleLetter, runFailed, runPill, runRegion, timeLeft,
     type FeedFilters,
 } from './group-logic';
-import { authHeaders, REGION_RETRY_MS, shouldLoadRegion } from './logic';
+import { authHeaders, isOwnPet, petPanel, REGION_RETRY_MS, shouldLoadRegion, unseenTarget } from './logic';
 import { buildAppBundle, buildBundle } from './routes';
 import { drawPass } from './ui-kit';
 import type { GroupMemberView, MemberPlayer, PassiveEvent, RunView, WorldContact } from '../group-types';
 import type { RunMeta, WireEvent } from '../../sdk/group/wire';
+import type { PetReport } from '../../sdk/group/types';
+import type { PetState } from '../../sdk/types';
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -261,6 +263,51 @@ describe('con colours (ConLevelGrid.cs)', () => {
 });
 
 describe('viewer page logic', () => {
+    test('the Target line for an id nothing in view has: our own id is self', () => {
+        expect(unseenTarget(11, 11)).toBe('self');
+        expect(unseenTarget(21, 11)).toBe('#21 (not in view)');
+        expect(unseenTarget(21, undefined)).toBe('#21 (not in view)');
+    });
+
+    test('isOwnPet: the window\'s whatever its entry says, one with no window only with the pet flag (those ids linger and get reused)', () => {
+        const pet: PetState = { objectId: 600, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null };
+        const npc = (objectId: number, isPet: boolean) => ({ objectId, isPet });
+        expect(isOwnPet({ pet }, npc(600, false))).toBe(true);
+        expect(isOwnPet({ pet }, npc(601, true))).toBe(false);
+        expect(isOwnPet({ pet: null, summons: [601] }, npc(601, true))).toBe(true);
+        expect(isOwnPet({ pet: null, summons: [601] }, npc(601, false))).toBe(false);
+        expect(isOwnPet({}, npc(600, true))).toBe(false);
+        expect(isOwnPet(null, npc(600, true))).toBe(false);
+    });
+
+    test('the bot page\'s pet block: window pet, pets with no window, how the last one went; nothing for a bot that never had one', () => {
+        const nameOf = (id: number) => (id === 500 ? 'wolf' : `#${id}`);
+        const entry = makeNpc({ objectId: 600, name: 'spirit warrior', level: 17, healthPercent: 84, inCombat: true, isPet: true });
+        const pet: PetState = { objectId: 600, name: 'old name', aggression: 'aggressive', walk: 'comeHere', icons: [5, 6], targetObjectId: 500 };
+        const lastPetLoss = { objectId: 590, name: 'spirit mage', cause: 'owner_died', at: 1000 } as const;
+
+        expect(petPanel(makeState({}), nameOf)).toBeNull();
+        expect(petPanel(null, nameOf)).toBeNull();
+        expect(petPanel(makeState({ pet: null, summons: [], lastPetLoss: null }), nameOf)).toBeNull();
+
+        expect(petPanel(makeState({ pet, nearbyNpcs: [entry], lastPetLoss }), nameOf)).toEqual({
+            pet: { objectId: 600, name: 'spirit warrior', level: 17, hp: 84, inCombat: true, orders: 'aggressive · come here', target: 'wolf', icons: 2 },
+            summons: [], lost: null,
+        });
+        // Out of view: the window's name, nothing of its entry. Its target is the window's too.
+        expect(petPanel(makeState({ pet: { ...pet, targetObjectId: null } }), nameOf)!.pet).toEqual({
+            objectId: 600, name: 'old name', level: null, hp: null, inCombat: false, orders: 'aggressive · come here', target: null, icons: 2,
+        });
+        expect(petPanel(makeState({ pet: { ...pet, name: undefined } }), nameOf)!.pet!.name).toBe('#600');
+
+        // No window: entries in view by name, the rest by id.
+        expect(petPanel(makeState({ pet: null, summons: [700, 701], nearbyNpcs: [makeNpc({ objectId: 700, name: 'ice being', isPet: true })] }), nameOf)).toEqual({
+            pet: null, summons: ['ice being', '#701'], lost: null,
+        });
+        expect(petPanel(makeState({ pet: null, lastPetLoss }), nameOf)).toEqual({ pet: null, summons: [], lost: { name: 'spirit mage', cause: 'owner died', at: 1000 } });
+        expect(petPanel(makeState({ pet: null, lastPetLoss: { ...lastPetLoss, name: null } }), nameOf)!.lost!.name).toBe('#590');
+    });
+
     test('region zone data: no refetch storm after a failure, retry after the backoff', () => {
         expect(shouldLoadRegion(1, null, null, null, 0)).toBe(true);
         expect(shouldLoadRegion(1, 1, null, null, 0)).toBe(false);
@@ -571,9 +618,12 @@ describe('group page logic', () => {
         expect(contactListed(contact({ name: 'Kalli', level: 43, npc: npc({ isPeaceful: true, role: 'merchant' }) }), albion)).toBe(false);
         expect(contactListed(contact({ npc: npc({ isTargetable: false }) }), albion)).toBe(false);
         expect(contactListed(contact({ npc: npc({ isPet: true }) }), albion)).toBe(false);
+        expect(contactListed(contact({ realm: 'albion', npc: npc({ isPet: true }) }), albion)).toBe(false);
         expect(contactListed(contact({ name: 'Merarka', level: 50, realm: 'albion' }), albion)).toBe(false);
         // Another realm's guards can be fought; so can a mob the gateway knows nothing more of.
         expect(contactListed(contact({ realm: 'midgard' }), albion)).toBe(true);
+        // So can their pets, as sdk isAttackable says.
+        expect(contactListed(contact({ realm: 'midgard', npc: npc({ isPet: true }) }), albion)).toBe(true);
         expect(contactListed(contact({ npc: null }), albion)).toBe(true);
         // Dead ones never; a threat always, even a pet on a member.
         expect(contactListed(contact({ isDead: true }), albion)).toBe(false);
@@ -663,6 +713,117 @@ describe('group page logic', () => {
         expect(deathContext(lines, 29)).toEqual({ start: 17, lines: lines.slice(17) });
         expect(deathContext(lines, 30)).toEqual({ start: 0, lines: [] });
         expect(deathContext(lines, -1).lines).toEqual([]);
+    });
+
+    describe('pets', () => {
+        const albion = new Set(['albion']);
+        const npc = (o: Partial<NonNullable<WorldContact['npc']>>) => ({ isPeaceful: false, isTargetable: true, isPet: true, role: null, ...o });
+        const owned = contact({ name: 'spirit warrior', realm: 'albion', npc: npc({ owner: 'Hrafna' }) });
+        const enemy = contact({ name: 'spirit warrior', realm: 'midgard', npc: npc({}) });
+        const friend = contact({ name: 'spirit warrior', realm: 'albion', npc: npc({}) });
+        const monsters = contact({ name: 'skeleton', realm: 'none', npc: npc({}) });
+        const wolf = contact();
+
+        test('a member\'s pet always shows on the map: with NPCs off too, it belongs with its owner', () => {
+            for (const layer of ['all', 'threats', 'off']) expect(npcShown(owned, layer)).toBe(true);
+            expect(npcShown(enemy, 'off')).toBe(false);
+            expect(npcShown(enemy, 'threats')).toBe(false);
+            expect(npcShown(enemy, 'all')).toBe(true);
+        });
+
+        test('the contacts panel keeps members\' and friends\' pets off, lists enemy pets; a monster\'s only on us', () => {
+            expect(contactListed(owned, albion)).toBe(false);
+            expect(contactListed(friend, albion)).toBe(false);
+            expect(contactListed(monsters, albion)).toBe(false);
+            expect(contactListed(enemy, albion)).toBe(true);
+            expect(contactListed({ ...monsters, target: 'Hrafna' }, albion)).toBe(true);
+            // Never a member's own, whatever its entry or a stale board says.
+            expect(contactListed({ ...owned, target: 'Hrafna' }, albion)).toBe(false);
+            expect(contactListed({ ...owned, board: board({ threat: true }) }, albion)).toBe(false);
+        });
+
+        test('a mob on a member\'s pet is a threat, by the members\' states or by the run\'s board; a member\'s pet never is', () => {
+            expect(isThreat(contact({ targetPet: 'Hrafna' }))).toBe(true);
+            expect(isThreat(contact({ targetPet: 'Hrafna', isDead: true }))).toBe(false);
+            expect(isThreat(contact({ board: board({ threat: true, targetPet: 'Hrafna' }) }))).toBe(true);
+            expect(npcShown(contact({ targetPet: 'Hrafna' }), 'threats')).toBe(true);
+            expect(contactListed(contact({ targetPet: 'Hrafna', realm: 'albion' }), albion)).toBe(true);
+            expect(isThreat({ ...owned, target: 'Hrafna' })).toBe(false);
+            expect(isThreat({ ...owned, inCombat: true, board: board({ threat: true }) })).toBe(false);
+            expect(isThreat(enemy)).toBe(false);
+        });
+
+        test('who a contact is on, for the panel and the tooltip', () => {
+            expect(contactAim(contact({ target: 'Hrafna' }))).toBe('Hrafna');
+            expect(contactAim(contact({ targetPet: 'Hrafna' }))).toBe('Hrafna\'s pet');
+            expect(contactAim(contact({ board: board({ targetPet: 'Hrafna' }) }))).toBe('Hrafna\'s pet');
+            // The member it is on now over the pet the board last saw.
+            expect(contactAim(contact({ target: 'Galahad', board: board({ targetPet: 'Hrafna' }) }))).toBe('Galahad');
+            expect(contactAim(contact())).toBeNull();
+            expect(contactAim({ ...owned, target: 'Hrafna' })).toBeNull();
+        });
+
+        test('petSide and its tooltip text, by the owner and the realm', () => {
+            expect([owned, enemy, friend, monsters, wolf].map(c => petSide(c, albion))).toEqual(['member', 'enemy', 'friend', 'monster', null]);
+            expect([owned, enemy, friend, monsters, wolf].map(c => petTitle(c, albion))).toEqual(['pet of Hrafna', 'enemy pet', 'friendly pet', 'a monster\'s pet', null]);
+            expect(petSide(contact({ kind: 'player', npc: null, realm: 'midgard', enemy: true }), albion)).toBeNull();
+            expect([...memberRealms([member('galahad', { realm: 'albion' }), member('nimue', null), member('mob', { realm: 'none' })])]).toEqual(['albion']);
+        });
+
+        test('map labels: a member\'s pet by its owner, anything else by its level', () => {
+            expect(mapLabel(owned)).toBe('spirit warrior (Hrafna)');
+            expect(mapLabel(enemy)).toBe('spirit warrior 9');
+            expect(mapLabel(wolf)).toBe('wolf 9');
+            expect(mapLabel(contact({ name: '' }))).toBe('(unnamed) 9');
+            expect(mapLabel(contact({ name: '', npc: npc({ owner: 'Hrafna' }) }))).toBe('(unnamed) (Hrafna)');
+        });
+
+        test('a pet chip on any pet the panel lists; players keep their tags', () => {
+            expect(enemyTags(enemy)).toEqual(['pet']);
+            expect(enemyTags(wolf)).toEqual([]);
+            expect(enemyTags(contact({ kind: 'player', npc: null, board: board({ healer: true }) }))).toEqual(['healer']);
+        });
+
+        const report = (over: Partial<PetReport> = {}): PetReport => ({
+            objectId: 600, name: 'spirit warrior', level: 17, x: 1, y: 2, z: 3, hp: 84, targetId: 500, inCombat: true, aggression: 'defensive', walk: 'follow', icons: [], ...over,
+        });
+        const nameOf = (id: number) => (id === 500 ? 'wolf' : `#${id}`);
+
+        test('petLine, shared with the CLI', () => {
+            expect(petLine(report(), nameOf)).toBe('spirit warrior L17 84% · defensive · follow → wolf');
+            expect(petLine(report({ targetId: null, walk: 'stay', hp: 83.6 }), nameOf)).toBe('spirit warrior L17 84% · defensive · stay');
+            expect(petLine(report({ targetId: null, aggression: 'passive', walk: 'comeHere' }), nameOf)).toBe('spirit warrior L17 84% · passive · come here');
+            expect(petLine(report({ targetId: null, aggression: 'aggressive', walk: 'goTarget' }), nameOf)).toBe('spirit warrior L17 84% · aggressive · go to target');
+            expect(petLine(report({ level: null, hp: null, targetId: 7 }), nameOf)).toBe('spirit warrior out of view · defensive · follow → #7');
+            expect(petLine(report({ name: '', level: null, hp: null, targetId: null }), nameOf)).toBe('#600 out of view · defensive · follow');
+        });
+
+        test('a member\'s card: its pet, those with no window, "no pet" when the run keeps a main one up, nothing otherwise', () => {
+            const can = (pet: 'main' | 'fnf' | null | undefined): Partial<GroupMemberView> => ({ run: { ...inRun('nuker').run!, can: { heal: false, cc: false, nuke: true, ...(pet !== undefined ? { pet } : {}) } } });
+            expect(memberPetRow(member('a', {}, { pet: report() }), nameOf)).toEqual({ text: 'Pet: spirit warrior L17 84% · defensive · follow → wolf', hp: 84 });
+            expect(memberPetRow(member('a', {}, { pet: report({ hp: null, level: null }) }), nameOf)!.hp).toBeNull();
+            expect(memberPetRow(member('a', {}, { pet: report({ targetId: null }), summons: [1, 2] }), nameOf)!.text).toBe('Pet: spirit warrior L17 84% · defensive · follow · 2 more');
+            expect(memberPetRow(member('a', {}, { pet: null, summons: [1, 2] }), nameOf)).toEqual({ text: 'Pets: 2 with no window', hp: null });
+            expect(memberPetRow(member('a', {}, { pet: null, ...can('main') }), nameOf)).toEqual({ text: 'no pet', hp: null });
+            // A Theurgist with no spirits up: "Petthe nuker L10 Theurgist ... no pet" read while the watcher had "petthe SUMMONS [23124:earth spirit,23122:earth spirit]". They come and go with its target.
+            expect(memberPetRow(member('a', {}, { ...can('fnf') }), nameOf)).toBeNull();
+            expect(memberPetRow(member('a', {}, { summons: [1, 2], ...can('fnf') }), nameOf)).toEqual({ text: 'Pets: 2 with no window', hp: null });
+            expect(memberPetRow(member('a', {}, { pet: null, ...can(null) }), nameOf)).toBeNull();
+            expect(memberPetRow(member('a', {}, { pet: null, ...can(undefined) }), nameOf)).toBeNull();
+            expect(memberPetRow(member('a', {}, { pet: null }), nameOf)).toBeNull();
+            expect(memberPetRow(member('a', {}), nameOf)).toBeNull();
+        });
+    });
+
+    test('contactLine: a contact in --live as the page\'s panel has it ("--live prints no enemies")', () => {
+        const pet = { isPeaceful: false, isTargetable: true, isPet: true, role: null };
+        const seen = { seenBy: ['Petbon', 'Pethun'], nearest: 812.4 };
+        expect(contactLine(contact({ objectId: 9, name: 'wolf', level: 8, hp: 73.4, target: 'Pettan', ...seen }), null)).toBe('wolf L8 73% → Pettan, seen 2, 812 away');
+        expect(contactLine(contact({ objectId: 9, name: 'wolf', level: 8, hp: 73, target: 'Pettan', ...seen }), 9)).toBe('* wolf L8 73% → Pettan, seen 2, 812 away');
+        expect(contactLine(contact({ name: 'earthen spirit', level: 20, hp: 100, target: null, targetPet: 'Petbon', npc: pet, ...seen }), null)).toBe('earthen spirit L20 100% → Petbon\'s pet [pet], seen 2, 812 away');
+        expect(contactLine(contact({ kind: 'player', name: 'Saracen', level: 24, hp: 50, target: null, enemy: true, board: { threat: true, stale: true, healer: true, cc: { by: 'Petspi', kind: 'mezz', until: 0 } } as never, ...seen }), null)).toBe('Saracen L24 50% [healer, mezz, stale], seen 2, 812 away');
+        // A frame from an older gateway can lack all of it.
+        expect(contactLine(contact({ name: 'rat', level: 1, hp: undefined as never, target: null, seenBy: undefined as never, nearest: undefined as never }), null)).toBe('rat L1 100%, seen 0, 0 away');
     });
 
     test('roleLetter labels members on the map', () => {

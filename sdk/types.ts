@@ -96,6 +96,8 @@ export interface PlayerState {
     realmSpecPoints: number;
     money: Money;
     stats: Stats | null;
+    /** The same without item bonuses: base, buffs and realm abilities, what a percent power cost goes by (SpellHandler.cs:1190-1199). Absent from an older client. */
+    statsWithoutItems?: Stats | null;
     /** Constitution lost to PvE deaths (from level 6); a town healer (GameHealer) restores it for money. */
     constitutionLost: number;
     encumbrance: { current: number; max: number } | null;
@@ -104,11 +106,17 @@ export interface PlayerState {
     isSitting: boolean;
     /** Melee auto-attack toggled on (server 0x74 AttackMode). */
     attacking: boolean;
+    /**
+     * In a fight as far as we can see: attack mode on, a swing or harmful spell by or on us, our pet or a summon within the last 8 s, or an NPC on one of them.
+     * Not the server's own flag: that lasts 10 s (GameLiving.cs:31, :227), so what the server gates on it ("You have been in combat recently") can refuse for up to 2 s after this reads false.
+     */
     inCombat: boolean;
     targetObjectId: number | null;
     /** Server tick-independent counter incremented on each death. */
     deathCount: number;
     lastDeathAt: number | null;
+    /** A Necromancer in shade (the negative effect with icon 403, ShadeECSEffect.cs:8, :10; Stealth has that icon as a positive one): the servant fights, we can't melee (ClassDisciple.cs:91), and its death is ours. Leaving shade cuts our health to the pet's percent as it last went (:72-82, :149): a release or the tether leaves min(current, max(10, its %)), its death 10 %. A zone change or a quit in shade uses that percent stale (:155-160), 10 % with no release this session: releasePet first. False out of shade, absent from an older client. */
+    isShade?: boolean;
 }
 
 // ── World objects ───────────────────────────────────────────────────────────
@@ -136,8 +144,22 @@ export interface NearbyNpc extends WorldObjectBase {
     realm: Realm;
     healthPercent: number;
     speed: number;
-    /** Object the NPC is attacking/targeting, if any. */
+    /**
+     * Object the NPC is attacking/targeting, if any. Its 0xA1 names one only at a standstill within reach (PacketLib168.cs:820-828), so its swings and spells on us, our pet or a summon
+     * name it too. That holds for 5 s while it is on the move, and 6 s between its casts, from a cast's first animation when it was on one of those then. When a pet of ours is lost, not to a region change or our death, a mob on it reads as on us at once:
+     * the server re-aims it. So does the window pet's own target if it was moving or hurt, on its first run at the pet and never named. That holds for its run: its distance at 150 units/s, slower below 33 % health, plus 2 s, at least 5 s, and on while it reads 0xFFFF and comes nearer, 30 s at most, until
+     * a real id or a 0 says otherwise. The server goes by threat, so where it has another to turn to it reads as on nobody until its next swing or 0xA1: with another pet of ours within 600 of it, a minion's mob while
+     * its commander lives, and in a group of two or more. So does a mob on the pet at full health with nothing to show that it or we attacked it: it has no aggro on us (StandardMobBrain.cs:566-571). A 0 clears any of this, and a 0x72 under 6 s after its naming puts it back: a caster's 0 can come first.
+     * A DoT's tick on one of ours names nobody when the mob was named on another of ours in the last 6 s: it has no 0x1B, and says where the spell landed some time ago.
+     */
     targetObjectId: number | null;
+    /**
+     * `targetObjectId` stands on a spell alone: a mob casting from range at us or a pet of ours, with its 0x1B or its damage spell's 0xBC to go by, or held through 0xA1's 0 between casts.
+     * Its target for the bot's own fight all the same, as the server sends none (PacketLib168.cs:820-828). The group reads it as the others' clients do, from the spell (observeState, Contact.targetBySpell), so what is on a member isn't told by whose report came last. Absent otherwise: the server's own id, a swing, or a run at us (65535).
+     */
+    targetBySpell?: boolean;
+    /** When the client first held this entry, on its clock (as `receivedAt`): a death under this id before then was another mob's, as the server hands ids on at once (Region.cs:955). Absent from an older client. */
+    firstSeenAt?: number;
     inCombat: boolean;
     /** Flags decoded from 0xDA. */
     isPeaceful: boolean;
@@ -161,6 +183,10 @@ export interface NearbyPlayer extends WorldObjectBase {
     isDead: boolean;
     isSitting: boolean;
     inCombat: boolean;
+    /** Its model, from its create (PacketLib1124.cs:382) and every change since (0xDB, PacketLib168.cs:990-998). Absent from an older client. */
+    model?: number;
+    /** A Necromancer in shade, model 822 (GamePlayer.cs:12345-12346): nobody can attack it, and no pet can be ordered at it: `You can't attack a shadowed necromancer!` (AbstractServerRules.cs:449-455). Its servant can be. Absent from an older client. */
+    isShade?: boolean;
 }
 
 export interface NearbyObject extends WorldObjectBase {
@@ -684,6 +710,57 @@ export interface TradeWindow {
     partnerMoney: number;
 }
 
+export type PetAggression = 'aggressive' | 'defensive' | 'passive';
+export type PetWalk = 'follow' | 'stay' | 'goTarget' | 'comeHere';
+export type PetCommand = PetAggression | PetWalk | 'attack' | 'release';
+
+/**
+ * Our pet as the server's pet window (0x88) has it. A pet the window doesn't list (a Theurgist's, a
+ * fire-and-forget turret, a bomber, a Bonedancer's minion: SetBrainToOwner is empty or the commander
+ * holds it) never shows here. Its health and position are its entry in nearbyNpcs (sdk.getPet):
+ * that entry can be gone while the window stays: out of view, or until the client has asked for it again after a jump.
+ */
+export interface PetState {
+    objectId: number;
+    /** Its name, from its entry when we last had one, so it holds while the pet is out of view. Absent until an entry was seen, and from an older client. */
+    name?: string;
+    /** From the server, not from what we asked: an order can change it (ControlledMobBrain.cs:213-214, :228-233). */
+    aggression: PetAggression;
+    /** Where it was told to go. A turret's reads 'follow' for its whole life: its walk orders change nothing (TurretBrain.cs:100-108). */
+    walk: PetWalk;
+    /** Effect icons on it, at most 8 (PacketLib181.cs:157-166). */
+    icons: number[];
+    /**
+     * Who it is fighting, a caster pet between casts and a pet on its way included. Set by the answer to an attack order
+     * (to what the order named), by its 0xBC swing or 0x1B cast at an enemy, and by an 0xA1 naming the id. An 0xA1 reading 0, as
+     * a caster's does between casts (PacketLib168.cs:820), clears it only when all that is over 6 s old; one reading 0xFFFF
+     * (on the move) keeps it and counts as that evidence, for a run of any length. Cleared at once by the target's death (an 0xA1 still naming it in the next 2 s, older than the death, reads 0), a change to passive, and the answer to a follow, stay,
+     * come here or go to target order (a defensive pet that hits back gets a fresh target from that swing). Null when it isn't fighting.
+     */
+    targetObjectId: number | null;
+}
+
+export type PetLossCause = 'died' | 'released' | 'owner_died' | 'region_change';
+
+/**
+ * How our last window pet went. Stays until the next loss: compare `at`. 'released' is any close that came first:
+ * our order, a charm or duration ending, the tether, or a death out of our view (its 0xA2 goes only to players near it).
+ */
+export interface PetLoss {
+    objectId: number;
+    /** From its NPC entry, also one since gone out of view; null when we never had one. */
+    name: string | null;
+    cause: PetLossCause;
+    /** Client wall-clock time (ms epoch). */
+    at: number;
+    /**
+     * The NPCs that read as on it when it went; absent with none. Their entries can't say so any more: the model hands them to us at the loss, or with another for them to turn to (a groupmate, another pet of ours) clears them. Absent from an older client.
+     */
+    targetedBy?: number[];
+    /** Who it aimed at when it went (PetState.targetObjectId), which targetedBy can't say of a mob it was on its way to. Absent with nobody, and from an older client. */
+    targetObjectId?: number;
+}
+
 export interface BotWorldState {
     /** Monotonic publish counter (one per published snapshot). */
     tick: number;
@@ -719,10 +796,27 @@ export interface BotWorldState {
     combatEvents: CombatEvent[];
     /** Concentration effects we maintain (server 0x75). */
     concentrationEffects?: ConcentrationEffect[];
-    /** Current ground target, when set via setGroundTarget or the server (0xEC). */
+    /** Current ground target, when set via setGroundTarget or the server (0xEC). Null again once the server drops it: 'Your ground target is not visible!'. */
     groundTarget?: Vec3 | null;
     /** Open player trade window; absent or null when closed. */
     trade?: TradeWindow | null;
+    /** Our pet's window; null without one, absent from an older client. */
+    pet?: PetState | null;
+    /** How the last window pet went; null before the first loss. */
+    lastPetLoss?: PetLoss | null;
+    /**
+     * Object ids of our own pets with no window, in view or not (sdk.getSummons has the entries in view): a Theurgist's, a
+     * fire-and-forget turret, a bomber, a Bonedancer's minion. Known from the 0x1B of their summon on an entry just seen, so
+     * a buff of ours on a groupmate's fresh pet can land here too. Gone with their 0xA2 type 0, a region change, a 0xDA under that id with no pet flag or another name (ids get reused),
+     * for a minion the window closing (it goes with its commander), or 30 s with no entry: one that ends out of view leaves no 0xA2, so it lingers that long, and one of ours that comes back
+     * after that reads as a stranger's. A minion is exempt from the 30 s while its window is open: it can't outlive the commander, and it would be a pet nothing could address. Absent from an older client.
+     */
+    summons?: number[];
+    /**
+     * Those of `summons` that came under 3.5 s ago, minions left out. One that fights by itself is in its fight from the start (TheurgistPetBrain.cs), with nothing to show it yet:
+     * a caster in range reads target 0 until its first cast lands (PacketLib168.cs:820). Absent from an older client.
+     */
+    freshSummons?: number[];
 }
 
 // ── Actions ─────────────────────────────────────────────────────────────────
@@ -753,7 +847,10 @@ export type BotAction = ActionBase & (
     | { type: 'attack'; on: boolean }
     | { type: 'useSkill'; skillIndex: number }
     | { type: 'castSpell'; lineIndex: number; spellIndex: number }
-    | { type: 'setGroundTarget'; x: number; y: number; z: number }
+    | { type: 'setGroundTarget'; x: number; y: number; z?: number }
+
+    // Pets. Success means dispatched: the server's "You command ..." line and state.pet show the effect.
+    | { type: 'petCommand'; command: PetCommand; targetObjectId?: number }
 
     // Items
     | { type: 'useItem'; slot: number; useType?: number }

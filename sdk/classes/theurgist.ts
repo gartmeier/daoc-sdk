@@ -7,10 +7,10 @@ import type { Character } from '../group/character';
 import { thrifty } from './thrifty';
 
 export interface TheurgistOptions {
-    /** No nukes below this % power. 40 is what was measured. */
+    /** No nukes below this % power, nor his pets, which count as nukes (fnfPet). 40 is what was measured. */
     saveBelow?: number;
 }
 
 export function theurgist({ saveBelow = 40 }: TheurgistOptions = {}): Character {
-    return { role: 'nuker', fight: [thrifty(assist(), saveBelow)] };
+    return { role: 'nuker', fight: [thrifty(assist(), saveBelow)], pet: { fnfFloor: saveBelow } };
 }

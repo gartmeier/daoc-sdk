@@ -372,7 +372,7 @@ The sequence is in `packets/Client/168/WorldInitRequestHandler.cs:114-149` and `
 | 21 | u8 | level (\|0x80 statue) |
 | 22 | u8 | flags: realm<<6, 0x01 ghost, 0x02 has inventory (expect a 0x15 for this NPC), 0x04 torch, 0x10 peace, 0x20 flying |
 | 23 | u8 | 0x20 (max stick) |
-| 24 | u8 | flags2: 0x01 cant-target, 0x02 dont-show-name, 0x04 stealthed, 0x08 quest available, 0x10 quest finish, 0x80 pet/controlled |
+| 24 | u8 | flags2: 0x01 cant-target, 0x02 dont-show-name, 0x04 stealthed, 0x08 quest available, 0x10 quest finish, 0x80 pet/controlled (any owner) |
 | 25 | u8 | flags3: 0x01 lesson, 0x02 lore, 0x20 pending |
 | 26 | u16 | 0 |
 | 28 | pascal | name (≤47; GMs see `[name]-DOR-NON`) |
@@ -660,7 +660,8 @@ The sequence is in `packets/Client/168/WorldInitRequestHandler.cs:114-149` and `
 - `u8 aggro` (1 aggressive, 2 defensive, 3 passive)
 - `u8 walk` (1 follow, 2 stay, 3 goto, 4 here)
 - `u8 0`
-- `u8 n` (≤8), then n × `u16 icon`
+- `u8 n` (≤8), then n × `u16 icon`: effects in `GetSortedEffects()` order, skipping `Icon == 0`, disabled and immunity effects (181:157-166)
+- A close is always `00 00 00 00 00 01 01 00 00`: it is sent as `(null, Close, 0, 0)` and enum 0 is Aggressive and Follow (CharacterClassBase.cs:305), so aggro and walk read `01 01` and mean nothing
 
 **0x83 QuestEntry**
 - The task line is sent first (184:59): `u8 0`, `u16LE nameLen`, `00 00 00`, name.

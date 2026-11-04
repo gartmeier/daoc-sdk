@@ -90,7 +90,7 @@ describe('finishTurn', () => {
             const inTurn = new Promise<void>(r => { reached = r; });
             const agent = new MemberAgent({
                 bot: 'x', role: 'healer',
-                sdk: { getGameMessages: () => [], onStateUpdate: () => () => {}, getState: () => null, getSkills: () => ({ spells: [] }), getPlayer: () => null, isConnected: () => true },
+                sdk: { getGameMessages: () => [], onStateUpdate: () => () => {}, getState: () => null, getSkills: () => ({ spells: [] }), getPlayer: () => ({}), isConnected: () => true },
                 actions: {},
             } as never, new Blackboard(), [{
                 name: 'cast',

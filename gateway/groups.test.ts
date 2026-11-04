@@ -10,7 +10,7 @@ import { composePassive, createGroupStore, discoverGroups, groupPath, runStateOf
 import { botEnvAuth, botIdentity, checkControlPassword } from './security';
 import { makeNpc, makePlayer, makePlayerObj, makeState } from '../sdk/test/fixtures';
 import { contact, picture, report } from '../sdk/group/fixtures';
-import type { BotWorldState, CombatEvent, PlayerState } from './types';
+import type { BotWorldState, CombatEvent, NearbyNpc, PlayerState } from './types';
 import type { GroupPublish } from '../sdk/group/wire';
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -395,6 +395,122 @@ describe('the passive group frame', () => {
         expect(composePassive(group, { ...src, sessions: frozen }, 3000)).toEqual(view);
     });
 
+    test('an NPC at 0 % is dead only with a fresh death event: under 1 % reads 0 alive (GameLiving.cs:2621)', () => {
+        const T = 1_800_000_000_000;
+        const npc = makeNpc({ objectId: 500, name: 'wolf', x: 1100, y: 1000, healthPercent: 0, targetObjectId: 1001 });
+        const see = (combatEvents: CombatEvent[], over: Partial<NearbyNpc> = {}) => {
+            const sessions = new Map<string, any>();
+            sessions.set('tankuser', { ws: {}, clientId: 'a', lastStateReceivedAt: T, lastState: tankState({ timestamp: T, nearbyNpcs: [{ ...npc, ...over }], combatEvents }) });
+            const group = discoverGroups([root]).find(g => g.id === 'alpha')!;
+            return composePassive(group, { sessions, sdkSessions: new Map(), sessionStatus: () => 'active' }, T).world.find(w => w.key === '1:500')!;
+        };
+        const died = (ago: number): CombatEvent => ({ id: 1, kind: 'death', attackerObjectId: null, targetObjectId: 500, receivedAt: T - ago });
+        // Alive at the floor, so the panel keeps listing it and the map doesn't draw it dead.
+        expect(see([])).toMatchObject({ hp: 1, isDead: false, target: 'Tanky' });
+        expect(see([died(5000)])).toMatchObject({ hp: 1, isDead: false });
+        expect(see([{ ...died(100), targetObjectId: 501 }])).toMatchObject({ hp: 1, isDead: false });
+        expect(see([died(300)])).toMatchObject({ hp: 0, isDead: true });
+        // Above 0 % nothing changes, an event or not.
+        expect(see([], { healthPercent: 37 })).toMatchObject({ hp: 37, isDead: false });
+        expect(see([died(300)], { healthPercent: 100 })).toMatchObject({ hp: 100, isDead: false });
+    });
+
+    describe('pets, with no run', () => {
+        const T = 1_800_000_000_000;
+        const WINDOW = { objectId: 600, name: 'old name', aggression: 'defensive', walk: 'follow', icons: [5, 6], targetObjectId: 500 } as const;
+        const compose = (states: Record<string, BotWorldState>, gone: string[] = []) => {
+            const sessions = new Map<string, any>();
+            for (const [username, lastState] of Object.entries(states)) sessions.set(username, { ws: gone.includes(username) ? null : {}, clientId: username, lastStateReceivedAt: T, lastState });
+            const group = discoverGroups([root]).find(g => g.id === 'alpha')!;
+            return composePassive(group, { sessions, sdkSessions: new Map(), sessionStatus: (s: any) => (s.ws ? 'active' : 'dead') }, T);
+        };
+        const pet = (over: Partial<NearbyNpc> = {}) => makeNpc({ objectId: 600, name: 'spirit warrior', level: 17, x: 1010, y: 990, z: 5, healthPercent: 84, inCombat: true, isPet: true, ...over });
+
+        test('a member\'s window pet: its entry\'s level, place and health, its target from the window (a caster pet\'s entry reads 0 and 65535)', () => {
+            const view = compose({ tankuser: tankState({ pet: { ...WINDOW, icons: [5, 6] }, nearbyNpcs: [pet({ targetObjectId: 0 })] }) });
+            expect(view.members[0]!.pet).toEqual({
+                objectId: 600, name: 'spirit warrior', level: 17, x: 1010, y: 990, z: 5, hp: 84, targetId: 500, inCombat: true, aggression: 'defensive', walk: 'follow', icons: [5, 6],
+            });
+        });
+
+        test('out of view it keeps its window\'s name and has no place; null without one; absent from an older client or one gone', () => {
+            const view = compose({
+                tankuser: tankState({ pet: { ...WINDOW, icons: [5, 6] } }),
+                healuser: healState({ pet: null }),
+                nuke1: nukeState({ pet: { ...WINDOW, objectId: 700, icons: [] } }),
+            }, ['nuke1']);
+            expect(view.members[0]!.pet).toEqual({ objectId: 600, name: 'old name', level: null, x: null, y: null, z: null, hp: null, targetId: 500, inCombat: false, aggression: 'defensive', walk: 'follow', icons: [5, 6] });
+            expect(view.members[1]!.pet).toBeNull();
+            expect('pet' in view.members[2]!).toBe(false);
+            expect('pet' in compose({ tankuser: tankState() }).members[0]!).toBe(false);
+            // A broken one from a client is none of the page's problem.
+            expect(compose({ tankuser: tankState({ pet: { objectId: 'x' } as any }) }).members[0]!.pet).toBeNull();
+        });
+
+        test('pets with no window: their ids on the member, absent without any', () => {
+            const view = compose({ tankuser: tankState({ summons: [601, 'x' as any, 602] }), healuser: healState({ summons: [] }) });
+            expect(view.members[0]!.summons).toEqual([601, 602]);
+            expect('summons' in view.members[1]!).toBe(false);
+        });
+
+        test('npc.owner says whose pet it is, whoever sees it: the window\'s without the flag (a charm), summons only with it (their ids linger and get reused)', () => {
+            const rat = makeNpc({ objectId: 500, name: 'rat', x: 1100, y: 1000 });
+            const view = compose({
+                tankuser: tankState({
+                    pet: { ...WINDOW, icons: [] },
+                    nearbyNpcs: [pet(), rat, makeNpc({ objectId: 700, name: 'ice being', isPet: true, x: 1100, y: 1100 }), makeNpc({ objectId: 701, name: 'wolf', x: 1100, y: 1200 })],
+                }),
+                // The healer sees the tank's pet with no flag yet, and owns 700 and, as far as it knows, 701.
+                healuser: healState({ summons: [700, 701], nearbyNpcs: [pet({ isPet: false })] }),
+            });
+            const npc = (id: number) => view.world.find(w => w.objectId === id)!.npc!;
+            expect(npc(600)).toMatchObject({ isPet: true, owner: 'Tanky' });
+            expect(npc(700)).toMatchObject({ isPet: true, owner: 'Healy' });
+            expect('owner' in npc(701)).toBe(false);
+            expect(npc(701).isPet).toBe(false);
+            expect('owner' in npc(500)).toBe(false);
+            // A charm no other client flags yet: the window says it's ours.
+            const charm = compose({ tankuser: tankState({ pet: { ...WINDOW, icons: [] }, nearbyNpcs: [pet({ isPet: false })] }) });
+            expect(charm.world[0]!.npc).toMatchObject({ isPet: true, owner: 'Tanky' });
+        });
+
+        test('no owner from a client gone (the server hands its pet\'s id on), and none across regions', () => {
+            const view = compose({
+                tankuser: tankState({ nearbyNpcs: [makeNpc({ objectId: 600, name: 'rat', x: 1100, y: 1000 })] }),
+                nuke1: nukeState({ pet: { ...WINDOW, icons: [] } }),
+                healuser: healState({ pet: { ...WINDOW, icons: [] } }, { regionId: 2 }),
+            }, ['nuke1']);
+            expect('owner' in view.world[0]!.npc!).toBe(false);
+        });
+
+        test('an enemy pet has no owner: the server sends every client the flag and the realm, never who', () => {
+            const view = compose({ tankuser: tankState({ nearbyNpcs: [makeNpc({ objectId: 800, name: 'spirit warrior', realm: 'midgard', isPet: true, x: 1100, y: 1000 })] }) });
+            expect(view.world[0]).toMatchObject({ realm: 'midgard', enemy: false, npc: { isPet: true } });
+            expect('owner' in view.world[0]!.npc!).toBe(false);
+        });
+
+        test('a mob on a member\'s pet names its owner, a window pet\'s or one with no window\'s; on the member itself `target` says so', () => {
+            const view = compose({
+                tankuser: tankState({
+                    pet: { ...WINDOW, icons: [] }, summons: [601],
+                    nearbyNpcs: [
+                        pet(),
+                        makeNpc({ objectId: 500, name: 'rat', x: 1100, y: 1000, targetObjectId: 600 }),
+                        makeNpc({ objectId: 501, name: 'cat', x: 1100, y: 1000, targetObjectId: 601 }),
+                        makeNpc({ objectId: 502, name: 'bat', x: 1100, y: 1000, targetObjectId: 1001 }),
+                        makeNpc({ objectId: 503, name: 'owl', x: 1100, y: 1000 }),
+                    ],
+                }),
+            });
+            const c = (id: number) => view.world.find(w => w.objectId === id)!;
+            expect(c(500)).toMatchObject({ target: null, targetPet: 'Tanky' });
+            expect(c(501)).toMatchObject({ target: null, targetPet: 'Tanky' });
+            expect(c(502).target).toBe('Tanky');
+            expect('targetPet' in c(502)).toBe(false);
+            expect('targetPet' in c(503)).toBe(false);
+        });
+    });
+
     test('grouping names missing members and strangers', () => {
         const sessions = new Map<string, any>();
         sessions.set('tankuser', { ws: {}, clientId: 'a', lastStateReceivedAt: 1, lastState: tankState({ group: [{ name: 'Tanky' }, { name: 'Healy' }, { name: 'Randomguy' }] as any }) });
@@ -530,6 +646,38 @@ describe('group run publishes', () => {
         const frame = (await live()).body;
         expect(frame.members[0].run.realmPoints).toBe(1250);
         expect(frame.world.find((w: any) => w.objectId === 700)).toMatchObject({ enemy: true, board: { threat: true, casting: true, helped: false, healer: true, caster: true } });
+    });
+
+    test('pets: a member\'s capability and what a contact is on reach the frame; a group with none has no new fields', async () => {
+        start();
+        const petEntry = makeNpc({ objectId: 600, name: 'spirit warrior', x: 1010, y: 990, isPet: true });
+        await attachBot('tankuser', tankState({
+            pet: { objectId: 600, aggression: 'aggressive', walk: 'stay', icons: [], targetObjectId: 500 }, summons: [601],
+            nearbyNpcs: [petEntry, makeNpc({ objectId: 500, name: 'rat', x: 1500, y: 1000, targetObjectId: 600 })],
+        }));
+        await attachBot('healuser', healState({ pet: null }));
+        const body = makePublish();
+        body.picture.members[0]!.capabilities.pet = 'main';
+        body.picture.members[1]!.capabilities.pet = null;
+        body.picture.contacts = [contact(500, { regionId: 1, threat: true, targetPet: 'Tanky' })];
+        await publish(body);
+        const frame = (await live()).body;
+        expect(frame.members[0].run.can).toEqual({ heal: false, cc: false, nuke: true, pet: 'main' });
+        expect(frame.members[1].run.can.pet).toBeNull();
+        expect('pet' in frame.members[2].run.can).toBe(false);
+        // The member's own state says what its pet does, run or no run.
+        expect(frame.members[0].pet).toMatchObject({ objectId: 600, aggression: 'aggressive', walk: 'stay', targetId: 500 });
+        expect(frame.members[0].summons).toEqual([601]);
+        const rat = frame.world.find((w: any) => w.objectId === 500);
+        expect(rat).toMatchObject({ targetPet: 'Tanky', board: { threat: true, targetPet: 'Tanky' } });
+        expect(frame.world.find((w: any) => w.objectId === 600).npc).toMatchObject({ isPet: true, owner: 'Tanky' });
+
+        const plain = makePublish();
+        plain.picture.contacts = [contact(500, { regionId: 1 })];
+        await publish(plain);
+        const after = (await live()).body;
+        expect('targetPet' in after.world.find((w: any) => w.objectId === 500).board).toBe(false);
+        expect('pet' in after.members[1].run.can).toBe(false);
     });
 
     test('events: resends are skipped, holes counted, ackSeq follows; ?events= pages', async () => {
@@ -902,6 +1050,33 @@ describe('the passive tracker', () => {
         ]);
     });
 
+    // "necroservant#432 -> Pethun#429 hit", "death Briton#427 -> Pethun#429", gateway "Pethun killed by Briton (L20)": the server names the pet's owner (GameLiving.cs:1299-1300).
+    test('a pet\'s kill names the pet, unless the player the server named has a hit of its own', async () => {
+        const f = fakeStore();
+        f.attach('tankuser');
+        const at = Date.now();
+        const hit = (id: number, attacker: number, kind: CombatEvent['kind'], ago: number): CombatEvent => ({ id, kind, attackerObjectId: attacker, targetObjectId: 1001, receivedAt: at - ago });
+        const servant = makeNpc({ objectId: 432, name: 'necroservant', level: 17, realm: 'hibernia', isPet: true });
+        const guard = makeNpc({ objectId: 433, name: 'Guard Fiach', level: 50, realm: 'hibernia' });
+        const stray = makeNpc({ objectId: 434, name: 'spirit soldier', level: 17, realm: 'midgard', isPet: true });
+        const owner = makePlayerObj({ objectId: 427, name: 'Celt', level: 20, realm: 'hibernia' });
+        const healy = makePlayerObj({ objectId: 1002, name: 'Healy', level: 10, realm: 'albion' });
+        const died = (n: number, extra: Partial<BotWorldState>) => {
+            f.store.onState('tankuser', tankState({ nearbyPlayers: [owner, healy], ...extra }, { isDead: true, deathCount: n, healthPercent: 0 }));
+            f.store.onState('tankuser', tankState({}, { deathCount: n }));
+        };
+        f.store.onState('tankuser', tankState());
+        // All the pet's, a friend's heal after it.
+        died(1, { nearbyNpcs: [servant], combatEvents: [hit(1, 432, 'melee', 3000), hit(2, 432, 'melee', 800), hit(3, 1002, 'spellEffect', 300), hit(4, 427, 'death', 100)] });
+        // The owner's own nuke in the window.
+        died(2, { nearbyNpcs: [servant], combatEvents: [hit(5, 427, 'spellEffect', 8000), hit(6, 432, 'melee', 300), hit(7, 427, 'death', 100)] });
+        // Another realm's pet isn't the one named; nor a guard, which has no owner.
+        died(3, { nearbyNpcs: [stray], combatEvents: [hit(8, 434, 'melee', 300), hit(9, 427, 'death', 100)] });
+        died(4, { nearbyNpcs: [guard], combatEvents: [hit(10, 433, 'melee', 300), hit(11, 427, 'death', 100)] });
+        const deaths = (await f.frame()).passive.events.filter((e: any) => e.kind === 'death');
+        expect(deaths.map((e: any) => e.by)).toEqual(['necroservant (L17)', 'Celt (L20)', 'Celt (L20)', 'Celt (L20)']);
+    });
+
     test('client drops and returns, controllers attach, change and leave; events carry the live run', async () => {
         const f = fakeStore();
         const session = f.attach('tankuser', tankState());
@@ -1094,6 +1269,56 @@ describe('sanitizePublish', () => {
         expect(clean.notes.join(' ')).toContain('settings');
         expect(clean.notes.join(' ')).toContain('report');
         expect(JSON.stringify(v)).not.toContain('tank-secret-1');
+    });
+
+    test('pet fields pass when they have the right type; absent ones stay absent; the wire stays version 1', () => {
+        const raw: any = makePublish();
+        raw.picture.members[0].capabilities.pet = 'main';
+        raw.picture.members[0].summons = [601, 'x', 602];
+        raw.picture.members[0].pet = {
+            objectId: 600, name: 'n'.repeat(100), level: 17, x: 1010, y: 990, z: 5, hp: 84, targetId: 500, inCombat: true,
+            aggression: 'passive', walk: 'goTarget', icons: [1, 'x', 2, 3, 4, 5, 6, 7, 8, 9], junk: true,
+        };
+        raw.picture.members[1].capabilities.pet = 'magic';
+        raw.picture.members[1].pet = null;
+        raw.picture.members[2].capabilities.pet = null;
+        raw.picture.members[2].pet = { objectId: 'x' };
+        raw.picture.contacts[0].targetPet = 'Tanky';
+        raw.picture.contacts[0].isPet = true;
+        raw.picture.contacts.push(contact(501, { regionId: 1, targetPet: null }), contact(502, { regionId: 1 }));
+        raw.picture.contacts[1].isPet = 'yes';
+        const clean = sanitizePublish(JSON.parse(JSON.stringify(raw)));
+        if (!clean.ok) throw new Error(clean.error);
+        const [tank, heal, nuke] = clean.value.picture.members;
+        expect(tank!.capabilities.pet).toBe('main');
+        expect(tank!.summons).toEqual([601, 602]);
+        expect(tank!.pet).toEqual({
+            objectId: 600, name: 'n'.repeat(64), level: 17, x: 1010, y: 990, z: 5, hp: 84, targetId: 500, inCombat: true,
+            aggression: 'passive', walk: 'goTarget', icons: [1, 2, 3, 4, 5, 6, 7, 8],
+        });
+        expect('pet' in heal!.capabilities).toBe(false);
+        expect(heal!.pet).toBeNull();
+        expect(nuke!.capabilities.pet).toBeNull();
+        expect(nuke!.pet).toBeNull();
+        const [rat, b, c] = clean.value.picture.contacts;
+        expect(rat).toMatchObject({ isPet: true, targetPet: 'Tanky' });
+        expect(b!.targetPet).toBeNull();
+        expect('isPet' in b!).toBe(false);
+        expect('targetPet' in c! || 'isPet' in c!).toBe(false);
+        expect(clean.value.v).toBe(1);
+
+        // From a runner before pets: nothing of it appears.
+        const old = sanitizePublish(JSON.parse(JSON.stringify(makePublish())));
+        if (!old.ok) throw new Error(old.error);
+        for (const m of old.value.picture.members) {
+            expect('pet' in m || 'summons' in m || 'pet' in m.capabilities).toBe(false);
+        }
+
+        // A value that doesn't parse reads as what a pet starts on, not as garbage for the page.
+        raw.picture.members[0].pet = { objectId: 600, aggression: 'angry', walk: 7, hp: 'lots', level: 'high' };
+        const odd = sanitizePublish(JSON.parse(JSON.stringify(raw)));
+        if (!odd.ok) throw new Error(odd.error);
+        expect(odd.value.picture.members[0]!.pet).toEqual({ objectId: 600, name: '', level: null, x: null, y: null, z: null, hp: null, targetId: null, inCombat: false, aggression: 'defensive', walk: 'follow', icons: [] });
     });
 
     test('RvR fields pass when they have the right type; absent ones stay absent', () => {

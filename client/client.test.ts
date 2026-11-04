@@ -1,6 +1,6 @@
 // DaocClient.execute against a session with a fake connection (no server).
 
-import type { BotAction } from '../sdk/types';
+import type { BotAction, PetCommand, PetState } from '../sdk/types';
 import { describe, expect, test } from 'bun:test';
 import { DaocClient } from './client';
 import { DaocSession } from './session';
@@ -231,6 +231,304 @@ describe('DaocClient trade', () => {
         expect(client.collectState().trade).toMatchObject({ revision: 1, partnerName: 'Aine', mySlots: [40] });
         s.model.handle(ServerOp.TradeWindow, new Uint8Array(40));
         expect(client.collectState().trade).toBeNull();
+    });
+});
+
+describe('DaocClient petCommand', () => {
+    const PET = 600;
+    const MOB = 7;
+    const npc = (objectId: number, over: object = {}) => ({ objectId, name: 'x', realm: 0, isPet: false, x: ME.x, y: ME.y, z: ME.z, ...over }) as never;
+    const window: PetState = { objectId: PET, aggression: 'defensive', walk: 'follow', icons: [], targetObjectId: null };
+    const BYTES: Record<PetCommand, string> = {
+        aggressive: '01 00 00', defensive: '02 00 00', passive: '03 00 00',
+        follow: '00 01 00', stay: '00 02 00', goTarget: '00 03 00', comeHere: '00 04 00',
+        attack: '00 00 01', release: '00 00 02',
+    };
+    const COMMANDS = Object.keys(BYTES) as PetCommand[];
+    /** A pet up and a mob in view. */
+    const withPet = () => {
+        const c = playingClient();
+        c.s.model.pet = window;
+        c.s.model.npcs.set(PET, npc(PET, { isPet: true }));
+        c.s.model.npcs.set(MOB, npc(MOB));
+        return c;
+    };
+
+    test('one 0x8A per order, with its bytes', async () => {
+        for (const command of COMMANDS) {
+            const { client, s, sent, payloads } = withPet();
+            s.model.setSelfTarget(MOB);
+            expect(await client.execute({ type: 'petCommand', command })).toMatchObject({ success: true, phase: 'dispatch' });
+            expect(sent).toEqual([ClientOp.PetWindow]);
+            expect(payloads).toEqual([BYTES[command]]);
+        }
+    });
+
+    test('an unknown command is bad_args, also one that is a property of every object', async () => {
+        const { client, sent } = withPet();
+        for (const command of ['fetch', 'constructor', 'toString', '', undefined]) {
+            expect(await client.execute({ type: 'petCommand', command: command as never })).toMatchObject({ success: false, reason: 'bad_args' });
+        }
+        expect(sent).toEqual([]);
+    });
+
+    test('without a window: no_pet, and nothing goes out, not even the target', async () => {
+        const { client, s, sent } = withPet();
+        s.model.pet = null;
+        for (const command of COMMANDS) {
+            expect(await client.execute({ type: 'petCommand', command })).toMatchObject({ success: false, reason: 'no_pet' });
+            expect(await client.execute({ type: 'petCommand', command, targetObjectId: MOB })).toMatchObject({ success: false, reason: 'no_pet' });
+        }
+        expect(sent).toEqual([]);
+        expect(s.model.self.targetObjectId).toBeNull();
+    });
+
+    test('with a target given it is selected first, in the same call', async () => {
+        const { client, s, sent, payloads } = withPet();
+        expect((await client.execute({ type: 'petCommand', command: 'attack', targetObjectId: MOB })).success).toBe(true);
+        expect(sent).toEqual([ClientOp.PlayerTarget, ClientOp.PetWindow]);
+        expect(payloads).toEqual(['00 07 60 00', '00 00 01']);
+        expect(s.model.self.targetObjectId).toBe(MOB);
+    });
+
+    test('we can be the destination, though no entry in the world holds us', async () => {
+        const { client, sent } = withPet();
+        expect((await client.execute({ type: 'petCommand', command: 'goTarget', targetObjectId: 1 })).success).toBe(true);
+        expect(sent).toEqual([ClientOp.PlayerTarget, ClientOp.PetWindow]);
+    });
+
+    test('a target given that we do not know sends nothing', async () => {
+        const { client, s, sent } = withPet();
+        for (const targetObjectId of [999, 0, -1, 1.5]) {
+            expect(await client.execute({ type: 'petCommand', command: 'attack', targetObjectId })).toMatchObject({ success: false, reason: 'unknown_object' });
+        }
+        expect(sent).toEqual([]);
+        expect(s.model.self.targetObjectId).toBeNull();
+    });
+
+    test('attack and goTarget with no target at all: no_target; the rest need none', async () => {
+        const { client, sent } = withPet();
+        for (const command of ['attack', 'goTarget'] as const) {
+            expect(await client.execute({ type: 'petCommand', command })).toMatchObject({ success: false, reason: 'no_target' });
+        }
+        expect(sent).toEqual([]);
+        for (const command of COMMANDS.filter(c => c !== 'attack' && c !== 'goTarget')) {
+            expect((await client.execute({ type: 'petCommand', command })).success).toBe(true);
+        }
+        expect(sent).toHaveLength(COMMANDS.length - 2);
+    });
+
+    test('release without a window goes through for a targeted pet of our realm (CharacterClassBase.cs:332-339), and for nothing else', async () => {
+        const { client, s, sent, payloads } = withPet();
+        s.model.pet = null;
+        s.model.self.realm = 1;
+        s.model.npcs.set(PET, npc(PET, { isPet: true, realm: 1 }));
+        s.model.npcs.set(601, npc(601, { isPet: true, realm: 2 }));
+        expect(await client.execute({ type: 'petCommand', command: 'release' })).toMatchObject({ success: false, reason: 'no_pet' });
+        s.model.setSelfTarget(MOB);
+        expect(await client.execute({ type: 'petCommand', command: 'release' })).toMatchObject({ success: false, reason: 'no_pet' });
+        s.model.setSelfTarget(601);
+        expect(await client.execute({ type: 'petCommand', command: 'release' })).toMatchObject({ success: false, reason: 'no_pet' });
+        expect(sent).toEqual([]);
+        s.model.setSelfTarget(PET);
+        expect(await client.execute({ type: 'petCommand', command: 'stay' })).toMatchObject({ success: false, reason: 'no_pet' });
+        expect((await client.execute({ type: 'petCommand', command: 'release' })).success).toBe(true);
+        expect(sent).toEqual([ClientOp.PetWindow]);
+        expect(payloads).toEqual(['00 00 02']);
+        s.model.setSelfTarget(null);
+        sent.length = 0;
+        expect((await client.execute({ type: 'petCommand', command: 'release', targetObjectId: PET })).success).toBe(true);
+        expect(sent).toEqual([ClientOp.PlayerTarget, ClientOp.PetWindow]);
+    });
+
+    test('not in game: refused like any action', async () => {
+        const { client, s, sent } = withPet();
+        s.phase = 'quitting';
+        expect(await client.execute({ type: 'petCommand', command: 'stay' })).toMatchObject({ success: false, reason: 'not_in_game' });
+        expect(sent).toEqual([]);
+    });
+
+    describe('the answer line names what the attack named', () => {
+        const line = (text: string) => new PacketWriter().u8(0).cString(text).toBytes();
+        const KILL = 'You command the amber simulacrum to kill your target!';
+
+        test('a raw attack during a melee fight: our target moves back before the line comes', async () => {
+            const { client, s } = withPet();
+            s.model.npcs.set(8, npc(8));
+            s.model.setSelfTarget(8);
+            expect((await client.execute({ type: 'petCommand', command: 'attack', targetObjectId: MOB })).success).toBe(true);
+            await client.execute({ type: 'setTarget', objectId: 8 });
+            s.model.handle(ServerOp.Message, line(KILL));
+            expect(s.model.pet!.targetObjectId).toBe(MOB);
+        });
+
+        test('with no id passed it is our target at the order', async () => {
+            const { client, s } = withPet();
+            s.model.npcs.set(8, npc(8));
+            s.model.setSelfTarget(MOB);
+            await client.execute({ type: 'petCommand', command: 'attack' });
+            await client.execute({ type: 'setTarget', objectId: 8 });
+            s.model.handle(ServerOp.Message, line(KILL));
+            expect(s.model.pet!.targetObjectId).toBe(MOB);
+        });
+
+        test('only an attack: a line after another order goes by our target', async () => {
+            const { client, s } = withPet();
+            s.model.setSelfTarget(MOB);
+            await client.execute({ type: 'petCommand', command: 'goTarget', targetObjectId: 1 });
+            s.model.handle(ServerOp.Message, line(KILL));
+            expect(s.model.pet!.targetObjectId).toBe(1);
+        });
+    });
+
+    test('the summons and the shade reach the snapshot', () => {
+        const { client, s } = playingClient();
+        s.model.self.realm = 1;
+        expect(client.collectState().summons).toEqual([]);
+        expect(client.collectState().player?.isShade).toBe(false);
+        // 0xDA for a pet of our realm, then our 0x1B on it.
+        s.model.handle(ServerOp.NPCCreate, new PacketWriter().u16(610).u16(0).u16(0).u16(ME.z).u32(ME.x + 60).u32(ME.y).u16(0).u16(100).u8(50).u8(5).u8(1 << 6).u8(0).u8(0x80).u8(0).u16(0).pascal('air spirit').pascal('').toBytes());
+        s.model.handle(ServerOp.SpellEffectAnimation, new PacketWriter().u16(1).u16(101).u16(610).u16(0).u8(0).u8(1).toBytes());
+        s.model.handle(ServerOp.UpdateIcons, new PacketWriter().u8(1).u8(0).u8(0).u8(0).u8(0).u8(0xFF).u8(0).u16(403).u16(0).u16(0).u8(1).pascal('Shade').toBytes());
+        const state = client.collectState();
+        expect(state.summons).toEqual([610]);
+        expect(state.freshSummons).toEqual([610]);
+        expect(state.pet).toBeNull();
+        expect(state.player?.isShade).toBe(true);
+    });
+
+    test('the stats without items reach the snapshot, as a copy', () => {
+        const { client, s } = playingClient();
+        expect(client.collectState().player?.statsWithoutItems).toBeNull();
+        const bare = { strength: 50, dexterity: 60, constitution: 50, quickness: 50, intelligence: 60, piety: 50, empathy: 50, charisma: 50 };
+        s.model.self.statsWithoutItems = bare;
+        const seen = client.collectState().player?.statsWithoutItems;
+        expect(seen).toEqual(bare);
+        expect(seen).not.toBe(bare);
+    });
+
+    test('the window and the last loss reach the snapshot', () => {
+        const { client, s } = playingClient();
+        expect(client.collectState()).toMatchObject({ pet: null, lastPetLoss: null });
+        s.model.handle(ServerOp.PetWindow, Uint8Array.of(2, 0x58, 0, 0, 2, 3, 2, 0, 0));
+        expect(client.collectState().pet).toEqual({ objectId: PET, aggression: 'passive', walk: 'stay', icons: [], targetObjectId: null });
+        s.model.handle(ServerOp.PetWindow, Uint8Array.of(0, 0, 0, 0, 0, 1, 1, 0, 0));
+        const state = client.collectState();
+        expect(state.pet).toBeNull();
+        expect(state.lastPetLoss).toMatchObject({ objectId: PET, name: null, cause: 'released' });
+    });
+});
+
+describe('DaocClient ground target flags', () => {
+    /** Bytes of the last packet with this opcode. */
+    const lastPayload = (sent: number[], payloads: string[], code: number): string[] => payloads[sent.lastIndexOf(code)]!.split(' ');
+    /** A client that knows one spell, one skill and one item, its last 0xA9 recent. */
+    const armed = () => {
+        const c = playingClient();
+        c.s.model.spellLines.set(0, { lineIndex: 0, lineName: 'Path', spells: [{ kind: 'spell', name: 'Summon', level: 5, internalId: 9 }] } as never);
+        c.s.model.usableSkills = [{ skillType: 5, level: 1, internalId: 1, special: 0, bonus: 0, icon: 0, name: 'Sprint' }];
+        c.s.mover.sendUpdate();
+        return c;
+    };
+    const flagsOf = async (c: ReturnType<typeof armed>) => {
+        await c.client.execute({ type: 'castSpell', lineIndex: 0, spellIndex: 0 });
+        await c.client.execute({ type: 'useSkill', skillIndex: 0 });
+        await c.client.execute({ type: 'useItem', slot: 10 });
+        await c.client.execute({ type: 'jump' });
+        return {
+            // After the 18-byte prefix (UseSpellHandler.cs:26-38).
+            cast: lastPayload(c.sent, c.payloads, ClientOp.UseSpell).slice(18, 20).join(' '),
+            skill: lastPayload(c.sent, c.payloads, ClientOp.UseSkill).slice(18, 20).join(' '),
+            slot: lastPayload(c.sent, c.payloads, ClientOp.UseSlot).slice(18, 20).join(' '),
+            // The action byte of a 0xA9 (PlayerPositionUpdateHandler.cs:58-82): the jump, then the heartbeat.
+            jump: lastPayload(c.sent, c.payloads, ClientOp.PositionUpdate)[32],
+        };
+    };
+    const off = { cast: '20 00', skill: '20 00', slot: '20 00', jump: '30' };
+    const on = { cast: '30 00', skill: '30 00', slot: '30 00', jump: '38' };
+
+    test('without a ground target every packet says only that the target is in view', async () => {
+        expect(await flagsOf(armed())).toEqual(off);
+    });
+
+    test('with one, spell, skill, item and position packets all keep it in view: each overwrites the server\'s flag', async () => {
+        const c = armed();
+        expect((await c.client.execute({ type: 'setGroundTarget', x: ME.x, y: ME.y, z: ME.z })).success).toBe(true);
+        expect(await flagsOf(c)).toEqual(on);
+        c.s.mover.sendUpdate();
+        expect(lastPayload(c.sent, c.payloads, ClientOp.PositionUpdate)[32]).toBe('38');
+    });
+
+    describe('a ground target with no z', () => {
+        /** The x, y and z of the last 0xEC (PlayerGroundTargetHandler.cs:11-14). */
+        const spotSent = (c: ReturnType<typeof playingClient>) => {
+            const bytes = lastPayload(c.sent, c.payloads, ClientOp.PlayerGroundTarget).map(b => parseInt(b, 16));
+            const u32 = (at: number) => (bytes[at]! * 2 ** 24) + (bytes[at + 1]! << 16) + (bytes[at + 2]! << 8) + bytes[at + 3]!;
+            return { x: u32(0), y: u32(4), z: u32(8) };
+        };
+        const withGround = (z: number | null) => {
+            const c = playingClient();
+            let asked: unknown[] = [];
+            (c.client as unknown as { opts: { ground: unknown } }).opts.ground = (...args: unknown[]) => { asked = args; return z === null ? null : { z, swimming: false }; };
+            return { ...c, asked: () => asked };
+        };
+
+        test('takes the ground the mover walks on, with our height as the layer hint', async () => {
+            const c = withGround(5293);
+            expect((await c.client.execute({ type: 'setGroundTarget', x: ME.x + 300, y: ME.y })).success).toBe(true);
+            expect(c.asked()).toEqual([1, ME.x + 300, ME.y, ME.z]);
+            expect(spotSent(c)).toEqual({ x: ME.x + 300, y: ME.y, z: 5293 });
+            expect(c.s.model.groundTarget).toEqual({ x: ME.x + 300, y: ME.y, z: 5293 });
+        });
+
+        test('with no terrain there, or none at all: our own height', async () => {
+            const noneThere = withGround(null);
+            await noneThere.client.execute({ type: 'setGroundTarget', x: ME.x, y: ME.y });
+            expect(spotSent(noneThere).z).toBe(ME.z);
+            const none = playingClient();
+            await none.client.execute({ type: 'setGroundTarget', x: ME.x, y: ME.y });
+            expect(spotSent(none).z).toBe(ME.z);
+        });
+
+        test('in deep water, the mesh\'s plane and not the swimming height: 24 off it, the server drops that (PlayerGroundTargetHandler.cs:63-85, seen live in Shannon Estuary)', async () => {
+            const c = playingClient();
+            (c.client as unknown as { opts: { ground: unknown } }).opts.ground = () => ({ z: 4573, swimming: true });
+            expect((await c.client.execute({ type: 'setGroundTarget', x: ME.x, y: ME.y })).success).toBe(true);
+            expect(spotSent(c).z).toBe(4597);
+            expect(c.s.model.groundTarget).toEqual({ x: ME.x, y: ME.y, z: 4597 });
+        });
+
+        test('in shallower water as well: the bed is up to 23 off the plane (live: depth 36, no z dropped, z 4597 kept)', async () => {
+            const c = playingClient();
+            (c.client as unknown as { opts: { ground: unknown } }).opts.ground = () => ({ z: 4577, swimming: false, waterZ: 4613 });
+            await c.client.execute({ type: 'setGroundTarget', x: ME.x, y: ME.y });
+            expect(spotSent(c).z).toBe(4597);
+        });
+
+        test('a z passed goes out as given, in deep water too', async () => {
+            const wet = playingClient();
+            (wet.client as unknown as { opts: { ground: unknown } }).opts.ground = () => ({ z: 4573, swimming: true });
+            await wet.client.execute({ type: 'setGroundTarget', x: ME.x, y: ME.y, z: 4573 });
+            expect(spotSent(wet).z).toBe(4573);
+            const c = withGround(5293);
+            await c.client.execute({ type: 'setGroundTarget', x: ME.x, y: ME.y, z: 6264 });
+            expect(spotSent(c).z).toBe(6264);
+            expect(c.asked()).toEqual([]);
+        });
+
+        test('a z that is no number is bad_args', async () => {
+            const c = playingClient();
+            expect(await c.client.execute({ type: 'setGroundTarget', x: ME.x, y: ME.y, z: Number.NaN })).toMatchObject({ success: false, reason: 'bad_args' });
+            expect(await c.client.execute({ type: 'setGroundTarget', x: Number.NaN, y: ME.y })).toMatchObject({ success: false, reason: 'bad_args' });
+        });
+    });
+
+    test('a ground target from the server counts, and the server clearing it turns the flags off', async () => {
+        const c = armed();
+        c.s.model.handle(ServerOp.ChangeGroundTarget, new PacketWriter().u32(ME.x).u32(ME.y).u32(ME.z).toBytes());
+        expect(await flagsOf(c)).toEqual(on);
+        c.s.model.handle(ServerOp.ChangeGroundTarget, new PacketWriter().u32(0).u32(0).u32(0).toBytes());
+        expect(await flagsOf(c)).toEqual(off);
     });
 });
 

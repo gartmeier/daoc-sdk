@@ -135,6 +135,12 @@ export function decodeRemoveObject(p: Uint8Array): { objectId: number; type: num
     return { objectId: r.u16(), type: r.remaining >= 2 ? r.u16() : 0 };
 }
 
+/** 0xDB ModelChange (PacketLib168.cs:990-998): u16 oid, u16 model, u32 LE size (a player's 0: :982). A player's goes out to all within view on any change of Model (GamePlayer.cs:2018-2022). */
+export function decodeModelChange(p: Uint8Array): { objectId: number; model: number; size: number } {
+    const r = new PacketReader(p);
+    return { objectId: r.u16(), model: r.u16(), size: r.u32le() };
+}
+
 /** 0xE1 ObjectDelete (PacketLib168.cs:2864): u16 oid, u16 1. */
 export function decodeObjectDelete(p: Uint8Array): { objectId: number } {
     return { objectId: new PacketReader(p).u16() };

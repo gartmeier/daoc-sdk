@@ -25,7 +25,7 @@ Albion's list caster for damage over time: DoTs from Matter, lifedrains from Bod
 
 Morgana plays Matter. **Community, unverified:** the sources agree it's the efficient PvE line, and the wiki gives Spirit debuffer the same 46 / 28 / 4.
 
-**Server code: the spells that Spirit 3 buys need a pet.** Convert Spirit (Spirit 3) reclaims power from one, and no bot summons one yet. It costs Perforate Spirit one level later: Matter 24 alone also fits the 299, and the catalogue says so. The area DoT isn't cast either, so it's a wash until a behaviour uses one of them.
+**Server code: the spells that Spirit 3 buys need a pet.** Convert Spirit (Spirit 3) reclaims power from one, and it sacrifices the pet, so no behaviour casts it, though `summonPet` keeps a pet up. It costs Perforate Spirit one level later: Matter 24 alone also fits the 299, and the catalogue says so. The area DoT isn't cast either, so it's a wash until a behaviour uses one of them.
 
 ## Matter at 24 in Thidranki
 
@@ -35,7 +35,8 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 - **DoTs are her power efficiency:** 148 and 222 damage for 13 power each, against 85 for 14 for the lifedrain, if the target lives through them. **Server code:** `pickNuke` drops them below 40 % target health, which is why.
 - **Crowd control:** a root, Major Crippling (2.5 s, range 1500, 31 s, baseline), since a mezz is Mind and she has no Mind. `capabilities().cc` counts it, so she gets adds.
 - **Buffs:** her own Fend Offense and Barrier of Warding. Acuity comes from the Cleric.
-- **Reached, and no behaviour casts it:** Puncture Spirit (area DoT, 33, radius 350, 17 power; only with `aoe`, and it breaks mezzes), Cursed Vigor (disease), Enfeeble Body and Magical Web (debuffs), Obscuring Dust (nearsight), Shift Health, the pet and all its spells.
+- **Reached, and no behaviour casts it:** Puncture Spirit (area DoT, 33, radius 350, 17 power; only with `aoe`, and it breaks mezzes), Cursed Vigor (disease), Enfeeble Body and Magical Web (debuffs), Obscuring Dust (nearsight), Shift Health, Convert Spirit and the pulsing pet shields.
+- **The pet:** Emerald Simulacrum, baseline at level 20, is kept up by `summonPet` and follows the focus (`petControl`), with its heals by `petHeal` and its long buffs by `petBuff` (`bun sdk/classes/reach.ts Cabalist Matter`). The reports below are from runs with no pet, so compare with `--pet.enabled=false`.
 
 ## What the reports show
 
@@ -54,6 +55,6 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 ## Not supported yet
 
-- **The pet:** Emerald Simulacrum, baseline at level 20, stronger with level whatever the spec. The whole Spirit line is for it.
+- **The Spirit line beyond the pet's upkeep:** its level comes with the character's whatever the spec. What more Spirit buys for it hasn't been measured.
 - **Area DoT** and **disease:** no behaviour for either.
 - **Spirit debuffer:** Diminish Immunities at Spirit 22 (Body, 15, 8 s) matches her Body lifedrain, so `resistDebuff` would cast it wherever `debuffPays` says ([enchanter.md](enchanter.md)). Nobody has run the build.

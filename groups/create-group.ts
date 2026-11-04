@@ -6,6 +6,7 @@
 //
 // The first bot leads unless --leader says otherwise. Roles default to the class
 // in each bot.env (Hero → tank, Druid → healer, Bard → support, Mentalist → nuker, ...).
+// It warns when that leaves no tank: a PvE hunt pulls only with one.
 
 import { cp, readFile, readdir, writeFile } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
@@ -36,12 +37,14 @@ const roles = new Map(flag('role').map(r => r.split(':') as [string, string]));
 const members: GroupDefinition['members'] = [];
 const roster: string[] = [];
 const realms = new Set<string>();
+let tanks = 0;
 for (const bot of bots) {
     const path = findBotEnv(bot);
     if (!path) die(`no bots/${bot}/bot.env (create it with bun bots/create-bot.ts ${bot} ...)`);
     const env = parseEnvFile(readFileSync(path, 'utf-8'));
     const role = (roles.get(bot) ?? (await loadCharacter(bot))?.role ?? roleForClass(env.CLASS ?? '')) as Role;
     if (!ROLES.includes(role)) die(`${bot}: unknown role "${role}" (use ${ROLES.join(', ')})`);
+    if (role === 'tank') tanks++;
     realms.add(env.REALM ?? '?');
     members.push(roles.has(bot) ? { bot, role } : { bot });
     roster.push(`| ${bot} | ${env.CHAR_NAME ?? bot} | ${env.CLASS ?? '?'} | ${role} |`);
@@ -61,6 +64,7 @@ const def: GroupDefinition = { name: group, leader, members };
 await writeFile(join(dir, 'group.json'), JSON.stringify(def, null, 2) + '\n');
 console.log(`Created ${dir}`);
 console.log(table);
+if (!tanks) console.warn(`\nWarning: no member is a tank. A PvE hunt pulls only with one, so this group would stay in recover ("no living tank to pull"). Give one the role: --role=<bot>:tank, or "role": "tank" on its entry in group.json.`);
 console.log(`\nStart the clients:  bun client/swarm.ts ${bots.join(' ')}`);
 console.log(`Look:               bun sdk/group/cli.ts ${group}`);
 console.log(`Hunt for a minute:  bun groups/${group}/hunt.ts 60`);

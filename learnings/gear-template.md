@@ -31,7 +31,7 @@ Left out on purpose: casting speed (cap 10 %), melee speed (10 %), fatigue, spel
 - **Weapons:** DPS 84 and quality 100 on the class's own type. Warrior, Paladin and Hero one-hander and large shield; Skald axe, small shield and greataxe (held, as before); Cleric mace and medium shield; Healer and Shaman hammer and small shield; Druid and Bard club and small shield.
 - **Focus casters:** a staff with ALL Spell Lines 24, no shield or right hand: they don't have the skill.
 - **No bonuses on weapons but the focus:** so the totals don't depend on which weapon is out.
-- **The Bard keeps Bard Initiate Lute.** A song only needs an instrument out (`SpellHandler.cs` `CheckInstrument`). Wearing the club puts it away, and the SDK has no weapon switch, so the script takes the lute off and puts it on again last.
+- **The Bard keeps Bard Initiate Lute.** A song only needs an instrument out (`SpellHandler.cs` `CheckInstrument`). Wearing the club puts it away, and `bot.takeMeleeSlot`, the SDK's weapon switch, only takes melee weapons in hand, so the script takes the lute off and puts it on again last.
 - **Weight:** about half of real pieces, because the replaced set stays in the backpack. See "After it" below.
 
 ## Where the items come from

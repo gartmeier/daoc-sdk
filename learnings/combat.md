@@ -35,8 +35,8 @@ What it does:
 | `timeout` | over `timeout` (60 s); attack and chase are stopped |
 | `target_lost` | the mob vanished above 20 % health |
 | `out_of_reach` | it ran beyond `maxChaseDistance` |
-| `not_attackable` | `isKillable` said no; `force: true` overrides |
-| `refused` | the server refused the attack (message in `k.message`) |
+| `not_attackable` | `isKillable` said no and it is no enemy realm's pet; `force: true` overrides |
+| `refused` | the server refused the attack (message in `k.message`), or we have no melee weapon in slots 10 or 12, or we are a shade with `usePet: false`: no walk then |
 
 `bot.attack(npc)` only starts melee: it approaches, targets, faces and swings, then returns. Use it when you want to manage the fight yourself.
 
@@ -62,7 +62,7 @@ A mob that failed is avoided for 60 s. A death stops the grind unless `respawn: 
 
 - **`stopReason`:** `duration`, `maxKills`, `died`, `onKill`, `no_targets` or `error`.
 - **Nothing to fight:** after `noTargetTimeoutMs` (default 60 s; `0` or `Infinity` turns it off) idle near the anchor with no candidate, grind stops with `no_targets`. Its message names the con window and your level. Resting resets the count. Widen `maxCon`/`radius`, or move to a better spawn (`findNpcSpawns`).
-- **The last fight runs past `durationMs`:** grind finishes the kill it started, so a 120 s grind can take 140 s. A death in that last fight is counted (`stopReason: 'died'` without `respawn`), but with `respawn: true` the bot can be left dead when grind returns. Check `bot.isDead()` afterwards.
+- **The last fight runs past `durationMs`:** grind finishes the kill it started, so a 120 s grind can take 140 s. A death in that last fight is counted (`stopReason: 'died'` without `respawn`), and with `respawn: true` released too. A failed release leaves the bot dead: `stopReason: 'error'`, "Could not respawn: ...".
 
 ## Numbers from live runs (xp_rate 3)
 
@@ -103,4 +103,4 @@ A mob that failed is avoided for 60 s. A death stops the grind unless `respawn: 
 - **Melee range is 128 in 3D,** plus 32 for each side that is moving. A wrong z breaks melee; `killNpc` adopts the mob's z, but raw `sdk.sendAttack` doesn't.
 - **Facing:** a swing needs the target within a 120° arc in front of you. `killNpc` re-faces automatically. `bot.face(n)` with a bare number always turns to heading `n`; face an object by passing the object, a name pattern or `{ objectId }`.
 - **"IN COMBAT"** in the state summary right after a kill is normal. The server's in-combat flag lingers for a few seconds.
-- **Guards and other realm NPCs are never killable targets:** `isKillable` rejects any NPC whose realm isn't `'none'`. `force: true` skips that check, but the server still decides whether the attack is allowed.
+- **Guards and other realm NPCs are never killable targets:** `isKillable` rejects any NPC whose realm isn't `'none'`. `force: true` skips that check, but the server still decides whether the attack is allowed. An enemy realm's pet needs no `force`: `killNpc` takes it, for no XP (`GameNPC.cs:2731-2732`), and `findKillableNpc` leaves it out.

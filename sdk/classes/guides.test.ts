@@ -1,7 +1,7 @@
 // Holds what the class guides (learnings/classes/) claim to the data and to the Spellbook a member fights with.
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'fs';
+import { readdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { buildPath, earnedSpecPoints, getBuild, specCost } from '../../data/builds';
 import { getClass, getSpell } from '../../data/index';
@@ -22,7 +22,7 @@ import { druid } from './druid';
 import { healer } from './healer';
 import { hero } from './hero';
 import { paladin } from './paladin';
-import { reach, reachOfBuild, type Reach } from './reach';
+import { reach, reachOfBuild, reachSheet, type Reach } from './reach';
 import { reactingStyle } from './reacting-tank';
 import { shaman } from './shaman';
 import { skald } from './skald';
@@ -350,6 +350,93 @@ describe('theurgist guide', () => {
     test('the kit is a nuker with a floor', () => {
         expect(theurgist().role).toBe('nuker');
         expect(theurgist({ saveBelow: 30 }).fight!.map(b => b.name)).toEqual(['assist']);
+    });
+
+    test('the floor holds for his pets as well: fnfPet counts as a nuke, and thrifty wraps only assist', () => {
+        expect(theurgist().pet).toEqual({ fnfFloor: 40 });
+        expect(theurgist({ saveBelow: 30 }).pet).toEqual({ fnfFloor: 30 });
+    });
+});
+
+describe('reach: what the pet behaviours cast', () => {
+    const at24 = (className: string, build: string, level = 24) => reachOfBuild(getBuild(className, build)!, level);
+    const unusedNames = (r: Reach) => r.unused.map(k => k.name);
+
+    test('Spiritmaster, Darkness caster: summonPet, petHeal, petBuff, and none of those is "no behaviour casts it"', () => {
+        const r = at24('Spiritmaster', 'Darkness caster');
+        expect(r.summon?.spell.name).toBe('Summon Spirit Warrior');
+        expect(r.petHeal?.spell.name).toBe('Replenish Spirit');
+        expect(r.petBuffs.map(s => s.spell.name)).toContain('Valkyrie\'s Agility');
+        for (const n of ['Summon Spirit Warrior', 'Replenish Spirit', 'Valkyrie\'s Agility']) expect(unusedNames(r)).not.toContain(n);
+        const sheet = reachSheet(r);
+        expect(sheet).toContain('summonPet:\n  Summon Spirit Warrior');
+        expect(sheet).toContain('petHeal:\n  Replenish Spirit');
+    });
+
+    test('Theurgist: fnfPet, his pets in it', () => {
+        const r = at24('Theurgist', 'Ice and earth');
+        expect(r.fnf?.spell.name).toBe('Summon Aged Ice Spirit');
+        expect(r.summon).toBeNull();
+        expect(unusedNames(r)).not.toContain('Summon Aged Ice Spirit');
+        expect(reachSheet(r)).toContain('fnfPet:\n  Summon Aged Ice Spirit');
+    });
+
+    test('Enchanter and Cabalist', () => {
+        const e = at24('Enchanter', 'Pet buffer');
+        expect(e.summon?.spell.name).toBe('Underhill Compatriot');
+        expect(unusedNames(e)).not.toContain('Underhill Compatriot');
+        const c = at24('Cabalist', 'Matter');
+        expect(c.summon?.spell.name).toBe('Emerald Simulacrum');
+        expect(unusedNames(c)).not.toContain('Emerald Simulacrum');
+        expect(unusedNames(c)).not.toContain('Restore Simulacrum');
+    });
+
+    test('a Druid: Group Nature keeps a pet, her pet heal one of her heals; a Heal druid at 24 is told the truth about hers: it stays uncast', () => {
+        const group = at24('Druid', 'Group Nature');
+        expect(group.summon?.spell.name).toBe('Call Nature Spirit');
+        expect(group.petHeal?.target).toBe('Realm');
+        expect(group.petHeal?.recast).toBe(0);
+        const heal = at24('Druid', 'Heal druid');
+        expect(heal.summon).toBeNull();
+        expect(unusedNames(heal)).toContain('Call Minor Nature Spirit');
+        expect(at24('Druid', 'Heal druid', 10).summon?.spell.name).toBe('Call Minor Nature Spirit');
+    });
+
+    test('what really isn\'t cast stays listed: a Necromancer\'s servant, a conversion, a pulsing pet shield, a turret', () => {
+        expect(unusedNames(at24('Necromancer', 'Deathsight'))).toContain('Call Necroservant');
+        expect(at24('Necromancer', 'Deathsight').summon).toBeNull();
+        expect(unusedNames(at24('Cabalist', 'Spirit debuffer'))).toContain('Convert Spirit');
+        expect(unusedNames(at24('Spiritmaster', 'Darkness caster'))).toContain('Spirit\'s Revenge');
+        expect(at24('Animist', 'Arboreal group').summon).toBeNull();
+    });
+});
+
+describe('what the guides and the catalogue say of pets, now that bots have them', () => {
+    const root = join(import.meta.dir, '..', '..');
+    const textsIn = (dir: string, ext: string) => readdirSync(join(root, dir)).filter(f => f.endsWith(ext)).map(f => [`${dir}/${f}`, readFileSync(join(root, dir, f), 'utf8')] as const);
+
+    test('none says no bot or behaviour can', () => {
+        const stale = /no bot (has )?summon|No behaviour casts them|something no bot has|Bots have no pet commands|there are no pet commands|pet control the bots do not have|Pet commands were not checked|the pet and all its spells|the pet and its buffs|the group heals, the pet\.|Unverified: pets/;
+        const found = [...textsIn('learnings/classes', '.md'), ...textsIn('data/builds', '.ts'), ['learnings/spells.md', readFileSync(join(root, 'learnings/spells.md'), 'utf8')] as const]
+            .filter(([f, text]) => !f.endsWith('.test.ts') && stale.test(text)).map(([f]) => f);
+        expect(found).toEqual([]);
+    });
+
+    test('the merged board\'s rules are the docs\': a root also breaks on a landed hit, and a monster\'s swing doesn\'t break it', () => {
+        expect(readFileSync(join(root, 'learnings/rvr.md'), 'utf8')).not.toContain('Only walking off counts as a root breaking');
+        expect(readFileSync(join(root, 'learnings/classes/druid.md'), 'utf8')).not.toContain('A root stays until the add swings');
+    });
+
+    test('the SDK does have a weapon switch: what it lacks is one for an instrument', () => {
+        for (const f of ['learnings/gear-template.md', 'learnings/classes/bard.md', 'learnings/classes/warrior.md', 'sdk/group/gear-template.ts']) {
+            expect(readFileSync(join(root, f), 'utf8')).not.toContain('the SDK has no weapon switch');
+        }
+    });
+
+    test('the live rez script expects what castSpell says of the living: invalid_target, before anything is sent', () => {
+        const script = readFileSync(join(root, 'sdk/test/live/rez-live.ts'), 'utf8');
+        expect(script).not.toContain("raw.reason === 'not_dead'");
+        expect(script).toContain("raw.reason === 'invalid_target'");
     });
 });
 

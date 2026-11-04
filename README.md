@@ -60,7 +60,7 @@ The guarded `export default main` lets MCP run the same file: `execute_code({ bo
 - Full reference: [sdk/API.md](sdk/API.md), generated from source.
 - Topic notes from live runs: [learnings/](learnings/README.md).
 - Examples:
-  - [bots/examples/](bots/examples/): `grinder.ts`, `merchant-run.ts`, `gear-care.ts`, `train-build.ts`, `caster.ts`, `explorer.ts`, `duo.ts`.
+  - [bots/examples/](bots/examples/): `grinder.ts`, `merchant-run.ts`, `gear-care.ts`, `train-build.ts`, `caster.ts`, `pet.ts`, `explorer.ts`, `duo.ts`.
   - Run one with `bun bots/examples/<x>.ts <bot> [args]`. A copy in `bots/<bot>/` takes the same args without the bot name (`scriptArgs()` in `bots/examples/script-args.ts`), and MCP takes them as `args`.
 
 ## Architecture
