@@ -3,7 +3,7 @@ import { areaMezzCatch, backupHealWanted, confuse, interrupt, rest, SAVING_POWER
 import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
 import { enemy, obs, picture, report, sighting } from './fixtures';
-import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings, noticePhantom } from './pack';
+import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings, noticePhantom, shouldBolt } from './pack';
 import { RVR_SETTINGS, rvrBehaviors, rvrRoaming, defaultPatrol, spokedPatrol } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { pickNuke, type SpellPick } from './spells';
@@ -555,6 +555,38 @@ describe('areaMezzCatch', () => {
     test('nothing when the focus would be caught', () => {
         expect(areaMezzCatch(t, [t, n, far], 350, 2)).toEqual([]);
         expect(areaMezzCatch(t, [t, n, far], 350, 3).length).toBe(2);
+    });
+});
+
+describe('bolting', () => {
+    const near = (...realms: string[]) => realms.map(realm => ({ realm })) as any[];
+    test('shouldBolt: a death with as many enemies as we have left, or a second realm with us three short', () => {
+        expect(shouldBolt(near('midgard', 'midgard', 'midgard', 'midgard'), 4, 1)).toBe(true);
+        expect(shouldBolt(near('midgard', 'midgard', 'midgard'), 4, 1)).toBe(false);
+        expect(shouldBolt(near('midgard', 'midgard', 'midgard', 'midgard', 'midgard', 'midgard', 'midgard', 'midgard'), 5, 0)).toBe(false);
+        expect(shouldBolt(near('midgard', 'midgard', 'midgard', 'midgard', 'albion', 'albion', 'albion', 'albion'), 5, 0)).toBe(true);
+        expect(shouldBolt(near('midgard', 'albion', 'albion', 'albion'), 5, 0)).toBe(false);
+    });
+    const dead = () => team({ Menta: { isDead: true, hp: 0 } });
+    test('off by default: a pack in a raid fights on', () => {
+        const u = decidePack(ctx(picture(dead(), fiveAt(11_000)), { memory: { pack: 'raid', raidAt: 1000, packAnchor: { x: 10_000, y: 10_000, z: 0 } }, now: 2000 }));
+        expect(u.phase).toBe('engage');
+    });
+    const on = { pack: { ...PACK_SETTINGS.pack, boltRun: 4000 } };
+    test('on: it runs away from them, far, then fights again once the clock is up', () => {
+        const m: any = { pack: 'raid', raidAt: 1000, packAnchor: { x: 10_000, y: 10_000, z: 0 } };
+        const u = decidePack(ctx(picture(dead(), fiveAt(11_000)), { memory: m, settings: on, now: 2000 }));
+        expect(u.phase).toBe('retreat');
+        expect(u.retreatTo!.x).toBeLessThan(8000);
+        expect(m.pack).toBe('bolt');
+        expect(decidePack(ctx(picture(dead(), fiveAt(11_000)), { memory: m, settings: on, now: 5000 })).phase).toBe('retreat');
+        decidePack(ctx(picture(dead(), fiveAt(11_000)), { memory: m, settings: on, now: 2000 + PACK_SETTINGS.pack.boltMs }));
+        expect(m.pack).not.toBe('bolt');
+    });
+    test('on: no second bolt while cooling', () => {
+        const m: any = { pack: 'kill', killAt: 1000, boltCool: 50_000 };
+        decidePack(ctx(picture(dead(), fiveAt(11_000)), { memory: m, settings: on, now: 2000 }));
+        expect(m.pack).not.toBe('bolt');
     });
 });
 

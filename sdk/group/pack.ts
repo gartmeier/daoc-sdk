@@ -49,6 +49,13 @@ export interface PackOptions {
     raidReady: { hp: number; mana: number };
     /** ... where it stands, with enemies no nearer than this; nearer, it moves off first. */
     restClear: number;
+    /**
+     * Bolt this far when losing: a member dead and as many enemies near as we have left, or a second realm arriving with us
+     * three short (shouldBolt). 0: never, the pack fights on in short pull backs. boltMs: how long at most, and no second bolt for boltCoolMs.
+     */
+    boltRun: number;
+    boltMs: number;
+    boltCoolMs: number;
     /** A focus whose health didn't change for this long is a phantom: left alone for phantomMs. */
     frozenMs: number;
     phantomMs: number;
@@ -102,7 +109,7 @@ export interface PackSettings extends RvrSettings {
 export const PACK_OPTIONS: PackOptions = {
     standoff: 1500, reach: 1500, openAt: 1450, idleMs: 3000, waitMs: 0, minPack: 3, minTogether: 3,
     // User, live: fights may be joined head on, the first version avoided all of them. Only a real crowd is refused.
-    frozenMs: 20_000, phantomMs: 120_000, maxFoes: 8, spokeAt: 0, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
+    boltRun: 0, boltMs: 15_000, boltCoolMs: 30_000, frozenMs: 20_000, phantomMs: 120_000, maxFoes: 8, spokeAt: 0, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
     raidMs: 8000, finishMs: 4000, finishHp: 25, closeCount: 3, closeIn: 700,
     pullBack: 1500, pullMs: 6000, maxChasers: 2, chaseGap: 800, maxLegs: 0, killMs: 12_000, preyHp: 40, healedBy: 30, droppedMs: 15_000,
     leave: 2000, cooldownMs: 0,
@@ -159,6 +166,15 @@ export function packCc(foes: readonly Contact[], members: readonly MemberReport[
         if (immuneKinds(c).includes('mezz')) return false;
         return role !== 'nuker' || !!c.healer;
     });
+}
+
+/**
+ * Whether a pack in a fight should run for it. Live, it lost four or five within a minute or so when two groups converged,
+ * one at a time, still turning on its chasers after each 1500-unit pull back.
+ */
+export function shouldBolt(near: readonly Pick<Contact, 'realm'>[], alive: number, dead: number): boolean {
+    if (dead > 0 && near.length >= alive) return true;
+    return new Set(near.map(c => c.realm)).size >= 2 && near.length >= alive + 3;
 }
 
 /**
@@ -270,6 +286,20 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // A run that starts at the keep starts together and buffed.
     if (!mem.pack && homeSpot && dist(centre, homeSpot) <= k.keepRadius) { mem.pack = 'rebuff'; mem.rebuffAt = now; }
     mem.pack ??= 'stalk';
+
+    if (mem.pack === 'bolt') {
+        const chased = free.some(c => dist(c, centre) <= k.reach);
+        if (now - mem.boltAt >= k.boltMs || !chased) { mem.pack = 'stalk'; mem.legKind = null; }
+        else return say({ ...none, phase: 'retreat', retreatTo: mem.boltTo, anchor: mem.boltTo, objective: 'bolt: away from both', reason: 'bolt: running' });
+    }
+    if (k.boltRun && (mem.pack === 'raid' || mem.pack === 'pull' || mem.pack === 'kill') && now >= (mem.boltCool ?? 0)
+        && shouldBolt(free.filter(c => dist(c, centre) <= k.reach + 500), main.length, dead.length)) {
+        mem.pack = 'bolt';
+        mem.boltAt = now;
+        mem.boltCool = now + k.boltCoolMs;
+        mem.boltTo = spotAlong(trip, centre, runWay(centre, free, homeSpot), k.boltRun);
+        return say({ ...none, phase: 'retreat', retreatTo: mem.boltTo, anchor: mem.boltTo, objective: 'bolt: away from both', reason: `bolt: ${dead.length} dead, ${free.length} free vs ${main.length}` });
+    }
 
     if (mem.pack === 'raid') {
         const anchor: Point3 = mem.packAnchor;
