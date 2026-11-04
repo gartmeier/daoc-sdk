@@ -19,7 +19,7 @@
 import { estimateZ } from '../../data/index';
 import type { Realm } from '../types';
 import type { Behavior } from './member';
-import { backupHeal, confuse, crowdControl, cureMezz, flee, interrupt, rest, rez, release, retreat, SAVING_POWER, shedLoad, song, sprint, holdFormation, buff } from './behaviors';
+import { backupHeal, confuse, crowdControl, flee, interrupt, rest, rez, release, retreat, SAVING_POWER, shedLoad, song, sprint, holdFormation, buff } from './behaviors';
 import { isAlive, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
@@ -114,7 +114,6 @@ export const PACK_SETTINGS: PackSettings = {
     standGround: true,
     standStep: 500,
     areaMezzMin: 2,
-    cureMezz: true,
     strongestNuke: true,
     // The Hero stands in front of the casters and hits what reaches them; he doesn't charge.
     chaseLeash: 800,
@@ -451,7 +450,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
 export function packBehaviors(): Record<Role, Behavior<RvrSettings>[]> {
     const lists = rvrBehaviors() as Record<Role, Behavior<RvrSettings>[]>;
     const out = Object.fromEntries(Object.entries(lists).map(([role, list]) => [role, list.filter(b => b.name !== 'position')])) as Record<Role, Behavior<RvrSettings>[]>;
-    out.support = [release(), sprint(), retreat(), flee(), rez(), interrupt(), cureMezz(), crowdControl(), backupHeal(), confuse(), song(), shedLoad(), holdFormation(), buff(), rest()] as Behavior<RvrSettings>[];
+    out.support = [release(), sprint(), retreat(), flee(), rez(), interrupt(), crowdControl(), backupHeal(), confuse(), song(), shedLoad(), holdFormation(), buff(), rest()] as Behavior<RvrSettings>[];
     return out;
 }
 

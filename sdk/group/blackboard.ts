@@ -68,7 +68,6 @@ export interface MemberSelf {
     bot: string;
     role: Role;
     activity: Activity;
-    mezzedAt?: number;
     capabilities: Capabilities;
     combat?: MemberCombat;
 }
@@ -300,7 +299,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         hp: p.healthPercent, maxHp: p.maxHealth, mana: p.manaPercent, endurance: p.endurancePercent,
         load: p.encumbrance && p.encumbrance.max > 0 ? Math.round(100 * p.encumbrance.current / p.encumbrance.max) : 0,
         isDead: p.isDead, isSitting: p.isSitting, inCombat: p.inCombat, attacking: p.attacking, targetId: p.targetObjectId,
-        effects: state.effects.map(e => e.name), capabilities: self.capabilities, activity: self.activity, combat: self.combat, mezzedAt: self.mezzedAt,
+        effects: state.effects.map(e => e.name), capabilities: self.capabilities, activity: self.activity, combat: self.combat,
         at: state.timestamp, pet: petReport(state),
     };
     if (state.summons?.length) report.summons = [...state.summons];

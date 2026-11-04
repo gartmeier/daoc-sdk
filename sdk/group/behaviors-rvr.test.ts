@@ -7,7 +7,7 @@ import type { CastResult, KillPlayerOptions, KillPlayerResult } from '../actions
 import { executionContext } from '../execution-context';
 import type { CombatEvent, NearbyNpc, NearbyPlayer } from '../types';
 import { shaman } from '../classes/shaman';
-import { assist, ckey, crowdControl, cureMezz, fightRejoin, flee, heal, holdFormation, isDown, leashFallback, onMember, peelTarget, pull, rejoinFight, rest, retreat, spareNuke, tank, type TacticsSettings } from './behaviors';
+import { assist, ckey, crowdControl, fightRejoin, flee, heal, holdFormation, isDown, leashFallback, onMember, peelTarget, pull, rejoinFight, rest, retreat, spareNuke, tank, type TacticsSettings } from './behaviors';
 import { withCharacter } from './character';
 import { rvrBehaviors } from './rvr';
 import { contact, enemy, picture, report } from './fixtures';
@@ -486,25 +486,6 @@ describe('crowdControl: what an add can take, by immunity and by its health', ()
         expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
         expect(sequence).toEqual(['follow', 'cast']);
         expect(s.marks.map(m => m.targetId)).toEqual([52, 53]);
-    });
-});
-
-describe('cureMezz', () => {
-    const mezzed = (name: string, role: Role, objectId: number, x = 10_100) => report(name, { role, regionId: R, x, y: 10_000, objectId, mezzedAt: Date.now() });
-    const run = async (members: MemberReport[], on = true) => {
-        const s = stub({ name: 'Bard', role: 'support', at: { x: 10_000, y: 10_000 }, members, settings: { ...LEASHED, cureMezz: on }, castSpell: async () => ({ success: true, message: 'Cast' }) });
-        (s.ctx.spells as any).cureMezz = () => ({ spell: { name: 'Clarifying Harmonies' }, range: 2000 });
-        const acted = await cureMezz().run(s.ctx);
-        return { acted, cast: s.calls.castSpell };
-    };
-
-    test('the healer first', async () => {
-        expect(await run([mezzed('Nuker', 'nuker', 4), mezzed('Healer', 'healer', 2)])).toEqual({ acted: true, cast: [2] });
-    });
-    test('off, nobody mezzed or out of reach: nothing', async () => {
-        expect((await run([mezzed('Healer', 'healer', 2)], false)).acted).toBe(false);
-        expect((await run([report('Healer', { role: 'healer', regionId: R, x: 10_100, y: 10_000, objectId: 2 })])).acted).toBe(false);
-        expect((await run([mezzed('Healer', 'healer', 2, 13_000)])).acted).toBe(false);
     });
 });
 

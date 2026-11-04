@@ -34,8 +34,6 @@ export interface TacticsSettings {
     standStep?: number;
     /** Open with an area mezz when it catches at least this many free enemies and not the focus (areaMezzCatch). */
     areaMezzMin?: number;
-    /** The Bard's cure for a mezzed member (cureMezz). */
-    cureMezz?: boolean;
     /** Nuke with the hardest hit rather than the highest spell level (NukeOptions.byDamage). */
     strongestNuke?: boolean;
     /** How far a member walks to a healer for lost constitution or sickness (default 4000). */
@@ -837,39 +835,6 @@ function mezzComing(ctx: MemberContext<TacticsSettings>, target: Contact): boole
     return ctx.orders().cc.some(a => a.by !== ctx.name && near(a.targetId))
         || ctx.members().some(m => m.name !== ctx.name && !m.isDead && m.activity.kind === 'cc' && near(m.activity.targetId));
 }
-
-/** A mezzed member retries an action at most 3 s apart (waitOutSelfCc), so older than this it woke up. */
-const MEZZED_MS = 4000;
-const MEZZ_SPELLS = new Set(getSpells().filter(s => s.type === 'Mesmerize').map(s => s.name));
-
-/** The server told this member it is mezzed, or the effect shows on it. */
-export function memberMezzed(m: Pick<MemberReport, 'effects' | 'mezzedAt' | 'isDead'>, now = Date.now()): boolean {
-    return !m.isDead && ((m.mezzedAt !== undefined && now - m.mezzedAt < MEZZED_MS) || m.effects.some(e => MEZZ_SPELLS.has(e)));
-}
-
-/** Cure a mezzed member in reach: the healer first, then who deals the damage. A live wipe had three standing mesmerized while the rest died. */
-export const cureMezz = (): Behavior<TacticsSettings> => ({
-    name: 'cureMezz',
-    interruptible: false,
-    async run(ctx) {
-        if (!ctx.settings.cureMezz) return false;
-        const sp = ctx.spells.cureMezz();
-        if (!sp) return false;
-        const rank: Partial<Record<Role, number>> = { healer: 0, nuker: 1, tank: 2 };
-        const me = ctx.me();
-        const who = ctx.members()
-            .filter(m => m.name !== ctx.name && memberMezzed(m) && dist(m, me) <= sp.range && Date.now() - (ctx.memory.get(`cured:${m.name}`) ?? 0) > MEZZED_MS)
-            .sort((a, b) => (rank[a.role] ?? 3) - (rank[b.role] ?? 3))[0];
-        if (!who) return false;
-        await stopSwinging(ctx);
-        ctx.memory.set(`cured:${who.name}`, Date.now());
-        ctx.doing('cure', null, who.name);
-        const c = await ctx.bot.castSpell(sp.spell, who.objectId, { approach: false });
-        ctx.result('cure', c);
-        await waitOutSelfCc(c);
-        return true;
-    },
-});
 
 /** An enemy player started a cast this long ago at most, so an interrupt can still catch it. */
 const INTERRUPT_WINDOW_MS = 2000;

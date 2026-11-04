@@ -134,8 +134,6 @@ export interface MemberReport {
     capabilities: Capabilities;
     combat?: MemberCombat;
     activity: Activity;
-    /** When the server last told this member it can't act for a mezz. A report's `effects` says so too, when the effect is displayed. */
-    mezzedAt?: number;
     /** Snapshot time (ms epoch). */
     at: number;
     /** Its window pet; null without one, absent from an older runner or client. */

@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from 'bun:test';
-import { areaMezzCatch, backupHealWanted, confuse, interrupt, rest, SAVING_POWER, standStepTo, memberMezzed } from './behaviors';
+import { areaMezzCatch, backupHealWanted, confuse, interrupt, rest, SAVING_POWER, standStepTo } from './behaviors';
 import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
 import { enemy, obs, picture, report, sighting } from './fixtures';
@@ -581,18 +581,6 @@ describe('a phantom focus', () => {
         const u = decidePack(ctx(picture(team(), [foe(101, 11_000, 10_000, { hp: 33 })]), { memory: { pack: 'stalk', phantoms: { 101: 500_000 } }, now: 1000 }));
         expect(u.focus ?? null).toBeNull();
         expect(u.phase).not.toBe('engage');
-    });
-});
-
-describe('memberMezzed', () => {
-    const now = 100_000;
-    test('from the server\'s answer, for a few seconds; from a displayed effect; never dead', () => {
-        expect(memberMezzed({ effects: [], isDead: false, mezzedAt: now - 3000 }, now)).toBe(true);
-        expect(memberMezzed({ effects: [], isDead: false, mezzedAt: now - 5000 }, now)).toBe(false);
-        expect(memberMezzed({ effects: [], isDead: false }, now)).toBe(false);
-        expect(memberMezzed({ effects: ['Mesmerizing Hymn'], isDead: false }, now)).toBe(true);
-        expect(memberMezzed({ effects: ['Holding Vines'], isDead: false }, now)).toBe(false);
-        expect(memberMezzed({ effects: ['Mesmerizing Hymn'], isDead: true }, now)).toBe(false);
     });
 });
 
