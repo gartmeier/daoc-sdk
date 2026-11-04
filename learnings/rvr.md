@@ -205,6 +205,17 @@ Hit and run for one group, as an alternative to `rvr-roam`: `defineStrategy(rvrP
 
 Deaths are the clear result: every pack round lost fewer than the best roaming round. Kills are better too, but the pack's gain is mostly Albion (26 against 11): against Midgard, 24 and 19 is within the noise, so the pack doesn't yet beat the stronger group by more than it survives it. Realm points vary a lot with who else hit a kill: pack and roaming tied on p1 and r1.
 
+**Then two fixes, 4 rounds:** the Bard mezzes what it can reach and steps up when nothing is; a pack no longer parks short of an enemy that stands still (a stalk aimed at the stand-off while a raid opens 50 closer, and formation slack kept the centre from the last units: one round sat 1469 from a Briton for 5 minutes).
+
+| Round | K | D | RP | Midgard | Spread | Oisin's mezzes | "Out of reach" turns |
+|---|---|---|---|---|---|---|---|
+| n1 | 15 | 0 | 140 | 14 | 274 | 7 | 6 |
+| n2 | 14 | 0 | 135 | 11 | 311 | 6 | 16 |
+| n3 | 16 | 0 | 200 | 6 | 239 | 7 | 10 |
+| n4 | 15 | 0 | 90 | 15 | 332 | 8 | 1 |
+
+Against p1-p3 (17 kills, 1 death, 117 RP, 8 Midgard kills a round; spread 545-910): 15 kills, 0 deaths, 141 RP, 11.5 Midgard kills a round; spread 239-332, none strayed. The tighter pack and the Midgard kills are more than the rounds before varied, but three things changed at once: both fixes, and the opponents came back from their own guild trip. Oisin's idle turns fell (97 to 33 over the rounds compared by length), his mezz count didn't rise (6-8 against 6-13): cc:immune and cc:resisted now take up the gain. So it's the parking fix, 5 raids opened by it, and less idling; not more mezzes.
+
 **Within the noise so far:** Brigid's acuity and giving up a healed focus. Before the give-up the pack went 17/0, 16/0, 21/0 and 6/5; with it 8/2, 17/0, 13/1, 19/1, 18/1. It did stop the 5 minutes on one Troll, but single deaths now show up where the rounds before it had none. The early comparison (63/0 in 45 minutes against 20/10 in 22) overstated the gain: opponents get absent or farmed, and s17 and s18 (18/0, 11/1, 0 RP) had no Midgard at all, so count those out. c3, 12/0, was also the pack and no control.
 
 **Not done:** Oisin's mezz cure (Clarifying Harmonies): a member's report doesn't say it's mezzed. The Hero's post-block stuns. A member rezzed in the field isn't told apart from a released one for the rebuff.
