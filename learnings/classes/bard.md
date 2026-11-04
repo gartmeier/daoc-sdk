@@ -6,9 +6,15 @@ Hibernia's support: mezz and damage shouts from Music, songs and base buffs from
 - **Server code:** read from the server source or data, or worked out by the same `Spellbook` a member fights with.
 - **Community, unverified:** other players' advice, written for other servers and patches.
 
-## No kit
+## The kit
 
-There is no `sdk/classes/bard.ts`. `roleForClass` makes a Bard support, the one list that mezzes on its own and plays songs, and Oisin runs on it unchanged. A kit would hold nothing of the class's own.
+`sdk/classes/bard.ts` holds only the role, `support`, which is what `roleForClass` gives. It changes nothing against the role list, on purpose:
+
+- **It's the one list built round him.** `crowdControl()` without `assignedOnly`, and songs. In the wolf pack, `packBehaviors` writes the support list itself: `interrupt`, `crowdControl`, `backupHeal`, `confuse`, `song`. The role matters there too: `packCc` gives area mezzes to whoever's role is `support`.
+- **Characters do apply in the pack,** but that list has no fight and no `position`, so what a character adds lands at `shedLoad`: below `song`, even under `react`.
+- **A shout wouldn't reach.** `assist` would cast Concussive Yell (21, instant, range 700, recast 10 s). The pack stands at 1500 with `standGround` and a `standStep` of 500, so it mostly wouldn't fire, and each step takes him toward the enemy for 21 damage. Outside the pack, `castSpell` would walk him in.
+
+So a `bard()` character is worth wiring only so the report says it came from a character.
 
 ## Builds
 

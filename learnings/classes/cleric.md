@@ -6,9 +6,22 @@ Albion's healer and buffer: heals from Rejuvenation, every stat buff from Enhanc
 - **Server code:** read from the server source or data, or worked out by the same `Spellbook` a member fights with.
 - **Community, unverified:** other players' advice, written for other servers and patches.
 
-## No kit
+## The kit
 
-There is no `sdk/classes/cleric.ts`. `roleForClass` makes a Cleric a healer and the list casts what the bot knows, so a kit would hold nothing of the class's own. Nimue runs on the plain role list.
+`sdk/classes/cleric.ts` is a healer that casts Smite on the focus when nobody needs healing, above a floor of power:
+
+```typescript
+import { cleric } from '../../sdk/classes/cleric';
+export default cleric();                       // or cleric({ saveBelow: 30 })
+```
+
+**Why, verified:** she was idle 51 % of fights, "nothing to do" 820 times, and has no mezz or root to fill it. Ulfgar's 0 damage in 46 minutes is the same list ([shaman.md](shaman.md)).
+
+**What changes, server code:** `assist` goes above `position` (in the wolf pack, above `shedLoad`), below `heal`. At Smite 1 it casts Minor Judgement: 54, 3 s, 15 power. Below 50 % power she leaves it. The floor is a guess, picked because Greater Revival costs 52 power; the 40 % on the Sorcerer and Theurgist was measured on nukers, and nothing was on a healer.
+
+**The cost:** `assist` can't be interrupted, so someone who drops just after she starts waits up to 3 s for the heal. And when she can't see the focus outside the wolf pack, `assist` walks her toward it.
+
+**Not played.** To look for: her nukes and damage a minute, and whether her heals, `no power` and the group's deaths get worse. In PvE, Camelot's `memberBehaviors` don't name her, so it applies there too.
 
 ## Builds
 
@@ -35,7 +48,7 @@ A Cleric's heals live in the skills list, the hybrid path: `castSpell` handles i
 - **Her instant is rarely picked.** Gift of the Heavens is 40 % of her health, 230 on her template's 575, and a heal on a timer waits until nothing else covers. Greater Revival covers more, and past 263 `pickHeal` falls back to whatever restores most. So it goes off only when she's too short of power for anything bigger. A Healer's and Druid's 55 % does go off ([healer.md](healer.md)).
 - **No crowd control.** Heavenly Visions, her only mezz, is point-blank, so she doesn't count as a mezzer (**verified:** rounds on 2026-11-01). The group's control is the Sorcerer's mezz and two roots.
 - **Rez:** Raise Fallen, at Rejuvenation 15.
-- **Reached, and no behaviour casts it:** Stunning Flare (stun, 2.5 s, 5 s), Heaven's Commendation and the other group heals, the cures. Minor Judgement (54, 3 s, 15 power) is in reach of `assist`, which the healer's list doesn't have.
+- **Reached, and no behaviour casts it:** Stunning Flare (stun, 2.5 s, 5 s), Heaven's Commendation and the other group heals, the cures. Minor Judgement (54, 3 s, 15 power) is in reach of `assist`, which the healer's list doesn't have and the kit adds. At Smite 1 its minimum is low ([mentalist.md](mentalist.md)).
 
 ## More buffs than she can hold
 
@@ -60,5 +73,4 @@ A Cleric's heals live in the skills list, the hybrid path: `castSpell` handles i
 ## Not supported yet
 
 - **Stunning Flare on an enemy healer:** asked for in the group's log since the first RvR rounds. Nothing picks a stun for a target.
-- **Using the idle time:** `{ fight: [assist()] }` in her character would cast Minor Judgement as a Shaman's kit does ([shaman.md](shaman.md)). At Smite 1 its minimum is low ([mentalist.md](mentalist.md)), and it costs a fifth of what her big heal does. Not tried.
 - **Group heals** and **cures,** as for the Healer.

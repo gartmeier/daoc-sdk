@@ -6,9 +6,22 @@ Midgard's tank: a weapon line, a shield and Parry, with no spells. For every sty
 - **Server code:** read from the server source or data.
 - **Community, unverified:** other players' advice, written for other servers and patches.
 
-## No kit
+## The kit
 
-There is no `sdk/classes/warrior.ts`. `roleForClass` makes a Warrior a tank, and the tank's list reads taunt and damage styles from the server, so a kit would hold nothing of the class's own. Thorgrim runs on the plain role list.
+`sdk/classes/warrior.ts` is the tank's list with a fight that also swings what a block, a parry or a position opens, the same `reactingTank` as the Hero's ([hero.md](hero.md)):
+
+```typescript
+import { warrior } from '../../sdk/classes/warrior';
+export default warrior();
+```
+
+**What changes, server code,** on Axe 24, Shields 18: Pillager stays the backup, with its attack slow. Ahead of it go Valkyrie's Shield after a block, Disable (4 s stun, from the side) with the enemy on someone else, and Cleave otherwise, which needs a parry and slows the target by 16.
+
+**On Axe a block buys damage, not a stun.** Valkyrie's Shield has no proc: it's growth 0.89 for 5 endurance, and the picker takes the first reaction to a block in the data's order, ahead of Stun and Incapacitate. A Hero gets Horizon Blade there, a stun.
+
+In `rvrRoaming`, which is what Midgard runs, the list keeps `tank` and this replaces it in place.
+
+**Not played.** To look for: landed reactions in the log, his damage a minute and his endurance. Pillager's slow goes on less often if reactions land instead.
 
 ## Builds
 
@@ -31,7 +44,7 @@ There is no `sdk/classes/warrior.ts`. `roleForClass` makes a Warrior a tank, and
 
 **Verified: the name doesn't tell you the threat.** On Axe, Plague taunts and Hoarfrost detaunts. Runs 070604 and 072248 at level 14 had tank hold 53 % and 31 %, with 2 and 7 deaths: an old match on the word "taunt" had made Hoarfrost his damage style once Axe 12 made it his best, so he shed threat on every hit. With `tankStyles` reading the proc, test run 075641 had hold 100 % and 0 deaths, and the group then had 0 deaths in about 40 hunts up to level 20. The other lines have their own: Draw Out and Provoke taunt, Temper and Placate detaunt. [group-coordination.md](../group-coordination.md) has the threat numbers.
 
-**Verified,** at 24 his damage style is Pillager (Axe 10, anytime, 15 endurance, slows the target's attacks by 21 for 20 s). The same kit of block reactions and side stuns as a Hero's is in reach and unused ([hero.md](hero.md)), from Shields 18: Stun, Disable, Incapacitate.
+**Verified,** at 24 his damage style is Pillager (Axe 10, anytime, 15 endurance, slows the target's attacks by 21 for 20 s). The same block reactions and side stuns as a Hero's are in reach ([hero.md](hero.md)), from Shields 18: Stun, Disable, Incapacitate. The plain `tank` doesn't use them. The kit swings Disable, and after a block on Axe it swings Valkyrie's Shield instead of a stun.
 
 ## A slower weapon
 

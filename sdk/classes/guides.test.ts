@@ -6,18 +6,31 @@ import { join } from 'path';
 import { buildPath, earnedSpecPoints, getBuild, specCost } from '../../data/builds';
 import { getClass, getSpell } from '../../data/index';
 import { defaultBehaviors } from '../group/behaviors';
-import { withCharacter } from '../group/character';
+import { withCharacter, type Character } from '../group/character';
 import { planBuffs } from '../group/buffs';
-import type { MemberContext } from '../group/member';
+import type { Behavior, MemberContext } from '../group/member';
+import { PACK_OPTIONS, packBehaviors } from '../group/pack';
+import { rvrBehaviors } from '../group/rvr';
+import { ANYTIME_STYLE, tankStyles } from '../group/styles';
 import { roleForClass } from '../group/strategy';
 import type { MemberReport, Role } from '../group/types';
+import { EquipmentSlot, ObjectType, type CombatResult, type SpellDetails, type Style } from '../types';
+import { bard } from './bard';
+import { cabalist } from './cabalist';
+import { cleric } from './cleric';
+import { druid } from './druid';
+import { healer } from './healer';
+import { hero } from './hero';
 import { paladin } from './paladin';
 import { reach, reachOfBuild, type Reach } from './reach';
+import { reactingStyle } from './reacting-tank';
 import { shaman } from './shaman';
 import { skald } from './skald';
 import { sorcerer } from './sorcerer';
+import { spiritmaster } from './spiritmaster';
 import { theurgist } from './theurgist';
 import { thrifty } from './thrifty';
+import { warrior } from './warrior';
 
 const guide = (name: string) => readFileSync(join(import.meta.dir, `../../learnings/classes/${name}.md`), 'utf-8').replaceAll('\r\n', '\n');
 const names = (list: { spell: { name: string } }[]) => list.map(s => s.spell.name);
@@ -352,5 +365,116 @@ describe('thrifty', () => {
         expect(await thrifty(inner, 40).run(ctx(50, [1]).ctx)).toBe(true);
         expect(await thrifty(inner, 40).run(ctx(30, []).ctx)).toBe(true);
         expect(await thrifty(inner, 40).run(ctx(0, [1], 0).ctx)).toBe(true);
+    });
+});
+
+describe('the role-only kits', () => {
+    const kits: [string, () => { role?: Role; fight?: unknown; react?: unknown; chores?: unknown }][] = [['Bard', bard], ['Healer', healer], ['Spiritmaster', spiritmaster], ['Cabalist', cabalist], ['Druid', druid]];
+
+    test.each(kits)('%s has its class\'s role and leaves every list as it is', (className, kit) => {
+        const role = roleForClass(className);
+        expect(kit()).toEqual({ role });
+        for (const lists of [defaultBehaviors(), rvrBehaviors(), packBehaviors()]) {
+            const list = lists[role] as Behavior<any>[];
+            expect(withCharacter(list, kit() as Character).map(b => b.name)).toEqual(list.map(b => b.name));
+        }
+    });
+
+    test('a Heal druid and a Healer have no damage spell for assist, and a Nature druid has', () => {
+        expect(reachOfBuild(getBuild('Druid', 'Heal druid')!, 24).nukes).toEqual([]);
+        expect(reachOfBuild(getBuild('Healer', 'Mending first')!, 24).nukes).toEqual([]);
+        expect(names(reachOfBuild(getBuild('Druid', 'Group Nature')!, 24).nukes)).toEqual(['Wither']);
+        expect(druid({ dotsAbove: 50 }).fight!.map(b => b.name)).toEqual(['assist']);
+    });
+
+    test('a Bard\'s shout reaches under half of the wolf pack\'s standoff', () => {
+        const shout = reachOfBuild(getBuild('Bard', 'Nurture support')!, 24).nukes[0]!;
+        expect(shout.range).toBeLessThan(PACK_OPTIONS.standoff / 2);
+    });
+});
+
+describe('the cleric kit', () => {
+    test('a healer with a floor, whose assist goes below heal in every list', () => {
+        expect(cleric().role).toBe('healer');
+        for (const lists of [defaultBehaviors(), rvrBehaviors(), packBehaviors()]) {
+            const list = withCharacter(lists.healer as Behavior<any>[], cleric() as Character).map(b => b.name);
+            expect(list.lastIndexOf('heal')).toBeLessThan(list.indexOf('assist'));
+        }
+    });
+
+    test('its nuke is Minor Judgement', () => {
+        expect(names(reachOfBuild(getBuild('Cleric', 'Healer')!, 24).nukes)).toEqual(['Minor Judgement']);
+    });
+});
+
+describe('the tank kits', () => {
+    // The styles as the server describes them, from the static data.
+    const RESULTS: Record<number, CombatResult> = { 3: 'parry', 4: 'block' };
+    const OPENINGS = ['offensive', 'defensive', 'positional'] as const;
+    const served = (r: Reach): Style[] => r.styles.map(s => {
+        const spell = s.procs?.[0] ? getSpell(s.procs[0].spellId) : undefined;
+        const description = !spell || !/taunt/i.test(spell.type) ? '' : `${spell.value! < 0 ? 'decreases' : 'increasing'} your threat`;
+        return {
+            name: s.name, internalId: s.id, specLevel: s.specLevelRequirement, specName: s.specKeyName, skillIndex: s.id,
+            prerequisite: s.openingRequirementType === 0 && !s.attackResultRequirement ? ANYTIME_STYLE : 0,
+            details: {
+                fatigue: s.enduranceCost, attackMod: 0, defensiveMod: 0, openingDamage: s.growthRate * 200, opening: OPENINGS[s.openingRequirementType]!,
+                result: RESULTS[s.attackResultRequirement] ?? (s.attackResultRequirement ? 'other' : null), position: null, openingStyle: null, followUps: [],
+                weapon: s.specKeyName === 'Shields' ? 'Shield' : s.specKeyName, stealth: false, procSpellId: spell ? s.procs![0]!.spellId : null, ...(spell ? { procSpell: { description } as SpellDetails } : {}),
+            },
+        };
+    });
+    const worn = (right: number) => [{ slot: EquipmentSlot.RightHand, objectType: right }, { slot: EquipmentSlot.LeftHand, objectType: ObjectType.Shield }];
+    /** What the kit's picker queues, with a foe's last swing at us. */
+    const queue = (styles: Style[], equipment: { slot: number; objectType: number }[], o: { foeDid?: CombatResult; onOther?: boolean; endurance?: number }) => {
+        const me = 1, foe = 2;
+        return reactingStyle({
+            target: { objectId: foe, targetObjectId: o.onOther ? 3 : me } as never,
+            player: { objectId: me, endurancePercent: o.endurance ?? 100 } as never,
+            state: { equipment, combatEvents: o.foeDid ? [{ kind: 'melee', attackerObjectId: foe, targetObjectId: me, result: o.foeDid }] : [], gameMessages: [] } as never,
+            styles,
+        });
+    };
+
+    test.each([['Hero', hero], ['Warrior', warrior]] as const)('a %s keeps the tank\'s place in every list', (className, kit) => {
+        expect(kit().role).toBe(roleForClass(className));
+        for (const lists of [defaultBehaviors(), rvrBehaviors(), packBehaviors()]) {
+            const list = lists.tank as Behavior<any>[];
+            expect(withCharacter(list, kit() as Character).map(b => b.name)).toEqual(list.map(b => b.name));
+        }
+    });
+
+    const heroStyles = served(reachOfBuild(getBuild('Hero', 'Sword and board tank')!, 24));
+    const warriorStyles = served(reach('Warrior', 24, { Axe: 24, Shields: 18, Parry: 16 }));
+    const blades = worn(ObjectType.Blades), axe = worn(ObjectType.Axe);
+
+    test('the damage style behind the reactions is the plain tank\'s', () => {
+        expect(tankStyles(heroStyles, blades).damage).toBe('Fire Blade');
+        expect(tankStyles(warriorStyles, axe).damage).toBe('Pillager');
+    });
+
+    test('a Hero: a stun after a block, a stun from the side, and a parry reaction otherwise', () => {
+        expect(queue(heroStyles, blades, { foeDid: 'block' })).toEqual(['Horizon Blade', 'Fire Blade']);
+        expect(queue(heroStyles, blades, { onOther: true })).toEqual(['Disable', 'Fire Blade']);
+        expect(queue(heroStyles, blades, {})).toEqual(['Return Blade', 'Fire Blade']);
+    });
+
+    test('on Axe the reaction to a block is damage and no stun, and for a Hero it is a stun', () => {
+        const procs = (r: Reach, name: string) => r.styles.find(s => s.name === name)!.procs ?? [];
+        const axeReach = reach('Warrior', 24, { Axe: 24, Shields: 18, Parry: 16 });
+        expect(procs(axeReach, "Valkyrie's Shield")).toEqual([]);
+        expect(getSpell(procs(reachOfBuild(getBuild('Hero', 'Sword and board tank')!, 24), 'Horizon Blade')[0]!.spellId)!.type).toBe('StyleStun');
+    });
+
+    test('a Warrior the same, keeping Pillager', () => {
+        expect(queue(warriorStyles, axe, { foeDid: 'block' })).toEqual(["Valkyrie's Shield", 'Pillager']);
+        expect(queue(warriorStyles, axe, { onOther: true })).toEqual(['Disable', 'Pillager']);
+        expect(queue(warriorStyles, axe, {})).toEqual(['Cleave', 'Pillager']);
+    });
+
+    test('never a taunt from the picker, and down to the plain tank\'s 15 %', () => {
+        for (const o of [{}, { foeDid: 'block' as const }, { onOther: true }]) expect(queue(heroStyles, blades, o)).not.toContain('Taunting Blade');
+        expect(queue(heroStyles, blades, { endurance: 20 })).toContain('Fire Blade');
+        expect(queue(heroStyles, blades, { endurance: 10 })).toEqual([]);
     });
 });
