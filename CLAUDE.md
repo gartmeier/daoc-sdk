@@ -2,7 +2,7 @@
 
 You play Dark Age of Camelot on a local OpenDAoC server by writing bot scripts. Start small, make one step toward the goal, then learn and grow the script as you go. Characters are **persistent**: every session continues where the last one ended.
 
-Before writing logic for a topic (walking, combat, spells, merchants, looting, gear care, trading, trainers, builds, death, classes, zones, grouping/chat, group coordination, RvR), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
+Before writing logic for a topic (walking, combat, spells, pets, merchants, looting, gear care, trading, trainers, builds, death, classes, zones, grouping/chat, group coordination, RvR), read its file in [learnings/](learnings/README.md). Exact signatures are in [sdk/API.md](sdk/API.md).
 
 ## First-time setup
 
@@ -111,7 +111,9 @@ A new call for the same bot cancels the one still running. Every result includes
 | `killNpc(npc, {styles})` | Approach, attack, chase, wait for death; reports xp/money/items |
 | `killPlayer(objectId, {useStyle})` | The same against an enemy-realm player (named by race: pass the id); reason `immune` during PvP immunity |
 | `castSpell(spell, target?)` | Approach to range, cast, observe completion/damage |
-| `grind({durationMs, pattern, respawn, onKill})` | Hunt/kill/loot/rest loop around an anchor |
+| `grind({durationMs, pattern, respawn, pet, onKill})` | Hunt/kill/loot/rest loop around an anchor; `pet: true` fights with a window pet |
+| `summonPet(spell?, {replace, groundTarget})` / `charmPet(mob)` / `releasePet` / `findSummonSpell(kind)` | Bring up or let go a pet, seen in its window or its line; reason `pet_exists`, `no_ground_target`, `resisted`, ... (learnings/pets.md) |
+| `petKill` / `petAttack` / `petFollow` / `petStay` / `petComeHere` / `petGoTo` / `setPetAggression(mode)` | Order a window pet, seen in the server's answer. `petAttack`, `petKill` and `petGoTo` move our own target too. `killNpc` orders it as well (`usePet`). State: `sdk.getPetState()`, `sdk.getPet()`, `sdk.getSummons()` |
 | `rest({healthPercent, manaPercent})` / `releaseAndRespawn()` | Sit to regenerate / respawn at the bind point |
 | `resurrect(target, {spell, answerMs})` / `acceptResurrection({timeout})` / `resurrectSpell()` | Rez a dead player of our realm, success meaning it is back; say yes as the corpse (no script running, no answer). Reasons `no_power`, `not_dead`, `already_considering`, `no_answer`, `expired`, ... (learnings/death-and-rest.md) |
 | `lootNearby()` | Pick up ground loot (autoloot usually already did) |
@@ -123,7 +125,7 @@ A new call for the same bot cancels the one still running. Every result includes
 | `respec(trainer, line?)` | Take the points back from every line or one, free at any level; reports `regained`, `specs`; reason `no_need`, `refused`, ...; ends the character's own buffs and kills its pet |
 | `trainSpec(trainer, spec, levels)` | Raise one line by hand; `spec` is any name of the line (Shield or Shields). Read a line's level with `sdk.findSpecialization(name)` (learnings/npc-dialog.md) |
 | `equipItem` / `unequipItem` / `useItem` / `dropItem` / `destroyItem` | Items |
-| `takeMeleeSlot({styles, weapon})` | The best melee weapon in hand: `attack` and `killNpc` do this for themselves on a bow's refusal or a style's "requires a X weapon" |
+| `takeMeleeSlot({styles, weapon, keepOnTie})` | The best melee weapon in hand: `attack`, `killNpc` and `killPlayer` do this for themselves on a bow's refusal, `killNpc` and `killPlayer` also on a style's "requires a X weapon" |
 | `delveItem(item \| name \| slot)` | An item's real bonuses: `lines`, `bonuses`, `unknown`; reason `empty_slot`, `not_found`, `no_response` (learnings/looting.md) |
 | `trade(player, {give, money, accept})` / `offerTrade` / `acceptTrade` / `cancelTrade` | Trade with a player: both sides call, in any order, within 128 units, between hunts; reports `gave`, `received`, `moneyGiven`, `moneyReceived`; reason `cancelled`, `busy`, `inventory_full`, `partner_no_accept`, ...; an add that opens a window waits for its slot on the clock, up to 750 ms (learnings/trading.md) |
 | `invite` / `acceptGroupInvite` / `groupSay` / `follow` / `say` / `send` | Social |
@@ -137,7 +139,7 @@ From `sdk.*`, the common calls are `getState`, `getPlayer`, `getInventory`, `fin
 - **Login refused with 0x2C code 0x11 / `AccountIsInLogoutProcedure`:** the character is still in the world, link-dead. This happens when a client dropped without quitting. Wait 60 s and retry; the runner backs off on its own.
   - To stop a client cleanly, use a quit action: `await sdk.sendQuit()`, MCP `disconnect_bot`, or `bun client/dev/swarm-check.ts <bot> [<bot> ...] --seconds=0 --quit` (the runner logs out, then exits 0). Ctrl+C is clean only when typed in the client's own console. Never kill it outright.
   - On Windows, a SIGINT/SIGTERM sent from another process (`process.kill`, `child.kill`, `Stop-Process`, `taskkill`) terminates bun abruptly and causes the 60 s lockout. `kill -INT` from Git Bash does not reach bun at all. A client in a background shell is stopped with a quit action.
-  - After combat, quitting can take up to 60 s ("You will quit after sitting for N seconds").
+  - After combat, quitting can take up to 60 s ("You will quit after sitting for N seconds"). With a mob on you it doesn't finish: the client closes at 75 s, exit 0, and the character stays link-dead about 60 s more (learnings/death-and-rest.md).
 - **`BotPreemptedError` ("Pre-empted by another controller"):** a second script, MCP call or `swarm-check` took control of the same bot, so this script was aborted at once. The game client is fine and keeps running; run one controller per bot, or run the script again. Under MCP the cut-off call's remaining actions fail, and the next `execute_code` takes control back.
 - **The client goes link-dead or the bot freezes** after more than ~5 s without position updates; the server then misreads the next packets. Keep the event loop free: waits must `await` (`sdk.waitForCondition`, `Bun.sleep`), never busy-loop.
 - **Monsters ignore the bot, and the PvE results look wrong:** the account is a GM (PrivLevel > 1). Mobs never attack GMs, and GMs skip range and loot checks. Use fresh PrivLevel-1 accounts for gameplay.
@@ -148,7 +150,9 @@ From `sdk.*`, the common calls are `getState`, `getPlayer`, `getInventory`, `fin
 - **Walking onto a zone exit does nothing:** the server uses a zone point only when the client sends 0x90 PlayerRegionChangeRequest. Use `bot.useZonePoint(idOrZonePoint)` (`getZonePointsFrom(regionId)` lists them), which walks there, asks and observes the jump. Teleporters (`bot.whisper('Master Visur', 'Camelot')`) also change regions. Zone boundaries inside a region work by walking. See learnings/regions-and-zones.md.
 - **A teleporter answered and no jump came:** `bot.whisper` reads success on the NPC's answer, and the port can still refuse for combat (`You can't use this item in combat!`). The server's `InCombat` counts the pet and lasts 2 s longer than `player.inCombat`: wait 10 s after the fight, whisper again and watch the position.
 - **Line of sight is not real:** the client answers every server LoS check with "clear", so spells and aggro behave as if nothing blocks the view.
-- **Casters get interrupted:** every melee hit interrupts casting ("your spell is interrupted"). Pull from range and fall back to melee (`bots/examples/caster.ts`). There is no kiting helper yet.
+- **Casters get interrupted:** a swing at you, a miss too, starts a timer of about 3 s, and a cast that reaches its half way with one running ends ("your spell is interrupted"). Past half way a swing changes nothing, and a mob below your level skips the timer 5 % of the time per level. So in melee a cast almost never lands: pull from range and fall back to melee (`bots/examples/caster.ts`, learnings/spells.md). There is no kiting helper yet.
+- **A pet doesn't move:** summoned with the owner's z off the mesh it lands on the owner and stays there, though `summonPet` succeeded and `walk` reads `follow`. The cause is a client without navmesh and terrain, or a DB move: fix that (in a worktree `DAOC_NAVMESH_DIR` at main's `server/navmesh`, `DETOUR_LIB` at its `lib/Detour.dll`), walk a step and summon with `{ replace: true }`. A mob it can't reach leaves it standing too: `petKill` says `out_of_reach`, and `petFollow` frees it.
+- **Dead soon after the pet:** the mob it hit comes for the owner, 9-10 s from 1500. Solo it is in `getAttackers` for its whole run; in a group, or beside another pet of ours, it reads on nobody until its next swing. Keep about 900 clear to cast a 6 s summon, or leave, and don't end a script there (learnings/pets.md).
 - **An NPC "did not answer" a whisper:** NPCs silently ignore a whisper within 1.5 s of the last one they accepted from you, and the server refuses whispers < 500 ms apart ("Slow down! ..."). `bot.whisper` spaces its own whispers and retries; after a raw `sdk.sendWhisper`, wait 1.6 s yourself.
 - **The bot keeps walking after a script ended:** a timeout, Ctrl+C or MCP cancel stops the mover, but a script that ends while a raw `sdk.sendMoveTo` is still running leaves it going. Run `await sdk.sendStop()`.
 - **A character name is taken or invalid:** names are unique server-wide, letters only, at least 3. Set `CHAR_NAME=` in bot.env.
@@ -166,12 +170,12 @@ The game server is the source of truth and is well tested. When something fails,
 ```
 bots/             create-bot.ts, choose-build.ts (a catalogue build to bots/<name>/build.ts)
 bots/<name>/      bot.env (credentials + character), build.ts (its spec points), script.ts, lab_log.md, character.ts (its routine in a group), runs/history.jsonl
-bots/examples/    grinder.ts, merchant-run.ts, gear-care.ts, train-build.ts, caster.ts, explorer.ts, duo.ts (bun bots/examples/<x>.ts <bot>); script-args.ts
+bots/examples/    grinder.ts, merchant-run.ts, gear-care.ts, train-build.ts, caster.ts, pet.ts, explorer.ts, duo.ts (bun bots/examples/<x>.ts <bot>); script-args.ts
 groups/<group>/   group.json (members, roles), strategy.ts, hunt.ts, lab_log.md, runs/ (observer reports); create-group.ts, _template/
 learnings/        topic notes from live runs; classes/<class>.md: builds, how to play it, what has been tested
 sdk/              BotSDK (index.ts), BotActions (actions.ts), runner.ts, cli.ts, chat.ts, API.md
 sdk/classes/      standard class kits (role) a bot imports into its character.ts and tunes
-sdk/group/        group coordination: blackboard, member agents + behaviours, coordinator, pve strategy, observer, runner, cli
+sdk/group/        group coordination: blackboard, member agents + behaviours, pets, coordinator, pve strategy, observer, runner, cli
 client/           headless DAoC client (runner.ts, swarm.ts for many bots in one process)
 data/             static world data: findNpcSpawns, getMerchantItems, estimateZ, validateCharacter, getClassSkills, ...; bun data/class-sheet.ts <class> prints a class's spells and spec points
 data/builds/      researched builds per class, the buying rule (rule.ts)

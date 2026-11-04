@@ -67,7 +67,7 @@ That's a fix in `sdk/group/spells.ts`, not a kit: power and health regen as sepa
 
 ## Not supported yet
 
-- **Charm:** Compel Will at Mind 12. **Community, unverified:** the guides disagree on what Mind does for pet level.
+- **Charm:** Compel Will at Mind 12 takes a mob up to L26 or his own level, whichever is lower: that's the spell's value, so Mind buys the rank and nothing more (`CharmSpellHandler.cs`, [pets.md](../pets.md)). **Community, unverified:** the guides disagree, and the server is what counts here.
 - **Mezz cure:** Clear Mind, as for the Bard ([bard.md](bard.md)).
 - **Debuffs:** no behaviour casts stat debuffs.
-- **Pets** generally: a charm stays out of the automatic behaviours (`group-coordination.md`), though `petControl` orders one that is up. Guides cover what the class has, the SDK's `bot.pet*` calls how it is driven.
+- **Pets** generally: a charm stays out of the automatic behaviours (`group-coordination.md`), though `petControl` orders one that is up. [pets.md](../pets.md) has how one is driven.

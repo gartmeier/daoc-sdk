@@ -46,7 +46,7 @@ Taliesin plays Ice and earth. **Community, unverified:** Earth and wind is the m
 - **A cheaper nuke it doesn't cast:** Ice Blast, Cold 17: 64 and a 35 % snare for 30 s, 3 s, 10 power. 6.4 damage a power against 5.9. `pickNuke` takes the highest level, so the build's own Cold spell never goes off. Against players who run, the snare might be worth more than the damage. Not measured.
 - **Crowd control:** a root, Fingers Of Ice (Lesser), 2.5 s, 38 s, baseline, since he has no mezz. He gets adds.
 - **Buffs:** Emerald Shield and Skin of Dust on himself, and on others, for power rather than concentration: Earthen Burst (damage add) and Bolstering Storm (haste 11) for the tank, Skin of Sand (a bladeturn) for the tank and healer. At 12-13 power and 20 minutes a go, those come out of his pool between fights.
-- **Pets:** Summon Aged Ice Spirit and the others go on the focus by `fnfPet`, on a fight with 13 s left at its rate, above his power floor: summoned at the target, gone in 20-30 s, which is how they're meant to fight (ice 25, air 20, earth 30 s; 60 s from Earth 32).
+- **Pets:** Summon Aged Ice Spirit and the others go on the focus by `fnfPet`, on a fight with 13 s left at its rate, above his power floor: each comes 64 in front of him and goes at the target, gone with it or in 20-30 s, which is how they're meant to fight (ice 25, air 20, earth 30 s; 60 s from Earth 32).
 - **Reached, and no behaviour casts it:** Field of Snow (area root), Friction (attack slow), Brisk Wind.
 
 ## What the reports show

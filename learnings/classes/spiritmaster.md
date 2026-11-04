@@ -33,7 +33,7 @@ Hrafna plays Darkness caster. **Community, unverified:** Blackthorn and Uthgard 
 - **Crowd control:** Hold Spirit, at Suppression 4: 3 s, 3 power, 20 s. Half what a Healer's baseline Sedate lasts, for a quarter of the power ([healer.md](healer.md)). Dark Wave is point-blank and no longer picked ([rvr.md](../rvr.md): it was cast at enemies 1500 away, "No cast observed", 22 times in one round). Shroud of Gloom (Darkness, radius 300) is an area mezz, not used.
 - **Buffs:** her own Suppressive Barrier (AF) and Protecting Spirit (absorb), timed and costing power. Sight of the Deep comes from the Shaman.
 - **Reached, and no behaviour casts it:** Darken Vision, Field of Darkness, Quell Strength and Attenuate Strength (stat debuffs, instant), Suppress Movement (a root, taken only when she has no mezz), Dampen Health (Body, and her nukes are Cold).
-- **The pet:** Summon Spirit Warrior, baseline at level 20, is kept up by `summonPet` at 25 % of her pool each (`bun sdk/classes/reach.ts` shows it with `petHeal` and `petBuff`). It follows the focus (`petControl`). Her power is the group's limit below, and the pet makes it more so: the reports below are from runs with no pet, so compare with `--pet.enabled=false`.
+- **The pet:** Summon Spirit Warrior, baseline at level 20, is kept up by `summonPet` at about 30 % of her pool each, a focus caster's 25 % times 1.2 with next to no focus bonus at Summoning 2 ([pets.md](../pets.md#summoning); `bun sdk/classes/reach.ts` shows it with `petHeal` and `petBuff`). It follows the focus (`petControl`). Her power is the group's limit below, and the pet makes it more so: the reports below are from runs with no pet, so compare with `--pet.enabled=false`.
 
 ## Her power was the group's limit
 
@@ -70,6 +70,10 @@ No caster was targeted at any of them. Her 5 s dated from a run where the real c
 
 - **In RvR she mezzes nearly as often as she nukes,** and her first nuke comes 24 s in: `crowdControl` is above `assist`, and the coordinator gives nukers adds before healers. Whether a 20 s mezz is worth more than a 90-damage nuke there hasn't been compared. The group order is set in `assignCc`, so it's the same for Hrafna, Merlin, Morgana and Taliesin.
 - Template health is 459, the lowest of her group.
+
+## At low levels
+
+**Verified,** solo: Major Magic Shield (Suppression baseline at L10, a base AF buff) decides a mob reaching her. It takes a thrall's hit from 37 to 15 and an ant worker's from 28-31 to 10-11. It survives a relog with the time it had left, and a death ends it.
 
 ## Weight
 

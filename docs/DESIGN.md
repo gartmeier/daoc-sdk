@@ -38,7 +38,7 @@ data/                 static world data from server/db SQL dumps: sql.ts (parser
 client/               headless DAoC client
   net/                framing (C→S 12-byte header + checksum, S→C 3-byte header stream decoder), TCP connection
   protocol/           PacketReader/PacketWriter, opcodes, outgoing encoders, incoming decoders (pure functions)
-  model/              WorldModel: applies decoded packets (player, objects, inventory, skills, chat, dialogs, merchant, group, effects)
+  model/              WorldModel: applies decoded packets (player, objects, inventory, skills, chat, dialogs, merchant, group, effects, pet window and summons)
   movement.ts         Mover: heartbeat + moveTo along waypoints at ≤0.9×maxSpeed, 200 ms cadence, snaps on server correction
   session.ts          DaocSession: connect → login → (create char) → enter world → playing; keepalive ping; LoS replies; 0xD5; region change; quit
   client.ts           DaocClient: session + model + mover; collectState(): BotWorldState; execute(action): Promise<ActionResult>
@@ -53,6 +53,7 @@ sdk/group/            group coordination on top of BotSDK/BotActions (one contro
   blackboard.ts       shared picture: merges members' sightings into contacts (freshness, staleness, sticky threat, cc, kills)
   member.ts           MemberAgent: publishes its snapshots, runs its role's behaviour list; orders changes interrupt
   behaviors.ts        behaviour library (release, retreat, flee, heal, crowdControl, pull, tank, assist, position, holdFormation, rest, buff, shedLoad)
+  pets.ts             pets in a run: withPets wraps every member's list; petControl on its own side tick is the one authority over a window pet (learnings/pets.md)
   strategy.ts, pve.ts GroupStrategy (decide + behaviours + settings), Coordinator, the PvE leveling policy
   rvr.ts              the RvR roaming policy for battlegrounds (patrol, fight enemy players, hunt, fall back, regroup)
   keeps.ts            a battleground's keeps, arrival points and the circles round the keeps whose guards attack us
