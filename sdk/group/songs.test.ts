@@ -2,7 +2,8 @@ import { afterEach, describe, expect, setSystemTime, test } from 'bun:test';
 import { song } from './behaviors';
 import { report } from './fixtures';
 import type { MemberContext } from './member';
-import { chooseSong, songKind, type SongKind } from './songs';
+import { rvrBehaviors } from './rvr';
+import { chooseSong, SONG_SETTINGS, songKind, type SongKind } from './songs';
 import type { MemberReport, Role } from './types';
 
 const caster = { heal: true, cc: false, nuke: true, buffs: [], buffSpells: [] };
@@ -50,6 +51,27 @@ describe('song choice', () => {
         expect(chooseSong(OISIN, 'recover', group({ Niamh: { mana: 20 } }))).toBe('endurance');
     });
 
+    test('a Paladin: armor in a fight, endurance when he runs low, his heal chant in a fight only', () => {
+        expect(songKind({ type: 'SpecArmorFactorBuff', target: 'Group', pulse: true })).toBe('armor');
+        expect(songKind({ type: 'SpecArmorFactorBuff', target: 'Realm', pulse: false })).toBeNull();   // a Cleric's concentration buff
+        expect(songKind({ type: 'CombatHeal', target: 'Group', pulse: true })).toBe('combatHeal');
+        const galahad: SongKind[] = ['endurance', 'damage', 'armor', 'combatHeal'];
+        expect(chooseSong(galahad, 'engage', group())).toBe('armor');
+        expect(chooseSong(galahad, 'engage', group(), SONG_SETTINGS, 29)).toBe('endurance');
+        expect(chooseSong(galahad, 'engage', group(), SONG_SETTINGS, 30)).toBe('armor');
+        // Out of a fight the heal chant heals nobody and armor is the buffs' slot.
+        expect(chooseSong(galahad, 'recover', group({ Niamh: { hp: 20 } }))).toBe('endurance');
+        expect(chooseSong(galahad, 'travel', group())).toBe('endurance');
+        // Below Chants 4 he has only these: the heal chant still beats nothing, and goes before added damage.
+        expect(chooseSong(['combatHeal', 'damage'], 'engage', group())).toBe('combatHeal');
+    });
+
+    test('whoever has no armor chant sings in a fight as before, however low its endurance', () => {
+        expect(chooseSong(OISIN, 'engage', group(), SONG_SETTINGS, 5)).toBe('endurance');
+        expect(chooseSong(OISIN, 'engage', group(), SONG_SETTINGS, 100)).toBe('endurance');
+        expect(chooseSong(['health', 'speed', 'damage'], 'engage', group(), SONG_SETTINGS, 5)).toBe('damage');
+    });
+
     test('nothing to play without songs', () => {
         expect(chooseSong([], 'travel', group())).toBeNull();
     });
@@ -66,6 +88,7 @@ describe('song(): a running pulse is never sent again', () => {
         const cast: string[] = [];
         const state = { effects: [] as { name: string }[] };
         const orders = { phase };
+        const me = { attacking, endurancePercent: 100 };
         const ctx = {
             memory: new Map<string, unknown>(),
             spells: { songs: () => songs },
@@ -74,12 +97,12 @@ describe('song(): a running pulse is never sent again', () => {
             orders: () => orders,
             members: () => group(),
             settings: {},
-            me: () => ({ attacking }),
+            me: () => me,
             doing: () => {},
             result: () => {},
         } as unknown as MemberContext<any>;
         const b = song();
-        return { sent, cast, state, orders, run: (at: number) => { setSystemTime(new Date(start + at)); return b.run(ctx); } };
+        return { sent, cast, state, orders, me, ctx, run: (at: number) => { setSystemTime(new Date(start + at)); return b.run(ctx); } };
     }
 
     test('nothing goes out until one pulse has had time to show: a run can begin in the gap between two', async () => {
@@ -128,6 +151,32 @@ describe('song(): a running pulse is never sent again', () => {
         await s.run(0);
         expect(await s.run(6000)).toBe(false);
         expect(s.sent).toEqual([]);
+        expect(s.cast).toEqual([]);
+    });
+
+    test('the RvR tank list sings before it fights, and a second song() from a kit sends nothing twice', async () => {
+        const list = rvrBehaviors().tank.map(b => b.name);
+        expect(list.indexOf('song')).toBeGreaterThanOrEqual(0);
+        expect(list.indexOf('song')).toBeLessThan(list.indexOf('tank'));
+        const s = setup([charge]);
+        const kit = song();
+        await s.run(0);
+        await s.run(6000);
+        await kit.run(s.ctx);
+        expect(s.sent).toEqual(['2:7']);
+    });
+
+    test('in a fight he changes chant when his endurance runs low: an instant one, raw, so the swing goes on', async () => {
+        const armor = pick("Crusader's Defense", 'armor');
+        const endurance = pick('Chant of Persistence', 'endurance');
+        const s = setup([{ ...armor, spell: { ...armor.spell, spellIndex: 1 } }, { ...endurance, spell: { ...endurance.spell, spellIndex: 2 } }]);
+        await s.run(0);
+        expect(await s.run(6000)).toBe(false);
+        expect(s.sent).toEqual(['2:1']);
+        s.state.effects = [{ name: "Crusader's Defense" }];
+        s.me.endurancePercent = 20;
+        expect(await s.run(12_000)).toBe(false);
+        expect(s.sent).toEqual(['2:1', '2:2']);
         expect(s.cast).toEqual([]);
     });
 

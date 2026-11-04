@@ -239,8 +239,13 @@ describe('paladin guide', () => {
         expect(specCost(1, 24) - specCost(1, 22)).toBe(47);
     });
 
+    test('in a fight he has the armor chant too, and the heal chant, from Chants 23 and 20', () => {
+        expect(chants().songs.find(s => s.kind === 'armor')?.spell.name).toBe("Crusader's Defense");
+        expect(chants().songs.find(s => s.kind === 'combatHeal')?.spell.name).toBe("Crusader's Refreshment");
+    });
+
     test('its other chants have no behaviour', () => {
-        for (const name of ["Crusader's Refreshment", "Crusader's Defense", 'Aura of Indestructability', 'Aggravate']) expect(chants().unused.map(k => k.name)).toContain(name);
+        for (const name of ['Aura of Indestructability', 'Aggravate']) expect(chants().unused.map(k => k.name)).toContain(name);
     });
 });
 

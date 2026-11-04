@@ -1226,7 +1226,7 @@ export const song = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         const songs = ctx.spells.songs();
         if (!songs.length || ctx.bot.isDead()) return false;
-        const kind = chooseSong(songs.map(s => s.kind), ctx.orders().phase, ctx.members(), ctx.settings.songs ?? SONG_SETTINGS);
+        const kind = chooseSong(songs.map(s => s.kind), ctx.orders().phase, ctx.members(), ctx.settings.songs ?? SONG_SETTINGS, ctx.me().endurancePercent);
         const want = songs.find(s => s.kind === kind);
         if (!want) return false;
         const playing = (ctx.sdk.getState()?.effects ?? []).map(e => e.name);

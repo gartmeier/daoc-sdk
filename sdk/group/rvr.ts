@@ -498,7 +498,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 /** Behaviour lists by role. No healer() visit: battlegrounds have no town healer, and RvR deaths cost no constitution. */
 export function rvrBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
-        tank: [release(), sprint(), retreat(), rejoinFight(), rez(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
+        tank: [release(), sprint(), retreat(), rejoinFight(), rez(), song(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
         healer: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), shedLoad(), holdFormation(), buff(), rest()],
         support: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
         nuker: [release(), sprint(), retreat(), rejoinFight(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
