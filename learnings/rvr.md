@@ -246,6 +246,14 @@ Alternating, 10 minutes each. The Hero's damage rose in two of three pairs (he r
 
 **Open:** the Hero's kill failed "ran beyond 3800 units" in bursts of about 48 tries (4 rounds of the last 16; a minute lost in one) with the group 1500-2500 from that Briton. The chase limit counts from the Hero, so his own client must place it far off while the board doesn't. Not explained yet.
 
+**A phantom focus:** two whole rounds (0 and 4 kills) went round hunt, kill and pull back on Briton#468, frozen at 33 %, in nobody's view and never hit. Why the board kept it fresh isn't known. A focus whose health stands still for 20 s is now left alone for 2 minutes (`noticePhantom`, `frozenMs`, `phantomMs`). No such loop in the six rounds since, but it was rare before too. The Hero's "ran beyond 3800 units" looks like the same kind, at 100 %.
+
+**Patrol detours toward the enemy homes** (`pack.spokeAt`, off): a round of 0 kills walked the ring for 9.5 minutes while the other two groups fought each other out of its sight. Three rounds each: with detours 28 kills, 6 deaths, 315 RP, without 33, 8, 345; no less travel. Not what fixes that round.
+
+**A mezz cure for the pack:** tried and taken out. Oisin cured 1-24 times a round, and six rounds each came to 47 kills, 14 deaths with it, 68 and 12 without, phantom rounds included; 27 / 6 against 34 / 8 without them. Lines about acting while mezzed fell in the first three rounds (0, 1, 1 against 35, 26, 13) and not in the next three (11, 23, 0 against 0, 13, 28). Oisin is often mezzed himself. Main's `cureMezz` stays available for a list that wants it.
+
+**Harder since the night:** the pack went from 15 kills, 0 deaths a round to about 10 and 2 once Midgard and Camelot had their fixes, and Ciaran had his pet and kit. Those arrived together, so this doesn't say which.
+
 **Within the noise so far:** Brigid's acuity and giving up a healed focus. Before the give-up the pack went 17/0, 16/0, 21/0 and 6/5; with it 8/2, 17/0, 13/1, 19/1, 18/1. It did stop the 5 minutes on one Troll, but single deaths now show up where the rounds before it had none. The early comparison (63/0 in 45 minutes against 20/10 in 22) overstated the gain: opponents get absent or farmed, and s17 and s18 (18/0, 11/1, 0 RP) had no Midgard at all, so count those out. c3, 12/0, was also the pack and no control.
 
 **Not done:** Oisin's mezz cure (Clarifying Harmonies): a member's report doesn't say it's mezzed. The Hero's post-block stuns. A member rezzed in the field isn't told apart from a released one for the rebuff.

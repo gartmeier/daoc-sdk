@@ -7,7 +7,7 @@
 // when outside their limits from the fight (combatRange, positioning.ts): out when
 // a mob could reach them mid-cast, in when their spells don't reach.
 
-import { findNpcSpawns } from '../../data/index';
+import { findNpcSpawns, getSpells } from '../../data/index';
 import { styleQueue, type StyleChoice, type StyleChooser } from '../actions';
 import { resurrectCost, STYLE_NEEDS_WEAPON } from '../actions-helpers';
 import { ANYTIME_STYLE, fighterStyle, tankStyles } from './styles';
@@ -643,6 +643,45 @@ function ccWalkStuck(ctx: MemberContext, targetId: number): string | null {
     return `No progress for ${CC_WALK_STUCK_MS}ms at (${me.x}, ${me.y})${me.maxSpeed === 0 ? ' (max speed 0: rooted, stunned or overloaded)' : ''}`;
 }
 
+let mezzNames: Set<string> | undefined;
+/** What a mezz is called in a member's effects: the server sends the spell's name, so every Mesmerize spell of any realm. */
+function isMezzEffect(name: string): boolean {
+    mezzNames ??= new Set(getSpells().filter(s => s.type === 'Mesmerize').map(s => s.name));
+    return mezzNames.has(name);
+}
+
+/** Who a mezz cure frees first: the healer, then the tank, then the most hurt, within its range. Never ourselves: a mezzed member can't cast. */
+export function mezzedMember(me: Point & { name: string; regionId: number }, members: readonly MemberReport[], range: number, mezzed: (effect: string) => boolean = isMezzEffect): MemberReport | null {
+    const rank = (m: MemberReport) => (m.role === 'healer' ? 0 : m.role === 'tank' ? 1 : 2);
+    return members
+        .filter(m => m.name !== me.name && !m.isDead && m.regionId === me.regionId && dist(me, m) <= range && m.effects.some(mezzed))
+        .sort((a, b) => rank(a) - rank(b) || a.hp - b.hp)[0] ?? null;
+}
+
+/** A member held by a mezz is a member lost for its whole length: a cure (Clear Mind) frees it, in a fight. A cast is 3 s, and one a target at a time. */
+const CURE_SPACING_MS = 4000;
+export const cureMezz = (): Behavior<TacticsSettings> => ({
+    name: 'cureMezz',
+    interruptible: false,
+    async run(ctx) {
+        const o = ctx.orders();
+        if (o.phase !== 'engage' && o.phase !== 'retreat') return false;
+        const sp = ctx.spells.all().find(s => s.type === 'CureMezz' && s.radius === 0);
+        if (!sp || sp.spell.cooldownRemaining > 0 || ctx.me().manaPercent < 10) return false;
+        const m = mezzedMember(ctx.me(), ctx.members(), sp.range);
+        if (!m) return false;
+        const key = `cured:${m.objectId}`;
+        if (Date.now() - (ctx.memory.get(key) ?? 0) < CURE_SPACING_MS) return false;
+        ctx.memory.set(key, Date.now());
+        await stopSwinging(ctx);
+        ctx.doing('cure', m.objectId, sp.spell.name);
+        const c = await ctx.bot.castSpell(sp.spell, m.objectId, { approach: false });
+        ctx.result('cure', c, m.objectId);
+        await waitOutSelfCc(c);
+        return true;
+    },
+});
+
 /**
  * Mezz (or, without a mezz or at an NPC a mezz can't take, root) our crowd-control assignment; without `assignedOnly`,
  * also any add (not the focus) attacking the group that nobody controls or is mezzing yet. With a pet to order, out of range it walks in steps announced
@@ -755,6 +794,8 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         // castSpell knows without a send that this can't land (a peace flag, our realm, ourselves): the next add gets the turn.
         else if (c.reason === 'invalid_target' || c.reason === 'not_attackable' || c.reason === 'no_target') cantLand.set(ckey(target), Date.now() + CC_IMMUNE_MS);
         else if (await waitOutSelfCc(c)) return true;
+        // Our client said in range and the server didn't: not again on the next tick. A live round tried 17 times in 5 s.
+        else if (stand && c.reason === 'out_of_range') await Bun.sleep(1000);
         // PvP immunity (reason 'immune': up to 10 s after a port, login or release) and "You must wait": try again shortly.
         else if (c.retryAfterMs) await Bun.sleep(Math.min(c.retryAfterMs, 3000));
         // The spell list's power cost can trail the server's ("You don't have enough power"): don't retry every turn.
