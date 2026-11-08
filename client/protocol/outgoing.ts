@@ -154,9 +154,19 @@ export interface PositionUpdate {
     /** Bit15 = on ground. Default 0x8000. */
     fallingDamage?: number;
     heading: number;
+    /** Flag bits above the 12-bit heading (HEADING_ON_GROUND), relayed to viewers as sent (GameObject.RawHeading). Default none. */
+    headingFlags?: number;
     actionFlags?: number;
     healthPercent?: number;
 }
+
+/**
+ * Heading bit a real 1.127 client sets while it is on the ground, and in the short hops of running down
+ * a slope (up to about 30 units up); it clears it only in a real fall (seen 33-77 units up). The server
+ * relays it to viewers, and without it a viewer draws the player in steps at each 200 ms update, bobbing
+ * on slopes, instead of moving it along the ground (packet capture 2026-11-08, learnings/walking.md).
+ */
+export const HEADING_ON_GROUND = 0x1000;
 
 /** 0xA9 PositionUpdate, 40-byte 1.127 layout (PlayerPositionUpdateHandler.cs:58-82). */
 export function encodePositionUpdate(p: PositionUpdate): Uint8Array {
@@ -172,7 +182,7 @@ export function encodePositionUpdate(p: PositionUpdate): Uint8Array {
         .u8(p.stateFlags ?? 0)
         .u8(0)
         .u16(p.fallingDamage ?? 0x8000)
-        .u16(p.heading & 0xFFF)
+        .u16((p.heading & 0xFFF) | ((p.headingFlags ?? 0) & 0xF000))
         .u8(p.actionFlags ?? 0)
         .fill(0, 2)
         .u8(p.healthPercent ?? 100)

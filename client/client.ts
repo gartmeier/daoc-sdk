@@ -401,7 +401,7 @@ export class DaocClient {
                 m.self.isSitting = false;
                 mv.moveTo({ x: a.x, y: a.y, z: finalZ }, { waypoints: a.waypoints, tolerance: a.tolerance, speedFactor: a.speedFactor });
                 const d = Math.hypot(a.x - mv.x, a.y - mv.y);
-                const speed = mv.speedLimit * Math.min(1, Math.max(0.05, a.speedFactor ?? 0.9));
+                const speed = mv.speedLimit * Math.min(1, Math.max(0.05, a.speedFactor ?? 1));
                 // maxSpeed 0 = rooted/stunned: the mover waits in place until 0xB6 restores it.
                 const etaMs = speed > 0 ? Math.round((d / speed) * 1000) : null;
                 const note = speed > 0 ? '' : ' (max speed is 0: rooted/stunned, waiting)';

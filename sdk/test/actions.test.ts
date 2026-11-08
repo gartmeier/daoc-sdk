@@ -198,8 +198,8 @@ describe('walkTo', () => {
         const pathProvider: PathProvider = { name: 'detour', findPath: () => ({ success: true, waypoints: detour(start) }) };
         const { result, delays } = await deadlinesDuring(() => bot.walkTo(start.x + 1000, start.y, { pathProvider }));
         expect(result).toMatchObject({ success: true, message: 'Arrived' });
-        // 9000 units at 0.9 × 191: 1.5 × 52 s + 15 s ≈ 93 s (the straight 1000 units would give ≈ 24 s).
-        expect(Math.max(...delays)).toBeGreaterThan(90_000);
+        // 9000 units at 191: 1.5 × 47 s + 15 s ≈ 86 s (the straight 1000 units would give ≈ 23 s).
+        expect(Math.max(...delays)).toBeGreaterThan(80_000);
         expect(w.sentOf('moveTo')[0]!.waypoints).toHaveLength(2);
     });
 

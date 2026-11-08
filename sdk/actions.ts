@@ -5895,7 +5895,7 @@ export class BotActions {
         }
 
         // The slowest the route can be: the planner doesn't know which parts of it are water.
-        const speed = (p0.maxSwimSpeed || 85) * (options.speedFactor ?? 0.9);
+        const speed = (p0.maxSwimSpeed || 85) * (options.speedFactor ?? 1);
         const provider = options.pathProvider ?? getDefaultPathProvider();
         // An explicit timeout covers planning and never moves. The default is 1.5 × the swimming ETA
         // along the planned route + 15 s (stuckMs ends a stalled walk long before), set once a plan exists (navmesh detours can be several times

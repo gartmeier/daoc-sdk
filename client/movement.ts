@@ -2,8 +2,13 @@
 //
 // - 0xA9 every 200 ms while moving and at least every 1000 ms idle; the server
 //   soft-linkdeads after 5 s without one (PlayerMovementComponent.cs:15,52-61).
-// - Steps stay under speedFactor × maxSpeed so the speed monitor
-//   (gameutils/PlayerMovementMonitor.cs:56-130, tolerance ×1.15) never trips.
+// - Full speed by default, like a real client (it ran a 0.9 margin until 2026-11-08, which a viewer
+//   could tell at 171 against 191): the speed monitor allows ×1.15 plus one game tick
+//   (gameutils/PlayerMovementMonitor.cs:56-130).
+// - Off a downhill slope we fall like a real client instead of sliding down glued to it: gravity
+//   FALL_GRAVITY, nothing pulling us onto the ground, and the vertical speed in the 0xA9's zSpeed,
+//   which the server relays to every viewer (PlayerPositionUpdateHandler.cs:88, :697). Uphill and on
+//   the flat z is the ground, as before.
 // - In deep water the limit is maxSwimSpeed: the server doesn't know about swimming (its monitor
 //   only checks maxSpeed), a real client slows itself down, and so do we.
 // - zoneId comes from the zone table (data/zones.ts); an unknown zone id kicks us
@@ -12,7 +17,7 @@
 
 import type { MovementState, Vec3 } from '../sdk/types';
 import { getZoneAt } from '../data/zones';
-import { encodePositionUpdate, StateFlags, ActionFlags } from './protocol/outgoing';
+import { encodePositionUpdate, StateFlags, ActionFlags, HEADING_ON_GROUND } from './protocol/outgoing';
 
 export const PLAYER_BASE_SPEED = 191;
 /** A real client's swim speed at 100 % with water speed 0 (game.dll 0x4388d9). */
@@ -76,6 +81,17 @@ export interface MoverDeps {
 /** A segment that climbs more than this and twice its length is a ladder/off-mesh hop: keep its interpolated z. */
 const HOP_MIN_RISE = 48;
 
+/**
+ * A real 1.127 client's gravity in units/s², with no pull onto the ground: fitted to Vue running down
+ * the slope east of the Camelot Hills start at 191 (7 runs, bots/Movewatch/runs/at-191b.jsonl, client/dev/record-moves.ts).
+ * Simulated at FALL_STEPS_PER_S it predicts the height in the air within about 2 units, and it is in the
+ * air for 59 % of the updates downhill (up to 54 units over the slope), never uphill or on the flat.
+ */
+export const FALL_GRAVITY = 1000;
+const FALL_STEPS_PER_S = 60;
+/** Higher than this over the ground in a fall, HEADING_ON_GROUND goes off until we land (a real client kept it at 30, dropped it from 61). */
+const ON_GROUND_MAX_HEIGHT = 30;
+
 export class Mover {
     regionId = 0;
     x = 0;
@@ -97,9 +113,13 @@ export class Mover {
     targetInView = true;
 
     moving = false;
+    /** Vertical speed in units/s: below 0 while falling, 0 on the ground (and swimming). */
+    vz = 0;
+    /** In a real fall (more than ON_GROUND_MAX_HEIGHT up at some point since we left the ground): HEADING_ON_GROUND is off. */
+    falling = false;
     private waypoints: Waypoint[] = [];
     private tolerance = 16;
-    private speedFactor = 0.9;
+    private speedFactor = 1;
     private segmentStart: Vec3 = { x: 0, y: 0, z: 0 };
     lastStopReason: MovementState['lastStopReason'] = null;
     correctionCount = 0;
@@ -175,6 +195,8 @@ export class Mover {
         this.heading = heading & 0xFFF;
         this.updateZone();
         this.swimming = false;
+        this.vz = 0;
+        this.falling = false;
         this.reground(false);
         if (reason === 'teleported') this.correctionCount++;
         if (wasMoving || reason === 'teleported') this.finish(reason ?? 'stopped', true);
@@ -240,7 +262,7 @@ export class Mover {
         }
         this.waypoints = list;
         this.tolerance = Math.max(1, opts.tolerance ?? 16);
-        this.speedFactor = Math.min(1, Math.max(0.05, opts.speedFactor ?? 0.9));
+        this.speedFactor = Math.min(1, Math.max(0.05, opts.speedFactor ?? 1));
         this.segmentStart = this.position;
         this.lastStopReason = null;
         const first = this.waypoints[0]!;
@@ -320,6 +342,16 @@ export class Mover {
             }
             return;
         }
+        // Stopped (or casting) in the air: keep falling, with an update every step until we land.
+        if (this.vz !== 0) {
+            if (now - this.lastStepAt >= MOVE_INTERVAL_MS - 5) {
+                const dt = Math.min(500, now - this.lastStepAt) / 1000;
+                this.lastStepAt = now;
+                this.fall({ x: this.x, y: this.y }, this.z, dt);
+                this.sendUpdate();
+            }
+            return;
+        }
         this.lastStepAt = now;
         if (now - this.lastSentAt >= IDLE_INTERVAL_MS) this.sendUpdate();
     }
@@ -330,6 +362,8 @@ export class Mover {
         const speed = this.speedLimit * this.speedFactor;
         let budget = speed * dt;
         this.speed = speed;
+        const from = { x: this.x, y: this.y };
+        const zFrom = this.z;
         while (budget > 0 && this.waypoints.length > 0) {
             const w = this.waypoints[0]!;
             const isLast = this.waypoints.length === 1;
@@ -356,7 +390,8 @@ export class Mover {
             if (Math.hypot(w.x - this.x, w.y - this.y) <= tol + 0.01) this.arriveAt(w, isLast);
         }
         this.updateZone();
-        this.reground(true);
+        if (!this.isHop()) this.fall(from, zFrom, dt);
+        else this.vz = 0;
         if (this.waypoints.length === 0 && this.moving) this.finish('arrived', false);
     }
 
@@ -367,16 +402,65 @@ export class Mover {
     private reground(skipHops: boolean): void {
         const ground = this.deps.ground;
         if (!ground) return;
-        const w = this.waypoints[0];
-        if (skipHops && w?.z !== undefined) {
-            const rise = Math.abs(w.z - this.segmentStart.z);
-            if (rise > HOP_MIN_RISE && rise > 2 * Math.hypot(w.x - this.segmentStart.x, w.y - this.segmentStart.y)) return;
-        }
+        if (skipHops && this.isHop()) return;
         const g = ground(this.regionId, this.x, this.y, this.z);
         if (!g) return;
         this.z = g.z;
         this.swimming = g.swimming;
         if (g.swimming) this.sitting = false;
+    }
+
+    /** The current segment is a ladder/off-mesh hop: its interpolated z stands. */
+    private isHop(): boolean {
+        const w = this.waypoints[0];
+        if (w?.z === undefined) return false;
+        const rise = Math.abs(w.z - this.segmentStart.z);
+        return rise > HOP_MIN_RISE && rise > 2 * Math.hypot(w.x - this.segmentStart.x, w.y - this.segmentStart.y);
+    }
+
+    /**
+     * z over the last dt, from (from, zFrom) to where we are now, in FALL_STEPS_PER_S steps along the
+     * straight line: the ground lifts us, and where it drops away faster than we fall we are in the air
+     * under FALL_GRAVITY until we meet it again (vz < 0 meanwhile). Swimming holds us at the swim height.
+     * Without a ground source z stays as it is, and a step with no ground under it keeps the waypoint z.
+     */
+    private fall(from: { x: number; y: number }, zFrom: number, dt: number): void {
+        const ground = this.deps.ground;
+        if (!ground) return;
+        const n = Math.max(1, Math.round(dt * FALL_STEPS_PER_S));
+        const h = dt / n;
+        let z = zFrom;
+        let vz = this.vz;
+        let swimming = this.swimming;
+        let falling = this.falling;
+        for (let i = 1; i <= n; i++) {
+            const f = i / n;
+            const g = ground(this.regionId, from.x + (this.x - from.x) * f, from.y + (this.y - from.y) * f, z);
+            if (!g) {
+                this.vz = 0;
+                this.falling = false;
+                return;
+            }
+            swimming = g.swimming;
+            if (swimming) {
+                z = g.z;
+                vz = 0;
+                continue;
+            }
+            vz -= FALL_GRAVITY * h;
+            z += vz * h;
+            if (z <= g.z) {
+                z = g.z;
+                vz = 0;
+            }
+            if (vz === 0) falling = false;
+            else if (z - g.z > ON_GROUND_MAX_HEIGHT) falling = true;
+        }
+        this.z = z;
+        this.vz = vz;
+        this.falling = falling;
+        this.swimming = swimming;
+        if (swimming) this.sitting = false;
     }
 
     private arriveAt(w: Waypoint, isLast: boolean): void {
@@ -407,6 +491,7 @@ export class Mover {
             y: this.y,
             z: this.z,
             speed: this.moving && !this.holding ? this.speed : 0,
+            zSpeed: this.vz,
             sessionId: this.sessionId,
             objectId: this.objectId,
             zoneId: this.zoneId,
@@ -415,8 +500,12 @@ export class Mover {
             // real client shows dying and vanishing over and over. Otherwise never both: SWIMMING|SITTING
             // reads as DEAD, and SWIMMING|JUMPING as FLYING (an autoban under ban_hackers; ProcessStateFlags).
             stateFlags: this.deps.isDead?.() ? StateFlags.Dead : this.swimming ? StateFlags.Swimming : this.sitting ? StateFlags.Sitting : 0,
-            fallingDamage: 0x8000,
+            // Bit 15 would ask the server for fall damage from zSpeed (PlayerPositionUpdateHandler.cs:151-161).
+            // A real client left it off in every update of a capture, landings after falls at -665 included,
+            // and so do we. Viewers never see this field (it goes out as the steed seat).
+            fallingDamage: 0,
             heading: this.heading,
+            headingFlags: this.falling ? 0 : HEADING_ON_GROUND,
             actionFlags: this.actionFlags,
             healthPercent: this.healthPercent,
         });

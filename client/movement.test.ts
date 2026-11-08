@@ -7,7 +7,7 @@ const CAMELOT = { regionId: 1, x: 574797, y: 530161, z: 2896 };
 
 function harness() {
     let now = 1_000_000;
-    const sent: Array<{ at: number; x: number; y: number; speed: number; zone: number; heading: number }> = [];
+    const sent: Array<{ at: number; x: number; y: number; speed: number; zone: number; heading: number; headingFlags: number }> = [];
     const mover = new Mover({
         now: () => now,
         timer: false,
@@ -21,8 +21,8 @@ function harness() {
             r.skip(8);
             const zone = r.u16();
             r.skip(4);
-            const heading = r.u16();
-            sent.push({ at: now, x, y, speed, zone, heading });
+            const raw = r.u16();
+            sent.push({ at: now, x, y, speed, zone, heading: raw & 0xFFF, headingFlags: raw & 0xF000 });
         },
     });
     const advance = (ms: number, step = 100) => {
@@ -64,7 +64,7 @@ describe('Mover', () => {
         expect(sent.length).toBeGreaterThanOrEqual(5);
     });
 
-    test('moves in 200 ms steps at <= 0.9 × maxSpeed and arrives', () => {
+    test('moves in 200 ms steps at full maxSpeed and arrives', () => {
         const { mover, sent, advance } = harness();
         mover.snap(1, CAMELOT.x, CAMELOT.y, CAMELOT.z, 0, null);
         mover.start();
@@ -81,7 +81,7 @@ describe('Mover', () => {
             const b = sent[i]!;
             const dt = (b.at - a.at) / 1000;
             if (dt <= 0) continue;
-            expect(Math.hypot(b.x - a.x, b.y - a.y) / dt).toBeLessThanOrEqual(191 * 0.9 + 1); // + f32 rounding of large coords
+            expect(Math.hypot(b.x - a.x, b.y - a.y) / dt).toBeLessThanOrEqual(191 + 1); // + f32 rounding of large coords
         }
         for (let i = 1; i < moving.length; i++) expect(moving[i]!.at - moving[i - 1]!.at).toBeGreaterThanOrEqual(190);
         expect(moving[0]!.heading).toBe(3072); // +X
@@ -183,7 +183,7 @@ describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
 
     function groundHarness(ground: (regionId: number, x: number, y: number, zHint: number) => Ground) {
         let now = 1_000_000;
-        const sent: Array<{ x: number; z: number; flags: number }> = [];
+        const sent: Array<{ x: number; z: number; flags: number; zSpeed: number; onGround: boolean; fallFlags: number }> = [];
         const hints: number[] = [];
         const mover = new Mover({
             now: () => now,
@@ -197,9 +197,15 @@ describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
                 const x = r.f32le();
                 r.f32le();
                 const z = r.f32le();
-                r.skip(12); // speed, zSpeed, session id, object id
+                r.f32le(); // speed
+                const zSpeed = r.f32le();
+                r.skip(4); // session id, object id
                 r.u16(); // zone
-                sent.push({ x, z, flags: r.u8() });
+                const flags = r.u8();
+                r.u8();
+                const fallFlags = r.u16();
+                const onGround = (r.u16() & 0x1000) !== 0; // HEADING_ON_GROUND
+                sent.push({ x, z, flags, zSpeed, onGround, fallFlags });
             },
         });
         const advance = (ms: number) => {
@@ -219,11 +225,78 @@ describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
         mover.start();
         mover.moveTo({ x: CAMELOT.x + 800, y: CAMELOT.y, z: 2950 });
         advance(5000);
-        const dip = sent.filter(s => s.x > CAMELOT.x + 250 && s.x < CAMELOT.x + 550);
+        const dip = sent.filter(s => s.x > CAMELOT.x + 300 && s.x < CAMELOT.x + 550); // the first 50 or so units fall into it
         expect(dip.length).toBeGreaterThan(0);
         expect(dip.every(s => s.z === 2870)).toBe(true);
         expect(mover.z).toBe(2900);
         expect(mover.moving).toBe(false);
+    });
+
+    describe('falls off a downhill slope like a real client (FALL_GRAVITY)', () => {
+        // Flat at 3000 up to x+200, then down 1 per unit to 2400 at x+800, then flat.
+        const slope = (_r: number, x: number) => ({ z: 3000 - Math.min(600, Math.max(0, x - (CAMELOT.x + 200))), swimming: false });
+
+        test('in the air downhill with zSpeed < 0, never under the ground, landing at vz 0; short hops keep the on-ground bit', () => {
+            const { mover, sent, advance } = groundHarness(slope);
+            mover.snap(1, CAMELOT.x, CAMELOT.y, 3000, 0, null);
+            mover.start();
+            mover.moveTo({ x: CAMELOT.x + 1200, y: CAMELOT.y });
+            advance(8000);
+            const down = sent.filter(s => s.x > CAMELOT.x + 250 && s.x < CAMELOT.x + 800);
+            const air = down.filter(s => s.z > slope(1, s.x).z + 3);
+            expect(air.length).toBeGreaterThan(down.length / 3);
+            expect(air.every(s => s.zSpeed < 0)).toBe(true);
+            // Hops on a 1:1 slope stay within ON_GROUND_MAX_HEIGHT: a real client keeps HEADING_ON_GROUND there.
+            expect(air.every(s => s.z - slope(1, s.x).z <= 30)).toBe(true);
+            expect(sent.every(s => s.onGround && s.fallFlags === 0)).toBe(true);
+            expect(sent.every(s => s.z >= slope(1, s.x).z - 0.2)).toBe(true); // x is an f32: 1/16 unit out here
+            expect(Math.min(...sent.map(s => s.zSpeed))).toBeGreaterThan(-500); // the fall-damage threshold
+            expect(mover.z).toBe(2400);
+            expect(mover.vz).toBe(0);
+            expect(sent.at(-1)).toMatchObject({ z: 2400, zSpeed: 0, onGround: true });
+        });
+
+        test('a real fall (over 30 up) clears the on-ground heading bit until it lands', () => {
+            const cliff = (_r: number, x: number) => ({ z: x > CAMELOT.x + 100 ? 2700 : 3000, swimming: false });
+            const { mover, sent, advance } = groundHarness(cliff);
+            mover.snap(1, CAMELOT.x, CAMELOT.y, 3000, 0, null);
+            mover.start();
+            mover.moveTo({ x: CAMELOT.x + 600, y: CAMELOT.y });
+            advance(4000);
+            const off = sent.filter(s => !s.onGround);
+            expect(off.length).toBeGreaterThan(0);
+            expect(off.every(s => s.zSpeed < 0 && s.z - 2700 > 0)).toBe(true);
+            expect(sent.at(-1)).toMatchObject({ z: 2700, zSpeed: 0, onGround: true });
+            expect(mover.falling).toBe(false);
+        });
+
+        test('uphill and on the flat z is the ground and zSpeed 0', () => {
+            const { mover, sent, advance } = groundHarness(slope);
+            mover.snap(1, CAMELOT.x + 1000, CAMELOT.y, 2400, 0, null);
+            mover.start();
+            mover.moveTo({ x: CAMELOT.x, y: CAMELOT.y });
+            advance(8000);
+            expect(sent.length).toBeGreaterThan(20);
+            expect(sent.every(s => Math.abs(s.z - slope(1, s.x).z) < 0.2 && s.zSpeed === 0 && s.onGround)).toBe(true);
+        });
+
+        test('a stop in the air keeps falling, with an update every step, until it lands', () => {
+            const cliff = (_r: number, x: number) => ({ z: x > CAMELOT.x + 100 ? 2700 : 3000, swimming: false });
+            const { mover, sent, advance } = groundHarness(cliff);
+            mover.snap(1, CAMELOT.x, CAMELOT.y, 3000, 0, null);
+            mover.start();
+            mover.moveTo({ x: CAMELOT.x + 140, y: CAMELOT.y }, { tolerance: 1 });
+            advance(1000);
+            expect(mover.moving).toBe(false);
+            expect(mover.z).toBeGreaterThan(2700);
+            expect(mover.vz).toBeLessThan(0);
+            const before = sent.length;
+            advance(1000);
+            expect(sent.length - before).toBeGreaterThanOrEqual(2);
+            expect(mover.z).toBe(2700);
+            expect(mover.vz).toBe(0);
+            expect(sent.at(-1)).toMatchObject({ z: 2700, zSpeed: 0, onGround: true });
+        });
     });
 
     test('a null ground keeps the interpolated z', () => {
@@ -273,7 +346,7 @@ describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
         const { mover, advance } = groundHarness(() => ({ z: 1789, swimming: true }));
         mover.snap(1, CAMELOT.x, CAMELOT.y, 1789, 0, null);
         mover.start();
-        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y, z: 1789 });
+        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y, z: 1789 }, { speedFactor: 0.9 });
         advance(1000);
         expect(mover.x - CAMELOT.x).toBeCloseTo(76.5, 0);
     });
