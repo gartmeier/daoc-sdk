@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { PacketReader } from './protocol/buffer';
-import { headingFromDelta, headingTo, Mover, pointFromHeading } from './movement';
+import { headingFromDelta, headingTo, Mover, pointFromHeading, rampedMoveMs, RUN_ACCEL, RUN_DECEL } from './movement';
 
 // Camelot Hills (zone 0, region 1): OffsetX 67, OffsetY 59, 8×8 blocks of 8192.
 const CAMELOT = { regionId: 1, x: 574797, y: 530161, z: 2896 };
@@ -178,6 +178,184 @@ describe('Mover', () => {
     });
 });
 
+describe('Mover speed ramp (RUN_ACCEL, RUN_DECEL: a real client, bots/Movewatch/runs/at-191b.jsonl)', () => {
+    const start = () => {
+        const h = harness();
+        h.mover.snap(1, CAMELOT.x, CAMELOT.y, CAMELOT.z, 0, null);
+        h.mover.start();
+        return h;
+    };
+    /** Speeds of the 0xA9 sent during the move, one per 200 ms step, the start update left out. */
+    const stepSpeeds = (sent: Array<{ speed: number }>) => sent.slice(1).map(s => Math.round(s.speed));
+
+    test('speeds up from 0 by 50 per 200 ms update to 191, like Vue (38, 88, 139, 190, 191)', () => {
+        const { mover, sent, advance } = start();
+        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y });
+        advance(1400);
+        expect(stepSpeeds(sent)).toEqual([50, 100, 150, 191, 191, 191, 191]);
+        // 73 units to full speed (191² / 500), then 191 per second.
+        expect(mover.x - CAMELOT.x).toBeCloseTo((191 * 191) / (2 * RUN_ACCEL) + 191 * (1.4 - 191 / RUN_ACCEL), 0);
+    });
+
+    test('each step covers the distance its speeds give, and the 0xA9 carries the speed at its end', () => {
+        const { mover, sent, advance } = start();
+        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y });
+        advance(800);
+        const moved = sent.slice(1);
+        for (let i = 1; i < moved.length; i++) {
+            const a = moved[i - 1]!;
+            const b = moved[i]!;
+            // The mean of the two speeds, a little more on the step that reaches 191 part way.
+            expect(b.x - a.x).toBeGreaterThanOrEqual(((a.speed + b.speed) / 2) * 0.2 - 0.1);
+            expect(b.x - a.x).toBeLessThanOrEqual(Math.max(a.speed, b.speed) * 0.2 + 0.1);
+            if (b.speed < 191) expect(b.x - a.x).toBeCloseTo(((a.speed + b.speed) / 2) * 0.2, 0);
+        }
+    });
+
+    test('slows down by 100 per update before the end and stops at its rest point, tolerance / 2 short', () => {
+        const { mover, sent, advance } = start();
+        const stops: string[] = [];
+        mover.onStop(r => stops.push(r));
+        mover.moveTo({ x: CAMELOT.x + 600, y: CAMELOT.y }, { tolerance: 16 });
+        let closest = Infinity;
+        for (let t = 0; t < 5000 && mover.moving; t += 100) {
+            advance(100);
+            closest = Math.min(closest, CAMELOT.x + 600 - mover.x);
+        }
+        expect(stops).toEqual(['arrived']);
+        expect(CAMELOT.x + 600 - mover.x).toBeCloseTo(8, 1);
+        expect(closest).toBeGreaterThan(7.9); // never past it
+        const speeds = stepSpeeds(sent).filter(v => v > 0);
+        const tail = speeds.slice(speeds.lastIndexOf(191) + 1);
+        // 191 → 0 in 0.38 s: one or two updates on the way down, none dropping much more than RUN_DECEL allows.
+        expect(tail.length).toBeGreaterThanOrEqual(1);
+        expect(tail.length).toBeLessThanOrEqual(2);
+        let prev = 191;
+        for (const v of tail) {
+            expect(prev - v).toBeLessThanOrEqual(RUN_DECEL * 0.2 + 15);
+            prev = v;
+        }
+        expect(sent.at(-1)!.speed).toBe(0);
+    });
+
+    test('arrives within tolerance and never past the target, for short and long moves and any tolerance', () => {
+        for (const tolerance of [1, 16, 50, 200]) {
+            for (const distance of [5, 20, 40, 75, 150, 333, 1000]) {
+                const { mover, advance } = start();
+                mover.moveTo({ x: CAMELOT.x + distance, y: CAMELOT.y }, { tolerance });
+                for (let t = 0; t < 10_000 && mover.moving; t += 100) {
+                    advance(100);
+                    expect(mover.x).toBeLessThanOrEqual(CAMELOT.x + distance);
+                }
+                expect(mover.moving).toBe(false);
+                expect(mover.lastStopReason).toBe('arrived');
+                expect(CAMELOT.x + distance - mover.x).toBeLessThanOrEqual(tolerance);
+                expect(mover.speed).toBe(0);
+            }
+        }
+    });
+
+    test('a move re-issued mid-run keeps its speed, also round a corner', () => {
+        const { mover, sent, advance } = start();
+        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y });
+        advance(1000);
+        expect(mover.speed).toBe(191);
+        mover.moveTo({ x: mover.x + 500, y: mover.y + 1500 });
+        const before = sent.length;
+        advance(400);
+        expect(sent.slice(before).every(s => s.speed === 191)).toBe(true);
+        // The same once a slow-down has begun: it picks up from the speed it had.
+        mover.moveTo({ x: mover.x + 40, y: mover.y });
+        advance(200);
+        const slowed = mover.speed;
+        expect(slowed).toBeGreaterThan(0);
+        expect(slowed).toBeLessThan(191);
+        mover.moveTo({ x: mover.x + 2000, y: mover.y });
+        advance(200);
+        expect(mover.speed).toBeCloseTo(Math.min(191, slowed + RUN_ACCEL * 0.2), 0);
+    });
+
+    test('brake() slows to rest along the route in 0.38 s and 36 units, like Vue (191, 90, 0), and ends as stopped', () => {
+        const { mover, sent, advance } = start();
+        const stops: string[] = [];
+        mover.onStop(r => stops.push(r));
+        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y });
+        advance(2000);
+        const x0 = mover.x;
+        const before = sent.length;
+        mover.brake();
+        expect(mover.moving).toBe(true);
+        advance(600);
+        expect(mover.moving).toBe(false);
+        expect(stops).toEqual(['stopped']);
+        expect(mover.x - x0).toBeGreaterThan(30);
+        expect(mover.x - x0).toBeLessThanOrEqual((191 * 191) / (2 * RUN_DECEL));
+        expect(sent.slice(before).map(s => Math.round(s.speed))).toEqual([91, 0, 0]);
+    });
+
+    test('brake() round a corner keeps to the route', () => {
+        const { mover, advance } = start();
+        mover.moveTo({ x: CAMELOT.x + 200, y: CAMELOT.y + 2000 }, { waypoints: [{ x: CAMELOT.x + 200, y: CAMELOT.y, z: CAMELOT.z }] });
+        for (let t = 0; t < 3000 && CAMELOT.x + 200 - mover.x > 10; t += 100) advance(100);
+        mover.brake();
+        advance(600);
+        expect(mover.moving).toBe(false);
+        expect(mover.x).toBeCloseTo(CAMELOT.x + 200, 0);
+        expect(mover.y - CAMELOT.y).toBeGreaterThan(5);
+        expect(mover.y - CAMELOT.y).toBeLessThan(36);
+    });
+
+    test('stop() and a cast still stop dead, and the next move starts from 0', () => {
+        const { mover, sent, advance } = start();
+        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y });
+        advance(1000);
+        mover.stop();
+        expect(mover.moving).toBe(false);
+        expect(sent.at(-1)!.speed).toBe(0);
+        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y });
+        advance(200);
+        expect(mover.speed).toBeCloseTo(50, 5);
+        mover.holdPosition(300);
+        const held = mover.x;
+        mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y });
+        advance(300);
+        expect(mover.speed).toBe(0);
+        expect(mover.x).toBe(held);
+        advance(200);
+        expect(mover.speed).toBeCloseTo(50, 5);
+    });
+
+    test('a lower limit takes effect at once, a higher one is ramped up to', () => {
+        const { mover, advance } = start();
+        mover.moveTo({ x: CAMELOT.x + 3000, y: CAMELOT.y });
+        advance(1000);
+        mover.maxSpeedPercent = 50;
+        advance(200);
+        expect(mover.speed).toBeCloseTo(95.5, 5);
+        mover.maxSpeedPercent = 150;
+        advance(200);
+        expect(mover.speed).toBeCloseTo(145.5, 5);
+    });
+
+    test('rampedMoveMs: distance over speed plus the ramp, and short moves never reach top speed', () => {
+        expect(rampedMoveMs(0, 191)).toBe(0);
+        expect(rampedMoveMs(100, 0)).toBe(Infinity);
+        // 1000 units: 1000 / 191 + 191 / 500 + 191 / 1000 = 5.236 + 0.573 s.
+        expect(rampedMoveMs(1000, 191)).toBeCloseTo((1000 / 191 + 191 / (2 * RUN_ACCEL) + 191 / (2 * RUN_DECEL)) * 1000, 3);
+        expect(rampedMoveMs(1000, 191, 191)).toBeCloseTo((1000 / 191 + 191 / (2 * RUN_DECEL)) * 1000, 3);
+        // 30 units: peak sqrt(2 · 30 · 250 · 500 / 750) = 100.
+        expect(rampedMoveMs(30, 191)).toBeCloseTo((100 / RUN_ACCEL + 100 / RUN_DECEL) * 1000, 3);
+        // The mover takes as long, to the 200 ms step.
+        for (const distance of [30, 150, 600]) {
+            const { mover, advance, now } = start();
+            const t0 = now();
+            mover.moveTo({ x: CAMELOT.x + distance, y: CAMELOT.y }, { tolerance: 1 });
+            while (mover.moving) advance(100);
+            expect(Math.abs(now() - t0 - rampedMoveMs(distance - 0.5, 191))).toBeLessThanOrEqual(200);
+        }
+    });
+});
+
 describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
     type Ground = { z: number; swimming: boolean } | null;
 
@@ -286,7 +464,7 @@ describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
             mover.snap(1, CAMELOT.x, CAMELOT.y, 3000, 0, null);
             mover.start();
             mover.moveTo({ x: CAMELOT.x + 140, y: CAMELOT.y }, { tolerance: 1 });
-            advance(1000);
+            advance(1400); // 1.3 s with the speed-up and slow-down, over the edge at about 0.9 s
             expect(mover.moving).toBe(false);
             expect(mover.z).toBeGreaterThan(2700);
             expect(mover.vz).toBeLessThan(0);
@@ -331,7 +509,7 @@ describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
         mover.snap(1, CAMELOT.x, CAMELOT.y, 1830, 0, null);
         mover.start();
         mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y, z: 1830 }, { speedFactor: 1 });
-        advance(1000); // on land for the first 191 units, so the water starts on the way
+        advance(1200); // on land for the first 100 units (118 at 1 s with the speed-up), so the water starts on the way
         expect(mover.swimming).toBe(true);
         expect(mover.speed).toBe(85);
         const before = mover.x;
@@ -348,7 +526,9 @@ describe('Mover with a ground source (sdk/ground.ts moverGround)', () => {
         mover.start();
         mover.moveTo({ x: CAMELOT.x + 2000, y: CAMELOT.y, z: 1789 }, { speedFactor: 0.9 });
         advance(1000);
-        expect(mover.x - CAMELOT.x).toBeCloseTo(76.5, 0);
+        // 76.5 units/s, less the 0.31 s speed-up at RUN_ACCEL: 76.5 - 76.5² / 500.
+        expect(mover.speed).toBeCloseTo(76.5, 5);
+        expect(mover.x - CAMELOT.x).toBeCloseTo(76.5 - (76.5 * 76.5) / (2 * RUN_ACCEL), 0);
     });
 
     test('dead overrides swimming and sitting with the DEAD state alone, and ends with the death', () => {

@@ -9,6 +9,9 @@
 //   FALL_GRAVITY, nothing pulling us onto the ground, and the vertical speed in the 0xA9's zSpeed,
 //   which the server relays to every viewer (PlayerPositionUpdateHandler.cs:88, :697). Uphill and on
 //   the flat z is the ground, as before.
+// - Speed ramps like a real client's: up at RUN_ACCEL from 0, down at RUN_DECEL to rest at the end of
+//   a move or on brake(), and the 0xA9 carries the speed of the moment. A re-issued move keeps its speed;
+//   stop() (casting, sitting, server moves) still stops dead.
 // - In deep water the limit is maxSwimSpeed: the server doesn't know about swimming (its monitor
 //   only checks maxSpeed), a real client slows itself down, and so do we.
 // - zoneId comes from the zone table (data/zones.ts); an unknown zone id kicks us
@@ -92,6 +95,32 @@ const FALL_STEPS_PER_S = 60;
 /** Higher than this over the ground in a fall, HEADING_ON_GROUND goes off until we land (a real client kept it at 30, dropped it from 61). */
 const ON_GROUND_MAX_HEIGHT = 30;
 
+/**
+ * A real 1.127 client's speed-up and slow-down in units/s², from Vue's relayed speeds
+ * (bots/Movewatch/runs/at-191b.jsonl, vue-vs-bot.jsonl): about +50 per 200 ms update from 0 to 191
+ * (0.76 s, 73 units), the same +250 at 288 run speed, and -100 per update when stopping (191, 90, 0:
+ * 0.38 s, 37 units). Path corners keep the speed.
+ */
+export const RUN_ACCEL = 250;
+export const RUN_DECEL = 500;
+const RAMP_STEPS_PER_S = 60;
+
+/**
+ * ms to cover `distance` from speed v0 to rest at top speed `speed`, with RUN_ACCEL and RUN_DECEL
+ * (a short move peaks below `speed`). For ETAs; Infinity at speed 0.
+ */
+export function rampedMoveMs(distance: number, speed: number, v0 = 0): number {
+    if (distance <= 0) return 0;
+    if (speed <= 0) return Infinity;
+    const v = Math.min(v0, speed);
+    const up = (speed * speed - v * v) / (2 * RUN_ACCEL);
+    const down = (speed * speed) / (2 * RUN_DECEL);
+    if (up + down <= distance) return ((speed - v) / RUN_ACCEL + (distance - up - down) / speed + speed / RUN_DECEL) * 1000;
+    // Never reaches top speed: the peak where the speed-up meets the slow-down.
+    const peak = Math.sqrt(Math.max(v * v, (2 * distance * RUN_ACCEL * RUN_DECEL + RUN_DECEL * v * v) / (RUN_ACCEL + RUN_DECEL)));
+    return ((peak - v) / RUN_ACCEL + peak / RUN_DECEL) * 1000;
+}
+
 export class Mover {
     regionId = 0;
     x = 0;
@@ -122,6 +151,8 @@ export class Mover {
     private speedFactor = 1;
     private segmentStart: Vec3 = { x: 0, y: 0, z: 0 };
     lastStopReason: MovementState['lastStopReason'] = null;
+    /** How the current move ends at its last waypoint: 'arrived', or 'stopped' after brake(). */
+    private arrivalReason: StopReason = 'arrived';
     correctionCount = 0;
     /** While > now, XY is frozen (casting). */
     private holdUntil = 0;
@@ -265,6 +296,7 @@ export class Mover {
         this.speedFactor = Math.min(1, Math.max(0.05, opts.speedFactor ?? 1));
         this.segmentStart = this.position;
         this.lastStopReason = null;
+        this.arrivalReason = 'arrived';
         const first = this.waypoints[0]!;
         // atan2(0, 0) would turn us to heading 0 when the target is where we stand.
         if (Math.hypot(first.x - this.x, first.y - this.y) >= 1) this.heading = headingTo(this, first);
@@ -278,6 +310,46 @@ export class Mover {
     stop(reason: StopReason = 'stopped'): void {
         if (!this.moving) return;
         this.finish(reason, false);
+    }
+
+    /**
+     * Stop like a real client letting go of the keys: slow down at RUN_DECEL along the route still ahead
+     * (191 → 0 takes 0.38 s and 37 units), then stop with reason 'stopped'. Still `moving` meanwhile.
+     * At rest, holding or with no route this is stop().
+     */
+    brake(): void {
+        if (!this.moving) return;
+        if (this.holding || this.speed <= 0 || this.waypoints.length === 0) {
+            this.finish('stopped', false);
+            return;
+        }
+        let left = (this.speed * this.speed) / (2 * RUN_DECEL);
+        let at: { x: number; y: number; z: number | undefined } = this.segmentStart;
+        let cur: { x: number; y: number } = this;
+        const kept: Waypoint[] = [];
+        for (const w of this.waypoints) {
+            const d = Math.hypot(w.x - cur.x, w.y - cur.y);
+            if (d > left) {
+                // The rest point on this leg, its z on the same line as the leg's.
+                const f = left / d;
+                const x = cur.x + (w.x - cur.x) * f;
+                const y = cur.y + (w.y - cur.y) * f;
+                const legLen = Math.hypot(w.x - at.x, w.y - at.y);
+                const t = legLen > 0 ? 1 - Math.hypot(w.x - x, w.y - y) / legLen : 1;
+                kept.push({ x, y, z: w.z !== undefined && at.z !== undefined ? at.z + (w.z - at.z) * t : undefined });
+                left = 0;
+                break;
+            }
+            kept.push(w);
+            left -= d;
+            at = w;
+            cur = w;
+        }
+        this.waypoints = kept;
+        // The rest point is tolerance / 2 short of the last waypoint: put it on the cut, and keep a last
+        // leg that is already shorter than the slow-down.
+        this.tolerance = left > 0 ? Math.min(this.tolerance, 2) : 2;
+        this.arrivalReason = 'stopped';
     }
 
     face(heading: number): void {
@@ -335,6 +407,8 @@ export class Mover {
     pump(): void {
         if (!this.enabled) return;
         const now = this.now();
+        // A hold (casting) freezes us: the move after it starts from 0.
+        if (this.holding) this.speed = 0;
         if (this.moving && !this.holding) {
             if (now - this.lastStepAt >= MOVE_INTERVAL_MS - 5) {
                 this.step(now);
@@ -359,23 +433,30 @@ export class Mover {
     private step(now: number): void {
         const dt = Math.min(500, now - this.lastStepAt) / 1000;
         this.lastStepAt = now;
-        const speed = this.speedLimit * this.speedFactor;
-        let budget = speed * dt;
-        this.speed = speed;
         const from = { x: this.x, y: this.y };
         const zFrom = this.z;
+        // From rest already within tolerance of the end: arrive without a step (and without a ramp).
+        const end = this.waypoints[this.waypoints.length - 1];
+        if (this.speed === 0 && this.waypoints.length === 1 && end && Math.hypot(end.x - this.x, end.y - this.y) <= this.tolerance) {
+            this.arriveAt(end, true);
+            this.finish(this.arrivalReason, false);
+            return;
+        }
+        const { distance, rested } = this.ramp(dt);
+        let budget = distance;
         while (budget > 0 && this.waypoints.length > 0) {
             const w = this.waypoints[0]!;
             const isLast = this.waypoints.length === 1;
             const dx = w.x - this.x;
             const dy = w.y - this.y;
             const d = Math.hypot(dx, dy);
-            const tol = isLast ? this.tolerance : 1;
+            // The last waypoint ends at its rest point, tolerance / 2 short of it, where the slow-down ends.
+            const tol = isLast ? this.tolerance * 0.5 : 1;
             if (d <= tol) {
                 this.arriveAt(w, isLast);
                 continue;
             }
-            const advance = Math.min(budget, isLast ? d - Math.min(tol * 0.5, d) : d);
+            const advance = Math.min(budget, isLast ? d - tol : d);
             const f = advance / d;
             this.x += dx * f;
             this.y += dy * f;
@@ -389,10 +470,56 @@ export class Mover {
             budget -= advance;
             if (Math.hypot(w.x - this.x, w.y - this.y) <= tol + 0.01) this.arriveAt(w, isLast);
         }
+        // At rest where the ramp says the route ends: what is left (a last leg shorter than tolerance / 2,
+        // rounding) is within tolerance of the end.
+        if (rested && this.waypoints.length > 0) {
+            this.waypoints.splice(0, this.waypoints.length - 1);
+            this.arriveAt(this.waypoints[0]!, true);
+        }
         this.updateZone();
         if (!this.isHop()) this.fall(from, zFrom, dt);
         else this.vz = 0;
-        if (this.waypoints.length === 0 && this.moving) this.finish('arrived', false);
+        if (this.waypoints.length === 0 && this.moving) this.finish(this.arrivalReason, false);
+    }
+
+    /** Path length from here to the rest point: through every waypoint, ending tolerance / 2 short of the last. */
+    private routeLeft(): number {
+        let d = 0;
+        let at: { x: number; y: number } = this;
+        for (const w of this.waypoints) {
+            d += Math.hypot(w.x - at.x, w.y - at.y);
+            at = w;
+        }
+        return Math.max(0, d - this.tolerance * 0.5);
+    }
+
+    /**
+     * Speed over the next dt: up by RUN_ACCEL to speedLimit × speedFactor, down by RUN_DECEL to stop at
+     * the rest point (routeLeft), in RAMP_STEPS_PER_S steps. A lower limit (water, a snare) takes effect at
+     * once, like a real client: above it the server's speed monitor would object. Sets this.speed to the
+     * speed at the end of dt; returns the distance covered and whether that ends at rest at the rest point.
+     */
+    private ramp(dt: number): { distance: number; rested: boolean } {
+        const top = this.speedLimit * this.speedFactor;
+        const left = this.routeLeft();
+        let v = Math.min(this.speed, top);
+        let distance = 0;
+        const n = Math.max(1, Math.round(dt * RAMP_STEPS_PER_S));
+        const h = dt / n;
+        for (let i = 0; i < n; i++) {
+            const next = Math.min(top, v + RUN_ACCEL * h, Math.sqrt(2 * RUN_DECEL * (left - distance)));
+            const ds = ((v + next) / 2) * h;
+            // At the rest point: within a fraction of a unit at the end of the slow-down, or at once when
+            // the move came too close to slow down for (a re-issued move with its end next to us).
+            if (distance + ds >= left - 1e-3) {
+                this.speed = 0;
+                return { distance: left, rested: true };
+            }
+            distance += ds;
+            v = next;
+        }
+        this.speed = v;
+        return { distance, rested: false };
     }
 
     /**

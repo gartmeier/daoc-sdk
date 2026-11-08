@@ -9,7 +9,7 @@ import { getZone } from '../data/zones';
 import { DaocSession, SessionError, type SessionEndReason } from './session';
 import { ClientOp } from './protocol/opcodes';
 import * as out from './protocol/outgoing';
-import { headingTo, type MoverDeps } from './movement';
+import { headingTo, rampedMoveMs, type MoverDeps } from './movement';
 import { realmName } from './model/classes';
 import { groundTargetZ } from '../sdk/ground';
 import { coinDrops, COPPER_PER } from './model/world-model';
@@ -403,12 +403,14 @@ export class DaocClient {
                 const d = Math.hypot(a.x - mv.x, a.y - mv.y);
                 const speed = mv.speedLimit * Math.min(1, Math.max(0.05, a.speedFactor ?? 1));
                 // maxSpeed 0 = rooted/stunned: the mover waits in place until 0xB6 restores it.
-                const etaMs = speed > 0 ? Math.round((d / speed) * 1000) : null;
+                // The ramp adds up to 0.57 s at 191 (speed-up from where we are, slow-down at the end).
+                const etaMs = speed > 0 ? Math.round(rampedMoveMs(Math.max(0, d - (a.tolerance ?? 16) * 0.5), speed, mv.speed)) : null;
                 const note = speed > 0 ? '' : ' (max speed is 0: rooted/stunned, waiting)';
                 return ok(`moving to (${Math.round(a.x)}, ${Math.round(a.y)}), ${Math.round(d)} units${note}`, { distance: Math.round(d), etaMs });
             }
             case 'stop':
-                mv.stop('stopped');
+                // Like a player letting go of the keys: 0.38 s and 37 units to rest from 191 (Mover.brake).
+                mv.brake();
                 return ok('stopped');
             case 'face': {
                 if (m.self.isDead) return fail('dead', 'cannot turn while dead');
