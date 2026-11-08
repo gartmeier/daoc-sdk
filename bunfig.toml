@@ -1,0 +1,4 @@
+[test]
+# A plain `bun test` searches the whole checkout. Leave out the rs-sdk reference
+# submodule and the copies of this repo in session worktrees.
+pathIgnorePatterns = ["reference/**", ".claude/**"]
