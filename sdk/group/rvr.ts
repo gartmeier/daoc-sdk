@@ -406,6 +406,9 @@ export function spotAlong(t: Trip, from: Point, way: Point, distance: number): P
     return { x: spot.x, y: spot.y, z: t.zAt(spot) };
 }
 
+/** rvrFindings' contact finding: the first fight with players this late in a pair round, or this long without one. */
+const SLOW_FIRST_FIGHT_S = 240, SLOW_QUIET_S = 300;
+
 /** A tank this many cluster radii from every other member is walking back from a release, as in PvE (pve.ts tankIsFar). */
 const FAR_TANK_RADII = 4;
 
@@ -738,6 +741,14 @@ export function rvrFindings(r: RunReport, s: RvrSettings): Finding[] {
             severity: 'low', topic: 'slope', issue: `Members stood on ground steeper than 35° ${t.steepInFights ?? 0}% of fight time and ${t.steepInTravel ?? 0}% of travel`,
             evidence: `${t.steepPct ?? 0}% of the time alive${t.steepSpots?.length ? `; most at ${t.steepSpots.join(', ')}` : ''}`,
             suggestion: 'Stops stand on level ground (water.ts drySpot) and routes weigh slopes (safePath): look at what led there, a chase or a walk to a slot (walkTo routes on the navmesh, which covers cliffs).',
+        });
+    }
+    // As many fights as possible (user): ten minutes of a round is little, and a walk that long is most of it.
+    if (s.opponent && ((t.firstFightS ?? 0) >= SLOW_FIRST_FIGHT_S || (t.quietMaxS ?? 0) >= SLOW_QUIET_S)) {
+        out.push({
+            severity: 'low', topic: 'contact', issue: `${t.firstFightS == null ? 'No fight with enemy players' : `The first fight with enemy players came at ${Math.round(t.firstFightS / 60)} min`}, the longest stretch without one ${Math.round((t.quietMaxS ?? 0) / 60)} min`,
+            evidence: `first enemy seen at ${t.contactS == null ? 'never' : `${Math.round(t.contactS)} s`}, ${t.engagements ?? 0} fights with players; phases ${Object.entries(r.phases).map(([k, v]) => `${k} ${v}%`).join(', ')}`,
+            suggestion: 'Check where the two patrols ring (BattlegroundLayout.pairs, the walk there from each arrival: bun sdk/group/survey.ts), and what held the group back (waiting for a member, resting).',
         });
     }
     if (s.opponent && (t.threeWay ?? 0) > 0) {

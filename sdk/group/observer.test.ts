@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { findingsFor, formatReport, GroupObserver, saveReport, stampOf, type RunReport } from './observer';
+import { findingsFor, formatReport, GroupObserver, saveReport, stampOf, type RunReport, contactTimes } from './observer';
 import { contact, enemy, picture, report } from './fixtures';
 import type { Capabilities, GroupEvent, MemberReport, PetReport } from './types';
 import { getTerrainStore } from '../terrain';
@@ -253,6 +253,13 @@ describe('GroupObserver', () => {
         expect(md).toContain('Water: we swam 33% of the time alive and 67% of fight time (100% away from the anchor), the enemies in our fights 50%. Fights with both other realms: 1 of 1.');
         expect(md).toContain('Slope: on ground steeper than 35° 8% of the time alive, 0% of fight time, 17% of travel; most at (26500, 35500) 100%.');
         expect(md).toContain('in water: us 67%, them 50%');
+    });
+
+    test('contactTimes: the first sighting and fight with players, and the longest stretch without one', () => {
+        const f = (start: number, s: number, enemyPlayers = 3) => ({ start, durationMs: s * 1000, enemyPlayers });
+        expect(contactTimes([f(200, 60), f(30, 10, 0), f(500, 100)], 150, 600)).toEqual({ contactS: 150, firstFightS: 200, quietMaxS: 240 });
+        expect(contactTimes([], null, 600)).toEqual({ contactS: null, firstFightS: null, quietMaxS: 600 });
+        expect(formatReport(rvrRun())).toMatch(/Contact: first enemy player seen at 0:0\d, first fight with them at 0:\d\d; 1 such fights, the longest stretch without one 0:\d\d\./);
     });
 
     test('RvR: player kills, deaths to players, realm points, enemies seen and engagements; killers per member', () => {

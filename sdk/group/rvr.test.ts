@@ -790,6 +790,10 @@ describe('rvrRoaming', () => {
         expect(rvrFindings(run({ wetInFights: 35, wetWhere: { away: 80, near: 20 } }), RVR_SETTINGS)[0]!.suggestion).toContain('chaseLeash');
         expect(topics(run({ steepInFights: 20, steepInTravel: 5 }))).toEqual(['slope']);
         expect(topics(run({ steepInFights: 5, steepInTravel: 10 }))).toEqual([]);
+        // Slow contact counts in a pair round only.
+        expect(topics(run({ firstFightS: 300, quietMaxS: 300 }))).toEqual([]);
+        expect(rvrFindings(run({ firstFightS: 300, quietMaxS: 300 }), { ...RVR_SETTINGS, opponent: 'midgard' }).map(f => f.topic)).toEqual(['contact']);
+        expect(rvrFindings(run({ firstFightS: 100, quietMaxS: 200 }), { ...RVR_SETTINGS, opponent: 'midgard' }).map(f => f.topic)).toEqual([]);
         // A third realm in a fight matters only in a pair round.
         expect(topics(run({ threeWay: 2 }))).toEqual([]);
         expect(rvrFindings(run({ threeWay: 2 }), { ...RVR_SETTINGS, opponent: 'midgard' }).map(f => f.topic)).toEqual(['pair']);

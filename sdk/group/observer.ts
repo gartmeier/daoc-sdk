@@ -205,6 +205,13 @@ export interface RunReport {
         steepInTravel?: number;
         /** RvR: the 500-unit squares members stood in longest on steep ground, most first: "(x, y) n%" of the steep samples. */
         steepSpots?: string[];
+        /**
+         * RvR: seconds from the start to the first enemy player seen, and to the first fight with enemy players (null: none);
+         * the longest stretch without a fight with enemy players (from the start, between fights, to the end).
+         */
+        contactS?: number | null;
+        firstFightS?: number | null;
+        quietMaxS?: number;
         /** RvR: fights with players of both other realms in them: a third group joined. */
         threeWay?: number;
         /**
@@ -291,6 +298,21 @@ const shares = (r: Record<string, number>) => { const n = Object.values(r).reduc
 const WET_NEAR = 900;
 /** The Water line's words for wetWhere. */
 const WET_WHERE: Record<string, string> = { travel: 'on the way', away: 'away from the anchor', near: 'by the anchor', anchor: 'the anchor in water', loose: 'with no anchor' };
+/** m:ss */
+const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+
+/** contactS, firstFightS and quietMaxS (RunReport totals) from the fights with enemy players, in seconds from the start of a run `runS` long. */
+export function contactTimes(fights: readonly Pick<FightSummary, 'start' | 'durationMs' | 'enemyPlayers'>[], contactS: number | null, runS: number): { contactS: number | null; firstFightS: number | null; quietMaxS: number } {
+    const pvp = fights.filter(f => f.enemyPlayers).sort((a, b) => a.start - b.start);
+    let quiet = 0, from = 0;
+    for (const f of pvp) {
+        quiet = Math.max(quiet, f.start - from);
+        from = Math.max(from, f.start + Math.round(f.durationMs / 1000));
+    }
+    quiet = Math.max(quiet, runS - from);
+    return { contactS, firstFightS: pvp[0]?.start ?? null, quietMaxS: quiet };
+}
+
 /** steepSpots squares. */
 const STEEP_SQUARE = 500;
 const inc = (r: Record<string, number>, k: string, by = 1) => { r[k] = (r[k] ?? 0) + by; };
@@ -434,6 +456,8 @@ export class GroupObserver {
     private deathsAlone = 0;
     /** Member samples (alive) in deep water. */
     private wetSamples = 0;
+    /** When the first enemy player was seen. */
+    private firstSeenAt: number | null = null;
     /** Member fight samples (alive) in deep water, by where (wetWhere). */
     private readonly wetWhere: Record<string, number> = {};
     /** Member samples (alive) on steep ground; member samples (alive) under travel orders, and those on steep ground. */
@@ -567,7 +591,7 @@ export class GroupObserver {
             }
             samplePet(t.pet, m, p.at, p.orders.phase === 'pull' && p.orders.puller === m.name);
         }
-        for (const c of p.contacts) if (c.kind === 'player') this.enemies.add(`${c.regionId}:${c.objectId}`);
+        for (const c of p.contacts) if (c.kind === 'player') { this.enemies.add(`${c.regionId}:${c.objectId}`); this.firstSeenAt ??= p.at; }
         for (const w of p.orders.waiting ?? []) {
             const t = this.members.get(w.name);
             if (t) inc(t.waitMs, w.why, dt);
@@ -841,6 +865,7 @@ export class GroupObserver {
                 wetWhere: shares(this.wetWhere),
                 steepPct: pct(this.steepSamples, this.aliveSamples), steepInFights: pct(this.fightSteep, this.fightSteepSamples), steepInTravel: pct(this.travelSteep, this.travelMemberSamples),
                 steepSpots: [...this.steepAt].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `(${k.replace(',', ', ')}) ${pct(n, this.steepSamples)}%`),
+                ...contactTimes(this.fights, this.firstSeenAt === null ? null : Math.round((this.firstSeenAt - this.started) / 1000), Math.round(durationMs / 1000)),
                 threeWay: this.fights.filter(f => (f.enemyRealms?.length ?? 0) >= 2).length,
                 columnPct: pct(this.columnMs, this.travelMs), travelSpreadAvg: this.travelSamples ? Math.round(this.travelSpreadSum / this.travelSamples) : 0, ccFrontPct: pct(this.ccFrontSamples, this.travelSamples),
                 ...(this.columnPlaceSamples ? { columnOffAvg: Math.round(this.columnOffSum / this.columnPlaceSamples), columnTrailAvg: Math.round(this.columnTrailSum / this.columnPlaceSamples) } : {}),
@@ -1004,6 +1029,7 @@ export function formatReport(r: RunReport): string {
         const where = Object.entries(t.wetWhere ?? {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v}% ${WET_WHERE[k] ?? k}`).join(', ');
         lines.push(`Water: we swam ${t.wetPct}% of the time alive and ${t.wetInFights}% of fight time${where ? ` (${where})` : ''}, the enemies in our fights ${t.enemiesWetInFights}%. Fights with both other realms: ${t.threeWay} of ${t.engagements ?? 0}.`);
     }
+    if (rvr && t.contactS !== undefined) lines.push(`Contact: first enemy player seen ${t.contactS === null ? 'never' : `at ${clock(t.contactS)}`}, first fight with them ${t.firstFightS == null ? 'never' : `at ${clock(t.firstFightS)}`}; ${t.engagements ?? 0} such fights, the longest stretch without one ${clock(t.quietMaxS ?? 0)}.`);
     if (rvr && t.steepPct !== undefined) lines.push(`Slope: on ground steeper than 35° ${t.steepPct}% of the time alive, ${t.steepInFights}% of fight time, ${t.steepInTravel}% of travel${t.steepSpots?.length ? `; most at ${t.steepSpots.join(', ')}` : ''}.`);
     if (rvr && t.alivePct !== undefined) lines.push(`Together: ${t.spreadAvg} units from the group's centre on average, ${t.strayedPct}% of the time beyond 2500; alive ${t.alivePct}% of the time; ${t.deathsAlone} deaths with fewer than two near.`);
     if (rvr && t.travelSpreadAvg !== undefined) lines.push(`Travelling: ${t.columnPct}% of it in a column, ${t.travelSpreadAvg} units from the centre on average, a crowd controller in front ${t.ccFrontPct}% of the time${t.columnOffAvg !== undefined ? `; in it a follower stood ${t.columnOffAvg} off its place on average (${Math.abs(t.columnTrailAvg ?? 0)} ${(t.columnTrailAvg ?? 0) >= 0 ? 'too far back' : 'too close'} overall)` : ''}.`);
