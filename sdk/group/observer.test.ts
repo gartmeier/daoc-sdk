@@ -237,16 +237,21 @@ describe('GroupObserver', () => {
             contact(300, { kind: 'player', name: 'Norseman', realm: 'midgard', threat: true, target: 'Tank', regionId: 252, ...river }),
             contact(310, { kind: 'player', name: 'Celt', realm: 'hibernia', threat: true, target: 'Menta', regionId: 252, ...land }),
         ];
-        for (let i = 1; i <= 10; i++) o.sample(picture(ms(true), foes, { seq: 2, phase: 'engage', focus: 300 }, at(i)));
-        for (let i = 11; i <= 20; i++) o.sample(picture(ms(false), [], { seq: 3, phase: 'travel' }, at(i)));
+        // The fight's anchor on land: the two in the river are away from it. Menta crosses a steep bank on the way after (slope.ts).
+        const bank = { x: 26_300, y: 35_400 };
+        for (let i = 1; i <= 10; i++) o.sample(picture(ms(true), foes, { seq: 2, phase: 'engage', focus: 300, anchor: { ...land } }, at(i)));
+        for (let i = 11; i <= 20; i++) o.sample(picture(i > 15 ? members({ Tank: { regionId: 252, ...land }, Druid: { regionId: 252, ...land }, Menta: { regionId: 252, ...bank } }) : ms(false), [], { seq: 3, phase: 'travel' }, at(i)));
         const r = o.report();
+        expect(r.totals).toMatchObject({ wetWhere: { away: 100 }, steepInFights: 0, steepInTravel: Math.round(100 * 5 / 30), steepPct: Math.round(100 * 5 / 60), steepSpots: ['(26500, 35500) 100%'] });
+        expect(r.members.Menta).toMatchObject({ steepPct: 25, steepInFights: 0 });
         expect(r.totals).toMatchObject({ wetInFights: 67, enemiesWetInFights: 50, threeWay: 1 });
         expect(r.totals.wetPct).toBe(Math.round(100 * 20 / 60));
         expect(r.fights[0]).toMatchObject({ wetPct: 67, enemyWetPct: 50 });
         expect(r.members.Tank).toMatchObject({ wetPct: 50, wetInFights: 100 });
         expect(r.members.Menta).toMatchObject({ wetPct: 0, wetInFights: 0 });
         const md = formatReport(r);
-        expect(md).toContain('Water: we swam 33% of the time alive and 67% of fight time, the enemies in our fights 50%. Fights with both other realms: 1 of 1.');
+        expect(md).toContain('Water: we swam 33% of the time alive and 67% of fight time (100% away from the anchor), the enemies in our fights 50%. Fights with both other realms: 1 of 1.');
+        expect(md).toContain('Slope: on ground steeper than 35° 8% of the time alive, 0% of fight time, 17% of travel; most at (26500, 35500) 100%.');
         expect(md).toContain('in water: us 67%, them 50%');
     });
 

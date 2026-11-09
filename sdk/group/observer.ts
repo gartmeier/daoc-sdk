@@ -20,6 +20,7 @@ import { COLUMN_FAR } from './behaviors';
 import { CC_WALK, MEZZED } from './cc';
 import type { GroupEvent, GroupPicture, MemberCombat, MemberReport, Phase } from './types';
 import type { LiveReport } from './wire';
+import { isSteep } from './slope';
 import { isWet } from './water';
 
 export interface Finding {
@@ -154,6 +155,9 @@ export interface MemberStats {
     /** RvR: % of its time alive, and of its fight time alive, that it swam (deep water, water.ts). */
     wetPct?: number;
     wetInFights?: number;
+    /** RvR: % of its time alive, and of its fight time alive, on ground steeper than 35° (slope.ts STEEP). */
+    steepPct?: number;
+    steepInFights?: number;
 }
 
 export interface RunReport {
@@ -189,6 +193,18 @@ export interface RunReport {
         wetPct?: number;
         wetInFights?: number;
         enemiesWetInFights?: number;
+        /**
+         * RvR: where the members' wet fight samples were, % of them: `travel` while travelling or gathering (a crossing
+         * under attack), `away` more than WET_NEAR from the fight's anchor (chasing, fleeing, spilling out), `near` within it,
+         * `anchor` the anchor itself in water, `loose` orders with no anchor.
+         */
+        wetWhere?: Record<string, number>;
+        /** RvR: % of member time alive on ground steeper than 35° (slope.ts), of member fight time, and of member travel time. */
+        steepPct?: number;
+        steepInFights?: number;
+        steepInTravel?: number;
+        /** RvR: the 500-unit squares members stood in longest on steep ground, most first: "(x, y) n%" of the steep samples. */
+        steepSpots?: string[];
         /** RvR: fights with players of both other realms in them: a third group joined. */
         threeWay?: number;
         /**
@@ -250,6 +266,8 @@ interface Track {
     pet: PetTrack;
     /** Samples alive, and of those in deep water; fight samples (alive) in deep water. */
     alive: number; wet: number; wetFight: number;
+    /** Samples alive and fight samples on steep ground (slope.ts). */
+    steep: number; steepFight: number;
 }
 
 interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outcome' | 'adds' | 'openerMs' | 'enemyPlayers' | 'enemyRealms'> {
@@ -267,6 +285,14 @@ interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outc
 }
 
 const pct = (a: number, b: number) => b > 0 ? Math.round(100 * a / b) : 0;
+/** Each key's % of the total. */
+const shares = (r: Record<string, number>) => { const n = Object.values(r).reduce((a, b) => a + b, 0); return Object.fromEntries(Object.entries(r).map(([k, v]) => [k, pct(v, n)])); };
+/** A wet member within this of the fight's anchor is in its slot ('near'); farther it chased, fled or spilled out ('away'). */
+const WET_NEAR = 900;
+/** The Water line's words for wetWhere. */
+const WET_WHERE: Record<string, string> = { travel: 'on the way', away: 'away from the anchor', near: 'by the anchor', anchor: 'the anchor in water', loose: 'with no anchor' };
+/** steepSpots squares. */
+const STEEP_SQUARE = 500;
 const inc = (r: Record<string, number>, k: string, by = 1) => { r[k] = (r[k] ?? 0) + by; };
 const median = (xs: number[]): number | null => {
     if (!xs.length) return null;
@@ -408,6 +434,16 @@ export class GroupObserver {
     private deathsAlone = 0;
     /** Member samples (alive) in deep water. */
     private wetSamples = 0;
+    /** Member fight samples (alive) in deep water, by where (wetWhere). */
+    private readonly wetWhere: Record<string, number> = {};
+    /** Member samples (alive) on steep ground; member samples (alive) under travel orders, and those on steep ground. */
+    private steepSamples = 0;
+    private travelMemberSamples = 0;
+    private travelSteep = 0;
+    private fightSteep = 0;
+    private fightSteepSamples = 0;
+    /** Steep samples by 500-unit square, "x,y". */
+    private readonly steepAt = new Map<string, number>();
     /** Enemy player contacts ever seen, by region:objectId. */
     private readonly enemies = new Set<string>();
     /** The samples behind every fight's tank hold. */
@@ -502,7 +538,7 @@ export class GroupObserver {
         for (const m of p.members) {
             let t = this.members.get(m.name);
             if (!t) {
-                t = { role: m.role, className: m.className, level0: m.level, level1: m.level, xp0: m.experience, xp1: m.experience, deaths: 0, actions: {}, failures: {}, fightSamples: 0, engageSamples: 0, idle: 0, idleReasons: {}, targeted: 0, inMelee: 0, moving: 0, minHp: m.hp, waitMs: {}, rp0: null, rp1: 0, killedBy: {}, alive: 0, wet: 0, wetFight: 0, pet: { kind: null, name: '', samples: 0, up: 0, focusSamples: 0, onFocus: 0, drewFocus: 0, intercepts: 0, interceptAt: -Infinity, steppedIn: null, intercepted: 0, ownerGone: false, afterOwner: 0, onRecast: 0, pulling: 0, allSamples: 0, dead: 0, drewOrdered: 0, deaths: 0, brokeCc: 0, hadSummons: false, summons: [], fnfSummons: 0 } };
+                t = { role: m.role, className: m.className, level0: m.level, level1: m.level, xp0: m.experience, xp1: m.experience, deaths: 0, actions: {}, failures: {}, fightSamples: 0, engageSamples: 0, idle: 0, idleReasons: {}, targeted: 0, inMelee: 0, moving: 0, minHp: m.hp, waitMs: {}, rp0: null, rp1: 0, killedBy: {}, alive: 0, wet: 0, wetFight: 0, steep: 0, steepFight: 0, pet: { kind: null, name: '', samples: 0, up: 0, focusSamples: 0, onFocus: 0, drewFocus: 0, intercepts: 0, interceptAt: -Infinity, steppedIn: null, intercepted: 0, ownerGone: false, afterOwner: 0, onRecast: 0, pulling: 0, allSamples: 0, dead: 0, drewOrdered: 0, deaths: 0, brokeCc: 0, hadSummons: false, summons: [], fnfSummons: 0 } };
                 this.members.set(m.name, t);
             }
             t.className = m.className;
@@ -518,6 +554,14 @@ export class GroupObserver {
             if (!m.isDead) {
                 t.alive++;
                 if (isWet(m.regionId, m)) { t.wet++; this.wetSamples++; }
+                if (isSteep(m.regionId, m)) {
+                    t.steep++;
+                    this.steepSamples++;
+                    const k = `${Math.round(m.x / STEEP_SQUARE) * STEEP_SQUARE},${Math.round(m.y / STEEP_SQUARE) * STEEP_SQUARE}`;
+                    this.steepAt.set(k, (this.steepAt.get(k) ?? 0) + 1);
+                    if (phase === 'travel') this.travelSteep++;
+                }
+                if (phase === 'travel') this.travelMemberSamples++;
             }
             samplePet(t.pet, m, p.at, p.orders.phase === 'pull' && p.orders.puller === m.name);
         }
@@ -577,7 +621,14 @@ export class GroupObserver {
             const t = this.members.get(m.name)!;
             t.fightSamples++;
             f.memberSamples++;
-            if (isWet(m.regionId, m)) { t.wetFight++; f.memberWet++; }
+            if (isWet(m.regionId, m)) {
+                t.wetFight++;
+                f.memberWet++;
+                const anchor = p.orders.anchor;
+                inc(this.wetWhere, phase === 'travel' || phase === 'gather' ? 'travel' : !anchor ? 'loose' : isWet(m.regionId, anchor) ? 'anchor' : Math.hypot(m.x - anchor.x, m.y - anchor.y) > WET_NEAR ? 'away' : 'near');
+            }
+            this.fightSteepSamples++;
+            if (isSteep(m.regionId, m)) { t.steepFight++; this.fightSteep++; }
             // Idle and moving count while engaged only: during a pull, waiting at the base is the job. A mezz on it is nothing its list could have done, and no idle finding's advice fits that.
             if (phase === 'engage') t.engageSamples++;
             if (phase === 'engage' && m.activity.kind === 'idle' && m.activity.detail !== MEZZED) { t.idle++; inc(t.idleReasons, m.activity.detail || 'nothing to do'); }
@@ -753,6 +804,8 @@ export class GroupObserver {
                 stats.realmPoints = rpOf(t);
                 stats.wetPct = pct(t.wet, t.alive);
                 stats.wetInFights = pct(t.wetFight, t.fightSamples);
+                stats.steepPct = pct(t.steep, t.alive);
+                stats.steepInFights = pct(t.steepFight, t.fightSamples);
             }
             if (t.deaths) stats.killedBy = { ...t.killedBy };
             if (pet) {
@@ -783,6 +836,9 @@ export class GroupObserver {
                 spreadAvg: this.spreadSamples ? Math.round(this.spreadSum / this.spreadSamples) : 0, strayedPct: pct(this.strayedSamples, this.spreadSamples),
                 alivePct: pct(this.aliveSamples, this.memberSamples), deathsAlone: this.deathsAlone,
                 wetPct: pct(this.wetSamples, this.aliveSamples), wetInFights: pct(this.fightWet, this.fightMemberSamples), enemiesWetInFights: pct(this.fightEnemyWet, this.fightEnemySamples),
+                wetWhere: shares(this.wetWhere),
+                steepPct: pct(this.steepSamples, this.aliveSamples), steepInFights: pct(this.fightSteep, this.fightSteepSamples), steepInTravel: pct(this.travelSteep, this.travelMemberSamples),
+                steepSpots: [...this.steepAt].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `(${k.replace(',', ', ')}) ${pct(n, this.steepSamples)}%`),
                 threeWay: this.fights.filter(f => (f.enemyRealms?.length ?? 0) >= 2).length,
                 columnPct: pct(this.columnMs, this.travelMs), travelSpreadAvg: this.travelSamples ? Math.round(this.travelSpreadSum / this.travelSamples) : 0, ccFrontPct: pct(this.ccFrontSamples, this.travelSamples),
                 ...(this.columnPlaceSamples ? { columnOffAvg: Math.round(this.columnOffSum / this.columnPlaceSamples), columnTrailAvg: Math.round(this.columnTrailSum / this.columnPlaceSamples) } : {}),
@@ -942,7 +998,11 @@ export function formatReport(r: RunReport): string {
     ];
     const rvr = hasRvrTotals(r);
     if (rvr) lines.push(`RvR: ${t.enemiesSeen ?? 0} enemy players seen, ${t.engagements ?? 0} engagements, ${t.playerKills ?? 0} player kills, ${t.deathsToPlayers ?? 0} deaths to players, ${t.realmPoints ?? 0} realm points (${t.rpPerHour ?? 0}/h).`);
-    if (rvr && t.wetPct !== undefined) lines.push(`Water: we swam ${t.wetPct}% of the time alive and ${t.wetInFights}% of fight time, the enemies in our fights ${t.enemiesWetInFights}%. Fights with both other realms: ${t.threeWay} of ${t.engagements ?? 0}.`);
+    if (rvr && t.wetPct !== undefined) {
+        const where = Object.entries(t.wetWhere ?? {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v}% ${WET_WHERE[k] ?? k}`).join(', ');
+        lines.push(`Water: we swam ${t.wetPct}% of the time alive and ${t.wetInFights}% of fight time${where ? ` (${where})` : ''}, the enemies in our fights ${t.enemiesWetInFights}%. Fights with both other realms: ${t.threeWay} of ${t.engagements ?? 0}.`);
+    }
+    if (rvr && t.steepPct !== undefined) lines.push(`Slope: on ground steeper than 35° ${t.steepPct}% of the time alive, ${t.steepInFights}% of fight time, ${t.steepInTravel}% of travel${t.steepSpots?.length ? `; most at ${t.steepSpots.join(', ')}` : ''}.`);
     if (rvr && t.alivePct !== undefined) lines.push(`Together: ${t.spreadAvg} units from the group's centre on average, ${t.strayedPct}% of the time beyond 2500; alive ${t.alivePct}% of the time; ${t.deathsAlone} deaths with fewer than two near.`);
     if (rvr && t.travelSpreadAvg !== undefined) lines.push(`Travelling: ${t.columnPct}% of it in a column, ${t.travelSpreadAvg} units from the centre on average, a crowd controller in front ${t.ccFrontPct}% of the time${t.columnOffAvg !== undefined ? `; in it a follower stood ${t.columnOffAvg} off its place on average (${Math.abs(t.columnTrailAvg ?? 0)} ${(t.columnTrailAvg ?? 0) >= 0 ? 'too far back' : 'too close'} overall)` : ''}.`);
     if (r.previous) lines.push(`Against the previous run: ${Object.entries(r.previous).map(([k, v]) => `${k} ${v}`).join(', ')}.`);

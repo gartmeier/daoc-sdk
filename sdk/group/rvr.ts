@@ -40,6 +40,7 @@ import { assignCc } from './pve';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, pairMeet, THIDRANKI, type KeepSettings, type PlayerRealm } from './keeps';
 import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
+import { isLevel } from './slope';
 import { drySpot, isDry } from './water';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
@@ -192,7 +193,7 @@ export function realmOfGroup(members: readonly { className: string }[]): Realm {
 
 /** Default patrol: waypoints on a ring of this radius round the meeting point. */
 const PATROL_RADIUS = 5500, PATROL_POINTS = 6;
-/** A pair round's patrol: a smaller ring round the pair's spot on their river, so the two meet within a minute or so. */
+/** A pair round's patrol: a smaller ring round the pair's spot (on one realm's bank, keeps.ts), so the two meet within a minute or so. */
 const PAIR_RADIUS = 4000;
 /** Each waypoint stays this far outside aggro zones and keep circles: casters stand up to ~700 behind the anchor. */
 const PATROL_MARGIN = 900;
@@ -209,7 +210,7 @@ const PATROL_TURN: Record<PlayerRealm, 1 | -1> = { albion: -1, midgard: 1, hiber
 /**
  * A loop of waypoints on a ring round the battleground's meeting point, starting at the one
  * nearest our arrival point. Each is nudged out of aggro zones and keep circles (PATROL_MARGIN),
- * and with stayDry out of water, or dropped when nothing near it is safe. With an opponent, the
+ * and with stayDry out of water, and onto level ground (slope.ts isLevel: the members stand round it), or dropped when nothing near it is safe. With an opponent, the
  * ring is the pair's (PAIR_RADIUS round BattlegroundLayout.pairs), and the realm first in the
  * alphabet goes round by increasing angle, the other the other way. Empty outside a known battleground.
  */
@@ -230,7 +231,7 @@ export function defaultPatrol(regionId: number, realm: Realm, level: number, set
         const a = a0 + turn * k * 2 * Math.PI / PATROL_POINTS;
         const spot = NUDGES
             .map(([dr, da]) => ({ x: Math.round(centre.x + Math.cos(a + da) * (radius + dr)), y: Math.round(centre.y + Math.sin(a + da) * (radius + dr)) }))
-            .find(p => clearOf(p, blocked, PATROL_MARGIN) && (!dry || isDry(regionId, p)));
+            .find(p => clearOf(p, blocked, PATROL_MARGIN) && (!dry || isDry(regionId, p)) && isLevel(regionId, p));
         if (spot) out.push({ ...spot, z: estimateZ(regionId, spot.x, spot.y, bg.meet.z, { radius: 8000 }) });
     }
     // The first waypoint may have been dropped: start at the one nearest home.
@@ -693,9 +694,22 @@ export function rvrFindings(r: RunReport, s: RvrSettings): Finding[] {
     }
     if ((t.wetInFights ?? 0) >= 20) {
         const swimmers = Object.entries(r.members).filter(([, m]) => (m.wetInFights ?? 0) >= 20).map(([n, m]) => `${n} ${m.wetInFights}%`).join(', ');
+        const where = t.wetWhere ?? {};
+        const most = Object.entries(where).sort((a, b) => b[1] - a[1])[0]?.[0];
         out.push({
-            severity: 'medium', topic: 'water', issue: `Members swam ${t.wetInFights}% of fight time`, evidence: `${swimmers}; the enemies in our fights ${t.enemiesWetInFights ?? 0}%; stayDry ${staysDry(s) ? 'on' : 'off'}`,
-            suggestion: !staysDry(s) ? 'Turn stayDry on: the fight\'s anchor, legs and retreat spots then stand on the nearest bank.' : `The anchor stands on dry ground, so the chases went in: lower chaseLeash (${s.chaseLeash}) to keep tank and melee nearer it.`,
+            severity: 'medium', topic: 'water', issue: `Members swam ${t.wetInFights}% of fight time`,
+            evidence: `${swimmers}; the enemies in our fights ${t.enemiesWetInFights ?? 0}%; stayDry ${staysDry(s) ? 'on' : 'off'}${Object.keys(where).length ? `; wet fight time ${Object.entries(where).map(([k, v]) => `${k} ${v}%`).join(', ')}` : ''}`,
+            suggestion: !staysDry(s) ? 'Turn stayDry on: the fight\'s anchor, legs and retreat spots then stand on the nearest bank.'
+                : most === 'travel' ? 'Most of it was on the way, attacked while crossing: check where the routes cross the rivers (safePath) against where the enemies patrol (BattlegroundLayout.pairs).'
+                : most === 'near' || most === 'anchor' ? 'Most of it was by the anchor: the bank it stands on is too narrow for the slots round it; widen water.ts DRY_MARGIN.'
+                : `The anchor stands on dry ground, so the chases went in: lower chaseLeash (${s.chaseLeash}) to keep tank and melee nearer it.`,
+        });
+    }
+    if ((t.steepInFights ?? 0) >= 15 || (t.steepInTravel ?? 0) >= 15) {
+        out.push({
+            severity: 'low', topic: 'slope', issue: `Members stood on ground steeper than 35° ${t.steepInFights ?? 0}% of fight time and ${t.steepInTravel ?? 0}% of travel`,
+            evidence: `${t.steepPct ?? 0}% of the time alive${t.steepSpots?.length ? `; most at ${t.steepSpots.join(', ')}` : ''}`,
+            suggestion: 'Stops stand on level ground (water.ts drySpot) and routes weigh slopes (safePath): look at what led there, a chase or a walk to a slot (walkTo routes on the navmesh, which covers cliffs).',
         });
     }
     if (s.opponent && (t.threeWay ?? 0) > 0) {

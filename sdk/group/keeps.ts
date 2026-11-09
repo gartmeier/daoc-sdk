@@ -64,15 +64,20 @@ export const BATTLEGROUND_LAYOUTS: Record<number, BattlegroundLayout> = {
         arrival: { albion: { x: 38113, y: 53507, z: 4160 }, midgard: { x: 53568, y: 23643, z: 4530 }, hibernia: { x: 17367, y: 18248, z: 4320 } },
         meet: { x: 34000, y: 32000, z: 3836 },
         // Three rivers run out from the Faste, one between each two realms' halves; the only dry ways over are its three
-        // bridges, inside its guards. Each pair meets on its own river, 12000-14000 from the Faste (about halfway to the
-        // map's edge): the river's middle there, from the client's terrain (water.ts). A ring of 4000 round it crosses it twice.
-        // Hibernia and Midgard (user, 2026-11-09: they met in the water) meet on Hibernia's bank instead: the whole ring is dry
-        // (400 margin), its east edge 1800 from the river, 19.0k from Hibernia's arrival and 19.3k from Midgard's, which swims
-        // across once (the river ends near y 10000, 15k north of its arrival and 46k from Hibernia's: no dry way round).
+        // bridges, inside its guards (the halves also meet over cliffs round the rivers' far ends). Each pair meets on one
+        // realm's bank, on open ground: the whole ring of 4000 dry, level (no slope over 35° within 300, slope.ts) and clear
+        // of camps, the river at least 2900 from it, so a group that swam over comes ashore out of the other's sight. Found
+        // by a search over the terrain (learnings/rvr.md "Water and pair rounds"). Each realm swims across in one of its two
+        // pairings: Midgard to Hibernia's bank, Hibernia to Albion's, Albion to Midgard's, and that one has the longer walk.
+        // Distances from the arrivals in the order of the key. Until 2026-11-09 the Albion pairs met on the river's middle
+        // (Camelot swam 43-52 % of fight time against Hibernia), Hibernia and Midgard 800 from it.
         pairs: {
-            'hibernia|midgard': { x: 34500, y: 26500 },
-            'albion|hibernia': { x: 21155, y: 37017 },
-            'albion|midgard': { x: 46953, y: 40219 },
+            // 17.0k / 20.6k, the river 2900 east of the ring.
+            'hibernia|midgard': { x: 33000, y: 25000 },
+            // 19.1k / 27.0k, the river 3000 north of the ring.
+            'albion|hibernia': { x: 21000, y: 45000 },
+            // 24.4k / 11.4k, the river 3100 south of the ring.
+            'albion|midgard': { x: 54000, y: 35000 },
         },
     },
 };

@@ -608,7 +608,8 @@ describe('battleground data (static, Thidranki)', () => {
             expect(loop.every(w => isDry(T, w))).toBe(true);
             expect(loop.length).toBe(defaultPatrol(T, realm, 20, { stayDry: false }).length);
         }
-        expect(defaultPatrol(T, 'midgard', 20, { stayDry: false }).filter(w => isWet(T, w)).length).toBe(2);
+        // Off, a river one comes back (the other stood on a steep bank, and level ground moved it out: slope.ts).
+        expect(defaultPatrol(T, 'midgard', 20, { stayDry: false }).filter(w => isWet(T, w)).length).toBe(1);
     });
 
     test.skipIf(!terrain)('a fight that starts in a river is anchored on the bank; with stayDry off, where the group swims', () => {
@@ -784,6 +785,11 @@ describe('rvrRoaming', () => {
         expect(topics(run({}, '23→24'))).toEqual(['level']);
         expect(topics(run({ wetInFights: 35, enemiesWetInFights: 40 }))).toEqual(['water']);
         expect(topics(run({ wetInFights: 10 }))).toEqual([]);
+        // Where the wet time was picks the advice.
+        expect(rvrFindings(run({ wetInFights: 35, wetWhere: { travel: 70, away: 30 } }), RVR_SETTINGS)[0]!.suggestion).toContain('crossing');
+        expect(rvrFindings(run({ wetInFights: 35, wetWhere: { away: 80, near: 20 } }), RVR_SETTINGS)[0]!.suggestion).toContain('chaseLeash');
+        expect(topics(run({ steepInFights: 20, steepInTravel: 5 }))).toEqual(['slope']);
+        expect(topics(run({ steepInFights: 5, steepInTravel: 10 }))).toEqual([]);
         // A third realm in a fight matters only in a pair round.
         expect(topics(run({ threeWay: 2 }))).toEqual([]);
         expect(rvrFindings(run({ threeWay: 2 }), { ...RVR_SETTINGS, opponent: 'midgard' }).map(f => f.topic)).toEqual(['pair']);

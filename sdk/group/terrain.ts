@@ -5,6 +5,7 @@
 import { findNpcSpawns, getZoneAt, getZonesInRegion } from '../../data/index';
 import { conLevel } from '../actions-helpers';
 import type { Point, Point3 } from './types';
+import { CLIFF, slopeAt, slopeCost, STEEP } from './slope';
 import { isWet } from './water';
 
 export interface Danger { x: number; y: number; r: number; name: string; level: number }
@@ -258,6 +259,10 @@ const INSIDE_COST = 30;
 const OFF_MAP_COST = 1000;
 /** ... and in deep water: swimming is 85 against 191 running (client/movement.ts), so a cell of river takes 191/85 the time. A route crosses where the river is narrow. */
 const WATER_COST = 191 / 85 - 1;
+/** A straight line is no route once it crosses this much ground steeper than STEEP (or any steeper than CLIFF). */
+const STEEP_RUN = 200;
+/** A cell's slope cost (slope.ts slopeCost) is the mean of its centre and four spots this far off it. */
+const SLOPE_PROBE = 130;
 
 /**
  * Waypoints from `from` to `to` around every mob that would attack a group of `level`
@@ -265,7 +270,9 @@ const WATER_COST = 191 / 85 - 1;
  * Coarse grid A* (400-unit cells) where a cell inside a zone costs INSIDE_COST times more,
  * so a route always exists and crosses zones only where there is no way around. Deep water
  * (water.ts isWet) costs what swimming does (WATER_COST): a line across it is never clear, and
- * the route crosses a river where that is quickest.
+ * the route crosses a river where that is quickest. Steep ground costs more the steeper it is (slope.ts slopeCost:
+ * up to 3× at 45°, 7× beyond), and a line over a cliff, or more than STEEP_RUN of ground steeper than 35°, is never clear:
+ * routes go round hills and cross a river where its banks are low.
  * `avoid` adds circles to keep out of as well (the guards of an enemy keep: keepDangers
  * in rvr.ts); the index for each set of them is cached by their positions and radii.
  */
@@ -276,12 +283,17 @@ export function safePath(regionId: number, level: number, from: Point, to: Point
     const off = (x: number, y: number) => mapped && !onMap(regionId, { x, y });
     const clear = (a: Point, b: Point) => {
         const n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 100);
+        let steep = 0;
         for (let i = 1; i < n; i++) {
             const x = a.x + (b.x - a.x) * i / n, y = a.y + (b.y - a.y) * i / n;
             if (idx.inside(x, y) || off(x, y) || isWet(regionId, { x, y })) return false;
+            const s = slopeAt(regionId, { x, y });
+            if (s > CLIFF || (s > STEEP && (steep += 100) > STEEP_RUN)) return false;
         }
         return true;
     };
+    const slopeOf = (x: number, y: number) => (slopeCost(regionId, { x, y }) + slopeCost(regionId, { x: x + SLOPE_PROBE, y }) + slopeCost(regionId, { x: x - SLOPE_PROBE, y })
+        + slopeCost(regionId, { x, y: y + SLOPE_PROBE }) + slopeCost(regionId, { x, y: y - SLOPE_PROBE })) / 5;
     if (clear(from, to)) return [to];
     const cell = 400, pad = 12_000;
     const x0 = Math.min(from.x, to.x) - pad, y0 = Math.min(from.y, to.y) - pad;
@@ -293,7 +305,7 @@ export function safePath(regionId: number, level: number, from: Point, to: Point
     const start = at(si, sj), goal = at(ti, tj);
     const penalty = new Float32Array(w * h);
     // With the margin: a diagonal step between two cells can't cut a corner of the map then.
-    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) penalty[at(i, j)] = mapped && !onMap(regionId, { x: cx(i), y: cy(j) }, MAP_MARGIN) ? OFF_MAP_COST : idx.inside(cx(i), cy(j)) ? INSIDE_COST : isWet(regionId, { x: cx(i), y: cy(j) }) ? WATER_COST : 0;
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) penalty[at(i, j)] = mapped && !onMap(regionId, { x: cx(i), y: cy(j) }, MAP_MARGIN) ? OFF_MAP_COST : idx.inside(cx(i), cy(j)) ? INSIDE_COST : isWet(regionId, { x: cx(i), y: cy(j) }) ? WATER_COST : slopeOf(cx(i), cy(j));
     const g = new Float64Array(w * h).fill(Infinity), prev = new Int32Array(w * h).fill(-1);
     const done = new Uint8Array(w * h);
     const hfn = (k: number) => Math.hypot((k % w) - ti, Math.floor(k / w) - tj);
