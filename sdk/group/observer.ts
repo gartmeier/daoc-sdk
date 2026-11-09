@@ -16,6 +16,7 @@ import { existsSync, mkdirSync, readFileSync, appendFileSync, writeFileSync } fr
 import { dirname, join } from 'path';
 import { findBotEnv } from '../index';
 import { isAlive, type Blackboard } from './blackboard';
+import { COLUMN_FAR } from './behaviors';
 import { CC_WALK, MEZZED } from './cc';
 import type { GroupEvent, GroupPicture, MemberCombat, MemberReport, Phase } from './types';
 import type { LiveReport } from './wire';
@@ -190,6 +191,16 @@ export interface RunReport {
         enemiesWetInFights?: number;
         /** RvR: fights with players of both other realms in them: a third group joined. */
         threeWay?: number;
+        /**
+         * RvR, while the orders say travel: share of that time in a column (Orders.column), the main body's average distance
+         * from its centre, and how often the member nearest the leg's end could mezz (capabilities.cc), in %.
+         */
+        columnPct?: number;
+        travelSpreadAvg?: number;
+        ccFrontPct?: number;
+        /** RvR, in a column: a follower's average distance from its place (|behind the driver − (rank + 1) × gap|), and the signed average (positive: too far back). */
+        columnOffAvg?: number;
+        columnTrailAvg?: number;
     };
     /** % of run time per phase. */
     phases: Partial<Record<Phase, number>>;
@@ -384,6 +395,16 @@ export class GroupObserver {
     private fightWet = 0;
     private fightEnemySamples = 0;
     private fightEnemyWet = 0;
+    /** Travelling (orders): time, time of it in a column, and per sample the main body's spread and whether a crowd controller walked in front. */
+    private travelMs = 0;
+    private columnMs = 0;
+    private travelSamples = 0;
+    private travelSpreadSum = 0;
+    private ccFrontSamples = 0;
+    /** In a column: per follower sample within COLUMN_FAR of the driver, its distance from him less its planned (rank + 1) × gap, signed and absolute. */
+    private columnPlaceSamples = 0;
+    private columnTrailSum = 0;
+    private columnOffSum = 0;
     private deathsAlone = 0;
     /** Member samples (alive) in deep water. */
     private wetSamples = 0;
@@ -427,13 +448,13 @@ export class GroupObserver {
 
     /** Feed one picture (the board does this every sampleMs). */
     /** Who stood where this sample: the largest cluster within 2500 and each member's distance from its centre. */
-    private sampleTogether(p: GroupPicture): void {
+    private sampleTogether(p: GroupPicture): { core: MemberReport[]; c: { x: number; y: number } } | null {
         this.memberSamples += p.members.length;
         const alive = p.members.filter(m => !m.isDead);
         this.aliveSamples += alive.length;
         const near = (a: { x: number; y: number }, b: { x: number; y: number }, r: number) => Math.hypot(a.x - b.x, a.y - b.y) <= r;
         const lead = [...alive].sort((a, b) => alive.filter(o => o.regionId === b.regionId && near(o, b, 2500)).length - alive.filter(o => o.regionId === a.regionId && near(o, a, 2500)).length)[0];
-        if (!lead) return;
+        if (!lead) return null;
         const core = alive.filter(m => m.regionId === lead.regionId && near(m, lead, 2500));
         const c = { x: core.reduce((a, m) => a + m.x, 0) / core.length, y: core.reduce((a, m) => a + m.y, 0) / core.length };
         for (const m of alive) {
@@ -442,6 +463,32 @@ export class GroupObserver {
             this.spreadSamples++;
             if (d > 2500) this.strayedSamples++;
         }
+        return { core, c };
+    }
+
+    /** Travelling: how much of it in a column (Orders.column), how spread the main body walked, and whether the one nearest the leg's end could mezz. */
+    private sampleTravel(p: GroupPicture, dt: number, body: { core: MemberReport[]; c: { x: number; y: number } } | null): void {
+        const anchor = p.orders.anchor;
+        if (p.orders.phase !== 'travel' || !anchor || !body || body.core.length < 2) return;
+        this.travelMs += dt;
+        if (p.orders.column) this.columnMs += dt;
+        this.travelSamples++;
+        this.travelSpreadSum += body.core.reduce((a, m) => a + Math.hypot(m.x - body.c.x, m.y - body.c.y), 0) / body.core.length;
+        const front = [...body.core].sort((a, b) => Math.hypot(a.x - anchor.x, a.y - anchor.y) - Math.hypot(b.x - anchor.x, b.y - anchor.y))[0]!;
+        if (front.capabilities.cc) this.ccFrontSamples++;
+        const col = p.orders.column;
+        const driver = col && p.members.find(m => m.name === col.driver && !m.isDead);
+        if (!col || !driver) return;
+        col.order.forEach((name, rank) => {
+            const m = p.members.find(x => x.name === name);
+            if (!m || m.isDead || m.regionId !== driver.regionId) return;
+            const d = Math.hypot(m.x - driver.x, m.y - driver.y);
+            if (d > COLUMN_FAR) return;
+            const trail = d - (rank + 1) * col.gap;
+            this.columnPlaceSamples++;
+            this.columnTrailSum += trail;
+            this.columnOffSum += Math.abs(trail);
+        });
     }
 
     sample(p: GroupPicture): void {
@@ -451,7 +498,7 @@ export class GroupObserver {
         const phase = inferPhase(p);
         inc(this.phaseMs, phase, dt);
         const threats = p.contacts.filter(c => c.threat);
-        this.sampleTogether(p);
+        this.sampleTravel(p, dt, this.sampleTogether(p));
         for (const m of p.members) {
             let t = this.members.get(m.name);
             if (!t) {
@@ -737,6 +784,8 @@ export class GroupObserver {
                 alivePct: pct(this.aliveSamples, this.memberSamples), deathsAlone: this.deathsAlone,
                 wetPct: pct(this.wetSamples, this.aliveSamples), wetInFights: pct(this.fightWet, this.fightMemberSamples), enemiesWetInFights: pct(this.fightEnemyWet, this.fightEnemySamples),
                 threeWay: this.fights.filter(f => (f.enemyRealms?.length ?? 0) >= 2).length,
+                columnPct: pct(this.columnMs, this.travelMs), travelSpreadAvg: this.travelSamples ? Math.round(this.travelSpreadSum / this.travelSamples) : 0, ccFrontPct: pct(this.ccFrontSamples, this.travelSamples),
+                ...(this.columnPlaceSamples ? { columnOffAvg: Math.round(this.columnOffSum / this.columnPlaceSamples), columnTrailAvg: Math.round(this.columnTrailSum / this.columnPlaceSamples) } : {}),
             });
         }
         report.findings = findingsFor(report);
@@ -895,6 +944,7 @@ export function formatReport(r: RunReport): string {
     if (rvr) lines.push(`RvR: ${t.enemiesSeen ?? 0} enemy players seen, ${t.engagements ?? 0} engagements, ${t.playerKills ?? 0} player kills, ${t.deathsToPlayers ?? 0} deaths to players, ${t.realmPoints ?? 0} realm points (${t.rpPerHour ?? 0}/h).`);
     if (rvr && t.wetPct !== undefined) lines.push(`Water: we swam ${t.wetPct}% of the time alive and ${t.wetInFights}% of fight time, the enemies in our fights ${t.enemiesWetInFights}%. Fights with both other realms: ${t.threeWay} of ${t.engagements ?? 0}.`);
     if (rvr && t.alivePct !== undefined) lines.push(`Together: ${t.spreadAvg} units from the group's centre on average, ${t.strayedPct}% of the time beyond 2500; alive ${t.alivePct}% of the time; ${t.deathsAlone} deaths with fewer than two near.`);
+    if (rvr && t.travelSpreadAvg !== undefined) lines.push(`Travelling: ${t.columnPct}% of it in a column, ${t.travelSpreadAvg} units from the centre on average, a crowd controller in front ${t.ccFrontPct}% of the time${t.columnOffAvg !== undefined ? `; in it a follower stood ${t.columnOffAvg} off its place on average (${Math.abs(t.columnTrailAvg ?? 0)} ${(t.columnTrailAvg ?? 0) >= 0 ? 'too far back' : 'too close'} overall)` : ''}.`);
     if (r.previous) lines.push(`Against the previous run: ${Object.entries(r.previous).map(([k, v]) => `${k} ${v}`).join(', ')}.`);
     lines.push('', '## Findings', '');
     if (!r.findings.length) lines.push('None.');

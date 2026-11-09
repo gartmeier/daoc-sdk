@@ -377,7 +377,7 @@ const ccKey = (o: Orders) => o.cc.map(c => `${c.targetId}:${c.by}`).sort().join(
 /** Orders changed in a way that should interrupt what members are doing. */
 export function isMaterialChange(a: Orders, b: Orders): boolean {
     return a.phase !== b.phase || a.focus !== b.focus || a.puller !== b.puller || ccKey(a) !== ccKey(b)
-        || moved(a.retreatTo, b.retreatTo, 300) || moved(a.anchor, b.anchor, 300);
+        || moved(a.retreatTo, b.retreatTo, 300) || moved(a.anchor, b.anchor, 300) || (a.column?.driver ?? null) !== (b.column?.driver ?? null);
 }
 
 /** Late sightings of a dead mob (a member's client lags) are ignored this long ... */
@@ -802,7 +802,7 @@ export class Blackboard {
         if (material) {
             this.emit({
                 at: now, kind: 'orders', targetId: next.focus,
-                text: `${next.phase}${focus ? ` on ${focus.name}` : ''}${next.cc.length ? ` (cc ${next.cc.map(c => `${c.by}→${c.targetId}`).join(', ')})` : ''}: ${next.reason}`,
+                text: `${next.phase}${next.column ? ` (column behind ${next.column.driver})` : ''}${focus ? ` on ${focus.name}` : ''}${next.cc.length ? ` (cc ${next.cc.map(c => `${c.by}→${c.targetId}`).join(', ')})` : ''}: ${next.reason}`,
                 data: { phase: next.phase, focus: next.focus, puller: next.puller, seq: next.seq },
             });
             for (const l of this.orderListeners) l(this.getOrders(), prev);

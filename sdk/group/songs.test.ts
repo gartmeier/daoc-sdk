@@ -114,6 +114,20 @@ describe('song(): a running pulse is never sent again', () => {
         expect(s.sent).toEqual(['2:7']);
     });
 
+    test('songs.ccFirst: no song change in a fight while our mezz is still to cast; then it goes', async () => {
+        const s = setup([charge], 'engage', false);
+        const c = s.ctx as any;
+        c.name = 'Oisin';
+        c.settings = { songs: { ...SONG_SETTINGS, ccFirst: true } };
+        (s.orders as any).cc = [{ targetId: 501, by: 'Oisin' }];
+        await s.run(0);
+        expect(await s.run(6000)).toBe(false);
+        expect(s.cast).toEqual([]);
+        (s.orders as any).cc = [{ targetId: 501, by: 'Brigid' }];
+        await s.run(6100);
+        expect(s.cast).toEqual(['Chant of the Charge']);
+    });
+
     test('one already playing at the start is left alone, through a gap between pulses', async () => {
         const s = setup([charge]);
         s.state.effects = [{ name: 'Chant of the Charge' }];

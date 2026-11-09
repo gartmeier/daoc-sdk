@@ -1,8 +1,9 @@
 #!/bin/bash
 # Pair rounds: two groups a round and the third sits out (no script runs for it), rotating through the three pairings,
 # so every fight is one realm against one and rounds of a pairing compare with each other.
-# Each pair patrols a ring round the spot on the river between its halves (settings.opponent, sdk/group/keeps.ts pairs),
-# going round opposite ways, and stops on dry ground (stayDry, on by default).
+# Each pair patrols a ring round its spot (settings.opponent, sdk/group/keeps.ts pairs), going round opposite ways, and
+# stops on dry ground (stayDry, on by default). Hibernia and Midgard's spot is on Hibernia's bank: Midgard swims across
+# once, and the pack waits until it is ashore. The other two pairs still meet on their river.
 #
 #   FIRST=<0-2> bash groups/pair-rounds.sh [rounds=3] [seconds=600] [more flags for both groups]
 #

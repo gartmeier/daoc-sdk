@@ -27,8 +27,8 @@ import { aggroZones } from './terrain';
 import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, monsterAdds, onWhom, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
-import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
-import { drySpot } from './water';
+import type { ColumnOrder, Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
+import { drySpot, isWet } from './water';
 
 export { focusHealed, pickPackFocus } from './rvr';
 
@@ -100,6 +100,36 @@ export interface PackOptions {
     rebuffReady: { hp: number; mana: number };
     /** Released members within this of the keep's arrival wait there for the pack. */
     keepRadius: number;
+    /**
+     * Travel as a column (Orders.column) while no enemy player stands within this of our centre: the crowd controller in
+     * front (columnOrder), the others behind him. The first enemy this close spreads the pack into its slots, before a raid
+     * opens at openAt. Members see 3000 (agent.sightRadius) round themselves, which the pack's centre can put 4800 off
+     * (live, a hunt began there), so a large value (99999) spreads on the first enemy anyone sees.
+     * 0: never, slots all the way (as before).
+     */
+    column: number;
+    /**
+     * The slots stay this long after the last enemy within `column`, so one that goes stale or out of view for a moment
+     * doesn't string the pack out again mid-stalk (live, it flipped back for a second as the nearest foe went stale).
+     */
+    columnCalmMs: number;
+    /**
+     * The focus goes on the back line: known casters, then healers, never one in melee with us while another is in reach
+     * (pickPackFocus soft), and a focus that is neither gives way to one that is, once one is known. User, live
+     * 2026-11-09: our whole group burnt their tank first. Off: the nearest, as before.
+     */
+    focusSoft: boolean;
+    /**
+     * Casters (nukers and the healer) in a fight stand at least this far from the nearest free enemy player and step back
+     * when one comes closer (fanOut), and fanGap from each other. User, live 2026-11-09: casters fanned out, stayed as far
+     * off as they could and picked off what came close. 0: off, they hold where they stand.
+     */
+    fanMin: number;
+    fanGap: number;
+    /** Steps between places in the column. */
+    columnGap: number;
+    /** The driver's share of full speed; the others walk at full speed (the mover's default), so one that fell back closes up. */
+    columnSpeed: number;
 }
 
 export interface PackSettings extends RvrSettings {
@@ -114,6 +144,10 @@ export const PACK_OPTIONS: PackOptions = {
     pullBack: 1500, pullMs: 6000, maxChasers: 2, chaseGap: 800, maxLegs: 0, killMs: 12_000, preyHp: 40, healedBy: 30, droppedMs: 15_000,
     leave: 2000, cooldownMs: 0,
     rebuffMs: 20_000, rebuffReady: { hp: 90, mana: 80 }, keepRadius: 2500,
+    // Off until rounds compare it with the slots: --pack.column=3500.
+    column: 0, columnCalmMs: 30_000, columnGap: 120, columnSpeed: 0.9,
+    // Off until pair rounds compare them with the current pack: --pack.focusSoft=true --pack.fanMin=1100.
+    focusSoft: false, fanMin: 0, fanGap: 400,
 };
 
 export const PACK_SETTINGS: PackSettings = {
@@ -169,6 +203,22 @@ export function packCc(foes: readonly Contact[], members: readonly MemberReport[
     });
 }
 
+/** Who follows nearer the driver: the tank meets what comes first, the healers walk last. */
+const COLUMN_RANK: Record<Role, number> = { tank: 0, melee: 1, nuker: 2, support: 3, healer: 4 };
+
+/**
+ * Who leads the column and in what order the others follow. The driver is the crowd controller, as humans' Bard or
+ * Sorcerer: the support with a mezz, else a nuker with one, else anyone with one, else the tank. His mezz opens a
+ * raid, so he should be first in reach. Null with fewer than two.
+ */
+export function columnOrder(main: readonly MemberReport[]): { driver: string; order: string[] } | null {
+    if (main.length < 2) return null;
+    const lead = (m: MemberReport) => (m.capabilities.cc ? (m.role === 'support' ? 0 : m.role === 'nuker' ? 1 : 2) : m.role === 'tank' ? 3 : 4);
+    const driver = [...main].sort((a, b) => lead(a) - lead(b) || a.name.localeCompare(b.name))[0]!;
+    const order = main.filter(m => m !== driver).sort((a, b) => COLUMN_RANK[a.role] - COLUMN_RANK[b.role] || a.name.localeCompare(b.name)).map(m => m.name);
+    return { driver: driver.name, order };
+}
+
 /**
  * Whether a pack in a fight should run for it. Live, it lost four or five within a minute or so when two groups converged,
  * one at a time, still turning on its chasers after each 1500-unit pull back.
@@ -199,7 +249,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // rvr-roam with no enemy players on the board: patrol, rest, regroup, monsters that attack us, winding down.
     const calm = () => decideRvr({ ...ctx, picture: { ...p, contacts: p.contacts.filter(c => !players(c)) } });
     const alive = p.members.filter(m => !m.isDead);
-    if (!alive.length) { mem.pack = 'home'; return calm(); }
+    if (!alive.length) { mem.pack = 'home'; return { ...calm(), column: null, spread: false }; }
     const regionId = groupRegion(alive);
     if (!mem.realm || mem.realm === 'none') mem.realm = realmOfGroup(p.members);
     const realm: Realm = mem.realm;
@@ -225,7 +275,10 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const centre = centroid(main);
     // A shade is no foe, as in decideRvr: no focus, no mezz, nobody to count (AbstractServerRules.cs:449-455).
     noticePhantom(mem, p.contacts, o.phase === 'engage' ? o.focus : null, now, k);
-    const foes = p.contacts.filter(c => players(c) && !mem.phantoms[c.objectId] && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !inKeep(c)));
+    // With stayDry, one swimming that isn't fighting us waits until it is ashore. User, live 2026-11-09: with the pair spot on
+    // Hibernia's bank, Midgard swam across and the pack hunted it in the river (us 10-43 % of fight time wet, them 60-100 %).
+    const swimming = (c: Contact) => dry && !onUs(c) && isWet(regionId, c);
+    const foes = p.contacts.filter(c => players(c) && !mem.phantoms[c.objectId] && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !inKeep(c)) && !swimming(c));
     const free = foes.filter(c => !c.cc).sort((a, b) => dist(a, centre) - dist(b, centre));
     const stay: Point3 = onLand(centre, centre);
     const facing = free[0] ? { x: free[0].x, y: free[0].y } : undefined;
@@ -234,7 +287,17 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const pickupWait = pickups.map(m => ({ name: m.name, why: 'pickup' }));
     const dead = p.members.filter(m => m.isDead && m.regionId === regionId);
     const none = { focus: null, puller: null, cc: [], retreatTo: null };
-    const say = (u: OrdersUpdate): OrdersUpdate => ({ ...u, waiting: [...(u.waiting ?? []).filter(w => w.why !== 'pickup'), ...pickupWait] });
+    // Travelling with nobody near, nor anybody lately: a column behind the crowd controller. Every update says, as orders merge (setOrders).
+    const foeNear = !!k.column && foes.some(c => dist(c, centre) <= k.column);
+    if (foeNear) mem.columnFoeAt = now;
+    const settled = mem.columnFoeAt === undefined || now - mem.columnFoeAt >= k.columnCalmMs;
+    const column = (u: OrdersUpdate): ColumnOrder | null => {
+        if (!k.column || (u.phase ?? o.phase) !== 'travel' || foeNear || !settled) return null;
+        const c = columnOrder(main);
+        return c && { ...c, gap: k.columnGap, speed: k.columnSpeed };
+    };
+    // spread: an enemy player is known, so casters take their wider slots (spreadOnSight) from the first sight on.
+    const say = (u: OrdersUpdate): OrdersUpdate => ({ ...u, column: column(u), spread: foes.length > 0, waiting: [...(u.waiting ?? []).filter(w => w.why !== 'pickup'), ...pickupWait] });
     const areaRadius = 350;
 
     // Chasers are the Hero's: the anchor stands on the focus, so his leash lets him at it (never into a keep's circle).
@@ -253,7 +316,11 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         const held = pool.find(c => c.objectId === o.focus);
         if (held && focusHealed(mem.lowHp, held, k.healedBy)) mem.dropped[held.objectId] = now + k.droppedMs;
         const fresh = pool.filter(c => !mem.dropped[c.objectId]);
-        return fresh.find(c => c.objectId === o.focus) ?? pickPackFocus(fresh.length ? fresh : pool, centre, k.reach);
+        const kept = fresh.find(c => c.objectId === o.focus);
+        // focusSoft: a fighter we opened on gives way to a caster or healer as soon as one shows itself (casting).
+        const backLine = (c: Contact) => !!c.caster || !!c.healer;
+        if (kept && !(k.focusSoft && !backLine(kept) && fresh.some(backLine))) return kept;
+        return pickPackFocus(fresh.length ? fresh : pool, centre, k.reach, k.focusSoft);
     };
     const startPull = (why: string, legs = 0): OrdersUpdate => {
         mem.pack = 'pull';
@@ -286,7 +353,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         mem.raids = (mem.raids ?? 0) + 1;
         mem.packAnchor = stay;
         mem.holdSince = undefined;
-        const focus = pickPackFocus(free.filter(c => dist(c, centre) <= k.reach), centre, k.reach);
+        const focus = pickPackFocus(free.filter(c => dist(c, centre) <= k.reach), centre, k.reach, k.focusSoft);
         return fight('raid', focus, packCc(free.filter(c => dist(c, centre) <= k.reach), main, [], { centre, focus, areaRadius, now }), onFocus(focus), why);
     };
 
@@ -361,7 +428,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         mem.pack = 'kill';
         mem.killAt = now;
         mem.packAnchor = stay;
-        const focus = pickPackFocus(following, centre, k.reach);
+        const focus = pickPackFocus(following, centre, k.reach, k.focusSoft);
         return fight('kill', focus, packCc(following, main, [], { centre, focus, areaRadius, roots: true, now }), onFocus(focus), `${together} followed`);
         }
     }
@@ -468,7 +535,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             mem.pack = 'kill';
             mem.killAt = now;
             mem.pullLegs = 0;
-            const focus = pickPackFocus(seen, centre, k.reach);
+            const focus = pickPackFocus(seen, centre, k.reach, k.focusSoft);
             return fight('kill', focus, packCc(seen, main, [], { centre, focus, areaRadius, roots: true, now }), onFocus(focus), `${inSight.length} in sight vs ${main.length}`);
         }
         stepLeg(trip, 'prey', lead, { from: centre, movers: main, replan: 500 });
@@ -503,14 +570,109 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     return say({ ...none, phase: 'travel', anchor: mem.leg, ...(facing ? { facing } : {}), objective: `stalk ${seen.length} round (${Math.round(lead.x)}, ${Math.round(lead.y)})`, reason: `stalk ${tag(lead)}, ${Math.round(d)} away, ${crowd} together` });
 }
 
+/** A fan-out step is this long at most (one turn, then it looks again). */
+const FAN_LEG = 500;
+
+/**
+ * Where a caster in a fight steps to (pack.fanMin, fanGap), or null to stay: away from the nearest free enemy player
+ * when it stands within fanMin, to fanMin + 300 from it; else sideways, away from a caster of ours within fanGap.
+ * Never into water or within fanMin of another free enemy.
+ */
+export function fanOutStep(me: Point, foes: readonly Point[], mates: readonly Point[], k: Pick<PackOptions, 'fanMin' | 'fanGap'>, wet: (p: Point) => boolean = () => false): Point | null {
+    if (!k.fanMin || !foes.length) return null;
+    const near = [...foes].sort((a, b) => dist(a, me) - dist(b, me))[0]!;
+    const d = dist(me, near);
+    const ok = (p: Point) => !wet(p) && foes.every(f => f === near || dist(f, p) >= k.fanMin);
+    const u = d >= 1 ? { x: (me.x - near.x) / d, y: (me.y - near.y) / d } : { x: 1, y: 0 };
+    if (d < k.fanMin) {
+        const back = Math.min(FAN_LEG, k.fanMin + 300 - d);
+        // Straight away, else up to 60° off it.
+        for (const off of [0, 0.5, -0.5, 1, -1]) {
+            const c = Math.cos(off), s = Math.sin(off);
+            const to = { x: Math.round(me.x + (u.x * c - u.y * s) * back), y: Math.round(me.y + (u.x * s + u.y * c) * back) };
+            if (ok(to) && dist(near, to) > d) return to;
+        }
+        return null;
+    }
+    const mate = mates.filter(m => dist(m, me) < k.fanGap).sort((a, b) => dist(a, me) - dist(b, me))[0];
+    if (!mate) return null;
+    // Across the line to the enemy, on the side away from the mate.
+    const side = (mate.x - me.x) * -u.y + (mate.y - me.y) * u.x > 0 ? -1 : 1;
+    const step = k.fanGap - dist(mate, me) + 100;
+    const to = { x: Math.round(me.x - u.y * side * step), y: Math.round(me.y + u.x * side * step) };
+    return ok(to) && dist(near, to) >= k.fanMin ? to : null;
+}
+
+/** A healer keeps every member within this of it (heals reach 2000, Druid L24: Minor Restoration, Regrowth) ... */
+export const HEAL_REACH = 1700;
+/** ... and on its way to them stays this share of fanMin off every free enemy. */
+const HEAL_FOE_SHARE = 0.7;
+
+/**
+ * Where a healer in a fight steps to keep the group in its heals' reach (user, 2026-11-09: spread round the enemy,
+ * a Druid on one side can't heal the other), or null when every member is within HEAL_REACH: toward the members being
+ * hit (`hit`), else toward all of them, FAN_LEG at most, up to 60° off the straight way to keep clear of the enemy.
+ */
+export function healerStep(me: Point, members: readonly Point[], hit: readonly Point[], foes: readonly Point[], k: Pick<PackOptions, 'fanMin'>, wet: (p: Point) => boolean = () => false): Point | null {
+    if (!members.some(m => dist(m, me) > HEAL_REACH)) return null;
+    const to = centroid(hit.length ? hit : members);
+    const d = dist(me, to);
+    if (d < 1) return null;
+    const leg = Math.min(FAN_LEG, d);
+    const base = Math.atan2(to.y - me.y, to.x - me.x);
+    for (const off of [0, 0.5, -0.5, 1, -1]) {
+        const p = { x: Math.round(me.x + Math.cos(base + off) * leg), y: Math.round(me.y + Math.sin(base + off) * leg) };
+        if (!wet(p) && foes.every(f => dist(f, p) >= k.fanMin * HEAL_FOE_SHARE)) return p;
+    }
+    return null;
+}
+
+/**
+ * Casters fan out in a fight (pack.fanMin): off the nearest free enemy and apart from each other, so one enemy
+ * reaches one of them at a time and an area spell catches one. Between casts: a turn that moves casts nothing.
+ * The healer first keeps everyone in its reach (healerStep), moving where the damage goes; it spreads from nobody.
+ */
+export const fanOut = (): Behavior<PackSettings> => ({
+    name: 'fanOut',
+    async run(ctx) {
+        // A pack list run under other settings (a test's, or a strategy that borrows the lists) has no pack options.
+        const k = ctx.settings.pack as PackOptions | undefined;
+        if (!k?.fanMin || ctx.orders().phase !== 'engage') return false;
+        const me = ctx.me();
+        const now = Date.now();
+        const foes = ctx.picture().contacts.filter(c => c.kind === 'player' && !c.stale && isAlive(c) && !c.cc && !untouchable(c, now) && c.regionId === me.regionId);
+        const wet = (p: Point) => isWet(me.regionId, p);
+        const others = ctx.members().filter(m => m.name !== ctx.name && !m.isDead && m.regionId === me.regionId);
+        if (ctx.role === 'healer') {
+            const hit = others.filter(m => foes.some(f => f.target === m.name));
+            const toThem = healerStep(me, others, hit, foes, k, wet);
+            if (toThem) {
+                ctx.doing('move', null, hit.length ? `toward ${hit.map(m => m.name).join(', ')}, in heal reach` : 'back in heal reach of the group');
+                await ctx.bot.walkTo(toThem.x, toThem.y, { tolerance: 60, timeout: 3000 });
+                return true;
+            }
+        }
+        const mates = ctx.role === 'healer' ? [] : others.filter(m => m.role === 'nuker' || m.role === 'healer');
+        const to = fanOutStep(me, foes, mates, k, wet);
+        if (!to) return false;
+        ctx.doing('move', null, 'fan out');
+        await ctx.bot.walkTo(to.x, to.y, { tolerance: 60, timeout: 3000 });
+        return true;
+    },
+});
+
 /**
  * rvr-roam's lists without position(): nobody steps to keep a range from the focus, they cast or wait where they
  * stand. Support is the pack's crowd control: stop casts, mezz, heal only as a backup, then confuse.
+ * fanOut (off unless pack.fanMin) goes before a nuker's assist and after a healer's heal.
  */
 export function packBehaviors(): Record<Role, Behavior<RvrSettings>[]> {
     const lists = rvrBehaviors() as Record<Role, Behavior<RvrSettings>[]>;
     const out = Object.fromEntries(Object.entries(lists).map(([role, list]) => [role, list.filter(b => b.name !== 'position')])) as Record<Role, Behavior<RvrSettings>[]>;
     out.support = [release(), sprint(), retreat(), flee(), rez(), interrupt(), crowdControl(), backupHeal(), confuse(), song(), shedLoad(), holdFormation(), buff(), rest()] as Behavior<RvrSettings>[];
+    const before = (list: Behavior<RvrSettings>[], name: string) => { const i = list.findIndex(b => b.name === name); return i < 0 ? list : [...list.slice(0, i), fanOut() as unknown as Behavior<RvrSettings>, ...list.slice(i)]; };
+    out.nuker = before(out.nuker, 'assist');
+    out.healer = before(out.healer, 'crowdControl');
     return out;
 }
 

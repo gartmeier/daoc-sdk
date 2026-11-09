@@ -66,8 +66,11 @@ export const BATTLEGROUND_LAYOUTS: Record<number, BattlegroundLayout> = {
         // Three rivers run out from the Faste, one between each two realms' halves; the only dry ways over are its three
         // bridges, inside its guards. Each pair meets on its own river, 12000-14000 from the Faste (about halfway to the
         // map's edge): the river's middle there, from the client's terrain (water.ts). A ring of 4000 round it crosses it twice.
+        // Hibernia and Midgard (user, 2026-11-09: they met in the water) meet on Hibernia's bank instead: the whole ring is dry
+        // (400 margin), its east edge 1800 from the river, 19.0k from Hibernia's arrival and 19.3k from Midgard's, which swims
+        // across once (the river ends near y 10000, 15k north of its arrival and 46k from Hibernia's: no dry way round).
         pairs: {
-            'hibernia|midgard': { x: 41069, y: 26768 },
+            'hibernia|midgard': { x: 34500, y: 26500 },
             'albion|hibernia': { x: 21155, y: 37017 },
             'albion|midgard': { x: 46953, y: 40219 },
         },

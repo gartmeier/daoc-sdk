@@ -32,6 +32,18 @@ export interface TacticsSettings {
     standGround?: boolean;
     /** With standGround: a caster steps up to this far to bring the focus in range, if no free enemy stands within its melee distance there. */
     standStep?: number;
+    /**
+     * With standGround: the support walks round the fight up to this far (in legs, each turn again) to bring its
+     * crowd-control or interrupt target in reach, staying FLANK_CLEAR from every other free enemy player (flankStep);
+     * 0: the straight standStep. User, live 2026-11-09: the Bard stood at the back of a long line, out of reach of
+     * Midgard's supporters at the back of theirs; human Bards went round and interrupted from the side.
+     */
+    ccFlank?: number;
+    /**
+     * While an enemy player is known (Orders.spread), the casters' slots go this many times as far back and as wide
+     * (spreadFormation): human groups spread as soon as they saw the other one coming (user, 2026-11-09). 0 or 1: off.
+     */
+    spreadOnSight?: number;
     /** Open with an area mezz when it catches at least this many free enemies and not the focus (areaMezzCatch). */
     areaMezzMin?: number;
     /** Nuke with the hardest hit rather than the highest spell level (NukeOptions.byDamage). */
@@ -268,8 +280,26 @@ export function claimedBy(ctx: MemberContext, kind: string, targetId: number, wi
 export function formationSlot(ctx: MemberContext<TacticsSettings>, anchor: Point, facing: Point | null): Point {
     const same = ctx.members().filter(m => m.role === ctx.role).map(m => m.name);
     const away = facing && dist(anchor, facing) > 1 ? Math.atan2(anchor.y - facing.y, anchor.x - facing.x) : 0;
-    const o = formationOffset(ctx.settings.formation, ctx.role, Math.max(0, same.indexOf(ctx.name)), away);
+    const scale = ctx.orders().spread ? ctx.settings.spreadOnSight ?? 0 : 0;
+    const o = formationOffset(spreadFormation(ctx.settings.formation, scale), ctx.role, Math.max(0, same.indexOf(ctx.name)), away);
     return keepOnMap(ctx.me().regionId, anchor, { x: Math.round(anchor.x + o.x), y: Math.round(anchor.y + o.y) });
+}
+
+/** A spread caster's slot turns no further than this off the line back from the facing point. */
+const SPREAD_MAX_ANGLE = 1.2;
+
+/**
+ * The formation with the casters (nukers, healers) `scale` times as far back and as wide; the tank and the support keep
+ * theirs. 1 or less: unchanged. A role with no angle of its own gets 0.4 to scale, as formationOffset gives its second.
+ */
+export function spreadFormation(formation: TacticsSettings['formation'], scale: number): TacticsSettings['formation'] {
+    if (scale <= 1) return formation;
+    const out = { ...formation };
+    for (const role of ['nuker', 'healer'] as const) {
+        const f = formation[role] ?? { back: 200, angle: 0 };
+        out[role] = { back: f.back * scale, angle: Math.min(SPREAD_MAX_ANGLE, (f.angle || 0.4) * scale) };
+    }
+    return out;
 }
 
 /** Offset of the `index`-th member of `role` from the anchor, with `away` the angle from the facing point to the anchor. */
@@ -786,9 +816,12 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         if (stand && distanceTo(target) > sp.range) {
             // The Bard leads the pack to mezz: a short step like a caster's, the others hold.
             const view = foeInView(ctx, target.objectId);
-            const step = ctx.role === 'support' && view ? standStepTo(ctx.me(), view, sp.range, ctx.settings.standStep ?? 0, ctx.picture().contacts) : null;
+            const flank = ctx.settings.ccFlank ?? 0;
+            const step = ctx.role !== 'support' || !view ? null
+                : flank ? flankStep(ctx.me(), view, sp.range, flank, ctx.picture().contacts, target.objectId)
+                : standStepTo(ctx.me(), view, sp.range, ctx.settings.standStep ?? 0, ctx.picture().contacts);
             if (!step) return ctx.skip('cc: out of reach, holding ground');
-            ctx.doing('move', target.objectId, 'step in range');
+            ctx.doing('move', target.objectId, flank ? 'round the fight into range' : 'step in range');
             await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 });
             return true;
         }
@@ -864,6 +897,50 @@ export function standStepTo(me: Point, focus: Point & { distance: number }, rang
 /** A step in stays this far from any free enemy player. */
 const STEP_CLEAR = 500;
 
+/** A flank (flankStep) keeps this far from every free enemy player but its target ... */
+export const FLANK_CLEAR = 700;
+/** ... walks this far a turn, then looks again ... */
+const FLANK_LEG = 600;
+/** ... and stands this share of its spell's range from the target. */
+const FLANK_REACH = 0.85;
+
+const toSegment = (p: Point, a: Point, b: Point) => {
+    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+    const t = l2 ? Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2)) : 0;
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+};
+
+/**
+ * The next leg of a walk round the fight to a spot `range` × FLANK_REACH from `target`: of the spots on that circle
+ * FLANK_CLEAR from every other free enemy player, the nearest (one the straight way to which passes such a player counts
+ * double), within `budget`. The leg turns up to 90° off the straight way, the least that keeps it clear, so turn by turn
+ * the walk curves round the middle. Null when no spot or leg is clear, or the spot is beyond `budget`.
+ */
+export function flankStep(me: Point, target: Point, range: number, budget: number, contacts: readonly Contact[], targetId: number): Point | null {
+    const others = contacts.filter(c => c.kind === 'player' && !c.stale && alive(c) && !c.cc && c.objectId !== targetId);
+    const clear = (p: Point) => others.every(c => dist(c, p) >= FLANK_CLEAR);
+    const passes = (a: Point, b: Point, k = 1) => others.some(c => toSegment(c, a, b) < FLANK_CLEAR * k);
+    const r = range * FLANK_REACH;
+    let best: { p: Point; cost: number } | null = null;
+    for (let i = 0; i < 24; i++) {
+        const a = i * Math.PI / 12;
+        const p = { x: target.x + Math.cos(a) * r, y: target.y + Math.sin(a) * r };
+        if (!clear(p)) continue;
+        const cost = dist(me, p) * (passes(me, p) ? 2 : 1);
+        if (cost <= budget && (!best || cost < best.cost)) best = { p, cost };
+    }
+    if (!best) return null;
+    const d = dist(me, best.p);
+    if (d < 1) return null;
+    const leg = Math.min(FLANK_LEG, d);
+    const base = Math.atan2(best.p.y - me.y, best.p.x - me.x);
+    for (const off of [0, 0.5, -0.5, 1, -1, Math.PI / 2, -Math.PI / 2]) {
+        const to = { x: Math.round(me.x + Math.cos(base + off) * leg), y: Math.round(me.y + Math.sin(base + off) * leg) };
+        if (clear(to) && !passes(me, to, 0.8)) return to;
+    }
+    return null;
+}
+
 /**
  * The free enemy players an area mezz on `target` would catch, `target` first, or none at all when the
  * focus stands in its radius: mezzing what we are about to hit wastes the spell. A shade is no catch: the server's area selection leaves it out (SpellHandler.cs:1477, :1599).
@@ -915,6 +992,18 @@ export const interrupt = (): Behavior<TacticsSettings> => ({
             if (!sp) continue;
             ctx.doing('interrupt', foe.objectId, sp.spell.name);
             ctx.result('interrupt', await ctx.bot.castSpell(sp.spell, foe.objectId, { approach: false }), foe.objectId);
+            return true;
+        }
+        // None in reach: a support with ccFlank walks round the fight toward the first that is (spells: longest range first).
+        if (ctx.role !== 'support') return false;
+        const flank = ctx.settings.ccFlank ?? 0;
+        if (!flank) return false;
+        for (const foe of casting) {
+            const view = foeInView(ctx, foe.objectId);
+            const step = view && flankStep(ctx.me(), view, spells[0]!.range, flank, ctx.picture().contacts, foe.objectId);
+            if (!step) continue;
+            ctx.doing('move', foe.objectId, `round the fight to interrupt`);
+            await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 });
             return true;
         }
         return false;
@@ -1502,7 +1591,7 @@ export function fightRejoin(role: Role, chaseLeash: number | undefined): number 
 }
 
 /** One leg toward a slot, around known danger and the enemy keeps' guards. */
-async function walkTowardSlot(ctx: MemberContext<TacticsSettings>, slot: Point, leg: number): Promise<void> {
+async function walkTowardSlot(ctx: MemberContext<TacticsSettings>, slot: Point, leg: number, o: { speedFactor?: number; detail?: string } = {}): Promise<void> {
     const me = ctx.me();
     const d = dist(me, slot);
     let to: Point = slot;
@@ -1511,9 +1600,128 @@ async function walkTowardSlot(ctx: MemberContext<TacticsSettings>, slot: Point, 
         const f = Math.min(1, leg / dist(me, next));
         to = { x: me.x + (next.x - me.x) * f, y: me.y + (next.y - me.y) * f };
     }
-    ctx.doing('move', null, ctx.orders().phase);
-    const w = await ctx.bot.walkTo(to.x, to.y, { tolerance: 80 });
+    ctx.doing('move', null, o.detail ?? ctx.orders().phase);
+    const w = await ctx.bot.walkTo(to.x, to.y, { tolerance: 80, ...(o.speedFactor ? { speedFactor: o.speedFactor } : {}) });
     if (!w.success) { ctx.result('walk', w); await Bun.sleep(500); }
+}
+
+/** A follower this close to its place in the column stays where it is ... */
+export const COLUMN_BAND = 80;
+/** ... and one farther than this walks there by the navmesh, leg by leg, as to a slot: nearer, a straight move does, renewed every turn. */
+export const COLUMN_FAR = 1000;
+/** The driver's own walk ends this close to the leg's end, as a slot's does when travelling (needsSlot). */
+const COLUMN_DRIVER_SLACK = 250;
+/** Memory key: the last spot a follower's raw move was sent to. */
+const COLUMN_MOVE = 'columnMove';
+/** Memory key: the driver's recent reported positions ({x, y, at}), for his velocity. */
+const COLUMN_TRACK = 'columnTrack';
+/** Full run speed, units per second (client/movement.ts PLAYER_BASE_SPEED). */
+const RUN_SPEED = 191;
+/** The driver moves when his reports say this fast or faster (units per second) ... */
+export const COLUMN_MOVING = 40;
+/** ... over reports at least this far apart and at most COLUMN_TRACK_MS old. */
+const COLUMN_TRACK_MIN_MS = 300;
+const COLUMN_TRACK_MS = 1000;
+/**
+ * While he moves, a follower aims this far beyond its place, along his way, so its mover never slows down to arrive
+ * (it brakes for its end: movement.ts ramp) and the speed keeps it in place instead.
+ */
+export const COLUMN_LEAD = 400;
+/** Speed added per unit behind its place (per second: 100 behind runs 100 faster than the driver), and the slowest it goes. */
+const COLUMN_GAIN = 1;
+const COLUMN_MIN_SPEED = 0.3;
+
+/**
+ * The driver's velocity (units per second) from his last reports, or null standing or with too few: the oldest report
+ * within COLUMN_TRACK_MS against the newest, at least COLUMN_TRACK_MIN_MS apart.
+ */
+function driverVelocity(ctx: MemberContext<TacticsSettings>, driver: MemberReport): Point | null {
+    const prev: { x: number; y: number; at: number }[] = ctx.memory.get(COLUMN_TRACK) ?? [];
+    const track = prev.at(-1)?.at === driver.at ? prev : [...prev, { x: driver.x, y: driver.y, at: driver.at }];
+    const recent = track.filter(s => driver.at - s.at <= COLUMN_TRACK_MS);
+    ctx.memory.set(COLUMN_TRACK, recent);
+    const first = recent[0]!, last = recent.at(-1)!;
+    const dt = (last.at - first.at) / 1000;
+    if (dt * 1000 < COLUMN_TRACK_MIN_MS) return null;
+    const v = { x: (last.x - first.x) / dt, y: (last.y - first.y) / dt };
+    return Math.hypot(v.x, v.y) >= COLUMN_MOVING ? v : null;
+}
+
+/**
+ * How fast a follower runs (speed factor) and where it aims while the driver moves at `v`: his speed, plus COLUMN_GAIN
+ * per unit it is behind its place along his way (less when ahead), toward a point COLUMN_LEAD beyond its place.
+ */
+export function columnPace(me: Point, spot: Point, v: Point): { to: Point; speedFactor: number } {
+    const speed = Math.hypot(v.x, v.y);
+    const f = { x: v.x / speed, y: v.y / speed };
+    const behind = (spot.x - me.x) * f.x + (spot.y - me.y) * f.y;
+    const speedFactor = Math.round(Math.min(1, Math.max(COLUMN_MIN_SPEED, (speed + COLUMN_GAIN * behind) / RUN_SPEED)) * 100) / 100;
+    return { to: { x: Math.round(spot.x + f.x * COLUMN_LEAD), y: Math.round(spot.y + f.y * COLUMN_LEAD) }, speedFactor };
+}
+
+/**
+ * A follower's place in the column: `back` behind the driver, on the line from where he is heading (`ahead`, the leg's end)
+ * through him. Standing at the leg's end he heads nowhere: then `back` from him on the follower's own side, as a /stick holds.
+ */
+export function columnSpot(driver: Point, ahead: Point | null, me: Point, back: number): Point {
+    const unit = (dx: number, dy: number) => { const l = Math.hypot(dx, dy); return l < 1 ? null : { x: dx / l, y: dy / l }; };
+    const u = (ahead && dist(driver, ahead) > 100 ? unit(driver.x - ahead.x, driver.y - ahead.y) : null) ?? unit(me.x - driver.x, me.y - driver.y) ?? { x: 1, y: 0 };
+    return { x: Math.round(driver.x + u.x * back), y: Math.round(driver.y + u.y * back) };
+}
+
+/**
+ * Travelling in a column (Orders.column): the driver walks the leg a little slower than full speed, and each other member
+ * keeps its place behind him, (rank + 1) × gap back. A follower's move is a raw one renewed every turn, as bot.follow does,
+ * so it doesn't stop and start at each step; casts stop it (castSpell), and so does leaving the column. While he moves
+ * it aims past its place and keeps it by speed (columnPace): aimed at the place itself it braked there, stood until he
+ * was COLUMN_BAND on, and started again from rest, so the whole line trailed about 140 too far back (2026-11-09 A/B).
+ * Its place is where his last report puts him now, at his velocity. Null: not ours to walk (not in the order, or the
+ * driver gone), and the slot round the anchor holds instead.
+ */
+async function walkInColumn(ctx: MemberContext<TacticsSettings>): Promise<boolean | null> {
+    const o = ctx.orders();
+    const col = o.column;
+    if (!col || !o.anchor) return null;
+    const me = ctx.me();
+    if (col.driver === ctx.name) {
+        if (dist(me, o.anchor) < COLUMN_DRIVER_SLACK) return false;
+        await walkTowardSlot(ctx, o.anchor, 2500, { speedFactor: col.speed, detail: 'travel: driving the column' });
+        return true;
+    }
+    const rank = col.order.indexOf(ctx.name);
+    const driver = ctx.member(col.driver);
+    if (rank < 0 || !driver || driver.isDead || driver.regionId !== me.regionId) return null;
+    const v = driverVelocity(ctx, driver);
+    const ahead = v ? Math.min(1, Math.max(0, (Date.now() - driver.at) / 1000)) : 0;
+    const now = v ? { ...driver, x: driver.x + v.x * ahead, y: driver.y + v.y * ahead } : driver;
+    const spot = keepOnMap(me.regionId, driver, columnSpot(now, o.anchor, me, (rank + 1) * col.gap));
+    const d = dist(me, spot);
+    if (d > COLUMN_FAR) {
+        ctx.memory.delete(COLUMN_MOVE);
+        await walkTowardSlot(ctx, spot, 2500, { detail: `travel: catching up with ${col.driver}` });
+        return true;
+    }
+    // Standing: to its place, and there it stays. Moving: past it, at the pace that keeps it there.
+    if (!v && d <= COLUMN_BAND) return false;
+    const pace = v ? columnPace(me, spot, v) : null;
+    const to = pace ? keepOnMap(me.regionId, spot, pace.to) : spot;
+    const speedFactor = pace?.speedFactor ?? 1;
+    const last: { x: number; y: number; speedFactor?: number } | undefined = ctx.memory.get(COLUMN_MOVE);
+    if (!last || dist(last, to) > 40 || Math.abs((last.speedFactor ?? 1) - speedFactor) >= 0.05 || !ctx.sdk.getMovement()?.moving) {
+        const sent = await ctx.sdk.sendMoveTo(to.x, to.y, driver.z, { tolerance: 40, ...(speedFactor < 1 ? { speedFactor } : {}) });
+        if (!sent.success) { ctx.memory.delete(COLUMN_MOVE); ctx.result('walk', sent); return null; }
+        ctx.memory.set(COLUMN_MOVE, { x: to.x, y: to.y, speedFactor });
+    }
+    ctx.doing('move', null, `travel: column behind ${col.driver}`);
+    return true;
+}
+
+/** Out of the column with a raw move of ours still going: stop it, or it walks on to a place behind a driver nobody follows now. */
+async function leaveColumn(ctx: MemberContext<TacticsSettings>): Promise<void> {
+    ctx.memory.delete(COLUMN_TRACK);
+    if (!ctx.memory.has(COLUMN_MOVE)) return;
+    ctx.memory.delete(COLUMN_MOVE);
+    if (ctx.sdk.getMovement()?.moving) await ctx.sdk.sendStop();
 }
 
 /**
@@ -1545,6 +1753,11 @@ export const holdFormation = (): Behavior<TacticsSettings> => ({
         if (o.phase === 'pull' && o.puller === ctx.name) return false;
         // Nobody walks alone: the group is on its way to pick us up (pack.ts).
         if (o.waiting.some(w => w.name === ctx.name && w.why === 'pickup')) return ctx.skip('waiting to be picked up');
+        if (o.phase === 'travel' && o.column) {
+            const walked = await walkInColumn(ctx);
+            if (walked !== null) return walked;
+        }
+        await leaveColumn(ctx);
         const me = ctx.me();
         // In a fight only a member far from it moves here (back from a release, or tank and melee left beyond
         // the leash): the others' fight behaviours place them.
@@ -1636,6 +1849,9 @@ export const song = (): Behavior<TacticsSettings> => ({
         const holdMs = (ctx.settings.songs ?? SONG_SETTINGS).holdMs;
         if (last && playing.includes(last.name) && Date.now() - last.at < holdMs && ctx.orders().phase !== 'engage') return false;
         if (want.spell.cooldownRemaining > 0) return false;
+        // ccFirst: the mezz goes before a song change while we have one to cast (songs.ts).
+        const o = ctx.orders();
+        if ((ctx.settings.songs ?? SONG_SETTINGS).ccFirst && o.phase === 'engage' && o.cc.some(a => a.by === ctx.name)) return false;
         // A cast would stop the swing; one with a cast time waits for the fight to end.
         if (ctx.me().attacking && want.castTime > 0) return false;
         ctx.doing('song', null, want.spell.name);
