@@ -9,7 +9,7 @@ import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import type { SpellPick } from '../group/spells';
 import type { Contact } from '../group/types';
-import { unlessHammered } from './healer';
+import { guarded, unlessHammered } from './healer';
 
 /** After a resist, try again this much later at the earliest: a resist leaves no timer. */
 const RESIST_RETRY_MS = 6000;
@@ -47,5 +47,5 @@ export const disease = (): Behavior<TacticsSettings> => ({
 });
 
 export function shaman(): Character {
-    return { role: 'healer', fight: [unlessHammered(disease()), assist()] };
+    return { role: 'healer', fight: [guarded(unlessHammered(disease())), assist()] };
 }
