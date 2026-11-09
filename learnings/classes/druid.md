@@ -18,7 +18,7 @@ export default druid({ dotsAbove: 50 });       // Group or Solo Nature: Wither a
 
 **`druid()` adds `groupHeal` as `react` (2026-11-09, arena round 5 onwards; `sdk/classes/druid.test.ts`).** **Server code:** `heal` picks the cheapest single heal that covers one member (`pickHeal`), and Major Restoration (190 for 32 power) beats Renewing Conflux (139 for 57) on that, so the group heal was never cast. A Group-target heal with no radius lands on every member within its range (2000) of her, pets too (`SpellHandler.SelectTargets`, GROUP). `groupHeal` casts the best one she can pay for when three or more members there each miss 70 % of what it restores (about 97 of a 700-health member: below 86 %), in a fight, above 25 % power. Options `groupHealMin`, `groupHealAbove`.
 
-**Where it goes:** the pack's healer list has no fight and no `position`, so a `react` lands at `shedLoad`: below `heal` (tank 75 %, others 70 % in RvR), `crowdControl` and `spareNuke`. So it takes the turns she idled before (25-44 % of fight time, "nothing to do", rounds 1-4), when members sit at 70-86 %. Asked the orchestrator on 2026-11-09 to put a fight-less list's `react` above its main action, which would make it her first heal when three are hurt.
+**Where it goes:** `urgent` (Character.urgent, f4135fd): in the pack's healer list, below `emergencyHeal` and above `heal`, so with three hurt it is her first heal. It fires only when three or more each miss 70 % of what it restores, so a single hurt member still gets `heal`'s cheapest cover.
 
 **Server code:** a Heal druid at Nature 1 has no damage spell, so `assist` would have nothing to cast.
 

@@ -14,7 +14,10 @@ describe('druid kit', () => {
         const k = druid();
         expect(k.role).toBe('healer');
         expect(k.fight).toBeUndefined();
-        expect(withCharacter(packBehaviors().healer, k).map(b => b.name)).toContain('groupHeal');
+        const names = withCharacter(packBehaviors().healer, k).map(b => b.name);
+        // Above her single heals, below the emergency one.
+        expect(names.indexOf('groupHeal')).toBeGreaterThan(names.indexOf('emergencyHeal'));
+        expect(names.indexOf('groupHeal')).toBeLessThan(names.indexOf('heal'));
     });
 
     test('Heal druid reaches Renewing Conflux at 24: a group heal, no radius, which heal() never picks over Major Restoration', () => {

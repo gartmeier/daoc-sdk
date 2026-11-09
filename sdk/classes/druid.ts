@@ -56,7 +56,7 @@ export const groupHeal = (min = 3, above = 25): Behavior => ({
 export function druid({ dotsAbove, groupHealMin = 3, groupHealAbove = 25 }: DruidOptions = {}): Character {
     return {
         role: 'healer',
-        react: [groupHeal(groupHealMin, groupHealAbove)],
+        urgent: [groupHeal(groupHealMin, groupHealAbove)],
         ...(dotsAbove === undefined ? {} : { fight: [thrifty(assist(), dotsAbove)] }),
     };
 }
