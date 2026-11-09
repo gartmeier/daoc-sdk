@@ -30,6 +30,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 17 (vs Camelot, won 9 kills / 3 deaths):** 2 stuns, 2 cures (1 out of range), 6 heals, died once. Again no slow, though the report has Ulfgar in melee 30 %: that column may count an enemy in reach, not one swinging at him, which is what `hinder` needs (`onMember`). Watch `debuff` over the next rounds before changing it. She knows Hinder Spirit live (`bun sdk/cli.ts Sigrid`).
 
+**Round 18 (vs Hibernia, won by wipe 5 kills / 0 deaths):** 17 cures (4 interrupted), 2 Hinder Spirits (1 resisted), 4 heals; targeted 27 %, never in melee, idle 4 %. Against Hibernia's mezzers the cure is her main work.
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
