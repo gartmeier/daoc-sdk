@@ -41,6 +41,15 @@ describe('withCharacter', () => {
         expect(names(withCharacter(role, { urgent: [own('cure')], react: [own('myHeal')] }))).toEqual(['release', 'cure', 'myHeal', 'tank', 'shedLoad', 'buff', 'rest']);
     });
 
+    test('with a fight and an emergency heal ahead of it (a nuker\'s list), urgent goes above that heal, below flee and crowd control', () => {
+        const nuker = [release(), own('flee'), own('crowdControl'), own('emergencyHeal'), own('fanOut'), assist(), shedLoad(), rest()];
+        expect(names(withCharacter(nuker, { urgent: [own('stunCaster')], react: [own('myReact')] })))
+            .toEqual(['release', 'flee', 'crowdControl', 'stunCaster', 'emergencyHeal', 'fanOut', 'myReact', 'assist', 'shedLoad', 'rest']);
+        // With position and no fight (a roaming healer), urgent stays at react's place.
+        const healer = [release(), own('emergencyHeal'), own('flee'), heal(), own('position'), shedLoad()];
+        expect(names(withCharacter(healer, { urgent: [own('cure')] }))).toEqual(['release', 'emergencyHeal', 'flee', 'heal', 'cure', 'position', 'shedLoad']);
+    });
+
     test('a role list with no fight takes it where position() would keep it at range', () => {
         const healer = defaultBehaviors().healer;
         const list = names(withCharacter(healer, { fight: [own('myFight')] }));

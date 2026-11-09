@@ -24,9 +24,9 @@ export interface Character<S = any> {
     /** Its job when group.json doesn't pin one, ahead of the role its class would get. */
     role?: Role;
     /**
-     * Above the role's main action. In a list with a fight or position() that is react's place, ahead of it; in one with
-     * neither (the pack's healer and support), above its first heal, interrupt, crowd control or song, where react would go
-     * at shedLoad and get only the turns those leave.
+     * Above the role's main action. In a list with a fight, above the emergency heal ahead of it, else react's place, ahead
+     * of it; with position() and no fight, react's place; with neither (the pack's healer and support), above its first heal,
+     * interrupt, crowd control or song, where react would go at shedLoad and get only the turns those leave.
      */
     urgent?: Behavior<S>[];
     react?: Behavior<S>[];
@@ -67,9 +67,14 @@ export function withCharacter<S>(list: Behavior<S>[], character: Character<S> | 
         ...character.chores ?? [],
         ...list.slice(at),
     ];
+    // With a fight (a nuker's list), urgent goes above the emergency heal ahead of it: Niamh cast 11 emergency heals and no
+    // Prismatic Flash on the melee diving our healer in arena round 18 (2026-11-10). Without one, just ahead of react.
+    const emergency = first >= 0 ? list.findIndex(b => b.name === 'emergencyHeal') : -1;
+    const up = emergency >= 0 && emergency < at ? emergency : at;
     return [
-        ...list.slice(0, at),
+        ...list.slice(0, up),
         ...character.urgent ?? [],
+        ...list.slice(up, at),
         ...character.react ?? [],
         ...character.fight ?? list.filter(isFight),
         ...character.chores ?? [],
