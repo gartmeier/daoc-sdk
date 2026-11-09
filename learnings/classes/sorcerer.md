@@ -85,3 +85,5 @@ That's a fix in `sdk/group/spells.ts`, not a kit: power and health regen as sepa
 **The change** (`sdk/classes/sorcerer.ts`): a `selfBuff` chore (from the Paladin kit) keeps Shield Mind up between fights. That's Mind 16, self, 10 power, 20 minutes. **Server code:** a `MesmerizeDurationBuff` SingleStatBuff on MesmerizeDurationReduction, which CCSpellHandler.cs:212 multiplies into every mezz on him, so mezzes are 10 % shorter. `buff()` doesn't slot that type.
 
 **Not the kit's:** Clear Mind (`cureMezz`) is the group's `--cure` flag, and was within the noise on 2026-11-04 (groups/camelot/lab_log.md).
+
+**Arena round 21** (Camelot wiped Hibernia 5/0 in one 90 s fight, `groups/camelot/runs/20261109-231607.md`): the first Hibernia round with Shield Mind, the group's `--cure` against Hibernia, and its mezz-the-mezzer plan. Merlin cured 4 times (1 interrupted), cast 3 cc and dealt 421 damage, with no deaths. He was targeted 56 % and in melee 38 % of fight time. Against rounds 12 and 15 (1 kill, 12 deaths together), the opener no longer decided it.

@@ -99,3 +99,5 @@ A Cleric's heals live in the skills list, the hybrid path: `castSpell` handles i
 - **Stunning Flare on an enemy healer:** asked for in the group's log since the first RvR rounds. Nothing picks a stun for a target.
 - **The idle time, outside RvR:** `spareNuke` is in the RvR list only ([rvr.md](../rvr.md)). At Smite 1 Minor Judgement's minimum is low ([mentalist.md](mentalist.md)), and about 40 a cast is what it did live.
 - **Group heals** and **cures,** as for the Healer.
+
+**Arena round 21** (Camelot wiped Hibernia 5/0): 8 heals and 1 stun, plus 2 resisted. She was targeted 2 % of fight time and never in melee.
