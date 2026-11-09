@@ -335,6 +335,13 @@ export interface Trip {
  * while Merlin, Nimue and Morgana still swam at 111.
  */
 const LEG_SWIM_MS = 60_000;
+/**
+ * ... counting only a swimmer farther than this from the leg: one nearer is about in its slot. Live, 23:37-23:44: a leg
+ * along the south bank of the Faste's moat put Morgana's slot in the water 700 off it, and the group stood 60 s at every leg.
+ */
+const SWIM_HOLD = 900;
+/** A travel leg keeps this far from water (water.ts drySpot), so the slots round it, up to 700 off, stay dry. */
+const LEG_DRY_MARGIN = 800;
 
 function reachedBy(leg: Point, movers: readonly Point[], ageMs: number, swimming = 0): boolean {
     if (swimming && ageMs < LEG_SWIM_MS) return false;
@@ -352,7 +359,7 @@ function reachedBy(leg: Point, movers: readonly Point[], ageMs: number, swimming
 export function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; movers: readonly Point[]; replan: number; meet?: boolean; force?: boolean }): void {
     const { mem } = t;
     // Members still swimming: the dry leg in force (the far bank) stays, whatever the trip, until they are out (LEG_SWIM_MS).
-    const swimming = t.dry ? o.movers.filter(m => isWet(t.regionId, m)).length : 0;
+    const swimming = t.dry && mem.leg ? o.movers.filter(m => isWet(t.regionId, m) && dist(m, mem.leg) > SWIM_HOLD).length : 0;
     if (!o.force && swimming && mem.leg && !isWet(t.regionId, mem.leg) && t.now - (mem.legAt ?? t.now) < LEG_SWIM_MS) return;
     if (mem.legKind !== kind || !mem.goal || dist(mem.goal, goal) > o.replan) {
         mem.legKind = kind;
@@ -374,7 +381,9 @@ export function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; mo
         // A leg in a river is the far bank (the nearest dry spot that gets us nearer the goal, toward the next route point),
         // and the route points of the crossing are behind it then. No such bank: the leg stays where it is.
         const ahead = dist(from, goal);
-        const bank = drySpot(t.regionId, leg, { toward: next, ok: q => clearOf(q, t.avoid) && dist(q, goal) < ahead });
+        // isDry looks north, south, east and west: the diagonals too, or a bend of the river comes within 600 of a slot.
+        const diagonal = (q: Point) => [[1, 1], [1, -1], [-1, 1], [-1, -1]].every(([dx, dy]) => !isWet(t.regionId, { x: q.x + dx! * LEG_DRY_MARGIN * Math.SQRT1_2, y: q.y + dy! * LEG_DRY_MARGIN * Math.SQRT1_2 }));
+        const bank = drySpot(t.regionId, leg, { margin: LEG_DRY_MARGIN, toward: next, ok: q => clearOf(q, t.avoid) && dist(q, goal) < ahead && diagonal(q) });
         if (bank !== leg) {
             leg = bank;
             const route: Point[] = mem.route;

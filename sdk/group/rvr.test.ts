@@ -1064,6 +1064,22 @@ describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('stepLeg with stayDry: a 
         expect(Math.hypot(mem.leg.x - bank.x, mem.leg.y - bank.y)).toBeGreaterThan(500);
     });
 
+    test('one in the water by the leg (its slot) does not hold the group, and a new leg keeps 800 from water on every side', () => {
+        // Live, 23:37-23:44: legs along the Faste's moat put Morgana's slot in the water 700 off, and the group stood 60 s at each.
+        const mem: Record<string, any> = { legKind: 'patrol', leg: { ...bank, z: 0 }, legAt: 0, goal: { x: 30_000, y: 26_768 }, route: [{ x: 30_000, y: 26_768 }] };
+        const bySlot = { x: bank.x, y: bank.y };
+        stepLeg(trip(mem, 5000), 'hunt', { x: 34_000, y: 30_000 }, { from: bank, movers: [...out(4), bySlot], replan: 800 });
+        expect(mem.legKind).toBe('hunt');
+        // Along the moat south of the Faste, westward.
+        const walk: Record<string, any> = {};
+        let at: Point = { x: 46_784, y: 41_591 };
+        for (let i = 0; i < 15; i++) {
+            stepLeg(trip(walk, i * 20_000), 'patrol', { x: 24_333, y: 42_788 }, { from: at, movers: [at], replan: Infinity });
+            for (let k = 0; k < 16; k++) expect(isWet(T, { x: walk.leg.x + Math.cos(k * Math.PI / 8) * 700, y: walk.leg.y + Math.sin(k * Math.PI / 8) * 700 })).toBe(false);
+            at = { x: walk.leg.x, y: walk.leg.y };
+        }
+    });
+
     test('stuck swimming past LEG_SWIM_MS, or stayDry off: the group goes on', () => {
         const mem = () => ({ legKind: 'patrol', leg: { ...bank, z: 0 }, legAt: 0, goal: { x: 30_000, y: 26_768 }, route: [{ x: 30_000, y: 26_768 }] } as Record<string, any>);
         const late = mem();
