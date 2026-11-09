@@ -933,8 +933,8 @@ describe('rest with a pet in a fight (rest answers in_combat, at once, with no s
 
 describe('spareNuke: a healer with nothing to heal', () => {
     const nuke = { spell: { name: 'Minor Judgement' }, type: 'DirectDamage', range: 1500 };
-    const scene = (o: { mana?: number; canNuke?: boolean; at?: Point } = {}) => {
-        const s = stub({ name: 'Cleric', role: 'healer', at: o.at ?? { x: 10_000, y: 10_000 }, contacts: [foe(51, 11_000, 10_000)], orders: { focus: 51 }, settings: { ...LEASHED, standStep: 500 } as TacticsSettings });
+    const scene = (o: { mana?: number; canNuke?: boolean; at?: Point; contacts?: Contact[] } = {}) => {
+        const s = stub({ name: 'Cleric', role: 'healer', at: o.at ?? { x: 10_000, y: 10_000 }, contacts: o.contacts ?? [foe(51, 11_000, 10_000)], orders: { focus: 51 }, settings: { ...LEASHED, standStep: 500 } as TacticsSettings });
         const spells = s.ctx.spells as unknown as Record<string, unknown>;
         spells.nuke = () => (o.canNuke === false ? null : nuke);
         spells.capabilities = () => ({ nuke: o.canNuke !== false });
@@ -950,6 +950,14 @@ describe('spareNuke: a healer with nothing to heal', () => {
         expect(await spareNuke().run(s.ctx)).toBe(true);
         expect(s.calls.castSpell).toEqual([51]);
         expect(s.opts).toEqual([{ approach: false }]);
+    });
+
+    test('a burst on one of ours (2+ enemy players on it): it holds the nuke for heals (arena round 19)', async () => {
+        const s = scene({ contacts: [foe(51, 11_000, 10_000), foe(52, 10_100, 10_000, { target: 'Cleric' }), foe(53, 10_000, 10_100, { target: 'Cleric' })] });
+        expect(await spareNuke().run(s.ctx)).toBe(false);
+        expect(s.calls.castSpell).toEqual([]);
+        expect(s.skips.at(-1)).toMatch(/2 enemy players on one of ours/);
+        expect(await spareNuke().run(scene({ contacts: [foe(51, 11_000, 10_000), foe(52, 10_100, 10_000, { target: 'Cleric' })] }).ctx)).toBe(true);
     });
 
     test('below the floor it saves its power for heals, and the rez that needs 75 %', async () => {

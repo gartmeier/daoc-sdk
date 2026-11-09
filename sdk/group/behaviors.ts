@@ -1595,6 +1595,15 @@ const SPARE_NUKE_MANA = 75;
 /** The most it steps toward a focus just out of range: half its idle fight time went on that without a step (throwaway run, learnings/rvr.md). */
 const SPARE_NUKE_STEP = 400;
 
+/** The most free enemy players on any one living member of ours, when that is 2 or more (a burst); else 0. */
+export function burstOn(ctx: Pick<MemberContext<any>, 'threats' | 'members'>): number {
+    const ours = new Set(ctx.members().filter(m => !m.isDead).map(m => m.name));
+    const on = new Map<string, number>();
+    for (const t of ctx.threats()) if (t.kind === 'player' && !t.cc && t.target && ours.has(t.target)) on.set(t.target, (on.get(t.target) ?? 0) + 1);
+    const most = Math.max(0, ...on.values());
+    return most >= 2 ? most : 0;
+}
+
 /**
  * A healer with nothing to heal hits the focus, on spare power only and within a short step of where it
  * stands, so the nuke costs no heal: below heal() in the list, and no walk out of healing reach. Nothing for a
@@ -1608,6 +1617,10 @@ export const spareNuke = (minMana = SPARE_NUKE_MANA): Behavior<TacticsSettings> 
         async run(ctx) {
             if (ctx.orders().phase !== 'engage' || !ctx.spells.capabilities().nuke) return false;
             if (ctx.me().manaPercent < minMana) return ctx.skip(`spareNuke: saving power (< ${minMana} %)`);
+            // A burst on one of ours: a 3 s nuke now holds the next heal back. Arena round 19 (2026-11-10), Midgard killed Galahad
+            // 11 s into the engage while Nimue's Smite went out (Albion class session).
+            const burst = burstOn(ctx);
+            if (burst) return ctx.skip(`spareNuke: ${burst} enemy players on one of ours, holding for heals`);
             return inner.run(ctx);
         },
     };
