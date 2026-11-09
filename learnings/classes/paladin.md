@@ -131,7 +131,7 @@ The fewest deaths of the group, with the lowest damage of the three tanks: Slash
 
 ## Self AF (kit, from arena round 5, 2026-11-09)
 
-**Server code.** Aura of Indestructability (Chants 24, value 37, 17 power, 20 minutes; Aura of Defense at Chants 17) is a `PaladinArmorFactorBuff`: its own effect group (`PaladinAf`, EffectHelper.cs) in the uncapped `OtherBuff` category (SingleStatBuff.cs), so it adds to Crusader's Defense and to Nimue's AF buffs. `buff()` doesn't slot that type, so the kit's `selfBuff` chore (`sdk/classes/paladin.ts`) casts it between fights when no rank of it is on him. Not yet seen in a round: look for `buff` results naming it in his first Camelot round after commit.
+**Server code.** Aura of Indestructability (Chants 24, value 37, 17 power, 20 minutes; Aura of Defense at Chants 17) is a `PaladinArmorFactorBuff`: its own effect group (`PaladinAf`, EffectHelper.cs) in the uncapped `OtherBuff` category (SingleStatBuff.cs), so it adds to Crusader's Defense and to Nimue's AF buffs. `buff()` doesn't slot that type, so the kit's `selfBuff` chore (`sdk/classes/paladin.ts`) casts it between fights when no rank of it is on him. **Arena round 6:** `selfBuff` was on his list and he cast 2 buffs between fights.
 
 ## Community, RvR at 20-24 (research 2026-11-09)
 
