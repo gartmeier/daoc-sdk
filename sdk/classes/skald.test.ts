@@ -7,7 +7,8 @@ import type { Behavior } from '../group/member';
 import { packBehaviors } from '../group/pack';
 import { rvrBehaviors } from '../group/rvr';
 import { reachOfBuild } from './reach';
-import { shoutMezzTarget, skald } from './skald';
+import type { SpellDetails, Style } from '../types';
+import { shoutMezzTarget, skald, stylesFor } from './skald';
 
 const members = [
     report('Thorgrim', { role: 'tank' }),
@@ -31,6 +32,24 @@ describe('skald kit', () => {
             expect(list.indexOf('shoutMezz')).toBeGreaterThanOrEqual(0);
             expect(list.indexOf('shoutMezz')).toBeLessThan(list.findIndex(n => n === 'assistMelee' || n === 'assist'));
         }
+    });
+
+    test('its fight is assistMelee, once in every list', () => {
+        for (const lists of [defaultBehaviors(), rvrBehaviors(), packBehaviors()]) {
+            const list = withCharacter(lists.melee as Behavior<any>[], skald() as Character).map(b => b.name);
+            expect(list.filter(n => n === 'assistMelee')).toHaveLength(1);
+        }
+    });
+
+    test('no taunt (Plague) at a player; a monster keeps it', () => {
+        const style = (name: string, description: string | null): Style => ({
+            name, internalId: 0, specLevel: 6, specName: 'Axe', skillIndex: 0, prerequisite: 0x100,
+            details: { fatigue: 10, attackMod: 0, defensiveMod: 0, openingDamage: 50, opening: 'offensive', result: null, position: null, openingStyle: null, followUps: [], weapon: 'Axe', stealth: false,
+                procSpellId: description ? 1 : null, ...(description ? { procSpell: { description } as SpellDetails } : {}) },
+        } as Style);
+        const styles = [style('Plague', 'Taunts the target, increasing your threat against it by 17.'), style('Pillager', 'Slows the target.')];
+        expect(stylesFor(styles, true).map(s => s.name)).toEqual(['Pillager']);
+        expect(stylesFor(styles, false).map(s => s.name)).toEqual(['Plague', 'Pillager']);
     });
 
     test('it peels the enemy on our healer first, then a healer', () => {

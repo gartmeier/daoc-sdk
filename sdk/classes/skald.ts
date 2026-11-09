@@ -2,14 +2,16 @@
 // makes it support, which stands at range and never swings; its melee list already sings and fights.
 // What is the class's own is Crippling Shout: an instant mezz, range 700, 18 s, 30 s between uses, which a
 // melee list never casts. shoutMezz peels an enemy off our soft members with it. learnings/classes/skald.md says
-// why, and what has been measured.
+// why, and what has been measured. Its fight is the melee list's own (meleeFight), but swings no taunt at a player.
 
-import { claimedBy, foeInView, type TacticsSettings } from '../group/behaviors';
+import { assist, claimedBy, foeInView, type StylePick, type TacticsSettings } from '../group/behaviors';
 import { isAlive, untouchable } from '../group/blackboard';
 import { immuneKinds } from '../group/cc';
 import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
+import { fighterStyle, raisesThreat } from '../group/styles';
 import type { Contact, MemberReport } from '../group/types';
+import type { Style } from '../types';
 
 /** Another member's cc cast on it this recently: leave it to them. */
 const CLAIM_MS = 4000;
@@ -52,6 +54,13 @@ export const shoutMezz = (): Behavior<TacticsSettings> => ({
     },
 });
 
+/** A player has no threat table: a taunt (Plague) is a swing that could have been damage. Monsters keep every style. */
+export const stylesFor = (styles: readonly Style[], player: boolean): Style[] => (player ? styles.filter(s => !raisesThreat(s)) : [...styles]);
+
+const fighter = fighterStyle();
+/** fighterStyle, without taunts against players. */
+export const skaldStyle: StylePick = seen => fighter({ ...seen, styles: stylesFor(seen.styles, seen.target.kind === 'player') });
+
 export function skald(): Character {
-    return { role: 'melee', react: [shoutMezz()] };
+    return { role: 'melee', react: [shoutMezz()], fight: [assist({ melee: true, holdMs: 0, style: skaldStyle })] };
 }
