@@ -12,7 +12,7 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Server code:** `assist` has no spell to cast, since Mending first has no damage spell. `song` would play Ease of Movement, which the Skald's speed song outdoes in the same group.
 
-**Why the cure (round 4, 2026-11-09, Hibernia 3 kills / Midgard 1):** Bragi "can't cast while mesmerized" and Sigrid sat idle 51 % of fight time with "nothing to do". Over the 2026-11-03 rounds the group took 40 casts refused under a mezz. A human Healer's RvR job is heal, mezz, and cure the mezzed. Not measured yet: compare `cure` actions and `crowd_controlled` failures in the next Midgard rounds.
+**Why the cure (round 4, 2026-11-09, Hibernia 3 kills / Midgard 1):** Bragi "can't cast while mesmerized" and Sigrid sat idle 51 % of fight time with "nothing to do". Over the 2026-11-03 rounds the group took 40 casts refused under a mezz. A human Healer's RvR job is heal, mezz, and cure the mezzed. **Round 6 (2026-11-09, vs Camelot, react version):** 2 cures, 1 `cure:out_of_range` (no approach: the mezzed member was beyond 1500); idle 30 %. The `urgent` version starts with round 8.
 
 ## Builds
 

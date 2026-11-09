@@ -52,13 +52,15 @@ describe('skald kit', () => {
         expect(stylesFor(styles, false).map(s => s.name)).toEqual(['Plague', 'Pillager']);
     });
 
-    test('it peels the enemy on our healer first, then a healer', () => {
+    test('it peels the enemy on our healer first, then a healer, a caster, one on any of us; never an idle one', () => {
         const onHealer = enemy(1, 'hibernia', { target: 'Sigrid' });
         const healer = enemy(2, 'hibernia', { healer: true });
         const onTank = enemy(3, 'hibernia', { target: 'Thorgrim' });
         expect(shoutMezzTarget([onTank, healer, onHealer], members, none, near, 700)?.objectId).toBe(1);
         expect(shoutMezzTarget([onTank, healer], members, none, near, 700)?.objectId).toBe(2);
-        expect(shoutMezzTarget([onTank], members, none, near, 700)).toBeNull();
+        expect(shoutMezzTarget([onTank, enemy(4, 'hibernia', { caster: true })], members, none, near, 700)?.objectId).toBe(4);
+        expect(shoutMezzTarget([onTank], members, none, near, 700)?.objectId).toBe(3);
+        expect(shoutMezzTarget([enemy(5, 'hibernia')], members, none, near, 700)).toBeNull();
     });
 
     test('never the focus, an ordered or controlled one, one we hit, or one out of reach', () => {

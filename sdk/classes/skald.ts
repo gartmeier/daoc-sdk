@@ -18,18 +18,20 @@ const CLAIM_MS = 4000;
 
 /**
  * Who an instant mezz goes on: a free enemy player in `range`, not the focus, nobody's cc order, nobody of ours hitting it
- * (the next blow wakes it), and not immune. First one hitting our soft members (healers, casters), then a healer;
- * anyone else is not worth the 30 s timer. Null when none.
+ * (the next blow wakes it), and not immune. First one hitting our soft members (healers, casters), then a healer, a
+ * caster, then one hitting any of us (round 6, 2026-11-09: from the front line at 700 the first two were never in reach,
+ * and the shout went unused all round). One that hits nobody isn't worth the 30 s timer. Null when none.
  */
 export function shoutMezzTarget(contacts: readonly Contact[], members: readonly MemberReport[], o: { focus: number | null; cc: readonly { by: string; targetId: number }[] }, distanceTo: (id: number) => number, range: number, now = Date.now()): Contact | null {
     const soft = new Set(members.filter(m => !m.isDead && m.role !== 'tank' && m.role !== 'melee').map(m => m.name));
     const hit = new Set(members.filter(m => !m.isDead && m.attacking && m.targetId !== null).map(m => m.targetId!));
     for (const m of members) if (m.pet?.targetId) hit.add(m.pet.targetId);
-    const rank = (c: Contact) => (c.target && soft.has(c.target) ? 0 : c.healer ? 1 : 2);
+    const ours = new Set(members.filter(m => !m.isDead).map(m => m.name));
+    const rank = (c: Contact) => (c.target && soft.has(c.target) ? 0 : c.healer ? 1 : c.caster ? 2 : c.target && ours.has(c.target) ? 3 : 4);
     return contacts
         .filter(c => c.kind === 'player' && !c.isPet && !c.stale && isAlive(c) && !c.cc && !untouchable(c, now) && c.objectId !== o.focus
             && !o.cc.some(a => a.targetId === c.objectId) && !hit.has(c.objectId) && !immuneKinds(c, now).includes('mezz') && distanceTo(c.objectId) <= range)
-        .filter(c => rank(c) < 2)
+        .filter(c => rank(c) < 4)
         .sort((a, b) => rank(a) - rank(b) || distanceTo(a.objectId) - distanceTo(b.objectId))[0] ?? null;
 }
 
