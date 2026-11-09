@@ -8,7 +8,7 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 ## The kit
 
-`sdk/classes/healer.ts` holds the role, `healer` (what `roleForClass` gives), and `cureMezz` as `react`: Cleanse Mind (baseline Pacification 23, 3 s, range 1500) on a member whose effects show an enemy Mesmerize, the healer first, then the tank, then the most hurt. In every list it lands below `heal` and `crowdControl`, so a heal or her own mezz order still comes first. She is Midgard's only mezz cure: the Shaman has none.
+`sdk/classes/healer.ts` holds the role, `healer` (what `roleForClass` gives), and `cureMezz` as `urgent`: Cleanse Mind (baseline Pacification 23, 3 s, range 1500) on a member whose effects show an enemy Mesmerize, the healer first, then the tank, then the most hurt. In the pack's healer list (what the arena runs) it lands below `emergencyHeal` and above `heal` and `crowdControl`: a dying member first, then the mezzed one, then the ordinary heals. In lists with `position` it goes just above it. It went in as `react` first (6b05df7), below every heal; Hibernia's Bard found a cure there waits behind heals all fight, and the losses go to whoever is mezzed first. She is Midgard's only mezz cure: the Shaman has none.
 
 **Server code:** `assist` has no spell to cast, since Mending first has no damage spell. `song` would play Ease of Movement, which the Skald's speed song outdoes in the same group.
 

@@ -165,16 +165,17 @@ describe('healer guide', () => {
         expect(first().known.some(k => k.name === 'Allay Area')).toBe(false);
     });
 
-    test('the kit cures a mezzed member with Cleanse Mind, below heal and crowd control in every list', () => {
+    test('the kit cures a mezzed member with Cleanse Mind: in the pack below the emergency heal and above heal', () => {
         const cure = first().known.find(k => k.name === 'Cleanse Mind')!;
         expect(cure.info.type).toBe('CureMezz');
         expect(healer().role).toBe('healer');
         for (const lists of [defaultBehaviors(), rvrBehaviors(), packBehaviors()]) {
             const list = withCharacter(lists.healer as Behavior<any>[], healer() as Character).map(b => b.name);
             expect(list.filter(n => n === 'cureMezz')).toHaveLength(1);
-            expect(list.lastIndexOf('heal')).toBeLessThan(list.indexOf('cureMezz'));
-            expect(list.indexOf('crowdControl')).toBeLessThan(list.indexOf('cureMezz'));
+            expect(list.indexOf('emergencyHeal')).toBeLessThan(list.indexOf('cureMezz'));
         }
+        const pack = withCharacter(packBehaviors().healer as Behavior<any>[], healer() as Character).map(b => b.name);
+        expect(pack.indexOf('cureMezz')).toBe(pack.indexOf('heal') - 1);
     });
 });
 
