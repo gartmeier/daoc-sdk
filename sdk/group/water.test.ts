@@ -8,7 +8,7 @@ import { DRY_MARGIN, drySpot, isDry, isWet } from './water';
 // Thidranki's rivers from the client's terrain (bun run terrain:build); skipped without it.
 const T = 252;
 const terrain = getTerrainStore().available();
-const river = BATTLEGROUND_LAYOUTS[T]!.pairs!['hibernia|midgard']!; // the river's middle between Hibernia's and Midgard's halves
+const river = { x: 41_069, y: 26_768 }; // the river's middle between Hibernia's and Midgard's halves (the pair spot until 2026-11-09)
 const hibArrival = BATTLEGROUND_LAYOUTS[T]!.arrival.hibernia;
 const wetLength = (pts: Point[]) => {
     let wet = 0;

@@ -266,12 +266,28 @@ export interface Orders {
     waiting: { name: string; why: string }[];
     /** While travelling: how far there is still to go in all, beyond the leg in `anchor`. */
     journey?: number;
+    /**
+     * While travelling with no enemy player near: walk as a column, not in slots round the anchor. `driver` (the crowd
+     * controller) walks the leg at `speed` of full speed, the others stand `gap` apart behind him in `order`. Members not
+     * in it walk to their slots. Null or absent: slots for everyone. The pack sets it (pack.column).
+     */
+    column?: ColumnOrder | null;
+    /** An enemy player is known: casters take wider slots (TacticsSettings.spreadOnSight). The pack sets it. */
+    spread?: boolean;
     /** Why the coordinator decided this (for the observer and the log). */
     reason: string;
     issuedAt: number;
 }
 
 export type OrdersUpdate = Partial<Omit<Orders, 'seq' | 'issuedAt'>> & { reason: string };
+
+/** Orders.column: who leads, who follows in which place, how far apart, and the leader's share of full speed. */
+export interface ColumnOrder {
+    driver: string;
+    order: string[];
+    gap: number;
+    speed: number;
+}
 
 /** The shared picture every member and the coordinator read. */
 export interface GroupPicture {

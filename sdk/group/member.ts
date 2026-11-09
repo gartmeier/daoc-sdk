@@ -276,6 +276,8 @@ export class MemberAgent<S = any> {
     /** Does this orders change concern us? (Another member's mezz assignment doesn't stop our fight.) */
     private affected(next: Orders, prev: Orders): boolean {
         if (next.phase !== prev.phase || next.focus !== prev.focus || next.puller !== prev.puller) return true;
+        // Into a column or out of it: a walk to a slot or to a place behind the driver is the wrong one now.
+        if ((next.column?.driver ?? null) !== (prev.column?.driver ?? null)) return true;
         const mine = (o: Orders) => o.cc.filter(c => c.by === this.ctx.name).map(c => c.targetId).join(',');
         const moved = (a: Orders['anchor'], b: Orders['anchor']) => !a !== !b || (!!a && !!b && Math.hypot(a.x - b.x, a.y - b.y) > 300);
         return mine(next) !== mine(prev) || moved(next.retreatTo, prev.retreatTo) || (next.phase !== 'engage' && moved(next.anchor, prev.anchor));

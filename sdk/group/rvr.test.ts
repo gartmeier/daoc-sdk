@@ -613,7 +613,7 @@ describe('battleground data (static, Thidranki)', () => {
 
     test.skipIf(!terrain)('a fight that starts in a river is anchored on the bank; with stayDry off, where the group swims', () => {
         // The group in the river between Hibernia and Midgard (its middle 320 west of the tank), a Midgard player on it.
-        const river = BATTLEGROUND_LAYOUTS[T]!.pairs!['hibernia|midgard']!;
+        const river = { x: 41_069, y: 26_768 };
         const members = team({}, { x: river.x + 320, y: river.y }, T);
         const on = enemy(61, 'midgard', { regionId: T, x: river.x + 900, y: river.y, threat: true, target: 'Tank', targetId: 1 });
         const anchor = (stayDry: boolean) => decideRvr(ctx(picture(members, [on]), { settings: { stayDry, patrol: null } })).anchor!;

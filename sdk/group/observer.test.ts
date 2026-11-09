@@ -225,7 +225,7 @@ describe('GroupObserver', () => {
 
     // Thidranki's river between Hibernia and Midgard, from the client's terrain (bun run terrain:build); skipped without it.
     test.skipIf(!getTerrainStore().available())('RvR: time in water, ours and the enemies\', per fight and member, and fights with both other realms', () => {
-        const river = BATTLEGROUND_LAYOUTS[252]!.pairs!['hibernia|midgard']!;
+        const river = { x: 41_069, y: 26_768 }; // the river's middle between Hibernia's and Midgard's halves
         const land = BATTLEGROUND_LAYOUTS[252]!.arrival.hibernia;
         const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
         const at = (i: number) => T0 + i * 1000;

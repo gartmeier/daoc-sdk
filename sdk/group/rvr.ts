@@ -258,10 +258,14 @@ export function pickRvrFocus(pool: readonly Contact[], opts: { centre: Point; me
 /**
  * Who the damage goes on: the nearest free enemy, a known caster ahead of a fighter, nearly dead ones first. A known
  * healer only when nothing else is in reach: healers wear chain and heal themselves, and in round 9 Troll#438 stayed
- * the focus for 5 minutes while its health went back up. They get the mezz instead (packCc).
+ * the focus for 5 minutes while its health went back up. They get the mezz instead (packCc). With `soft`, the other way round.
  */
-export function pickPackFocus(pool: readonly Contact[], centre: Point, reach: number): Contact | null {
-    const score = (c: Contact) => (c.healer ? -200 : 0) + (c.caster ? 30 : 0) + (100 - c.hp) * 0.3 + (c.hp < 25 ? 40 : 0) + Math.max(0, 1 - dist(c, centre) / reach) * 40;
+export function pickPackFocus(pool: readonly Contact[], centre: Point, reach: number, soft = false): Contact | null {
+    // soft (pack.focusSoft): the back line first, as human groups did (casters, then healers, research 2026-11-09), and
+    // never one in melee with us while another is in reach: that is the tank's, and the nearest is usually their tank.
+    const role = (c: Contact) => !soft ? (c.healer ? -200 : 0) + (c.caster ? 30 : 0)
+        : c.caster && !c.healer ? 100 : c.healer ? 60 : c.target !== null && !c.targetBySpell ? -50 : 0;
+    const score = (c: Contact) => role(c) + (100 - c.hp) * 0.3 + (c.hp < 25 ? 40 : 0) + Math.max(0, 1 - dist(c, centre) / reach) * 40;
     return [...pool].sort((a, b) => score(b) - score(a))[0] ?? null;
 }
 

@@ -43,9 +43,15 @@ export interface SongSettings {
     holdMs: number;
     /** In a fight, endurance goes before armor when the singer is below this % (styles stop silently below 15 %). */
     enduranceBelow: number;
+    /**
+     * In a fight, no song change while the singer has a crowd-control assignment open (Orders.cc): the mezz goes first.
+     * User, live 2026-11-09: the Bard changed to the fight song as the raid opened, ahead of his opening mezz, and who
+     * mezzes the other group first decides most group fights. Off until pair rounds have it (--songs.ccFirst=true).
+     */
+    ccFirst?: boolean;
 }
 
-export const SONG_SETTINGS: SongSettings = { powerBelow: 70, healthBelow: 80, holdMs: 30_000, enduranceBelow: 30 };
+export const SONG_SETTINGS: SongSettings = { powerBelow: 70, healthBelow: 80, holdMs: 30_000, enduranceBelow: 30, ccFirst: false };
 
 const usesPower = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc;
 

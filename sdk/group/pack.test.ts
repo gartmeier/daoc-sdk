@@ -7,6 +7,7 @@ import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPac
 import { RVR_SETTINGS, rvrBehaviors, rvrRoaming } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { pickNuke, type SpellPick } from './spells';
+import { isWet } from './water';
 import type { Contact, GroupPicture, MemberReport, Orders, Point } from './types';
 
 // Region 9999 has no spawns and no battleground: no aggro zones, keeps or home get in the way.
@@ -508,6 +509,17 @@ describe('decidePack: nobody walks alone', () => {
     const keep = { x: 17_367, y: 18_248 };
     const middle = { x: 34_000, y: 32_000 };
     const thid = (o: Partial<Record<string, Partial<MemberReport>>> = {}, base = middle) => team(o, base, THID);
+
+    test.skipIf(!isWet(THID, { x: 41_069, y: 26_768 }))('with stayDry, Midgard swimming across is no foe until it is ashore, or on us', () => {
+        // The pack on Hibernia's bank, three Midgard players in the river 2500 east (the old pair spot), then on the bank.
+        const bank = { x: 38_500, y: 26_768 };
+        const swim = (x: number, over: Partial<Contact> = {}) => [101, 102, 103].map((id, i) => enemy(id, 'midgard', { regionId: THID, x: x + i * 100, y: 26_768, ...over }));
+        const decide = (contacts: Contact[], stayDry = true) => decidePack(ctx(picture(thid({}, bank), contacts), { memory: { realm: 'hibernia', pack: 'stalk' }, settings: { patrol: null, stayDry } }));
+        expect(decide(swim(40_900)).reason ?? '').not.toMatch(/hunt|stalk|raid/);
+        expect(decide(swim(40_900), false).reason).toMatch(/hunt|stalk|raid/);
+        expect(decide(swim(40_900, { target: 'Tank', targetId: 1, threat: true })).phase).toBe('engage');
+        expect(decide(swim(39_400)).reason).toMatch(/hunt|stalk|raid/);
+    });
 
     test('a released member at the keep is told to wait, and the pack goes to get it', () => {
         const m: any = { realm: 'hibernia' };
