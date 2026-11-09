@@ -21,6 +21,8 @@ export default warrior();
 
 In `rvrRoaming`, which is what Midgard runs, the list keeps `tank` and this replaces it in place.
 
+**Players read by their swings (2026-11-09, after arena round 11):** the kit's fight is `tank({ style: heldBySwing(reactingStyle) })`. **Server code / SDK:** the server never sends a player's target, `NearbyPlayer` has no `targetObjectId`, and `fighterStyle` reads "held" (on someone else) from that field, so against players it always looked for a reaction and never a positional. In rounds 4-11 Thorgrim landed only Pillager and Plunderer, no stun. `heldBySwing` fills a player's target from its last melee swing in our combat events (8 s window): one swinging at someone else reads as held, and the pick puts the positional first (Disable, Shields 13, a 4 s stun from the side), with the damage style behind it. A player swinging at him, or at nobody lately, is picked for as before. Not measured yet: Disable in the styles column of the next Midgard rounds.
+
 **Not played.** To look for: landed reactions in the log, his damage a minute and his endurance. Pillager's slow goes on less often if reactions land instead.
 
 ## Builds

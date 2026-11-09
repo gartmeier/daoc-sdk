@@ -12,6 +12,7 @@ import type { Behavior } from '../group/member';
 import { fighterStyle, raisesThreat } from '../group/styles';
 import type { Contact, MemberReport } from '../group/types';
 import type { Style } from '../types';
+import { heldBySwing } from './warrior';
 
 /** Another member's cc cast on it this recently: leave it to them. */
 const CLAIM_MS = 4000;
@@ -60,8 +61,8 @@ export const shoutMezz = (): Behavior<TacticsSettings> => ({
 export const stylesFor = (styles: readonly Style[], player: boolean): Style[] => (player ? styles.filter(s => !raisesThreat(s)) : [...styles]);
 
 const fighter = fighterStyle();
-/** fighterStyle, without taunts against players. */
-export const skaldStyle: StylePick = seen => fighter({ ...seen, styles: stylesFor(seen.styles, seen.target.kind === 'player') });
+/** fighterStyle, without taunts against players, and with a player's target from its last swing (heldBySwing). */
+export const skaldStyle: StylePick = heldBySwing(seen => fighter({ ...seen, styles: stylesFor(seen.styles, seen.target.kind === 'player') }));
 
 export function skald(): Character {
     return { role: 'melee', react: [shoutMezz()], fight: [assist({ melee: true, holdMs: 0, style: skaldStyle })] };
