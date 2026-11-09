@@ -24,6 +24,7 @@ export default { ...kit.character, fight: [assist({ holdMs: 1500 })] };
 
 - **Why, verified:** arena round 5 against Albion (Paladin, Cleric, Sorcerer, Cabalist, Theurgist), two wipes, Oisin dead first at 17 s and 36 s under their casters; the user asked for much more interrupting of casters.
 - **Server code:** a stun ends the target's cast at once (`OnHardCCStart`: `StopCurrentSpellcast`). A player then takes no stun for 60 s from its end (`immunity_timer_flat_length`), so the kit marks the board's stun immunity, not crowd control: marked as cc, `assist` and the Hero would leave the focus while it lasts (`ccHolds`).
+- **Range, verified, arena round 9:** her one Flash failed `stun:out_of_range`. The kit measured the board's ground-plane positions; the server measures in 3D. It now goes by our view's 3D distance with a 60-unit margin, and tries the next candidate when one is out of view.
 - **Below 15 % power** she keeps it for nukes. Cuchulainn's style stuns share the same immunity and don't mark the board: a Flash on a target he stunned answers "immune" and is marked then.
 
 - `character` only sets the role to `nuker`. The role's list already casts the nukes, buffs, mezzes and emergency heals from whatever the bot knows, so the kit adds no behaviour of its own yet.

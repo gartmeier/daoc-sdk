@@ -31,23 +31,23 @@ describe('mentalist kit', () => {
     });
 
     const members = [{ name: 'Oisin', role: 'support' as const }, { name: 'Niamh', role: 'nuker' as const }, { name: 'Brigid', role: 'healer' as const }];
-    const me = { x: 0, y: 0, regionId: 238 };
+    const dist = (c: Contact) => Math.hypot(c.x, c.y);
     const foe = (id: number, o: Partial<Contact> = {}) => ({ objectId: id, kind: 'player', regionId: 238, x: 500, y: 0, stale: false, cc: null, castingAt: 1000, target: null, targetBySpell: false, ...o }) as Contact;
 
     test('a caster on our Bard before one on a nuker, before a casting healer; the nearest of each', () => {
         const list = [foe(1, { healer: true }), foe(2, { target: 'Niamh', targetBySpell: true }), foe(3, { target: 'Oisin', targetBySpell: true, x: 1400 }), foe(4, { target: 'Oisin', targetBySpell: true, x: 900 })];
-        expect(stunTarget(list, members, me, 1500, 2000)?.objectId).toBe(4);
-        expect(stunTarget(list.slice(0, 2), members, me, 1500, 2000)?.objectId).toBe(2);
-        expect(stunTarget(list.slice(0, 1), members, me, 1500, 2000)?.objectId).toBe(1);
+        expect(stunTarget(list, members, 238, dist, 1500, 2000)?.objectId).toBe(4);
+        expect(stunTarget(list.slice(0, 2), members, 238, dist, 1500, 2000)?.objectId).toBe(2);
+        expect(stunTarget(list.slice(0, 1), members, 238, dist, 1500, 2000)?.objectId).toBe(1);
     });
 
     test('none that is quiet, out of range, held, stun-immune, or a swing on us rather than a spell', () => {
         const on = { target: 'Oisin', targetBySpell: true };
-        expect(stunTarget([foe(1, { ...on, castingAt: -5000 })], members, me, 1500, 2000)).toBeNull();
-        expect(stunTarget([foe(1, { ...on, x: 1600 })], members, me, 1500, 2000)).toBeNull();
-        expect(stunTarget([foe(1, { ...on, cc: { by: 'Oisin', kind: 'mezz', until: 9000 } })], members, me, 1500, 2000)).toBeNull();
-        expect(stunTarget([foe(1, { ...on, ccImmune: { stun: 3000 } })], members, me, 1500, 2000)).toBeNull();
-        expect(stunTarget([foe(1, { target: 'Oisin', targetBySpell: false })], members, me, 1500, 2000)).toBeNull();
+        expect(stunTarget([foe(1, { ...on, castingAt: -5000 })], members, 238, dist, 1500, 2000)).toBeNull();
+        expect(stunTarget([foe(1, { ...on, x: 1460 })], members, 238, dist, 1500, 2000)).toBeNull();
+        expect(stunTarget([foe(1, { ...on, cc: { by: 'Oisin', kind: 'mezz', until: 9000 } })], members, 238, dist, 1500, 2000)).toBeNull();
+        expect(stunTarget([foe(1, { ...on, ccImmune: { stun: 3000 } })], members, 238, dist, 1500, 2000)).toBeNull();
+        expect(stunTarget([foe(1, { target: 'Oisin', targetBySpell: false })], members, 238, dist, 1500, 2000)).toBeNull();
     });
 });
 

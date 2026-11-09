@@ -30,6 +30,8 @@ export default hero();
 
 **To look for:** "You perform your Numb/Disable perfectly" in the fight log, `Styles landed` in the report, the focus's casts cut short, and his endurance.
 
+**Verified, arena round 9** (2026-11-09, against Midgard, won 7 kills to 4, 2 fights): the kit's first round. Styles landed Fire Blade 6, Numb 3, no Disable or Incapacitate; 1,135 damage, 1 death. The stuns land; from the side or after a block they haven't yet.
+
 **Community, unverified:** DAoC RvR basics put stuns, mezzes and roots first among what turns a fight, and warn against breaking crowd control early ([Demise RvR basics](https://sites.google.com/view/demise-s3/rvr/the-basics)). No Hero-specific stun guide turned up in a search on 2026-11-09.
 
 ## Builds

@@ -78,3 +78,5 @@ What the class has that no behaviour uses:
 ## Arena rounds, 2026-11-09
 
 **Verified,** rounds 1-4 (Hibernia won all four): Oisin died in every one, was targeted 39-44 % of fight time and in melee reach 24-50 %, and `cc:interrupted` came to 3, 15, 0 and 6. `flee` runs him to the tank, then skips once he is within 150 ("attacked, already at the tank"), and `crowdControl` casts the 2.5 s mezz with the melee still on him. Raised with the orchestrator, whose `crowdControl` that is.
+
+**Verified, arena round 9** (won against Midgard): Oisin cast no mezz, interrupt or cure all round and died twice. The shared `cureMezz` threw "RANGE_MARGIN_3D is not defined" every turn: the arena loads `sdk/group` from the working tree, which held a half-made edit (fixed in 7557f12). As `urgent` it sits above everything, and a behaviour that throws counts as having acted (`member.ts` `step`), so the list started over at it each time. A kit's urgent behaviour is only as safe as the shared code under it; asked the orchestrator for a fall-through on a throw.

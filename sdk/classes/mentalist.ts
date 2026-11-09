@@ -17,23 +17,26 @@ export interface MentalistKit {
 const CASTING_MS = 2500;
 /** A stun's length plus the player's 60 s immunity after it (immunity_timer_flat_length, CrowdControlECSEffect.cs:20). */
 const STUN_IMMUNE_MS = 60_000;
+/** The server measures a spell's range in 3D: a foe at the edge by our view can be out of it (round 9: stun:out_of_range). */
+const RANGE_MARGIN = 60;
 /** Who it saves first: the roles that hold the group up, then anyone, then a healer of theirs at work. */
 const SAVE_FIRST: readonly Role[] = ['support', 'healer'];
 
 /**
- * The player to stun: casting now, in range, not crowd-controlled, not stun-immune by the board. First one whose spell
- * is on our support or healer, then one on any member, then a casting healer of theirs; the nearest of each.
+ * The player to stun: casting now, within `range` less a margin by `distanceTo` (our view's 3D distance; Infinity when
+ * out of view), not crowd-controlled, not stun-immune by the board. First one whose spell is on our support or healer,
+ * then one on any member, then a casting healer of theirs; the nearest of each.
  */
-export function stunTarget(contacts: readonly Contact[], members: readonly Pick<MemberReport, 'name' | 'role'>[], me: { x: number; y: number; regionId: number }, range: number, now: number): Contact | null {
+export function stunTarget(contacts: readonly Contact[], members: readonly Pick<MemberReport, 'name' | 'role'>[], regionId: number, distanceTo: (c: Contact) => number, range: number, now: number): Contact | null {
     const roleOf = new Map(members.map(m => [m.name, m.role]));
     const rank = (c: Contact) => {
         const on = c.target && c.targetBySpell ? roleOf.get(c.target) : undefined;
         return on && SAVE_FIRST.includes(on) ? 0 : on ? 1 : c.healer ? 2 : 3;
     };
-    const d = (c: Contact) => Math.hypot(c.x - me.x, c.y - me.y);
+    const d = (c: Contact) => distanceTo(c);
     return contacts
-        .filter(c => c.kind === 'player' && !c.stale && c.regionId === me.regionId && !c.cc && (c.ccImmune?.stun ?? 0) <= now
-            && now - (c.castingAt ?? -Infinity) <= CASTING_MS && d(c) <= range && rank(c) < 3)
+        .filter(c => c.kind === 'player' && !c.stale && c.regionId === regionId && !c.cc && (c.ccImmune?.stun ?? 0) <= now
+            && now - (c.castingAt ?? -Infinity) <= CASTING_MS && d(c) <= range - RANGE_MARGIN && rank(c) < 3)
         .sort((a, b) => rank(a) - rank(b) || d(a) - d(b))[0] ?? null;
 }
 
@@ -51,10 +54,9 @@ export const stunCaster = (floor = 15): Behavior => ({
         const sp = ctx.spells.all().find(s => s.type === 'Stun' && s.target === 'Enemy' && s.radius === 0 && s.power <= me.mana && s.spell.cooldownRemaining <= 0);
         if (!sp) return false;
         const self = ctx.members().find(m => m.name === me.name);
-        const foe = stunTarget(ctx.picture().contacts, ctx.members(), { x: me.x, y: me.y, regionId: self?.regionId ?? me.regionId }, sp.range, Date.now());
+        const seen = (c: Contact) => { const v = foeInView(ctx, c.objectId); return !v || ('isDead' in v && v.isDead) ? Infinity : v.distance; };
+        const foe = stunTarget(ctx.picture().contacts, ctx.members(), self?.regionId ?? me.regionId, seen, sp.range, Date.now());
         if (!foe) return false;
-        const view = foeInView(ctx, foe.objectId);
-        if (!view || ('isDead' in view && view.isDead)) return false;
         ctx.doing('stun', foe.objectId, `${sp.spell.name}${foe.target ? `, casting at ${foe.target}` : ''}`);
         const c = await ctx.bot.castSpell(sp.spell, foe.objectId, { approach: false });
         ctx.result('stun', c, foe.objectId);
