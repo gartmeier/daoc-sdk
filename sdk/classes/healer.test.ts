@@ -1,0 +1,32 @@
+import { describe, expect, test } from 'bun:test';
+import { getBuild } from '../../data/builds';
+import { enemy, report } from '../group/fixtures';
+import { reachOfBuild } from './reach';
+import { slowSpell, slowTarget } from './healer';
+
+const at = (x: number) => ({ x, y: 1000, z: 0 });
+const me = report('Sigrid', { role: 'healer', ...at(1000) });
+const members = [me, report('Thorgrim', { role: 'tank', ...at(3000) }), report('Hrafna', { role: 'nuker', ...at(2000) })];
+const near = () => 500;
+
+describe('healer kit: Hinder Spirit', () => {
+    test('Mending first has the instant slow at 24, and slowSpell picks it', () => {
+        const k = reachOfBuild(getBuild('Healer', 'Mending first')!, 24).known.find(k => k.name === 'Hinder Spirit')!;
+        expect(k.info.type).toBe('CombatSpeedDebuff');
+        const pick = { spell: { name: 'Hinder Spirit', level: 2, cooldownRemaining: 0 }, type: 'CombatSpeedDebuff', target: 'Enemy', range: 1500, radius: 0, power: 2, castTime: 0, duration: 20 } as any;
+        expect(slowSpell([pick], 10)?.spell.name).toBe('Hinder Spirit');
+        expect(slowSpell([{ ...pick, spell: { ...pick.spell, cooldownRemaining: 3 } }], 10)).toBeNull();
+    });
+
+    test('the melee on her first, then one on a caster; never the tank\'s, nor one still slowed', () => {
+        const onMe = enemy(1, 'hibernia', { target: 'Sigrid', ...at(1050) });
+        const onCaster = enemy(2, 'hibernia', { target: 'Hrafna', ...at(2050) });
+        const onTank = enemy(3, 'hibernia', { target: 'Thorgrim', ...at(3050) });
+        const now = 1_000_000;
+        expect(slowTarget(me, members, [onTank, onCaster, onMe], new Map(), near, 1500, now)?.objectId).toBe(1);
+        expect(slowTarget(me, members, [onTank, onCaster], new Map(), near, 1500, now)?.objectId).toBe(2);
+        expect(slowTarget(me, members, [onTank], new Map(), near, 1500, now)).toBeNull();
+        expect(slowTarget(me, members, [onCaster], new Map([[2, now + 5000]]), near, 1500, now)).toBeNull();
+        expect(slowTarget(me, members, [onCaster], new Map(), () => 1600, 1500, now)).toBeNull();
+    });
+});

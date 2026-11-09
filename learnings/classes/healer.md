@@ -22,6 +22,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 11 (2026-11-09, vs Camelot, 6 kills / 6 deaths, 3D range):** 9 cures, 1 interrupted, none out of range; 1 Halt Attack; 11 heals; idle 20 %.
 
+**Round 13 (vs Hibernia, won 4 kills / 1 death):** Hibernia's melee went for her: targeted 71 %, in melee 36 %, 4 heals and 2 mezzes interrupted, 2 heals landed, and she was the one death. Under the swings everything with a cast time is lost. **Hinder Spirit since then:** `hinder` in `urgent`, after the cure: the instant attack slow (Pacification 2, 16 %, 20 s, 2 power, 5 s timer) at an enemy player in melee on her, else on a soft member, nearest first, once per its 20 s. In the pack's list `flee` is above it, so at the tank it goes on the others' attackers more than her own. Not measured yet: `debuff` actions in the next Midgard rounds.
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
@@ -45,7 +47,7 @@ Sigrid plays Mending first. **Community, unverified:** Blackthorn warns it gives
 - **Crowd control:** Sedate, the baseline mezz, 2.5 s, range 1500, 43 s. It comes with the level whatever Pacification is. Allay Area, the area mezz, is Pacification 6, beyond her build and unused by the role lists anyway.
 - **Rez:** Reception from Valhalla, 30 % health, at Mending 15. A Shaman at Mending 14 has only the 10 % one ([shaman.md](shaman.md)).
 - **Buffs:** she's the group's first healer, so the base buffs are hers: Guardian's Lesser Barrier, Strengthen Health, Evasion and Lesser Power of the Viking, with Purity of Mind and haste, 19 buffs for 106 concentration. Piety 89 and the template's 36 make a pool of about 210 ([druid.md](druid.md)), so it fits. `providerFor` takes the first member of a role, so a group with two healers should list the base-buffer first.
-- **Reached, and no behaviour casts it:** Suspend Charge (area stun), Deny Movement (root), Hinder Spirit (instant attack slow), Eir's Glorious Touch (instant group heal, 50 %, 20 minutes), the cures, Wake Senseless.
+- **Reached, and no behaviour casts it:** Suspend Charge (area stun), Deny Movement (root), Eir's Glorious Touch (instant group heal, 50 %, 20 minutes), the cures, Wake Senseless.
 - **Ease of Movement** is a speed song, at Augmentation 5, and the healer's list has no `song`, so it never plays. The group has the Skald's for that.
 
 ## Sized heals
