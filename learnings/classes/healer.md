@@ -10,6 +10,10 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 `sdk/classes/healer.ts` holds the role, `healer` (what `roleForClass` gives), and `cureMezz` as `urgent`: Cleanse Mind (baseline Pacification 23, 3 s, range 1500) on a member whose effects show an enemy Mesmerize, the healer first, then the tank, then the most hurt. In the pack's healer list (what the arena runs) it lands below `emergencyHeal` and above `heal` and `crowdControl`: a dying member first, then the mezzed one, then the ordinary heals. In lists with `position` it goes just above it. It went in as `react` first (6b05df7), below every heal; Hibernia's Bard found a cure there waits behind heals all fight, and the losses go to whoever is mezzed first. She is Midgard's only mezz cure: the Shaman has none.
 
+**Halt Attack (2026-11-09, after round 6):** the kit's `fight` is the Cleric kit's `stunPeel` ([cleric.md](cleric.md)): Halt Attack (2.5 s, range 1500, 12 power, 8 s) from where she stands, at an enemy player in melee on one of our soft members (a healer first), else at the enemy healer while our focus is at 60 % or less; never at one under crowd control or immune to stuns, not below 15 % power. It goes below heal and crowd control. **Community, unverified:** a Pacification healer stuns the enemy healer for kill windows ([Blackthorn](https://blackthorn-daoc.com/wiki/healer-guide)).
+
+**Not into a swing:** the cure and the stun both skip while an enemy player is in melee on her (`unlessHammered`, the orchestrator's `hammeredBy`): a swing ends a cast half way, as `heal` and `crowdControl` already skip since f4135fd.
+
 **Server code:** `assist` has no spell to cast, since Mending first has no damage spell. `song` would play Ease of Movement, which the Skald's speed song outdoes in the same group.
 
 **Why the cure (round 4, 2026-11-09, Hibernia 3 kills / Midgard 1):** Bragi "can't cast while mesmerized" and Sigrid sat idle 51 % of fight time with "nothing to do". Over the 2026-11-03 rounds the group took 40 casts refused under a mezz. A human Healer's RvR job is heal, mezz, and cure the mezzed. **Round 6 (2026-11-09, vs Camelot, react version):** 2 cures, 1 `cure:out_of_range` (no approach: the mezzed member was beyond 1500); idle 30 %. The `urgent` version starts with round 8.
@@ -37,7 +41,7 @@ Sigrid plays Mending first. **Community, unverified:** Blackthorn warns it gives
 - **Crowd control:** Sedate, the baseline mezz, 2.5 s, range 1500, 43 s. It comes with the level whatever Pacification is. Allay Area, the area mezz, is Pacification 6, beyond her build and unused by the role lists anyway.
 - **Rez:** Reception from Valhalla, 30 % health, at Mending 15. A Shaman at Mending 14 has only the 10 % one ([shaman.md](shaman.md)).
 - **Buffs:** she's the group's first healer, so the base buffs are hers: Guardian's Lesser Barrier, Strengthen Health, Evasion and Lesser Power of the Viking, with Purity of Mind and haste, 19 buffs for 106 concentration. Piety 89 and the template's 36 make a pool of about 210 ([druid.md](druid.md)), so it fits. `providerFor` takes the first member of a role, so a group with two healers should list the base-buffer first.
-- **Reached, and no behaviour casts it:** Halt Attack (stun, 2.5 s, 8 s), Suspend Charge (area stun), Deny Movement (root), Hinder Spirit (instant attack slow), Eir's Glorious Touch (instant group heal, 50 %, 20 minutes), the cures, Wake Senseless.
+- **Reached, and no behaviour casts it:** Suspend Charge (area stun), Deny Movement (root), Hinder Spirit (instant attack slow), Eir's Glorious Touch (instant group heal, 50 %, 20 minutes), the cures, Wake Senseless.
 - **Ease of Movement** is a speed song, at Augmentation 5, and the healer's list has no `song`, so it never plays. The group has the Skald's for that.
 
 ## Sized heals
@@ -71,7 +75,6 @@ Nothing else needed from her at that camp: at any `ready.mana` from 10 to 35 her
 
 ## Not supported yet
 
-- **Stun on an enemy healer,** Halt Attack: asked for in the group's log since the first RvR rounds. Nothing picks a stun for a target.
 - **Group heals:** Eir's Glorious Touch is instant, for fights where several are hurt at once. A rule would have to count who is hurt.
 - **Root:** Deny Movement isn't taken while she has a mezz, and it lasts 9 s.
 - **Cures** for poison, disease and nearsight.

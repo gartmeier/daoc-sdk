@@ -177,6 +177,16 @@ describe('healer guide', () => {
         const pack = withCharacter(packBehaviors().healer as Behavior<any>[], healer() as Character).map(b => b.name);
         expect(pack.indexOf('cureMezz')).toBe(pack.indexOf('heal') - 1);
     });
+
+    test('her stun is Halt Attack, peeled below heal and crowd control in every list', () => {
+        const all = first().known.filter(k => k.info.type === 'Stun' && !k.info.radius).map(k => k.name);
+        expect(all).toContain('Halt Attack');
+        for (const lists of [defaultBehaviors(), rvrBehaviors(), packBehaviors()]) {
+            const list = withCharacter(lists.healer as Behavior<any>[], healer() as Character).map(b => b.name);
+            expect(list.lastIndexOf('heal')).toBeLessThan(list.indexOf('stunPeel'));
+            expect(list.indexOf('crowdControl')).toBeLessThan(list.indexOf('stunPeel'));
+        }
+    });
 });
 
 describe('shaman guide', () => {
@@ -318,7 +328,7 @@ describe('sorcerer guide', () => {
         expect(balanced().cc?.spell.name).toBe('Greater Mesmerization');
         expect(reach('Sorcerer', 24, {}).cc?.spell.name).toBe('Greater Mesmerization');
         expect(sorcerer().role).toBe('nuker');
-        expect(sorcerer().fight!.map(b => b.name)).toEqual(['assist']);
+        expect(sorcerer().fight!.map(b => b.name)).toEqual(['assist', 'offFocus']);
     });
 
     test('it opens on the DoT and never casts the cheaper Mind Scream', () => {
@@ -360,7 +370,7 @@ describe('theurgist guide', () => {
 
     test('the kit is a nuker with a floor', () => {
         expect(theurgist().role).toBe('nuker');
-        expect(theurgist({ saveBelow: 30 }).fight!.map(b => b.name)).toEqual(['assist']);
+        expect(theurgist({ saveBelow: 30 }).fight!.map(b => b.name)).toEqual(['assist', 'offFocus']);
     });
 
     test('the floor holds for his pets as well: fnfPet counts as a nuke, and thrifty wraps only assist', () => {
@@ -472,7 +482,7 @@ describe('thrifty', () => {
 });
 
 describe('the role-only kits', () => {
-    const kits: [string, () => { role?: Role; fight?: unknown; react?: unknown; chores?: unknown }][] = [['Spiritmaster', spiritmaster], ['Cabalist', cabalist]];
+    const kits: [string, () => { role?: Role; fight?: unknown; react?: unknown; chores?: unknown }][] = [['Spiritmaster', spiritmaster]];
 
     test.each(kits)('%s has its class\'s role and leaves every list as it is', (className, kit) => {
         const role = roleForClass(className);
