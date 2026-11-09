@@ -41,13 +41,20 @@ describe('mentalist kit', () => {
         expect(stunTarget(list.slice(0, 1), members, 238, dist, 1500, 2000)?.objectId).toBe(1);
     });
 
-    test('none that is quiet, out of range, held, stun-immune, or a swing on us rather than a spell', () => {
+    test('none that is quiet, out of range, held or stun-immune', () => {
         const on = { target: 'Oisin', targetBySpell: true };
         expect(stunTarget([foe(1, { ...on, castingAt: -5000 })], members, 238, dist, 1500, 2000)).toBeNull();
         expect(stunTarget([foe(1, { ...on, x: 1460 })], members, 238, dist, 1500, 2000)).toBeNull();
         expect(stunTarget([foe(1, { ...on, cc: { by: 'Oisin', kind: 'mezz', until: 9000 } })], members, 238, dist, 1500, 2000)).toBeNull();
         expect(stunTarget([foe(1, { ...on, ccImmune: { stun: 3000 } })], members, 238, dist, 1500, 2000)).toBeNull();
-        expect(stunTarget([foe(1, { target: 'Oisin', targetBySpell: false })], members, 238, dist, 1500, 2000)).toBeNull();
+    });
+
+    test('a melee swinging at our Bard or Druid counts first, as a caster on them; on a nuker, or not swinging, it does not', () => {
+        const melee = (id: number, target: string, swinging = true, x = 500) => foe(id, { target, targetBySpell: false, swinging, castingAt: undefined, x });
+        expect(stunTarget([melee(1, 'Brigid')], members, 238, dist, 1500, 2000)?.objectId).toBe(1);
+        expect(stunTarget([foe(2, { target: 'Niamh', targetBySpell: true, x: 200 }), melee(1, 'Oisin', true, 900)], members, 238, dist, 1500, 2000)?.objectId).toBe(1);
+        expect(stunTarget([melee(1, 'Oisin', false)], members, 238, dist, 1500, 2000)).toBeNull();
+        expect(stunTarget([melee(1, 'Niamh')], members, 238, dist, 1500, 2000)).toBeNull();
     });
 });
 
