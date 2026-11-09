@@ -84,3 +84,5 @@ What the class has that no behaviour uses:
 **Verified, arena round 12** (against Albion, won 7-0): Oisin survived the round for the first time in the arena, with 8 crowd control, 14 interrupts and 3 cure attempts (2 interrupted, 1 while mezzed himself). Rounds 10 and 12 had the orchestrator's f4135fd (no cast into a melee swing, step away) and ebf2fd2 (interrupt casters on our healer or support first) besides the kit's cure.
 
 **Arena round 21** (wiped 0-5 by Camelot, 99 s): 4 s after the engage Oisin, Niamh and Brigid were mezzed at once by an area mezz, and Oisin died mezzed 8 s later. The kit's cure can't help when the Bard is the one mezzed, and `interrupt()` runs only in the engage phase, so his instant Minor Lullaby (range 2300) can't cut a cast begun during the stalk. Asked the orchestrator to let it run earlier.
+
+**Verified, arena round 23** (wiped Midgard 5-1, no Bard death): 11 mezz cures, 13 interrupts, 4 mezzes. The first round with the cure high in his list (urgent), the earlier interrupt (before the engage) and Midgard's Sigrid as the group's focus.

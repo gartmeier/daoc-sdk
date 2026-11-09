@@ -98,3 +98,5 @@ What the class has that no behaviour uses:
 **Server code:** a speed song takes no effect in combat (`SpeedEnhancementSpellHandler.cs:69`), so a dived member can't outrun the melee without it.
 
 **Arena round 20** (wiped Midgard 5-1): Brigid 19 heals and 16 turns of "heal: not enough power" (dry). `rootDiver` uses the same 150 margin as the Flash from round 21. Watch her power: Renewing Conflux is 57 a cast, and her floor for it is 25 %.
+
+**Verified, arena round 23** (wiped Midgard 5-1): 17 heals, then 20 turns of "heal: not enough power" and 3 `no_power`. Her pool at 24 is 197 power (`bun sdk/cli.ts brigid`), so Greater Regrowth (52) and Renewing Conflux (57) each cost over a quarter of it, and two fights in a row (rounds 20, 23) ran her dry. The RvR heal thresholds (tank 75, others 70) are the group's setting; suggested 65 / 55 to the Hibernia group session.
