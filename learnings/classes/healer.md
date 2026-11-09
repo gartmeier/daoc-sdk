@@ -34,7 +34,7 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 19 (vs Camelot, won by wipe 5 / 0 in 4 minutes):** 3 cure attempts, all `out_of_range` despite the 3D margin; she was moving 55 % of the fight, so the picture is likely behind her own walk. A miss fails at once, so it costs a turn, not a cast. If it keeps up, the cure could step toward the member (as `crowdControl` does) instead of casting from where she stands.
 
-**Round 23 (vs Hibernia, wiped 1 / 5):** in melee 52 %, targeted 51 %, and no Hinder Spirit: `flee` sits above `urgent` in the pack's list and takes every turn while a melee is on her (circling the tank). A slot above `flee` for instants is asked of the orchestrator; until then the slow only goes on the attackers of others.
+**Round 23 (vs Hibernia, wiped 1 / 5):** in melee 52 %, targeted 51 %, and no Hinder Spirit: `flee` sits above `urgent` in the pack's list and takes every turn while a melee is on her (circling the tank). Since then the orchestrator's `Character.instant` slot puts it just above `flee`: one slow costs her one turn, and `flee` goes on the next.
 
 ## Builds
 

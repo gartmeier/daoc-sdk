@@ -6,7 +6,8 @@
 //   members, else on the enemy healer while our focus is low. Below heal and crowd control.
 // Neither starts with an enemy swinging at her: a swing ends a cast half way.
 // - Hinder Spirit, the instant attack slow (Pacification 2, 20 s, 5 s timer): on an enemy player in melee on her or a
-//   soft member, which an instant can do even under the swings. learnings/classes/healer.md says what, and what has
+//   soft member, which an instant can do even under the swings. In the instant slot, above flee, which otherwise takes
+//   every turn while a melee is on her. learnings/classes/healer.md says what, and what has
 //   been measured.
 
 import { cureMezz, foeInView, hammeredBy, onMember, type TacticsSettings } from '../group/behaviors';
@@ -65,5 +66,5 @@ export const hinder = (): Behavior<TacticsSettings> => ({
 });
 
 export function healer(): Character {
-    return { role: 'healer', urgent: [unlessHammered(cureMezz()), hinder()], fight: [unlessHammered(stunPeel())] };
+    return { role: 'healer', instant: [hinder()], urgent: [unlessHammered(cureMezz())], fight: [unlessHammered(stunPeel())] };
 }

@@ -175,7 +175,8 @@ describe('healer guide', () => {
             expect(list.indexOf('emergencyHeal')).toBeLessThan(list.indexOf('cureMezz'));
         }
         const pack = withCharacter(packBehaviors().healer as Behavior<any>[], healer() as Character).map(b => b.name);
-        expect(pack.slice(pack.indexOf('cureMezz'), pack.indexOf('heal'))).toEqual(['cureMezz', 'hinder']);
+        expect(pack.indexOf('cureMezz')).toBe(pack.indexOf('heal') - 1);
+        expect(pack.indexOf('hinder')).toBe(pack.indexOf('flee') - 1);
     });
 
     test('her stun is Halt Attack, peeled below heal and crowd control in every list', () => {
