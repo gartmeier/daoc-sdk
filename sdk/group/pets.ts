@@ -467,6 +467,16 @@ export const summonPet = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         const s = petSettings(ctx);
         ctx.memory.delete(REST_MANA_UP_TO);
+        const behind = leftBehind(ctx, s);
+        if (behind) {
+            const me = ctx.me();
+            if (me.mana < ctx.spells.powerOf(behind) || me.manaPercent < s.summonMana) return false;
+            ctx.memory.set('leftBehindAt', Date.now());
+            ctx.doing('summon', null, `${behind.spell.name}: the pet fell behind`);
+            const c = await ctx.bot.summonPet(behind.spell, { replace: true });
+            ctx.result('summon', c);
+            return true;
+        }
         const sp = summonFree(ctx, s);
         if (!sp) return false;
         const me = ctx.me();
@@ -483,6 +493,31 @@ export const summonPet = (): Behavior<TacticsSettings> => ({
         return true;
     },
 });
+
+/** A window pet this far from us, or out of view, in a quiet phase is summoned anew (leftBehind). */
+export const PET_LEFT_BEHIND = 3500;
+/** And no second time within this. */
+const LEFT_BEHIND_RETRY_MS = 60_000;
+
+/**
+ * The summon to cast again, with `replace`, for a window pet left behind: in a quiet phase, more than PET_LEFT_BEHIND off or out of
+ * view, nothing hostile near, the summon ready. A pet isn't in the group, so a speed song doesn't carry it: in arena round 24
+ * (2026-11-10) Morgana's simulacrum fell behind on a 14k leg and was closed at 10000 from her (ControlledMobBrain.cs:27), and she
+ * summoned it 3 times that round, each in or near a fight (Albion group session). Null when that isn't so.
+ */
+export function leftBehind(ctx: MemberContext<TacticsSettings>, s: PetSettings): SpellPick | null {
+    if (!s.enabled || !ctx.sdk.getState()?.pet || ctx.bot.isDead() || !QUIET_PHASES.has(ctx.orders().phase)) return null;
+    const pet = ctx.sdk.getPet();
+    if (pet && pet.distance <= PET_LEFT_BEHIND) return null;
+    if (Date.now() - (ctx.memory.get('leftBehindAt') ?? -Infinity) < LEFT_BEHIND_RETRY_MS) return null;
+    const sp = ctx.spells.summon();
+    if (!sp || sp.spell.cooldownRemaining > 0) return null;
+    const me = ctx.me();
+    const near = (c: Contact) => c.regionId === me.regionId && dist(c, me) < SUMMON_ENEMY_RADIUS;
+    if (ctx.threats().some(near) || ctx.picture().contacts.some(c => c.kind === 'player' && !c.stale && near(c))) return null;
+    if (!onMap(me.regionId, me, SUMMON_MAP_MARGIN)) return null;
+    return sp;
+}
 
 /** The summon, if nothing but its power and the map speaks against it now (summonPet). An instant one stands still for nothing, so in our own pull the mob we are bringing is no reason. */
 function summonFree(ctx: MemberContext<TacticsSettings>, s: PetSettings): SpellPick | null {

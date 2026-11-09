@@ -740,6 +740,19 @@ describe('summonPet: the gates', () => {
         }
     });
 
+    test('a window pet left behind (past 3500 or out of view) in a quiet phase: summoned anew with replace, once a minute (arena round 24)', async () => {
+        const far = noPet({ pet: {}, petEntry: { distance: 5000 } });
+        expect(await summonPet().run(far.ctx)).toBe(true);
+        expect(far.calls.summon).toEqual([{ spell: SUMMON.spell, opts: { replace: true } }]);
+        expect(await summonPet().run(far.ctx)).toBe(false);
+        const gone = noPet({ pet: {}, petEntry: null });
+        expect(await summonPet().run(gone.ctx)).toBe(true);
+        // Near, travelling, or with a foe near: left as it is.
+        expect(await acts({ pet: {}, petEntry: { distance: 3000 } })).toEqual(silent);
+        expect(await acts({ pet: {}, petEntry: { distance: 5000 }, orders: { phase: 'travel', focus: null } })).toEqual(silent);
+        expect(await acts({ pet: {}, petEntry: { distance: 5000 }, contacts: [mob(77)] })).toEqual(silent);
+    });
+
     test('in a pull, if we aren\'t the one pulling', async () => {
         expect((await acts({ orders: { phase: 'pull', focus: FOCUS, puller: 'Tank' } })).cast).toBe(1);
         expect(await acts({ orders: { phase: 'pull', focus: FOCUS, puller: 'Owner' } })).toEqual(silent);
