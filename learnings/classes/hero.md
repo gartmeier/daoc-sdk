@@ -8,26 +8,29 @@ Hibernia's tank: a large shield with blades, or a two-hander or spear in the oth
 
 ## The kit
 
-`sdk/classes/hero.ts` is the tank's list with a fight that also swings what a block, a parry or a position opens:
+`sdk/classes/hero.ts` is the tank's list with its own style pick, `heroStyle` (tested in `sdk/classes/hero.test.ts`):
 
 ```typescript
 import { hero } from '../../sdk/classes/hero';
 export default hero();
 ```
 
-**What changes, server code:** the plain `tank` swings Fire Blade. With the kit, `reactingTank` (`sdk/classes/reacting-tank.ts`) queues a style ahead of it, and Fire Blade stays the backup:
+**Against a player, a stun once per immunity (2026-11-09, arena round 5 onwards).** The queue for his next swing:
 
-| What just happened | First in the queue |
+| What just happened | Queue (first, backup) |
 |---|---|
-| He blocked | The first reaction to a block the server lists: in the data's order Horizon Blade (4 s stun), not Incapacitate (5 s) |
-| The enemy's on someone else | Disable (4 s stun, from the side) |
-| Anything else | Return Blade (needs a parry) |
+| His last block was the foe's last swing at him | Incapacitate (5 s, 20 end), Numb |
+| Anything else | Disable (side, 4 s), Numb (any time, 2 s) |
+| Our stun landed on it < stun + 60 s ago | the reacting tank's pick: reactions, then Fire Blade |
 
-Taunts still go in only as the tank's list decides. Styles stop at the same 15 % endurance. A reaction that lands costs its own endurance, 5 for Horizon Blade against 15 for Fire Blade.
+- **Why a backup stun, server code.** The choice goes in right after his own swing, for the next one (`actions.ts` style resend), and the server checks the opening when that swing comes (`PlayerStyleComponent.GetStyleToUse`). A block reaction needs the foe's *last* swing at him to be the block (`StyleProcessor.CanUseStyle`, Defensive), so a foe that swings again first spoils it, and the old kit's reactions never landed (rounds 43-48, s14). Numb behind it fires anywhere, so the swing stuns all the same. Without a backup the server swings the failing style anyway.
+- **Why stuns, server code.** A stun stops the target's cast at once (`AbstractCrowdControlECSEffect.OnHardCCStart`: `StopCurrentSpellcast`), where a plain hit past a cast's half way doesn't, and Hibernia's focus is mostly their back line. Style stuns give players the flat 60 s immunity (`immunity_timer_flat_length`, from the stun's end), so the kit keeps its own log of what it stunned and when; a style stun isn't marked on the board, so the group's `cc` and `ccHolds` don't stop the nukers.
+- **Endurance:** a stun is queued only if he can pay it (Numb and Disable 15, Incapacitate 20); Horizon Blade (5) is the block reaction left when he can't.
+- **Monsters:** the old pick, unchanged.
 
-**In the wolf pack:** it applies. `rvrPack` has no `memberBehaviors`, and its tank list keeps `tank`, which this replaces in place. The same is true of `rvrRoaming`.
+**To look for:** "You perform your Numb/Disable perfectly" in the fight log, `Styles landed` in the report, the focus's casts cut short, and his endurance.
 
-**Not played.** To look for: "You perform your Horizon Blade perfectly" and stuns in the fight log, kills and the group's deaths against plain `tank`, and his endurance.
+**Community, unverified:** DAoC RvR basics put stuns, mezzes and roots first among what turns a fight, and warn against breaking crowd control early ([Demise RvR basics](https://sites.google.com/view/demise-s3/rvr/the-basics)). No Hero-specific stun guide turned up in a search on 2026-11-09.
 
 ## Builds
 
@@ -91,6 +94,6 @@ Slam, the 9 s anytime stun, is Shields 42, past level 40 in this build, so it do
 
 ## Not supported yet
 
-- **Stuns:** no behaviour holds a stun for a target that needs it, like an enemy healer casting.
+- **Stuns held for a cast:** the kit stuns the focus as soon as it can, not when the focus starts a heal. The style choice comes a swing ahead, so holding it would need the cast seen before our swing.
 - **Engage** (Shields 7): no behaviour uses it.
 - **Guard in a fight:** `guard` runs only out of fights, so a Guard lost to a death stays down until the next quiet moment.

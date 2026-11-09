@@ -15,7 +15,6 @@ import { ANYTIME_STYLE, tankStyles } from '../group/styles';
 import { roleForClass } from '../group/strategy';
 import type { MemberReport, Role } from '../group/types';
 import { EquipmentSlot, ObjectType, type CombatResult, type SpellDetails, type Style } from '../types';
-import { bard } from './bard';
 import { cabalist } from './cabalist';
 import { cleric } from './cleric';
 import { druid } from './druid';
@@ -472,7 +471,7 @@ describe('thrifty', () => {
 });
 
 describe('the role-only kits', () => {
-    const kits: [string, () => { role?: Role; fight?: unknown; react?: unknown; chores?: unknown }][] = [['Bard', bard], ['Spiritmaster', spiritmaster], ['Cabalist', cabalist], ['Druid', druid]];
+    const kits: [string, () => { role?: Role; fight?: unknown; react?: unknown; chores?: unknown }][] = [['Spiritmaster', spiritmaster], ['Cabalist', cabalist], ['Druid', druid]];
 
     test.each(kits)('%s has its class\'s role and leaves every list as it is', (className, kit) => {
         const role = roleForClass(className);

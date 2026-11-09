@@ -8,13 +8,13 @@ Hibernia's support: mezz and damage shouts from Music, songs and base buffs from
 
 ## The kit
 
-`sdk/classes/bard.ts` holds only the role, `support`, which is what `roleForClass` gives. It changes nothing against the role list, on purpose:
+`sdk/classes/bard.ts` is the `support` role with one addition, `cureMezz` as `react` (2026-11-09, arena round 5 onwards; tested in `sdk/classes/bard.test.ts`):
 
-- **It's the one list built round him.** `crowdControl()` without `assignedOnly`, and songs. In the wolf pack, `packBehaviors` writes the support list itself: `interrupt`, `crowdControl`, `backupHeal`, `confuse`, `song`. The role matters there too: `packCc` gives area mezzes to whoever's role is `support`.
-- **Characters do apply in the pack,** but that list has no fight and no `position`, so what a character adds lands at `shedLoad`: below `song`, even under `react`.
-- **A shout wouldn't reach.** `assist` would cast Concussive Yell (21, instant, range 700, recast 10 s). The pack stands at 1500 with `standGround` and a `standStep` of 500, so it mostly wouldn't fire, and each step takes him toward the enemy for 21 damage. Outside the pack, `castSpell` would walk him in.
+- **The cure, server code.** Clarifying Harmonies (Music, baseline, CureMezz, single target, 3 s, range 1500) frees a mezzed member: the healer first, then the tank, then the most hurt (`mezzedMember`). It is Hibernia's only mezz cure. Arena rounds 2-3 had Brigid, Niamh and Oisin himself report "You can't cast while mesmerized!".
+- **Where it goes:** the pack's support list has no fight and no `position`, so a character's `react` lands at `shedLoad`, below `interrupt`, `crowdControl`, `backupHeal`, `confuse` and `song`. It takes the turns those leave; a cure ahead of a new mezz would need the orchestrator's `withCharacter` to place it (asked 2026-11-09).
+- **A shout wouldn't reach.** `assist` would cast Concussive Yell (21, instant, range 700, recast 10 s). The pack stands at 1500, so it is still left out.
 
-So a `bard()` character is worth wiring only so the report says it came from a character.
+**Community, unverified:** in small-man fights a Bard pairs with a caster (often a Mentalist) to cover mezz, mezz cure, heals and amnesia between them ([Eden forum](https://eden-daoc.net/viewtopic.php?p=4968)).
 
 ## Builds
 
@@ -43,7 +43,7 @@ Oisin plays Nurture support. **Community, unverified:** the level 50 numbers com
 - **Rez:** Minor Reconstitution.
 - **Buffs:** the group's base buffs, Skin of the Redwood, Redwood's Stoutness, Dexterity of the Badger and Vigor of the Redwood: 11 buffs for 81 concentration. Charisma 89 and the template's 36 make a pool of about 210 by the Druid's formula ([druid.md](druid.md)), so it fits.
 - **No acuity:** a Bard's Nurture has none, and the group's nukers go without ([druid.md](druid.md)).
-- **Reached, and no behaviour casts it:** Concussive Yell (21 damage, instant, range 700, recast 10 s), Clarifying Harmonies, Lullaby, Befuddling Cadence, the cures, the group heal.
+- **Reached, and no behaviour casts it:** Concussive Yell (21 damage, instant, range 700, recast 10 s), Lullaby, Befuddling Cadence, the cures, the group heal.
 
 ## The instrument
 
@@ -70,8 +70,11 @@ A song needs an instrument out (`SpellHandler.cs` `CheckInstrument`), and `bot.t
 
 What the class has that no behaviour uses:
 
-- **Clarifying Harmonies,** a mezz cure, at level 24. Most members' reports are full of `crowd_controlled` failures, so a cure on a mezzed healer looks worth trying: it has 1500 range and 3 s to cast. Nobody tracks which members are mezzed yet, and he can't cast it mezzed himself.
 - **Area mezz:** Captivate Audience (radius 350) and up. On a player, its duration falls to half at the edge of the area (`SpellHandler.CalculateEffectDuration`).
 - **Shouts:** Concussive Yell and up, direct damage, needing `assist` in a character's list. Short range, and it would compete with mezzes for his turns.
 - **Lullaby** (Amnesia, instant, area) and **confusion** (Befuddling Cadence).
 - **Weapon styles:** the build leaves Blades at 1 to 40, and he stands at range with a lute. Music crowd control's Blades 10 reaches Glowing Blade, but there's no behaviour that would have him swing.
+
+## Arena rounds, 2026-11-09
+
+**Verified,** rounds 1-4 (Hibernia won all four): Oisin died in every one, was targeted 39-44 % of fight time and in melee reach 24-50 %, and `cc:interrupted` came to 3, 15, 0 and 6. `flee` runs him to the tank, then skips once he is within 150 ("attacked, already at the tank"), and `crowdControl` casts the 2.5 s mezz with the melee still on him. Raised with the orchestrator, whose `crowdControl` that is.
