@@ -26,6 +26,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 14 (vs Camelot, wiped in 85 s, code before Hinder Spirit):** Camelot mezzed Ulfgar, Bragi and Hrafna and went for her: in melee 44 %, 1 heal landed, 2 mezzes and a cure interrupted, and she died casting Greater Reparation (3.3 s). The first to die in three of the last four rounds she was in.
 
+**Round 16 (vs Hibernia, won by wipe 5 kills / 1 death, Hinder Spirit in):** in melee 2 %, targeted 16 %, 4 cures, 1 stun, 6 heals, no death; no slow cast, with no enemy in melee on her or the casters.
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
