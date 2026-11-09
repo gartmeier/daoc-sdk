@@ -319,7 +319,16 @@ export interface Trip {
     dry?: boolean;
 }
 
-function reachedBy(leg: Point, movers: readonly Point[], ageMs: number): boolean {
+/**
+ * With stayDry, a leg isn't reached while a member still swims, nor does a new trip replace it (stepLeg), for up to this
+ * long after it was set: a crossing of ~2500 at 85 takes 30 s. User, live 2026-11-09: Albion's tank and a caster came out
+ * of the river, the leg counted as reached (within LEG_REACHED), a hunt planned on from the bank, and they ran on at 250
+ * while Merlin, Nimue and Morgana still swam at 111.
+ */
+const LEG_SWIM_MS = 60_000;
+
+function reachedBy(leg: Point, movers: readonly Point[], ageMs: number, swimming = 0): boolean {
+    if (swimming && ageMs < LEG_SWIM_MS) return false;
     const short = movers.filter(m => dist(m, leg) >= LEG_REACHED).length;
     return short === 0 || (ageMs > LEG_TIMEOUT_MS && short <= 1);
 }
@@ -328,16 +337,20 @@ function reachedBy(leg: Point, movers: readonly Point[], ageMs: number): boolean
  * The leg in force toward `goal`: kept until `movers` reached it, then the next one, chained from
  * it along a route round aggro zones and keep circles (safePath). A new kind of trip, or a goal
  * that moved more than `replan`, starts over from `from`. With `meet`, a leg covers at most half
- * the gap (the other side walks toward us). Writes memory.leg, legFacing and route (the viewer draws them).
+ * the gap (the other side walks toward us). With t.dry, nobody goes on while a mover still swims (LEG_SWIM_MS).
+ * Writes memory.leg, legFacing and route (the viewer draws them).
  */
 export function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; movers: readonly Point[]; replan: number; meet?: boolean; force?: boolean }): void {
     const { mem } = t;
+    // Members still swimming: the dry leg in force (the far bank) stays, whatever the trip, until they are out (LEG_SWIM_MS).
+    const swimming = t.dry ? o.movers.filter(m => isWet(t.regionId, m)).length : 0;
+    if (!o.force && swimming && mem.leg && !isWet(t.regionId, mem.leg) && t.now - (mem.legAt ?? t.now) < LEG_SWIM_MS) return;
     if (mem.legKind !== kind || !mem.goal || dist(mem.goal, goal) > o.replan) {
         mem.legKind = kind;
         mem.leg = null;
         mem.route = null;
     }
-    if (!o.force && mem.leg && !reachedBy(mem.leg, o.movers, t.now - mem.legAt)) return;
+    if (!o.force && mem.leg && !reachedBy(mem.leg, o.movers, t.now - mem.legAt, swimming)) return;
     const from: Point = mem.leg ?? o.from;
     if (!mem.route || dist(mem.goal, goal) > 1) {
         mem.route = safePath(t.regionId, t.level, from, goal, t.avoid);
@@ -363,7 +376,9 @@ export function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; mo
     const { x, y } = leg;
     mem.leg = { x, y, z: t.zAt({ x, y }) };
     mem.legAt = t.now;
-    mem.legFacing = { x: next.x, y: next.y };
+    // Facing on along the route: after a crossing's bank moved the leg, `next` lies behind it in the river.
+    const on: Point = (mem.route as Point[]).find(q => dist(q, leg) > 300) ?? goal;
+    mem.legFacing = { x: on.x, y: on.y };
 }
 
 /** Which way to run from `enemies`: toward home, unless they stand that way (within 60° of it), then straight away from them. */

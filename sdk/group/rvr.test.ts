@@ -5,7 +5,7 @@ import { Blackboard, observeState } from './blackboard';
 import { contact, enemy, picture, report } from './fixtures';
 import type { RunReport } from './observer';
 import { memoryView } from './publish';
-import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, homeOf, keepDangers, pickRvrFocus, RVR_SETTINGS, rvrFindings, rvrRoaming, type RvrSettings } from './rvr';
+import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, homeOf, keepDangers, pickRvrFocus, RVR_SETTINGS, rvrFindings, rvrRoaming, stepLeg, type RvrSettings } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { aggroZones, safePath } from './terrain';
 import { getTerrainStore } from '../terrain';
@@ -1036,5 +1036,37 @@ describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('decideRvr with stayDry: 
         expect(decide(swim(40_900), { memory, now: 47_000 }).reason).not.toMatch(/wait ashore/);
         decide([], { memory, now: 50_000 });
         expect(decide(swim(40_900), { memory, now: 51_000 }).reason).toMatch(/wait ashore/);
+    });
+});
+
+describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('stepLeg with stayDry: a crossing waits for those still swimming', () => {
+    const T = 252;
+    const river = { x: 41_069, y: 26_768 };
+    const bank = { x: 38_500, y: 26_768 }; // dry, west of it
+    const trip = (mem: Record<string, any>, now: number, dry = true) => ({ mem, now, regionId: T, level: 24, avoid: [], travelLeg: 1500, zAt: () => 0, dry });
+    const out = (n: number) => Array.from({ length: n }, (_, i) => ({ x: bank.x + i * 50, y: bank.y }));
+    const swimmers = [{ x: river.x, y: river.y }, { x: river.x - 100, y: river.y }];
+
+    test('the leg on the bank is not reached, and a hunt doesn\'t replace it, until they are out', () => {
+        expect(isDry(T, bank) && isWet(T, swimmers[0]!)).toBe(true);
+        const mem: Record<string, any> = { legKind: 'patrol', leg: { ...bank, z: 0 }, legAt: 0, goal: { x: 30_000, y: 26_768 }, route: [{ x: 30_000, y: 26_768 }] };
+        // Three out, two in the river: a hunt the other way keeps the leg.
+        stepLeg(trip(mem, 5000), 'hunt', { x: 34_000, y: 30_000 }, { from: bank, movers: [...out(3), ...swimmers], replan: 800 });
+        expect(mem.leg).toMatchObject(bank);
+        expect(mem.legKind).toBe('patrol');
+        // All out: the hunt plans from the bank.
+        stepLeg(trip(mem, 20_000), 'hunt', { x: 34_000, y: 30_000 }, { from: bank, movers: out(5), replan: 800 });
+        expect(mem.legKind).toBe('hunt');
+        expect(Math.hypot(mem.leg.x - bank.x, mem.leg.y - bank.y)).toBeGreaterThan(500);
+    });
+
+    test('stuck swimming past LEG_SWIM_MS, or stayDry off: the group goes on', () => {
+        const mem = () => ({ legKind: 'patrol', leg: { ...bank, z: 0 }, legAt: 0, goal: { x: 30_000, y: 26_768 }, route: [{ x: 30_000, y: 26_768 }] } as Record<string, any>);
+        const late = mem();
+        stepLeg(trip(late, 61_000), 'hunt', { x: 34_000, y: 30_000 }, { from: bank, movers: [...out(3), ...swimmers], replan: 800 });
+        expect(late.legKind).toBe('hunt');
+        const wet = mem();
+        stepLeg(trip(wet, 5000, false), 'hunt', { x: 34_000, y: 30_000 }, { from: bank, movers: [...out(3), ...swimmers], replan: 800 });
+        expect(wet.legKind).toBe('hunt');
     });
 });
