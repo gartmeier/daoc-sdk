@@ -482,17 +482,6 @@ describe('thrifty', () => {
 });
 
 describe('the role-only kits', () => {
-    const kits: [string, () => { role?: Role; fight?: unknown; react?: unknown; chores?: unknown }][] = [['Spiritmaster', spiritmaster]];
-
-    test.each(kits)('%s has its class\'s role and leaves every list as it is', (className, kit) => {
-        const role = roleForClass(className);
-        expect(kit()).toEqual({ role });
-        for (const lists of [defaultBehaviors(), rvrBehaviors(), packBehaviors()]) {
-            const list = lists[role] as Behavior<any>[];
-            expect(withCharacter(list, kit() as Character).map(b => b.name)).toEqual(list.map(b => b.name));
-        }
-    });
-
     test('a Heal druid and a Healer have no damage spell for assist, and a Nature druid has', () => {
         expect(reachOfBuild(getBuild('Druid', 'Heal druid')!, 24).nukes).toEqual([]);
         expect(reachOfBuild(getBuild('Healer', 'Mending first')!, 24).nukes).toEqual([]);

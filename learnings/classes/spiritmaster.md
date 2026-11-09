@@ -8,7 +8,9 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 
 ## The kit
 
-`sdk/classes/spiritmaster.ts` holds only the role, `nuker`, which is what `roleForClass` gives. It changes nothing against the role list. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.
+`sdk/classes/spiritmaster.ts` is a `nuker` whose fight is `assist()`, then `nukeInReach()`. **Why (2026-11-10, after arena round 20):** with the pack holding ground, `assist` skips when the focus is beyond her nukes ("focus out of reach, holding ground"), and she stood idle: 36 % of fight time in round 4, 22 % in 6, 45 % in 19, 39 % (53 skips) in 20, a round Hibernia won by wipe. A human caster nukes what is in reach instead. `nukeInReach` gets the turn only when `assist` has none: her best single-target nuke at a free enemy player in range (50 inside it), not the focus, never one under crowd control (a nuke wakes a mezz), healers first, then casters, the most hurt, the nearest; not while a melee is on her (`hammeredBy`). It reports as `nuke`. Her pet stays on the focus. Not measured yet: her idle share and damage in the next Midgard rounds.
+
+Before that the kit held only the role. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.
 
 In PvE, Midgard's `memberBehaviors.hrafna` (the nuker's list plus `restOnPull`) overrides any character. In RvR nothing does.
 
