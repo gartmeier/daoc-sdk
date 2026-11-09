@@ -497,6 +497,21 @@ describe('decidePack: every enemy crowd-controlled, picked off one at a time', (
         }
     });
 
+    test('pack.fightOn: the Bard low with an enemy on us, the pack fights on instead of leaving to rest', () => {
+        // Arena round 4, 2026-11-09: the raid fell back to the stalk, the Bard under raidReady made it rest, and resting left.
+        const low = team({ Bard: { mana: 10 } });
+        const foes = [foe(101, 11_000, 10_000, { target: 'Druid', targetId: 2, threat: true })];
+        const without: any = { pack: 'stalk', resting: true };
+        expect(decidePack(ctx(picture(low, foes), { memory: without })).reason).toMatch(/leave/);
+        const withIt: any = { pack: 'stalk', resting: true };
+        const u = decidePack(ctx(picture(low, foes), { memory: withIt, settings: { pack: { fightOn: 2500 } } }));
+        expect(u.phase).toBe('engage');
+        expect(withIt.resting).toBe(false);
+        // Far off, the rest goes on as before.
+        const far: any = { pack: 'stalk', resting: true };
+        expect(decidePack(ctx(picture(low, [foe(101, 14_000)]), { memory: far, settings: { pack: { fightOn: 2500 } } })).phase).not.toBe('engage');
+    });
+
     test('one wakes or comes in reach: the pack\'s own raid, the focus in hand kept', () => {
         const m: any = { pack: 'pick' };
         const foes = [foe(101, 11_000, 10_000, { hp: 70 }), foe(102, 10_900, 10_000, { caster: true, hp: 20 }), mezzed(103, 11_400)];

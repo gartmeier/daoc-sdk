@@ -52,6 +52,11 @@ export interface PackOptions {
     /** ... where it stands, with enemies no nearer than this; nearer, it moves off first. */
     restClear: number;
     /**
+     * With a free enemy player this close to the centre nobody rests: the fight goes on (resting walked the pack away from
+     * enemies on it, arena round 4, 2026-11-09: the Bard died in that leave). 0: off, resting may leave as before.
+     */
+    fightOn?: number;
+    /**
      * Bolt this far when losing: a member dead and as many enemies near as we have left, or a second realm arriving with us
      * three short (shouldBolt). 0: never, the pack fights on in short pull backs. boltMs: how long at most, and no second bolt for boltCoolMs.
      */
@@ -514,7 +519,9 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // unless enemies are near (walking regenerates nothing): the Bard's power song and sitting come with 'recover'.
     // One nuker low doesn't stop five (s6: resting 23 % of the round, Ciaran's 197 power is 13 nukes): the healer or the Bard low does, or anyone badly hurt, or two nukers.
     const mustRest = short.some(m => m.hp < k.raidReady.hp || m.role === 'healer' || m.role === 'support') || short.length >= 2;
-    if (mustRest) mem.resting = true;
+    const fightOn = (k.fightOn ?? 0) > 0 && seen.some(c => dist(c, centre) <= k.fightOn!);
+    if (fightOn) { mem.resting = false; mem.movingOff = false; }
+    else if (mustRest) mem.resting = true;
     if (mem.resting && !main.some(m => m.hp < s.ready.hp || (usesMana(m) && m.mana < s.ready.mana))) mem.resting = false;
     if (mem.resting) {
         const who = main.filter(m => m.hp < s.ready.hp || (usesMana(m) && m.mana < s.ready.mana));
