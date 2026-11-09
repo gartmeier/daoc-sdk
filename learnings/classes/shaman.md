@@ -16,7 +16,8 @@ export default shaman();
 ```
 
 - **Why:** the healer's list has no `assist`, so a Shaman deals nothing. Midgard's strategy gives Ulfgar one in PvE (`memberBehaviors`), with `holdMs` 2.5 s beside Hrafna's: 18 runs measured the hold, with no caster targeted ([spiritmaster.md](spiritmaster.md)). Its RvR strategy has no such entry: Ulfgar dealt 0 damage in 46 minutes, with "nothing to do" as his idle reason 362 times.
-- **Not played in RvR.** Ulfgar has no `character.ts`, and this kit changes nothing until he does. Heals stay above it in the list. Compare his damage and the group's deaths.
+- **In RvR** Ulfgar plays it through `bots/ulfgar/character.ts`: round 4 (2026-11-09) he cast 9 nukes, first one 2.2 s into a fight, and was idle 6 % ("no power").
+- **Disease first (2026-11-09, after round 4):** the fight is `[disease(), assist()]`. `disease` casts Infectious Spores (3 s, range 1500, 10 power, 90 s) on the focus when it is a free enemy player in range and his last one there hasn't run out (a resist or a failed cast tries again 6 s later). A diseased target gets half the healing, which is what a kill on a player needs against a healer. It reports as `nuke`. Heals stay above it. Not measured yet: casts of Infectious Spores and the time to kill a focus in the next Midgard rounds.
 
 ## Builds
 
@@ -45,7 +46,7 @@ Ulfgar plays Buffer healer. **Community, unverified:** Uthgard calls Augmentatio
 - **Crowd control:** a root, Holding Creepers (2.5 s, range 1500, 43 s), baseline.
 - **Rez:** Arrival from Valhalla, 10 % health. Reception from Valhalla, 30 %, is Mending 15, one level on and 15 points; he has 1 left and Augmentation 18 would lose Might of the Deep. So Sigrid should do the rezzing when she can, and nothing makes her.
 - **Damage, with the kit:** Fungal Erosion (DoT, 35 every 4 s for 24 s, range 1500, 3 s cast, 12 power), then Fungal Pin (a bolt of 7, 20 s between uses). That DoT is 210 for 12 power against Hrafna's 90 for 14, though at Subterranean 3 its minimum is low ([mentalist.md](mentalist.md)).
-- **Reached, and no behaviour casts it:** Infectious Spores (disease), Fungal Mud, the group heal Group Reparation, the cures, Lesser Earth Invigoration (an endurance buff, which shares the `regen` slot with Frigg's Medicant, so only one of them is kept up).
+- **Reached, and no behaviour casts it:** Fungal Mud, the group heal Group Reparation, the cures, Lesser Earth Invigoration (an endurance buff, which shares the `regen` slot with Frigg's Medicant, so only one of them is kept up).
 
 ## What the reports show
 
@@ -68,6 +69,6 @@ Ulfgar plays Buffer healer. **Community, unverified:** Uthgard calls Augmentatio
 
 ## Not supported yet
 
-- **Disease:** Infectious Spores and at Subterranean 27 Mold Cloud, the instant area disease every level 50 spec stops for (**community, unverified**). Nothing casts a debuff that isn't damage.
+- **Area disease:** at Subterranean 27 Mold Cloud, the instant area disease every level 50 spec stops for (**community, unverified**).
 - **Group heals** and **cures,** as for the Healer ([healer.md](healer.md)).
 - **Who rezzes:** `rez` runs in every list and the first to act does it, whatever it restores.
