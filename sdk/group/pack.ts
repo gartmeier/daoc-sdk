@@ -291,6 +291,27 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         return say({ ...none, phase: 'retreat', retreatTo: mem.boltTo, anchor: mem.boltTo, objective: 'bolt: away from both', reason: `bolt: ${dead.length} dead, ${free.length} free vs ${main.length}` });
     }
 
+    // ── Picking off: every enemy in sight crowd-controlled, but the focus. Break one on purpose and kill it, everyone on it and no
+    // raid clock, then the next, one at a time, until none is left (ccHolds lets the members break it). User, live in Thidranki: with
+    // all of them mezzed `free` was empty, so the pack stood by them and rebuffed until they woke. Winding down, only the focus in hand.
+    const sight = foes.filter(c => dist(c, centre) <= s.huntRadius);
+    const target = o.phase === 'engage' ? sight.find(c => c.objectId === o.focus) : undefined;
+    const held = sight.filter(c => c.cc && c !== target);
+    const loose = sight.filter(c => !c.cc && c !== target);
+    if (!loose.length && (held.length || (mem.pack === 'pick' && target)) && main.length >= k.minPack && (!ctx.windingDown || target)) {
+        mem.pack = 'pick';
+        const near = sight.filter(c => dist(c, centre) <= k.reach);
+        // The one in hand stays wherever it is; a new one is the pack's pick (pickPackFocus) among those in reach, if any are.
+        const focus = keepFocus(target ? sight : near.length ? near : sight)!;
+        // Nothing free to mezz, and the focus is to be broken: no cc orders.
+        return fight('pick off', focus, [], onFocus(focus), `${sight.filter(c => c.cc && c !== focus).length} more crowd-controlled, ${main.length} of us`);
+    }
+    // Something woke or came: the pack's own fight, the focus kept while it is in reach (keepFocus).
+    if (mem.pack === 'pick') {
+        if (loose.some(c => dist(c, centre) <= k.reach)) { mem.pack = 'raid'; mem.raidAt = now; mem.packAnchor = stay; mem.holdSince = undefined; }
+        else mem.pack = 'stalk';
+    }
+
     if (mem.pack === 'raid') {
         const anchor: Point3 = mem.packAnchor;
         const reachable = free.filter(c => dist(c, centre) <= k.reach);

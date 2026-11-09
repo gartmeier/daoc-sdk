@@ -657,12 +657,12 @@ export class Blackboard {
     /**
      * A member's pet attacked a mob. Any swing breaks a mezz, a miss too, and any spell but a mezz on an NPC does; a root takes a hit (GameLiving.cs:1689-1704, :1729-1730).
      * A note for the observer, and the mob comes off cc for the group: a broken mezz sends no line of its own (live).
-     * A root on a focus with nothing else free had done its job (ccHolds), and petControl sends a pet in on purpose: that note counts for nothing.
+     * Crowd control on a focus with nothing else free is broken on purpose (ccHolds: a root has done its job, a mezz is picked off), and petControl sends a pet in for it: that note counts for nothing.
      */
     private petSwung(r: MemberReport, swing: NonNullable<Observation['petSwings']>[number], now: number): void {
         const c = this.contacts.get(`${r.regionId}:${swing.targetId}`);
         if (!c?.cc || swing.at - c.ccSince <= CC_SETTLE_MS || !(swing.landed || c.cc.kind === 'mezz')) return;
-        if (c.cc.kind === 'root' && c.objectId === this.orders.focus && !this.anotherFree(c, now)) this.emit({ at: now, kind: 'note', member: r.name, targetId: c.objectId, text: `${r.name}'s pet ended the root on ${c.name}, with nothing else free`, data: { kind: c.cc.kind, by: c.cc.by } });
+        if (c.objectId === this.orders.focus && !this.anotherFree(c, now)) this.emit({ at: now, kind: 'note', member: r.name, targetId: c.objectId, text: `${r.name}'s pet ended the ${c.cc.kind} on ${c.name}, with nothing else free`, data: { kind: c.cc.kind, by: c.cc.by } });
         else this.emit({ at: now, kind: 'note', member: r.name, targetId: c.objectId, text: `${r.name}'s pet broke the ${c.cc.kind} on ${c.name}`, data: { petBrokeCc: true, kind: c.cc.kind, by: c.cc.by } });
         this.ccEnded(c, c.cc.kind as CcKind, now);
     }

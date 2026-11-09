@@ -189,12 +189,13 @@ function casterToPeel(ctx: MemberContext<TacticsSettings>, t: Contact): boolean 
 const alive = isAlive;
 
 /**
- * Whether crowd control on `c` keeps our hands off it. A mezz always: any swing breaks one, a miss too (GameLiving.cs:1700-1704). A root on an add, or on a focus with something else free in the fight, while the coordinator moves the focus.
- * With nothing else free, a root has done its job: live a sole rooted Celt stood untouched from +4.2 to +32.3 while its pet killed a member (run 20261103-174453).
+ * Whether crowd control on `c` keeps our hands off it: on an add, or on a focus with something else free in the fight, while the coordinator moves the focus. Any swing breaks a mezz, a miss too (GameLiving.cs:1700-1704).
+ * With nothing else free, the coordinator chose it to be broken: a root has done its job (live a sole rooted Celt stood untouched from +4.2 to +32.3 while its pet killed a member, run 20261103-174453),
+ * and with every enemy mezzed the group picks them off one at a time (pack.ts pickOff, decideRvr) instead of standing by them, rebuffing, until they wake (user, live in Thidranki).
  */
 export function ccHolds(ctx: MemberContext, c: Contact): boolean {
     if (!c.cc) return false;
-    return c.cc.kind === 'mezz' || !loneFocus(ctx, c);
+    return !loneFocus(ctx, c);
 }
 
 /** It is the focus, and nothing else in the fight is free. */

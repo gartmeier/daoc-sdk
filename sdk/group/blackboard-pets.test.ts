@@ -919,8 +919,15 @@ describe('a pet on a rooted lone focus: the rule let it go in, so nothing was br
         expect(swung('root', { focus: 8, others: [add()] }).counted.length).toBe(1);
     });
 
-    test('a mezz always counts, lone focus or not', () => {
-        expect(swung('mezz').counted).toMatchObject([{ text: 'Petdru\'s pet broke the mezz on water beetle' }]);
+    // With every enemy mezzed the coordinator picks one off, and ccHolds lets the members and their pets break it (pack.ts, decideRvr).
+    test('a mezz on a lone focus is the same: broken on purpose', () => {
+        const { events, counted } = swung('mezz');
+        expect(counted).toEqual([]);
+        expect(events.filter(e => e.kind === 'note').map(e => e.text)).toContain('Petdru\'s pet ended the mezz on water beetle, with nothing else free');
+    });
+
+    test('a mezz with something else free counts', () => {
+        expect(swung('mezz', { others: [add()] }).counted).toMatchObject([{ text: 'Petdru\'s pet broke the mezz on water beetle', data: { petBrokeCc: true, kind: 'mezz' } }]);
     });
 });
 

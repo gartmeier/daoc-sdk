@@ -219,11 +219,12 @@ describe('petControl: the pet goes for the focus', () => {
 describe('petControl: never a crowd-controlled target', () => {
     const mezz = { by: 'Bard', kind: 'mezz', until: Date.now() + 9000 };
 
+    // Something else free in the fight: alone, a crowd-controlled focus is the one to break (ccHolds), the pet's too.
     test('a cc\'d focus: no order; on it already: it comes away', async () => {
-        const none = world({ contacts: [held({ cc: mezz })], orders: { focus: FOCUS } });
+        const none = world({ contacts: [held({ cc: mezz }), mob(52)], orders: { focus: FOCUS } });
         await petControl().run(none.ctx);
         expect(none.sent).toEqual([]);
-        const on = world({ contacts: [held({ cc: mezz })], orders: { focus: FOCUS }, pet: { targetObjectId: FOCUS } });
+        const on = world({ contacts: [held({ cc: mezz }), mob(52)], orders: { focus: FOCUS }, pet: { targetObjectId: FOCUS } });
         await petControl().run(on.ctx);
         expect(on.sent).toEqual([{ command: 'follow' }]);
     });
@@ -452,7 +453,7 @@ describe('petControl: a pet on stay is the character\'s own', () => {
     });
 
     test('called off, it stays parked', async () => {
-        const w = world({ contacts: [held({ cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 9000 } })], orders: { focus: FOCUS }, pet: { walk: 'stay', targetObjectId: FOCUS } });
+        const w = world({ contacts: [held({ cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 9000 } }), mob(52)], orders: { focus: FOCUS }, pet: { walk: 'stay', targetObjectId: FOCUS } });
         await petControl().run(w.ctx);
         expect(w.sent).toEqual([{ command: 'stay' }]);
     });
@@ -553,7 +554,7 @@ describe('petControl: while we cast', () => {
     });
 
     test('what takes no select still goes: a 0x8A interrupts nothing', async () => {
-        const off = world({ contacts: [held({ cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 9000 } })], orders: { focus: FOCUS }, pet: { targetObjectId: FOCUS }, combatEvents: [casting()] });
+        const off = world({ contacts: [held({ cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 9000 } }), mob(52)], orders: { focus: FOCUS }, pet: { targetObjectId: FOCUS }, combatEvents: [casting()] });
         await petControl().run(off.ctx);
         expect(off.sent).toEqual([{ command: 'follow' }]);
         const run = world({ orders: { phase: 'retreat', focus: null }, combatEvents: [casting()] });
@@ -866,7 +867,7 @@ describe('fnfPet: the gates', () => {
 
     test('the rules of a window pet\'s order: not held, cc\'d, a mezz in flight, out of view, no focus, another phase', async () => {
         expect(await casts({ contacts: [mob(FOCUS, 500)] })).toBe(0);
-        expect(await casts({ contacts: [{ ...lasting(), cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 9000 } }] })).toBe(0);
+        expect(await casts({ contacts: [{ ...lasting(), cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 9000 } }, mob(52)] })).toBe(0);
         expect(await casts({ orders: { focus: FOCUS, cc: [{ targetId: FOCUS, by: 'Bard' }] } })).toBe(0);
         expect(await casts({ inView: [] })).toBe(0);
         expect(await casts({ orders: { focus: null } })).toBe(0);
@@ -1550,7 +1551,7 @@ describe('petControl on the side tick: what its select may disturb', () => {
             const lifted = world({ contacts: [held(), mob(52)], orders: { focus: FOCUS }, turn, pet: { aggression: 'passive' } });
             await petControl().run(lifted.ctx);
             expect(lifted.sent).toEqual([{ command: 'defensive' }]);
-            const off = world({ contacts: [held({ cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 9000 } })], orders: { focus: FOCUS }, turn, pet: { targetObjectId: FOCUS } });
+            const off = world({ contacts: [held({ cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 9000 } }), mob(52)], orders: { focus: FOCUS }, turn, pet: { targetObjectId: FOCUS } });
             await petControl().run(off.ctx);
             expect(off.sent).toEqual([{ command: 'follow' }]);
         }
@@ -2173,8 +2174,18 @@ describe('petControl: a rooted focus', () => {
         expect(w.sent).toEqual([]);
     });
 
-    test('a mezz, no: called off', async () => {
-        const w = world({ contacts: [celt(mezz())], orders: { focus: FOCUS }, pet: { targetObjectId: FOCUS } });
+    // User, live in Thidranki: with every enemy mezzed the group stood by them. The coordinator picks one off (pack.ts, decideRvr), the pet with the others.
+    test('a mezz, the same: all that\'s left, the order goes; on it already, it stays on it', async () => {
+        const w = world({ contacts: [celt(mezz())], orders: { focus: FOCUS } });
+        await petControl().run(w.ctx);
+        expect(w.sent).toEqual([{ command: 'attack', target: FOCUS }]);
+        const on = world({ contacts: [celt(mezz())], orders: { focus: FOCUS }, pet: { targetObjectId: FOCUS } });
+        await petControl().run(on.ctx);
+        expect(on.sent).toEqual([]);
+    });
+
+    test('a mezz with something else free in the fight, no: called off', async () => {
+        const w = world({ contacts: [celt(mezz()), mob(ADD, 5000)], orders: { focus: FOCUS }, pet: { targetObjectId: FOCUS } });
         await petControl().run(w.ctx);
         expect(w.sent).toEqual([{ command: 'follow' }]);
     });

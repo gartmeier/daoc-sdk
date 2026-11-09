@@ -325,10 +325,25 @@ describe('assist: a crowd-controlled focus', () => {
         expect(nuke.calls.castSpell).toEqual([51]);
     });
 
-    test('a mezz never', async () => {
-        const s = stub({ name: 'Blade', role: 'melee', at, contacts: [foe(51, 10_200, 10_000, mezz())], orders: { focus: 51 } });
+    // User, live in Thidranki: with every enemy mezzed the group stood by them and rebuffed. The coordinator picks one off (pack.ts, decideRvr).
+    test('a mezz, the same: with every other enemy crowd-controlled the focus is the one to break', async () => {
+        const melee = stub({ name: 'Blade', role: 'melee', at, contacts: [foe(51, 10_200, 10_000, mezz()), foe(53, 10_300, 10_000, mezz())], orders: { focus: 51 } });
+        expect(await assist({ melee: true }).run(melee.ctx)).toBe(true);
+        expect(melee.calls.attack).toEqual([51]);
+        const nuke = stub({ name: 'Menta', role: 'nuker', at, contacts: [foe(51, 10_200, 10_000, mezz())], orders: { focus: 51 } });
+        expect(await assist().run(nuke.ctx)).toBe(true);
+        expect(nuke.calls.castSpell).toEqual([51]);
+    });
+
+    test('nor a mezz with something else free in the fight', async () => {
+        const s = stub({ name: 'Blade', role: 'melee', at, contacts: [foe(51, 10_200, 10_000, mezz()), foe(53, 10_300, 10_000)], orders: { focus: 51 } });
         expect(await assist({ melee: true }).run(s.ctx)).toBe(false);
         expect(s.skips).toEqual(['assist: focus is crowd-controlled']);
+    });
+
+    test('nor a mezzed add that isn\'t the focus', async () => {
+        const s = stub({ name: 'Blade', role: 'melee', at, contacts: [foe(51, 10_200, 10_000, mezz())], orders: { focus: 53 } });
+        expect(await assist({ melee: true }).run(s.ctx)).toBe(false);
     });
 
     test('nor a root with something else free in the fight, while the coordinator moves the focus', async () => {

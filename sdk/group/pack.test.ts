@@ -421,6 +421,78 @@ describe('decidePack: raid, pull back, kill, leave', () => {
     });
 });
 
+describe('decidePack: every enemy crowd-controlled, picked off one at a time', () => {
+    // User, live in Thidranki: with all of them mezzed `free` was empty, so the pack stood by them and rebuffed until they woke.
+    const mezz = { cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 60_000 } };
+    const mezzed = (id: number, x: number, over: Partial<Contact> = {}) => foe(id, x, 10_000, { ...mezz, ...over });
+    const three = () => [mezzed(101, 11_000), mezzed(102, 11_200, { caster: true, hp: 60 }), mezzed(103, 11_400, { healer: true })];
+    const engaged = (focus: number) => ({ phase: 'engage' as const, focus });
+
+    test('all of them mezzed: it engages one of them, the pack\'s pick (a caster nearer dying, a healer last), and orders no cc', () => {
+        const m: any = { pack: 'stalk' };
+        const u = decidePack(ctx(picture(team(), three()), { memory: m }));
+        expect(u).toMatchObject({ phase: 'engage', focus: 102, cc: [] });
+        expect(m.pack).toBe('pick');
+    });
+
+    test('so too from a rebuff, and from a raid whose own focus just died', () => {
+        expect(decidePack(ctx(picture(team(), three()), { memory: { pack: 'rebuff', rebuffAt: 0 }, now: 1000 }))).toMatchObject({ phase: 'engage', focus: 102 });
+        const m: any = { pack: 'raid', raidAt: 1000, packAnchor: { x: 10_000, y: 10_000, z: 0 } };
+        expect(decidePack(ctx(picture(team(), three(), engaged(100)), { memory: m, now: 2000 }))).toMatchObject({ phase: 'engage', focus: 102 });
+        expect(m.pack).toBe('pick');
+    });
+
+    test('the one broken stays the focus, with no raid clock and no mezz back on it, until it dies', () => {
+        const m: any = { pack: 'pick' };
+        const broken = [mezzed(101, 11_000), foe(102, 11_200, 10_000, { caster: true, hp: 30 }), mezzed(103, 11_400, { healer: true })];
+        const u = decidePack(ctx(picture(team(), broken, engaged(102)), { memory: m, now: 60_000 }));
+        expect(u).toMatchObject({ phase: 'engage', focus: 102 });
+        expect((u.cc ?? []).map(a => a.targetId)).not.toContain(102);
+        expect(m.pack).toBe('pick');
+    });
+
+    test('a mezzed focus stays the one chosen as the pack moves, though another would score higher now', () => {
+        const u = decidePack(ctx(picture(team(), three(), engaged(101)), { memory: { pack: 'pick' } }));
+        expect(u.focus).toBe(101);
+    });
+
+    test('then the next, until none is left', () => {
+        const m: any = { pack: 'pick' };
+        const left = [mezzed(101, 11_000), mezzed(103, 11_400, { healer: true })];
+        expect(decidePack(ctx(picture(team(), left, engaged(102)), { memory: m }))).toMatchObject({ phase: 'engage', focus: 101 });
+        expect(decidePack(ctx(picture(team(), [mezzed(103, 11_400, { healer: true })], engaged(101)), { memory: m }))).toMatchObject({ phase: 'engage', focus: 103 });
+        expect(decidePack(ctx(picture(team(), [], engaged(103)), { memory: m })).phase).not.toBe('engage');
+        expect(m.pack).not.toBe('pick');
+    });
+
+    test('a raid on the one free enemy, the rest mezzed, is a pick off: no pull back by the clock', () => {
+        const m: any = { pack: 'raid', raidAt: 1000, packAnchor: { x: 10_000, y: 10_000, z: 0 } };
+        const foes = [foe(101, 11_000), mezzed(102, 11_200), mezzed(103, 11_400)];
+        const u = decidePack(ctx(picture(team(), foes, engaged(101)), { memory: m, now: 1000 + PACK_SETTINGS.pack.raidMs + PACK_SETTINGS.pack.finishMs }));
+        expect(u).toMatchObject({ phase: 'engage', focus: 101 });
+        expect(m.pack).toBe('pick');
+    });
+
+    test('one wakes or comes in reach: the pack\'s own raid, the focus in hand kept', () => {
+        const m: any = { pack: 'pick' };
+        const foes = [foe(101, 11_000, 10_000, { hp: 70 }), foe(102, 10_900, 10_000, { caster: true, hp: 20 }), mezzed(103, 11_400)];
+        const u = decidePack(ctx(picture(team(), foes, engaged(101)), { memory: m, now: 5000 }));
+        expect(u).toMatchObject({ phase: 'engage', focus: 101 });
+        expect(m.pack).toBe('raid');
+    });
+
+    test('winding down: no new one is broken, the one in hand is finished', () => {
+        expect(decidePack(ctx(picture(team(), three()), { memory: { pack: 'stalk' }, windingDown: true })).phase).not.toBe('engage');
+        const broken = [mezzed(101, 11_000), foe(102, 11_200, 10_000, { hp: 30 })];
+        expect(decidePack(ctx(picture(team(), broken, engaged(102)), { memory: { pack: 'pick' }, windingDown: true }))).toMatchObject({ phase: 'engage', focus: 102 });
+    });
+
+    test('a broken pack doesn\'t: too few together to start one', () => {
+        const two = team().slice(0, 2);
+        expect(decidePack(ctx(picture(two, three()), { memory: { pack: 'stalk' } })).focus ?? null).toBeNull();
+    });
+});
+
 describe('decidePack: nobody walks alone', () => {
     // Region 252: the keep and its arrival are real, a released member stands at (17367, 18248).
     const THID = 252;

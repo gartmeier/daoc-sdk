@@ -449,8 +449,11 @@ describe('a swing left on a corpse', () => {
             expect(await left(m)).toBe(false);
         });
 
+        // Something else free in the fight: alone, a mezzed focus is the one to break (ccHolds).
         test('a mezz on the focus: any swing breaks one, a miss too', async () => {
-            const m = member({ role: 'melee', list: [meleeFight()], player: swinging, orders: { phase: 'engage', focus: RETHE, cc: [], anchor: ANCHOR }, world: { nearbyPlayers: [foe(RETHE, 100)], nearbyNpcs: [petNpc()] } });
+            const OTHER = 416;
+            const nuked = { id: 1, kind: 'spellEffect' as const, attackerObjectId: OTHER, targetObjectId: 100, receivedAt: Date.now() };
+            const m = member({ role: 'melee', list: [meleeFight()], player: { ...swinging, objectId: 100 }, orders: { phase: 'engage', focus: RETHE, cc: [], anchor: ANCHOR }, world: { nearbyPlayers: [foe(RETHE, 100), foe(OTHER, 1200)], nearbyNpcs: [petNpc()], combatEvents: [nuked] } });
             m.board.markCc(RETHE, 1, 'Bard', 'mezz', 30_000);
             expect(await left(m)).toBe(false);
         });

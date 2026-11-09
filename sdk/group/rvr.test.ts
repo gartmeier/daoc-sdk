@@ -826,6 +826,44 @@ describe('decideRvr: a rooted enemy', () => {
     });
 });
 
+describe('decideRvr: every enemy mezzed, picked off one at a time', () => {
+    // User, live in Thidranki: with every enemy mezzed the group left them all alone. The members break the focus (behaviors.ts ccHolds).
+    const mezz = { cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 60_000 } };
+    const three = () => [foe(51, { ...mezz }), foe(52, { ...mezz, x: 11_200, caster: true, hp: 50 }), foe(53, { ...mezz, x: 11_400 })];
+
+    test('it engages one of them, the picker\'s choice (a caster nearer dying), and no mezz goes back on it', () => {
+        const d = decideRvr(ctx(picture(team(), three())));
+        expect(d).toMatchObject({ phase: 'engage', focus: 52 });
+        expect((d.cc ?? []).map(a => a.targetId)).not.toContain(52);
+    });
+
+    test('with softFocus as well (the pack\'s picker)', () => {
+        const soft = { softFocus: { reach: 1500, healedBy: 30, droppedMs: 15_000 } };
+        expect(decideRvr(ctx(picture(team(), three()), { settings: soft }))).toMatchObject({ phase: 'engage', focus: 52 });
+    });
+
+    test('a mezzed focus stays the one chosen, though another scores higher now: no flipping before the first blow', () => {
+        expect(decideRvr(ctx(picture(team(), three(), { phase: 'engage', focus: 51 }))).focus).toBe(51);
+    });
+
+    test('once broken it is held, and the mezzer who put it under isn\'t sent back at it', () => {
+        const broken = [foe(51, { hp: 80 }), foe(52, { ...mezz, x: 11_200, caster: true, hp: 50 }), foe(53, { ...mezz, x: 11_400 })];
+        const d = decideRvr(ctx(picture(team(), broken, { phase: 'engage', focus: 51, cc: [{ targetId: 51, by: 'Bard' }] })));
+        expect(d).toMatchObject({ phase: 'engage', focus: 51 });
+        expect((d.cc ?? []).map(a => a.targetId)).not.toContain(51);
+    });
+
+    test('then the next, until none is left', () => {
+        const left = [foe(51, { ...mezz }), foe(53, { ...mezz, x: 11_400, healer: true })];
+        expect(decideRvr(ctx(picture(team(), left, { phase: 'engage', focus: 52 }))).focus).toBe(53);
+        expect(decideRvr(ctx(picture(team(), [foe(51, { ...mezz })], { phase: 'engage', focus: 53 }))).focus).toBe(51);
+    });
+
+    test('a free one beside them is still first', () => {
+        expect(decideRvr(ctx(picture(team(), [...three(), foe(54, { x: 11_600 })]))).focus).toBe(54);
+    });
+});
+
 describe('decideRvr: a player under the enemy keep\'s guards', () => {
     // Run r8: Celt under the keep at (35930,38271), 2841 from Thidranki Faste's centre, 5 s spell cooldown: "00:06 travel", "00:07 engage", "to defend you!" at +6.8, "disengage from combat!" at +7.3.
     const THIDRANKI_ID = 252;

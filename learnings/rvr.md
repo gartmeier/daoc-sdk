@@ -255,6 +255,14 @@ Hit and run for one group, as an alternative to `rvr-roam`: `defineStrategy(rvrP
 
 **What wakes a mezzed enemy** (`GameLiving.cs:1716-1727`): any damage, any melee swing even a miss, and non-damaging roots, stuns, confusions, amnesia, disease, nearsight and resist debuffs. Another mezz doesn't. So nothing but a mezz goes on a mezzed target, area Lullabies stay out, and a root keeps 350 from where the Bard's mezz can land. A resisted spell other than a mezz wakes it too (`:1729`).
 
+**Every enemy mezzed: pick them off** (2026-11-08, unit tests only, not yet live). The user saw the pack stand by a group it had mezzed whole in Thidranki, and rebuff until they woke: `decidePack`'s `free` list drops crowd-controlled enemies, so with all of them mezzed it found nobody to fight. Members also never touched a mezzed focus (`ccHolds`). Now:
+- With no free enemy in sight (`huntRadius`) but the focus, and at least one crowd-controlled, the pack goes to `pick`. It breaks one on purpose and puts everyone on it, pets too. The target is `pickPackFocus` among those in reach, so a caster nearer dying comes first and a healer last. There's no raid clock and no pull back, and no cc orders, so nothing mezzes the target again. When it dies the pack takes the next, until none is left.
+- A raid whose own focus is the one free enemy, with the rest mezzed, turns into a pick too, so the 8 s clock doesn't pull the pack off it.
+- Something that wakes or comes into reach ends the pick: back to a raid, with the focus in hand kept.
+- Winding down, it starts no new pick but finishes the one in hand. A pack of fewer than `minPack` (3) doesn't pick.
+- `ccHolds` (behaviors.ts) now treats a mezz like a root: it stops holding on a focus with nothing else free in the fight. A mezz on an add, or on a focus with something free beside it, still holds. On the board a pet's swing on such a focus is a note, not a broken cc (`petBrokeCc`).
+- rvr-roam already picked a mezzed player when nothing was free (`pickRvrFocus` takes free ones first), but a new pick every tick could flip between two as the group moved. It now keeps a crowd-controlled focus while nothing in its pool is free. `assignCc` never gets the focus, so its mezzer isn't sent back at it.
+
 **A speed song doesn't take on anyone in combat in the last 10 s** (`SpeedEnhancementSpellHandler.cs:69`): the first stretch of a run is sprint alone.
 
 **Spec and damage:** a spell's lowest roll depends on the spec of its line (`SpellHandler.CalculateLowerVarianceBound`): Light 1 at target level 24 rolls 21-100 %, Light 22 91-100 %. Round 9's Mana Enchanter averaged 58 a nuke with Sun Streak (88), and Niamh picked Sun Streak (level 24) over Glittering Visions (102, level 22) by level; `strongestNuke` picks by damage.

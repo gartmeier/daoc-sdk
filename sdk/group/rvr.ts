@@ -447,7 +447,9 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const lowHp: Record<number, number> = mem.lowHp ??= {};
         const dropped: Record<number, number> = mem.dropped ??= {};
         for (const [id, until] of Object.entries(dropped)) if (until <= now) { delete dropped[+id]; delete lowHp[+id]; }
-        const held = pool.find(c => c.objectId === o.focus && !c.cc) ?? null;
+        // A crowd-controlled focus stays only while nothing is free: then it was chosen to be broken (ccHolds lets the members at it), and a new pick
+        // each tick could flip between two of them, as the group moves, before the first blow lands. Once hit it is free and held as any.
+        const held = pool.find(c => c.objectId === o.focus && (!c.cc || !pool.some(x => !x.cc))) ?? null;
         if (soft && held && focusHealed(lowHp, held, soft.healedBy)) dropped[held.objectId] = now + soft.droppedMs;
         const current = held && !dropped[held.objectId] ? held : null;
         const big = against(players);
