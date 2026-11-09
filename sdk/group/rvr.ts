@@ -102,7 +102,9 @@ export const RVR_SETTINGS: RvrSettings = {
     heal: { tank: 75, other: 70, emergency: 40, outOfCombat: 90 },
     // An RvR death costs no XP or constitution, and a release gives full health and power: a rez saves only the walk
     // back, about 100 s. So the rezzer pays only from what it has, keeping a reserve, and may do it mid-fight when the group can spare it.
-    rez: { holdMs: 60_000, sit: false, reserve: 25, inFight: true },
+    // Nobody releases until the fight is over (user): one released mid-fight walks back from the portal keep alone into it.
+    // fightHoldMs only caps a fight that never seems to end; the rez wait (holdMs) starts when it does.
+    rez: { holdMs: 60_000, sit: false, reserve: 25, inFight: true, fightHoldMs: 300_000 },
     rest: { hp: 90, mana: 80 },
     combatRange: { healer: [500, 1600], support: [500, 1600], nuker: [700, 1400] },
     slotSlack: 350,

@@ -127,7 +127,8 @@ export const PACK_SETTINGS: PackSettings = {
     formation: { tank: { back: 0, angle: 0 }, healer: { back: 200, angle: 0.6 }, support: { back: -200, angle: 0 }, nuker: { back: 250, angle: 0.3 }, melee: { back: 120, angle: 0.8 } },
     ready: { hp: 70, mana: 50 },
     // Only between raids, from a corpse close by: a corpse the pack has left releases and is picked up.
-    rez: { holdMs: 20_000, radius: 2000, sit: false, reserve: 25, inFight: false },
+    // Nobody releases while the raid, its pull backs or a bolt go on (rvr-roam's fightHoldMs).
+    rez: { holdMs: 20_000, radius: 2000, sit: false, reserve: 25, inFight: false, fightHoldMs: RVR_SETTINGS.rez!.fightHoldMs },
     // These orders walk off and rest with an enemy in sight, so a pet's fight has to come off by itself (petControl).
     pet: { ...RVR_SETTINGS.pet!, strayFightsOff: true },
     pack: PACK_OPTIONS,

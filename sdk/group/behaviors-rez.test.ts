@@ -1,7 +1,8 @@
 // Corpses waiting for a rez and the members who bring them back, on a stub MemberContext.
 // Region 9999 has no spawns, so safeSpot and safePath see no danger.
 import { describe, expect, test } from 'bun:test';
-import { awaitingRez, healer, release, rez, rezPressure, rezzerNear, REZ_SETTINGS, type TacticsSettings } from './behaviors';
+import { AWAIT_FIGHT, awaitingRez, fightGoesOn, healer, release, rez, rezPressure, rezzerNear, REZ_SETTINGS, type TacticsSettings } from './behaviors';
+import { PACK_SETTINGS } from './pack';
 import { Blackboard } from './blackboard';
 import { contact, enemy, picture, report } from './fixtures';
 import { MemberAgent, type MemberContext } from './member';
@@ -251,6 +252,86 @@ describe('release', () => {
 
     test('RvR waits less: no XP is at stake, only the walk back', () => {
         expect(RVR_SETTINGS.rez?.holdMs).toBeLessThan(REZ_SETTINGS.holdMs);
+    });
+
+    test('RvR: nobody releases while the group fights, with or without a rezzer near', async () => {
+        const mage = report('Mage', { regionId: R });
+        for (const phase of ['engage', 'retreat'] as const) {
+            const { ctx, calls, doing } = stub({ dead: true, members: [mage], settings: RVR_SETTINGS, orders: { phase } });
+            expect(await release().run(ctx)).toBe(true);
+            expect(calls.release).toBe(0);
+            expect(doing.at(-1)?.kind).toBe(AWAIT_FIGHT);
+        }
+        // A threat on the board is a fight too, whatever the orders say yet.
+        const threat = stub({ dead: true, members: [mage], settings: RVR_SETTINGS, threats: true });
+        await release().run(threat.ctx);
+        expect(threat.calls.release).toBe(0);
+    });
+
+    test('RvR: once the fight is over, a corpse with nobody to rez it releases', async () => {
+        const { ctx, calls } = stub({ dead: true, members: [report('Mage', { regionId: R })], settings: RVR_SETTINGS, orders: { phase: 'recover' } });
+        await release().run(ctx);
+        expect(calls.release).toBe(1);
+    });
+
+    test('RvR: a wipe ends the fight for us: with nobody of ours alive here, release', async () => {
+        const members = [report('Mage', { regionId: R, isDead: true }), report('Away', { regionId: R + 1 })];
+        const { ctx, calls } = stub({ dead: true, members, settings: RVR_SETTINGS, orders: { phase: 'engage' }, threats: true });
+        await release().run(ctx);
+        expect(calls.release).toBe(1);
+    });
+
+    test('RvR: a fight that never seems to end holds only fightHoldMs', async () => {
+        const { ctx, calls } = stub({ dead: true, diedAgoMs: RVR_SETTINGS.rez!.fightHoldMs! + 1, members: [report('Mage', { regionId: R })], settings: RVR_SETTINGS, orders: { phase: 'engage' } });
+        await release().run(ctx);
+        expect(calls.release).toBe(1);
+    });
+
+    test('RvR: after a long fight, the rezzer\'s wait counts from its end, not from the death', async () => {
+        const long = RVR_SETTINGS.rez!.holdMs! + 10_000;
+        const fight = stub({ dead: true, diedAgoMs: long, members: [cleric()], settings: RVR_SETTINGS, orders: { phase: 'engage' } });
+        await release().run(fight.ctx);
+        const over = stub({ dead: true, diedAgoMs: long, members: [cleric()], settings: RVR_SETTINGS, orders: { phase: 'recover' } });
+        over.ctx.memory.set('fightHeldAt', fight.ctx.memory.get('fightHeldAt'));
+        await release().run(over.ctx);
+        expect(over.calls.release).toBe(0);
+        expect(over.doing.at(-1)?.kind).toBe('await_rez');
+        // Without that hold behind it, the same death is past holdMs.
+        const plain = stub({ dead: true, diedAgoMs: long, members: [cleric()], settings: RVR_SETTINGS, orders: { phase: 'recover' } });
+        await release().run(plain.ctx);
+        expect(plain.calls.release).toBe(1);
+    });
+
+    test('RvR: an offer is still said yes to in a fight', async () => {
+        const { ctx, calls } = stub({ dead: true, offer: true, members: [cleric()], settings: RVR_SETTINGS, orders: { phase: 'engage' } });
+        await release().run(ctx);
+        expect(calls.accept).toBe(1);
+        expect(calls.release).toBe(0);
+    });
+
+    test('PvE releases in a fight as before, and the pack holds like rvr-roam', async () => {
+        const { ctx, calls } = stub({ dead: true, members: [report('Mage', { regionId: R })], orders: { phase: 'engage' } });
+        await release().run(ctx);
+        expect(calls.release).toBe(1);
+        expect(PACK_SETTINGS.rez?.fightHoldMs).toBe(RVR_SETTINGS.rez!.fightHoldMs!);
+        expect(RVR_SETTINGS.rez!.fightHoldMs).toBeGreaterThan(0);
+    });
+
+    test('a run that is ending waits for a corpse still holding for the fight', () => {
+        const corpse = body('Tank', { activity: { kind: AWAIT_FIGHT, targetId: null, detail: 'engage', since: Date.now() } });
+        expect(awaitingRez([report('Mage', { regionId: R }), corpse], RVR_SETTINGS)).toBe(true);
+        expect(awaitingRez([report('Mage', { regionId: R }), body('Tank')], RVR_SETTINGS)).toBe(false);
+    });
+
+    test('fightGoesOn: phases, live threats in our region, and nobody alive here', () => {
+        const alive = [{ isDead: false, regionId: R }];
+        expect(fightGoesOn('engage', [], alive, R)).toBe(true);
+        expect(fightGoesOn('pull', [], alive, R)).toBe(true);
+        expect(fightGoesOn('gather', [], alive, R)).toBe(false);
+        expect(fightGoesOn('travel', [{ stale: false, regionId: R }], alive, R)).toBe(true);
+        expect(fightGoesOn('travel', [{ stale: true, regionId: R }], alive, R)).toBe(false);
+        expect(fightGoesOn('travel', [{ stale: false, regionId: R + 1 }], alive, R)).toBe(false);
+        expect(fightGoesOn('engage', [], [{ isDead: true, regionId: R }, { isDead: false, regionId: R + 1 }], R)).toBe(false);
     });
 
     test('RvR: a corpse does not wait for a rezzer who can\'t pay now and keep its reserve', async () => {

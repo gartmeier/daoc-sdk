@@ -294,9 +294,15 @@ export interface RezSettings {
     reserve: number;
     /** Cast during a fight too, while the group is not under pressure (rezPressure). */
     inFight: boolean;
+    /**
+     * A corpse doesn't release while its group still fights (fightGoesOn), up to this long after its death (ms);
+     * 0: it doesn't wait. In RvR a release mid-fight lands at the portal keep and walks back alone into the fight,
+     * and a rezzer can't spare the cast before it ends. holdMs then counts from the fight's end, not the death.
+     */
+    fightHoldMs: number;
 }
 
-export const REZ_SETTINGS: RezSettings = { holdMs: 120_000, radius: 4000, sit: true, reserve: 0, inFight: false };
+export const REZ_SETTINGS: RezSettings = { holdMs: 120_000, radius: 4000, sit: true, reserve: 0, inFight: false, fightHoldMs: 0 };
 /** A rez being cast on us holds the release this long past holdMs: the cast, then its 15 s question (ResurrectSpellHandler.cs:47). */
 const REZ_CLAIM_MS = 20_000;
 /** Sitting for the power or walking into range keeps a corpse ours this long: as long as a rest may take, and a little. */
@@ -342,15 +348,34 @@ export function rezPressure(me: Point & { name: string; regionId: number }, memb
     return onUs ? `${onUs.name} is on us` : null;
 }
 
-/** A corpse is waiting for a rezzer near it: a run that is ending lets that finish. */
+/**
+ * A corpse is waiting for a rezzer near it, or still holds its release for a fight (its report says so until its
+ * next turn after the fight): a run that is ending lets that finish.
+ */
 export function awaitingRez(members: MemberReport[], settings: Pick<TacticsSettings, 'rez'>): boolean {
     const s = rezSettings(settings);
+    if (members.some(m => m.isDead && m.activity?.kind === AWAIT_FIGHT)) return true;
     return s.holdMs > 0 && members.some(m => m.isDead && !!rezzerNear(members, m, s));
 }
 
+/** What a corpse holding its release for the fight shows as its activity. */
+export const AWAIT_FIGHT = 'await_fight';
+/** Phases that are a fight still going on: a pull back or a bolt in RvR is part of it. */
+const FIGHT_PHASES = new Set(['engage', 'retreat', 'pull']);
+
 /**
- * Dead: say yes to a rez; with a rezzer near, wait for one a while (REZ_SETTINGS); otherwise release and
- * respawn at the bind point (holdFormation walks back). Returning true keeps a corpse out of the rest of the list.
+ * Whether the fight a corpse holds its release for goes on: the orders are a fight's, or something is a threat
+ * to us. Not with nobody of ours alive in the corpse's region: a wipe ends it for us, and nobody there could rez.
+ */
+export function fightGoesOn(phase: string, threats: readonly Pick<Contact, 'stale' | 'regionId'>[], members: readonly Pick<MemberReport, 'isDead' | 'regionId'>[], regionId: number): boolean {
+    if (!members.some(m => !m.isDead && m.regionId === regionId)) return false;
+    return FIGHT_PHASES.has(phase) || threats.some(t => !t.stale && t.regionId === regionId);
+}
+
+/**
+ * Dead: say yes to a rez; while the group still fights, wait for the fight to end (rez.fightHoldMs, RvR); with a
+ * rezzer near, wait for one a while (REZ_SETTINGS); otherwise release and respawn at the bind point (holdFormation
+ * walks back). Returning true keeps a corpse out of the rest of the list.
  */
 export const release = (): Behavior => ({
     name: 'release',
@@ -367,7 +392,17 @@ export const release = (): Behavior => ({
         }
         const me = ctx.me();
         const s = rezSettings(ctx.settings);
-        const waited = Date.now() - (me.lastDeathAt ?? 0);
+        const now = Date.now();
+        const diedAt = me.lastDeathAt ?? 0;
+        // Nobody releases until the fight is over: a rez can come then, and nobody walks back into it alone.
+        if (s.fightHoldMs > 0 && now - diedAt < s.fightHoldMs && fightGoesOn(ctx.orders().phase, ctx.threats(), ctx.members(), me.regionId)) {
+            ctx.memory.set('fightHeldAt', now);
+            ctx.doing(AWAIT_FIGHT, null, ctx.orders().phase);
+            return true;
+        }
+        // A rezzer's wait counts from the fight's end: in a long one, holdMs from the death would be gone by then.
+        const heldAt: number = ctx.memory.get('fightHeldAt') ?? 0;
+        const waited = now - Math.max(diedAt, heldAt > diedAt ? heldAt : 0);
         const coming = claimedBy(ctx, 'rez', me.objectId, REZ_CLAIM_MS).length > 0;
         const rezzer = s.holdMs > 0 && waited < s.holdMs ? rezzerNear(ctx.members(), { name: ctx.name, regionId: me.regionId, x: me.x, y: me.y, level: me.level }, s) : undefined;
         if (coming || rezzer) {
