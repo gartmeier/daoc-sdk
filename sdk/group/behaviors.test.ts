@@ -244,6 +244,13 @@ describe('mezzedMember', () => {
         expect(mezzedMember(me, list, 1500, mezz)).toBeNull();
     });
 
+    test('range is 3D, with a margin: on a hill a member in reach on the ground plane is out of it (round 8: cure out_of_range)', () => {
+        const at = { ...me, z: 0 };
+        expect(mezzedMember(at, [member('Heal', 'healer', ['Sedate'], { x: 1400, z: 0 })], 1500, mezz)?.name).toBe('Heal');
+        expect(mezzedMember(at, [member('Heal', 'healer', ['Sedate'], { x: 1400, z: 600 })], 1500, mezz)).toBeNull();
+        expect(mezzedMember(at, [member('Heal', 'healer', ['Sedate'], { x: 1470, z: 0 })], 1500, mezz)).toBeNull();
+    });
+
     test('knows the real names: every Mesmerize spell in the data', () => {
         expect(mezzedMember(me, [member('Heal', 'healer', ['Greater Mesmerization'])], 1500)?.name).toBe('Heal');
         expect(mezzedMember(me, [member('Heal', 'healer', ['Holding Vines'])], 1500)).toBeNull();

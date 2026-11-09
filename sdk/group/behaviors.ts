@@ -780,12 +780,18 @@ function ccWalkStuck(ctx: MemberContext, targetId: number): string | null {
 }
 
 /** Who a mezz cure frees first: the healer, then the tank, then the most hurt, within its range. Never ourselves: a mezzed member can't cast. */
-export function mezzedMember(me: Point & { name: string; regionId: number }, members: readonly MemberReport[], range: number, mezzed: (effect: string) => boolean = isMezzEffect): MemberReport | null {
+export function mezzedMember(me: Point & { name: string; regionId: number; z?: number }, members: readonly MemberReport[], range: number, mezzed: (effect: string) => boolean = isMezzEffect): MemberReport | null {
     const rank = (m: MemberReport) => (m.role === 'healer' ? 0 : m.role === 'tank' ? 1 : 2);
+    // The server measures a spell's range in 3D, with a margin: on Thidranki's hills a member in reach on the ground plane was
+    // out of it with height (round 8, 2026-11-09: 3 of Sigrid's 5 cures came back "That target is too far away!").
+    const reach = (m: MemberReport) => Math.hypot(me.x - m.x, me.y - m.y, me.z != null && m.z != null ? me.z - m.z : 0) <= range - RANGE_MARGIN_3D;
     return members
-        .filter(m => m.name !== me.name && !m.isDead && m.regionId === me.regionId && dist(me, m) <= range && m.effects.some(mezzed))
+        .filter(m => m.name !== me.name && !m.isDead && m.regionId === me.regionId && reach(m) && m.effects.some(mezzed))
         .sort((a, b) => rank(a) - rank(b) || a.hp - b.hp)[0] ?? null;
 }
+
+/** Kept off a spell's range when it is measured in 3D from reports a quarter second old. */
+const RANGE_MARGIN_3D = 50;
 
 /** A member held by a mezz is a member lost for its whole length: a cure (Clear Mind) frees it, in a fight. A cast is 3 s, and one a target at a time. */
 const CURE_SPACING_MS = 4000;
