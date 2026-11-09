@@ -8,9 +8,11 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 ## The kit
 
-`sdk/classes/healer.ts` holds only the role, `healer`, which is what `roleForClass` gives. It changes nothing against the role list, and Sigrid plays the same either way.
+`sdk/classes/healer.ts` holds the role, `healer` (what `roleForClass` gives), and `cureMezz` as `react`: Cleanse Mind (baseline Pacification 23, 3 s, range 1500) on a member whose effects show an enemy Mesmerize, the healer first, then the tank, then the most hurt. In every list it lands below `heal` and `crowdControl`, so a heal or her own mezz order still comes first. She is Midgard's only mezz cure: the Shaman has none.
 
-**Server code: nothing that exists fits.** `assist` has no spell to cast, since Mending first has no damage spell, and outside the wolf pack it would still walk her toward a focus she can't see. `song` would play Ease of Movement, which the Skald's speed song outdoes in the same group. What she'd want is under "Not supported yet", and each needs a behaviour.
+**Server code:** `assist` has no spell to cast, since Mending first has no damage spell. `song` would play Ease of Movement, which the Skald's speed song outdoes in the same group.
+
+**Why the cure (round 4, 2026-11-09, Hibernia 3 kills / Midgard 1):** Bragi "can't cast while mesmerized" and Sigrid sat idle 51 % of fight time with "nothing to do". Over the 2026-11-03 rounds the group took 40 casts refused under a mezz. A human Healer's RvR job is heal, mezz, and cure the mezzed. Not measured yet: compare `cure` actions and `crowd_controlled` failures in the next Midgard rounds.
 
 ## Builds
 
@@ -35,7 +37,7 @@ Sigrid plays Mending first. **Community, unverified:** Blackthorn warns it gives
 - **Crowd control:** Sedate, the baseline mezz, 2.5 s, range 1500, 43 s. It comes with the level whatever Pacification is. Allay Area, the area mezz, is Pacification 6, beyond her build and unused by the role lists anyway.
 - **Rez:** Reception from Valhalla, 30 % health, at Mending 15. A Shaman at Mending 14 has only the 10 % one ([shaman.md](shaman.md)).
 - **Buffs:** she's the group's first healer, so the base buffs are hers: Guardian's Lesser Barrier, Strengthen Health, Evasion and Lesser Power of the Viking, with Purity of Mind and haste, 19 buffs for 106 concentration. Piety 89 and the template's 36 make a pool of about 210 ([druid.md](druid.md)), so it fits. `providerFor` takes the first member of a role, so a group with two healers should list the base-buffer first.
-- **Reached, and no behaviour casts it:** Halt Attack (stun, 2.5 s, 8 s), Suspend Charge (area stun), Deny Movement (root), Hinder Spirit (instant attack slow), Cleanse Mind (mezz cure), Eir's Glorious Touch (instant group heal, 50 %, 20 minutes), the cures, Wake Senseless.
+- **Reached, and no behaviour casts it:** Halt Attack (stun, 2.5 s, 8 s), Suspend Charge (area stun), Deny Movement (root), Hinder Spirit (instant attack slow), Eir's Glorious Touch (instant group heal, 50 %, 20 minutes), the cures, Wake Senseless.
 - **Ease of Movement** is a speed song, at Augmentation 5, and the healer's list has no `song`, so it never plays. The group has the Skald's for that.
 
 ## Sized heals
@@ -64,6 +66,5 @@ Nothing else needed from her at that camp: at any `ready.mana` from 10 to 35 her
 
 - **Stun on an enemy healer,** Halt Attack: asked for in the group's log since the first RvR rounds. Nothing picks a stun for a target.
 - **Group heals:** Eir's Glorious Touch is instant, for fights where several are hurt at once. A rule would have to count who is hurt.
-- **Mezz cure,** Cleanse Mind: nobody tracks which members are mezzed. A Shaman has none, so it's hers to give.
 - **Root:** Deny Movement isn't taken while she has a mezz, and it lasts 9 s.
 - **Cures** for poison, disease and nearsight.

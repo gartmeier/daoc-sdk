@@ -160,12 +160,22 @@ describe('healer guide', () => {
         expect(reach('Healer', 24, {}).cc?.spell.name).toBe('Sedate');
     });
 
-    test('its rez is the 30 % one, the stun and mezz cure go unused, and no area mezz at Pacification 4', () => {
+    test('its rez is the 30 % one, the stun goes unused, and no area mezz at Pacification 4', () => {
         expect(first().rez?.spell.name).toBe('Reception from Valhalla');
-        const unused = first().unused.map(k => k.name);
-        expect(unused).toContain('Halt Attack');
-        expect(unused).toContain('Cleanse Mind');
+        expect(first().unused.map(k => k.name)).toContain('Halt Attack');
         expect(first().known.some(k => k.name === 'Allay Area')).toBe(false);
+    });
+
+    test('the kit cures a mezzed member with Cleanse Mind, below heal and crowd control in every list', () => {
+        const cure = first().known.find(k => k.name === 'Cleanse Mind')!;
+        expect(cure.info.type).toBe('CureMezz');
+        expect(healer().role).toBe('healer');
+        for (const lists of [defaultBehaviors(), rvrBehaviors(), packBehaviors()]) {
+            const list = withCharacter(lists.healer as Behavior<any>[], healer() as Character).map(b => b.name);
+            expect(list.filter(n => n === 'cureMezz')).toHaveLength(1);
+            expect(list.lastIndexOf('heal')).toBeLessThan(list.indexOf('cureMezz'));
+            expect(list.indexOf('crowdControl')).toBeLessThan(list.indexOf('cureMezz'));
+        }
     });
 });
 
@@ -461,7 +471,7 @@ describe('thrifty', () => {
 });
 
 describe('the role-only kits', () => {
-    const kits: [string, () => { role?: Role; fight?: unknown; react?: unknown; chores?: unknown }][] = [['Bard', bard], ['Healer', healer], ['Spiritmaster', spiritmaster], ['Cabalist', cabalist], ['Druid', druid]];
+    const kits: [string, () => { role?: Role; fight?: unknown; react?: unknown; chores?: unknown }][] = [['Bard', bard], ['Spiritmaster', spiritmaster], ['Cabalist', cabalist], ['Druid', druid]];
 
     test.each(kits)('%s has its class\'s role and leaves every list as it is', (className, kit) => {
         const role = roleForClass(className);
