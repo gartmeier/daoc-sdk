@@ -107,3 +107,5 @@ Slam, the 9 s anytime stun, is Shields 42, past level 40 in this build, so it do
 **Verified, arena round 15** (wiped Camelot 5-0, no deaths, one 68 s fight): Disable landed for the first time (1), Fire Blade 1; 487 damage.
 
 **Verified, arena round 20** (wiped Midgard 5-1): Disable 3, Numb 1, Fire Blade 1, Taunting Blade 1; 874 damage. The side stun now lands most.
+
+**Arena round 25** (won 8-6 against Midgard, cap): 443 damage, 1 style each of Disable, Numb and Fire Blade. He died 17 s into the first fight, sent at Midgard's healer behind their line (the group's healerFirst), beyond Brigid's 2000 heal range, and spent most of the round walking back. No self-heal or escape at 24 in this build, so how far he dives is the group plan's to limit.
