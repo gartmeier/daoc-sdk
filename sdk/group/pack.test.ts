@@ -483,6 +483,20 @@ describe('decidePack: every enemy crowd-controlled, picked off one at a time', (
         expect(m.pack).toBe('pick');
     });
 
+    test('the one free enemy given up as healed, the rest mezzed: the raid stays on it, no flip to breaking a mezz and back', () => {
+        // Arena round 1, 2026-11-09: "pick off: Briton#488" and "raid: Briton#482" alternated every tick for ~30 s.
+        const now = 50_000;
+        const m: any = { pack: 'raid', raidAt: now - 5000, packAnchor: { x: 10_000, y: 10_000, z: 0 }, dropped: { 101: now + 10_000 }, lowHp: {} };
+        const foes = [foe(101, 11_000), mezzed(102, 11_200), mezzed(103, 11_400)];
+        let focus = 101;
+        for (let tick = 0; tick < 4; tick++) {
+            const u = decidePack(ctx(picture(team(), foes, engaged(focus)), { memory: m, now: now + tick * 500 }));
+            expect(u).toMatchObject({ phase: 'engage', focus: 101 });
+            expect(m.pack).toBe('raid');
+            focus = u.focus!;
+        }
+    });
+
     test('one wakes or comes in reach: the pack\'s own raid, the focus in hand kept', () => {
         const m: any = { pack: 'pick' };
         const foes = [foe(101, 11_000, 10_000, { hp: 70 }), foe(102, 10_900, 10_000, { caster: true, hp: 20 }), mezzed(103, 11_400)];

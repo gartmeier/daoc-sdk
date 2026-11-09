@@ -381,7 +381,10 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // raid clock, then the next, one at a time, until none is left (ccHolds lets the members break it). User, live in Thidranki: with
     // all of them mezzed `free` was empty, so the pack stood by them and rebuffed until they woke. Winding down, only the focus in hand.
     const sight = foes.filter(c => dist(c, centre) <= s.huntRadius);
-    const target = o.phase === 'engage' ? sight.find(c => c.objectId === o.focus) : undefined;
+    // A focus given up as healed (keepFocus's dropped) is no longer in hand: free, it is the raid's to keep or replace. Counted
+    // as in hand, it emptied `loose`, the pick broke a mezz on another, and the next tick it was loose again: a flip each tick.
+    const givenUp = (mem.dropped?.[o.focus ?? -1] ?? 0) > now;
+    const target = o.phase === 'engage' && !givenUp ? sight.find(c => c.objectId === o.focus) : undefined;
     const held = sight.filter(c => c.cc && c !== target);
     const loose = sight.filter(c => !c.cc && c !== target);
     if (!loose.length && (held.length || (mem.pack === 'pick' && target)) && main.length >= k.minPack && (!ctx.windingDown || target)) {
