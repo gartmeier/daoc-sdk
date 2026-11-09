@@ -30,12 +30,13 @@ export function slowSpell(all: readonly SpellPick[], mana: number): SpellPick | 
 }
 
 /**
- * Whom to slow: a free enemy player in melee on us, else on one of our soft members (not the tank or the melee), nearest
+ * Whom to slow: a free enemy player or pet in melee on us, else on one of our soft members (a pet too: a taunt doesn't move
+ * an ordered one, so the tank's peel leaves it, and Albion's simulacrum is in every Camelot fight) (not the tank or the melee), nearest
  * first; never one whose slow from us still runs (`until`), nor one beyond `range`. Null when none.
  */
 export function slowTarget(me: MemberReport, members: readonly MemberReport[], threats: readonly Contact[], until: ReadonlyMap<number, number>, distanceTo: (id: number) => number, range: number, now = Date.now()): Contact | null {
     const soft = members.filter(m => !m.isDead && m.role !== 'tank' && m.role !== 'melee');
-    const free = threats.filter(t => t.kind === 'player' && !t.isPet && !t.stale && isAlive(t) && !untouchable(t, now) && (until.get(t.objectId) ?? 0) <= now && distanceTo(t.objectId) <= range);
+    const free = threats.filter(t => (t.kind === 'player' || !!t.isPet) && !t.stale && isAlive(t) && !untouchable(t, now) && (until.get(t.objectId) ?? 0) <= now && distanceTo(t.objectId) <= range);
     return free.find(t => onMember(t, me)) ?? free.filter(t => soft.some(m => onMember(t, m))).sort((a, b) => distanceTo(a.objectId) - distanceTo(b.objectId))[0] ?? null;
 }
 

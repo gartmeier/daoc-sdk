@@ -28,5 +28,8 @@ describe('healer kit: Hinder Spirit', () => {
         expect(slowTarget(me, members, [onTank], new Map(), near, 1500, now)).toBeNull();
         expect(slowTarget(me, members, [onCaster], new Map([[2, now + 5000]]), near, 1500, now)).toBeNull();
         expect(slowTarget(me, members, [onCaster], new Map(), () => 1600, 1500, now)).toBeNull();
+        const pet = { ...enemy(4, 'albion', { target: 'Sigrid', ...at(1050) }), kind: 'npc' as const, isPet: true, name: 'emerald simulacrum' };
+        expect(slowTarget(me, members, [onCaster, pet], new Map(), near, 1500, now)?.objectId).toBe(4);
+        expect(slowTarget(me, members, [{ ...pet, isPet: false }], new Map(), near, 1500, now)).toBeNull();
     });
 });
