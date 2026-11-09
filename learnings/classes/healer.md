@@ -36,6 +36,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 23 (vs Hibernia, wiped 1 / 5):** in melee 52 %, targeted 51 %, and no Hinder Spirit: `flee` sits above `urgent` in the pack's list and takes every turn while a melee is on her (circling the tank). Since then the orchestrator's `Character.instant` slot puts it just above `flee`: one slow costs her one turn, and `flee` goes on the next.
 
+**Round 25 (vs Hibernia, lost on the cap 6 / 8, instant slot in):** 3 Hinder Spirits, 10 cures, 3 heals; 2 cures and 2 heals refused while she was crowd-controlled herself. Hibernia's mezzes and amnesia hit every caster (`crowd_controlled` on all four).
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
