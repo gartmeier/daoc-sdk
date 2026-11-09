@@ -26,6 +26,15 @@ describe('the cleric kit', () => {
         expect(stunTarget(me, members, [onMerlin, onMe], undefined, 1500, 60, NOW)?.target).toBe(onMe);
     });
 
+    test('an enemy pet in melee on a caster too, but never a pet as the healer or focus pick', () => {
+        const warrior = foe(7, { kind: 'npc', isPet: true, name: 'spirit warrior', x: 650, y: 0, target: 'Merlin' } as Partial<Contact>);
+        expect(stunTarget(me, members, [warrior], undefined, 1500, 60, NOW)).toEqual({ target: warrior, why: 'peel' });
+        const monster = foe(8, { kind: 'npc', name: 'wolf', x: 650, y: 0, target: 'Merlin' } as Partial<Contact>);
+        expect(stunTarget(me, members, [monster], undefined, 1500, 60, NOW)).toBeNull();
+        const focus = foe(1, { hp: 40 });
+        expect(stunTarget(me, members, [focus, { ...warrior, x: 0, y: 1400, target: 'Galahad' }], focus, 1500, 60, NOW)?.target).toBe(focus);
+    });
+
     test('not one on the tank, nor one nuking from afar, mezzed, stun-immune, or out of reach', () => {
         expect(stunTarget(me, members, [foe(1, { x: 0, y: 950, target: 'Galahad' })], undefined, 1500, 60, NOW)).toBeNull();
         expect(stunTarget(me, members, [foe(1, { x: 600, y: 1400, target: 'Merlin', targetBySpell: true })], undefined, 1500, 60, NOW)).toBeNull();

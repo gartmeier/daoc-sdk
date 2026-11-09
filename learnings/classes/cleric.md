@@ -35,6 +35,8 @@ export default cleric();                       // or cleric({ saveBelow: 30 })
 
 **After round 6:** with no enemy healer in reach and the focus at 60 % or less, she stuns the focus itself, so it can't heal itself, cast or run while the nukes land. The Smite floor stays. The 148 "no smite at players" skips came at any power, since that check runs before the power floor, so they don't show power held back. A 9-power stun is a better use of those turns than a 15-power, 36-damage Smite.
 
+**Arena round 8** (Midgard wiped Camelot in 5.2 min, 0 kills / 5 deaths, `groups/camelot/runs/20261109-213756.md`): Midgard's Spiritmaster pet ("The spirit warrior attacks you and your spell is interrupted!") broke Morgana's and Taliesin's casts before they died. Nimue cast 5 heals and 1 stun, with 128 idle turns. The peel case now also takes an enemy pet in melee on one of our non-tanks. The healer and focus cases stay players only.
+
 **To look for:** `stun` results in her report line, `heal` count against round 5's 12, and deaths of Merlin and Taliesin, who were in melee 19 % and 31 % of fight time.
 
 **Community, unverified** (the research agent's notes; web sources were thin, the server-code points are checked): stand at the back inside heal range (about 2000). Don't Smite at low Smite spec, except to finish a near-dead enemy when nobody needs heals. Heal the enemy's target first, then yourself. Buff Str/Con and Dex/Qui on the melee members first, then AF. Rez after the fight. **Server code:** instant spells skip the interrupt check (SpellHandler.cs:597, :603). A player is immune to spell stuns for 60 s after one ends (ECSGameEffect.cs:54).

@@ -31,14 +31,17 @@ type Who = Pick<MemberReport, 'name' | 'role' | 'isDead' | 'regionId' | 'x' | 'y
 
 /**
  * Whom to stun, if anyone: an enemy player in melee on a member who isn't the tank (a healer first, then the nearest
- * to us), else the enemy healer while our focus is at or below `healerBelow` %, or with no healer in reach the focus itself. Only players: a monster's stun
- * shortens with every repeat, and a pet's owner is the one to stop. Never one under crowd control (a stun would
+ * to us; an enemy pet doing so counts), else the enemy healer while our focus is at or below `healerBelow` %, or with no healer in reach the focus itself. Otherwise only players: a monster's stun
+ * shortens with every repeat. Never one under crowd control (a stun would
  * wake a mezz, and a stun on a stun is wasted), nor one immune to stuns, nor one beyond `range` of us.
  */
 export function stunTarget(me: Who, members: readonly Who[], threats: readonly Contact[], focus: Contact | undefined, range: number, healerBelow = STUN_HEALER_BELOW, now = Date.now()): { target: Contact; why: 'peel' | 'healer' | 'focus' } | null {
-    const open = threats.filter(c => c.kind === 'player' && !c.isPet && !c.stale && !c.cc && !ccImmuneTo(c, 'stun', now) && c.regionId === me.regionId && dist(me, c) <= range);
+    const free = (c: Contact) => !c.stale && !c.cc && !ccImmuneTo(c, 'stun', now) && c.regionId === me.regionId && dist(me, c) <= range;
+    const open = threats.filter(c => c.kind === 'player' && !c.isPet && free(c));
+    // A peel takes an enemy pet too: a Spiritmaster's spirit warrior interrupted Morgana and Taliesin to death in arena round 8.
+    const pets = threats.filter(c => c.kind !== 'player' && c.isPet && free(c));
     const soft = members.filter(m => !m.isDead && m.role !== 'tank' && m.regionId === me.regionId);
-    const onSoft = open
+    const onSoft = [...open, ...pets]
         .map(c => ({ c, on: soft.find(m => onMember(c, m)) }))
         .filter((x): x is { c: Contact; on: Who } => !!x.on)
         .sort((a, b) => Number(b.on.role === 'healer') - Number(a.on.role === 'healer') || dist(me, a.c) - dist(me, b.c));
