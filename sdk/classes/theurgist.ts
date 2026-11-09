@@ -3,7 +3,7 @@
 // with every cast he has 2.5-3 s long, casting nothing while a melee is on him: he gives ground instead.
 // learnings/classes/theurgist.md says what that was worth, and what it costs.
 
-import { onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
+import { giveGroundStep, HAVEN_ORBIT, onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
 import { dist } from '../group/battleground';
 import type { Behavior } from '../group/member';
 import type { Character } from '../group/character';
@@ -23,12 +23,8 @@ export interface TheurgistOptions {
 
 /** flee() runs to the tank until within this of him; giveGround keeps inside it, so the two don't pull him back and forth. */
 const AT_HAVEN = 150;
-/** How far from the haven he circles. */
-export const HAVEN_ORBIT = 130;
 /** A haven this far off is no haven: flee() gives the tank up there too. */
 const HAVEN_FAR = 5000;
-/** A spot this near where he stands is no step: turn a quarter round the haven instead. */
-const MIN_STEP = 80;
 
 type Who = Pick<MemberReport, 'name' | 'role' | 'isDead' | 'regionId' | 'x' | 'y'>;
 
@@ -38,21 +34,8 @@ export function havenOf(me: Who, members: readonly Who[]): Who | null {
     return members.find(m => m.role === 'tank' && near(m)) ?? members.find(m => m.role === 'healer' && near(m)) ?? null;
 }
 
-/**
- * Where to step with `attackers` on him: beside the haven on its far side from them (their centre), HAVEN_ORBIT out, so the melee has
- * to come round it and through the peel. Already there (they haven't moved), a quarter turn round the haven, the way away from them.
- */
-export function giveGroundStep(me: Point, attackers: readonly Point[], haven: Point): Point {
-    const c = { x: attackers.reduce((s, a) => s + a.x, 0) / attackers.length, y: attackers.reduce((s, a) => s + a.y, 0) / attackers.length };
-    let ax = haven.x - c.x, ay = haven.y - c.y;
-    const len = Math.hypot(ax, ay) || 1;
-    ax /= len; ay /= len;
-    const spot = { x: haven.x + ax * HAVEN_ORBIT, y: haven.y + ay * HAVEN_ORBIT };
-    if (dist(me, spot) >= MIN_STEP) return spot;
-    // A quarter turn: of the two, the one farther from the attackers' centre.
-    const turns = [{ x: haven.x - ay * HAVEN_ORBIT, y: haven.y + ax * HAVEN_ORBIT }, { x: haven.x + ay * HAVEN_ORBIT, y: haven.y - ax * HAVEN_ORBIT }];
-    return dist(turns[0]!, c) >= dist(turns[1]!, c) ? turns[0]! : turns[1]!;
-}
+/** The step itself, beside the haven on its far side from them: flee()'s, shared (sdk/group/behaviors.ts). */
+export { giveGroundStep, HAVEN_ORBIT };
 
 /** The enemies in melee on him, as flee() reads them, a rooted one in reach included. */
 export function meleeOn(me: Point & { name: string }, threats: readonly Contact[]): Contact[] {
