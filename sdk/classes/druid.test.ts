@@ -4,7 +4,8 @@ import { getSpell } from '../../data/index';
 import { withCharacter } from '../group/character';
 import { packBehaviors } from '../group/pack';
 import type { MemberReport } from '../group/types';
-import { druid, groupHealTargets } from './druid';
+import type { Contact } from '../group/types';
+import { diverTarget, druid, groupHealTargets } from './druid';
 import { reachOfBuild } from './reach';
 
 const member = (name: string, hp: number, o: Partial<MemberReport> = {}) => ({ name, hp, maxHp: 700, x: 0, y: 0, regionId: 238, isDead: false, ...o }) as MemberReport;
@@ -18,6 +19,7 @@ describe('druid kit', () => {
         // Above her single heals, below the emergency one.
         expect(names.indexOf('groupHeal')).toBeGreaterThan(names.indexOf('emergencyHeal'));
         expect(names.indexOf('groupHeal')).toBeLessThan(names.indexOf('heal'));
+        expect(names.indexOf('rootDiver')).toBe(names.indexOf('groupHeal') - 1);
     });
 
     test('Heal druid reaches Renewing Conflux at 24: a group heal, no radius, which heal() never picks over Major Restoration', () => {
@@ -33,5 +35,29 @@ describe('druid kit', () => {
         const ms = [member('a', 100), member('b', 85), member('c', 80, { x: 2500 }), member('d', 50, { isDead: true }), member('e', 70)];
         // 139 * 0.7 = 97 missing: below about 86 % of 700.
         expect(groupHealTargets({ x: 0, y: 0, regionId: 238 }, ms, 2000, 139).map(m => m.name)).toEqual(['b', 'e']);
+    });
+});
+
+describe('druid rootDiver', () => {
+    const members = [{ name: 'Cuchulainn', role: 'tank' as const }, { name: 'Oisin', role: 'support' as const }, { name: 'Niamh', role: 'nuker' as const }];
+    const dist = (c: Contact) => Math.hypot(c.x, c.y);
+    const melee = (id: number, target: string, o: Partial<Contact> = {}) => ({ objectId: id, kind: 'player', regionId: 238, x: 800, y: 0, stale: false, cc: null, swinging: true, target, targetBySpell: false, ...o }) as Contact;
+    const orders = { focus: 9, cc: [] as { targetId: number }[] };
+
+    test('the melee on our Bard before the one on a nuker, though farther', () => {
+        expect(diverTarget([melee(1, 'Niamh', { x: 300 }), melee(2, 'Oisin', { x: 1200 })], members, 238, dist, 1500, orders, 0)?.objectId).toBe(2);
+        expect(diverTarget([melee(1, 'Niamh')], members, 238, dist, 1500, orders, 0)?.objectId).toBe(1);
+    });
+
+    test('not one on the tank, a caster, the focus, one being crowd-controlled or assigned, root-immune, or out of reach', () => {
+        const none = (c: Contact, o = orders) => expect(diverTarget([c], members, 238, dist, 1500, o, 0)).toBeNull();
+        none(melee(1, 'Cuchulainn'));
+        none(melee(1, 'Oisin', { targetBySpell: true }));
+        none(melee(1, 'Oisin', { swinging: false }));
+        none(melee(9, 'Oisin'));
+        none(melee(1, 'Oisin', { cc: { by: 'Niamh', kind: 'mezz', until: 9000 } }));
+        none(melee(1, 'Oisin'), { focus: 9, cc: [{ targetId: 1 }] });
+        none(melee(1, 'Oisin', { ccImmune: { root: 5000 } }));
+        none(melee(1, 'Oisin', { x: 1460 }));
     });
 });

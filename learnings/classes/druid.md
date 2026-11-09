@@ -88,3 +88,11 @@ What the class has that no behaviour uses:
 - **Group heals:** Healing Conflux, Renewing Conflux, and Bith's Benison at Regrowth 23 (instant, 50 %, 20 minutes). A rule would have to count who is hurt.
 - **Cures:** poison, disease and nearsight. No behaviour watches for them.
 - **Area roots:** Patch of Ivy and up in Nature. `isRoot` wants a single target.
+
+## Arena rounds 13 and 16: rootDiver
+
+**Verified:** both lost to Midgard, whose melee dove our support and healer: round 13 Oisin dead at 11 s, Brigid at 35 s; round 16 a wipe, Brigid 7 heals in 131 s with 2 `out_of_range` and 1 mezzed. She roots only on the coordinator's assignment (`crowdControl({ assignedOnly })`), so nothing rooted a diver.
+
+**From round 17** her kit's `urgent` starts with `rootDiver`: Holding Vines (Nature, 2.5 s, range 1500, 38 s; a root on a player holds half of that by the board, then ends on damage or expiry) on an enemy player swinging at a member who isn't the tank, our support first, then the nearest. Not on the focus (the group's damage would break it), not on one in someone's crowd control or assigned for it, not root-immune (60 s after one, `immunity_timer_flat_length`), by our view's 3D distance with a 60 margin, never with a melee on herself (`hammeredBy`), above 15 % power. A landed root is marked like `crowdControl`'s, so nobody hits it, and `flee` walks the member out of a rooted melee's reach (`rootedOnUs`).
+
+**Server code:** a speed song takes no effect in combat (`SpeedEnhancementSpellHandler.cs:69`), so a dived member can't outrun the melee without it.
