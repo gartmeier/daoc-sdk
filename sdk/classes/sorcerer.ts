@@ -6,6 +6,10 @@ import { type TacticsSettings } from '../group/behaviors';
 import type { Behavior } from '../group/member';
 import type { Character } from '../group/character';
 import { nukerFight } from './cabalist';
+import { selfBuff } from './paladin';
+
+/** Shield Mind (Mind 16): mezzes on him last 10 % less (MesmerizeDurationBuff, CCSpellHandler.cs:212). buff() doesn't slot it. */
+export const SORCERER_SELF_BUFFS: readonly string[] = ['MesmerizeDurationBuff'];
 
 export interface SorcererOptions {
     /** No nukes below this % power; 0: no floor, as in Camelot's RvR rounds. 40 is what was measured. */
@@ -17,5 +21,5 @@ export interface SorcererOptions {
 }
 
 export function sorcerer({ saveBelow = 40, chores = [], offFocus: off = true }: SorcererOptions = {}): Character {
-    return { role: 'nuker', fight: nukerFight(saveBelow, off), ...(chores.length ? { chores } : {}) };
+    return { role: 'nuker', fight: nukerFight(saveBelow, off), chores: [...chores, selfBuff(SORCERER_SELF_BUFFS)] };
 }

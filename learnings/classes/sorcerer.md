@@ -77,3 +77,11 @@ That's a fix in `sdk/group/spells.ts`, not a kit: power and health regen as sepa
 - **Unverified:** mezz the adds, crowd-control the enemy healer, debuff the kill target, then DoT and nuke. Never DoT or AoE a mezzed target. Snare a melee that chases you. Source: camelotherald.fandom.com/wiki/Sorcerer (search snippet only).
 - **Server code:** confusion on a Theurgist's pet kills it (ConfusionECSEffect.cs:42), so Mystify Mind (Mind 16 on Merlin, 2.5 s, 9 power) clears an enemy Theurgist's pets. Instants skip the interrupt check (SpellHandler.cs:597, :603). His 0 s debuffs (Imbalance, Magical Web, Banish Conviction, Enfeeble Body) can go out in melee, but they do no damage.
 - **Verified, arena round 5:** Merlin was targeted 34 % of fight time and in melee 19 %, with 5 nukes interrupted and 4 casts refused while he was mezzed or stunned.
+
+## Shield Mind, and Hibernia's opening mezz (kit, from Camelot's round after round 12, 2026-11-09)
+
+**Verified, arena round 12** (Hibernia took the cap from Camelot, 1 kill / 7 deaths, `groups/camelot/runs/20261109-220938.md`): Hibernia opened with its mezzes. Merlin was "entranced" 4 s into the engage, then Morgana, Nimue and Galahad went within 10 s. Merlin dealt 182 damage in the round, and his mezzes went resisted 2, immune 1, interrupted 1.
+
+**The change** (`sdk/classes/sorcerer.ts`): a `selfBuff` chore (from the Paladin kit) keeps Shield Mind up between fights. That's Mind 16, self, 10 power, 20 minutes. **Server code:** a `MesmerizeDurationBuff` SingleStatBuff on MesmerizeDurationReduction, which CCSpellHandler.cs:212 multiplies into every mezz on him, so mezzes are 10 % shorter. `buff()` doesn't slot that type.
+
+**Not the kit's:** Clear Mind (`cureMezz`) is the group's `--cure` flag, and was within the noise on 2026-11-04 (groups/camelot/lab_log.md).
