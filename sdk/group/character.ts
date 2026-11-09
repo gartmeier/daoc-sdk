@@ -4,6 +4,7 @@
 // The role is the character's job in a group: where it stands, what it may be ordered to do. The
 // character says how it does that job. Its behaviours go into the role's list at the fight:
 //
+//   instant above flee (instant casts only: an attack slow on whoever is hitting us)
 //   urgent  above the role's main action (a mezz cure that must not wait for heals and songs)
 //   react   above the fight (a heal)
 //   fight   replaces the role's fight (tank, assist)
@@ -29,6 +30,11 @@ export interface Character<S = any> {
      * interrupt, crowd control or song, where react would go at shedLoad and get only the turns those leave.
      */
     urgent?: Behavior<S>[];
+    /**
+     * Instant casts only, above flee (or, in a list without it, ahead of the character's other behaviours): one turn for an
+     * instant and flee goes on the next. Each must return false fast when it has nothing instant to cast, or flee starves.
+     */
+    instant?: Behavior<S>[];
     react?: Behavior<S>[];
     fight?: Behavior<S>[];
     chores?: Behavior<S>[];
@@ -51,6 +57,18 @@ const MAIN_ACTIONS: ReadonlySet<string> = new Set(['heal', 'interrupt', 'crowdCo
  */
 export function withCharacter<S>(list: Behavior<S>[], character: Character<S> | null | undefined): Behavior<S>[] {
     if (!character) return list;
+    const placed = placeCharacter(list, character);
+    if (!character.instant?.length) return placed;
+    // Instants go above flee: a melee on a healer gave flee every turn, and Sigrid's instant attack slow never went on her own
+    // attacker (arena round 23, 2026-11-10, Midgard class session). Without flee, ahead of the character's other behaviours.
+    const own = new Set<Behavior<S>>([...character.urgent ?? [], ...character.react ?? [], ...character.fight ?? []]);
+    let i = placed.findIndex(b => b.name === 'flee');
+    if (i < 0) i = placed.findIndex(b => own.has(b) || ROLE_FIGHT.has(b.name));
+    if (i < 0) i = placed.length;
+    return [...placed.slice(0, i), ...character.instant, ...placed.slice(i)];
+}
+
+function placeCharacter<S>(list: Behavior<S>[], character: Character<S>): Behavior<S>[] {
     const isFight = (b: Behavior<S>) => ROLE_FIGHT.has(b.name);
     const first = list.findIndex(isFight);
     const stands = list.findIndex(b => b.name === 'position');
@@ -93,7 +111,7 @@ export async function loadCharacter(bot: string): Promise<Character | null> {
     const c = mod.default as Character | undefined;
     if (!c) throw new Error(`${path}: needs a default export`);
     if (c.role !== undefined && !ROLES.includes(c.role)) throw new Error(`${path}: role "${c.role}"; use one of ${ROLES.join(', ')}`);
-    for (const k of ['urgent', 'react', 'fight', 'chores'] as const) {
+    for (const k of ['instant', 'urgent', 'react', 'fight', 'chores'] as const) {
         if (c[k] !== undefined && !Array.isArray(c[k])) throw new Error(`${path}: ${k} must be a list of behaviours`);
     }
     if (c.pet !== undefined && c.pet !== false && (typeof c.pet !== 'object' || c.pet === null)) throw new Error(`${path}: pet must be false or { fnfFloor }`);

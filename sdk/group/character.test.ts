@@ -37,6 +37,15 @@ describe('withCharacter', () => {
             .toEqual(['release', 'emergencyHeal', 'flee', 'heal', 'crowdControl', 'cureMezz', 'shedLoad', 'rest']);
     });
 
+    test('instant goes above flee; without flee, ahead of the character\'s other behaviours', () => {
+        const healer = [release(), own('emergencyHeal'), own('flee'), own('rez'), heal(), own('crowdControl'), shedLoad(), rest()];
+        expect(names(withCharacter(healer, { instant: [own('hinder')], urgent: [own('cure')] })))
+            .toEqual(['release', 'emergencyHeal', 'hinder', 'flee', 'rez', 'cure', 'heal', 'crowdControl', 'shedLoad', 'rest']);
+        expect(names(withCharacter(role, { instant: [own('shout')], react: [own('myHeal')] })))
+            .toEqual(['release', 'shout', 'myHeal', 'tank', 'shedLoad', 'buff', 'rest']);
+        expect(withCharacter(role, { react: [own('myHeal')] }).map(b => b.name)).toEqual(['release', 'myHeal', 'tank', 'shedLoad', 'buff', 'rest']);
+    });
+
     test('with a fight, urgent goes where react does, ahead of it', () => {
         expect(names(withCharacter(role, { urgent: [own('cure')], react: [own('myHeal')] }))).toEqual(['release', 'cure', 'myHeal', 'tank', 'shedLoad', 'buff', 'rest']);
     });
