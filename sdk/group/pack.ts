@@ -189,8 +189,11 @@ const tag = (c: Contact) => `${c.name}#${c.objectId} (${c.hp}%${c.healer ? ' hea
  * healers only. `roots` adds members with only a root (the Druid), for chasers: a root on a raid's target breaks at
  * the first hit and keeps her from healing.
  */
-export function packCc(foes: readonly Contact[], members: readonly MemberReport[], current: readonly { targetId: number; by: string }[], o: { centre: Point; focus: Contact | null; areaRadius: number; roots?: boolean; now: number }): { targetId: number; by: string }[] {
-    const pool = foes.filter(c => c.objectId !== o.focus?.objectId && !c.cc);
+export function packCc(foes: readonly Contact[], members: readonly MemberReport[], current: readonly { targetId: number; by: string }[], o: { centre: Point; focus: Contact | null; areaRadius: number; roots?: boolean; now: number; keep?: readonly Contact[] }): { targetId: number; by: string }[] {
+    // `keep`: where an assignment already made may stay though its target left `foes` (the raid's reach). A 2.5 s mezz can't
+    // finish on a target that changes every 2 s: arena round 5, 2026-11-09, Oisin's went 482, 481, 488 in the opening.
+    const kept = (o.keep ?? []).filter(c => !foes.includes(c) && current.some(a => a.targetId === c.objectId));
+    const pool = [...foes, ...kept].filter(c => c.objectId !== o.focus?.objectId && !c.cc);
     const catches = (c: Contact) => (o.focus && dist(c, o.focus) <= o.areaRadius ? 0 : pool.filter(n => dist(n, c) <= o.areaRadius).length);
     const order = [...pool].sort((a, b) => catches(b) - catches(a) || Number(!!b.healer) - Number(!!a.healer) || dist(b, o.centre) - dist(a, o.centre));
     const mezzers = members.filter(m => m.capabilities.cc && (m.role === 'support' || m.role === 'nuker' || o.roots));
@@ -419,7 +422,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         if (!foes.length || (!reachable.length && elapsed >= k.idleMs)) mem.pack = 'stalk';
         else {
             if (done) return startPull(`${Math.round(elapsed / 1000)} s are up`);
-            return fight('raid', focus, packCc(reachable, main, o.cc, { centre, focus, areaRadius, now }), focus ? onFocus(focus) : anchor, `${free.length} free of ${foes.length} vs ${main.length}`);
+            return fight('raid', focus, packCc(reachable, main, o.cc, { centre, focus, areaRadius, now, keep: free }), focus ? onFocus(focus) : anchor, `${free.length} free of ${foes.length} vs ${main.length}`);
         }
     }
 

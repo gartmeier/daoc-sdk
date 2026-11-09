@@ -1,5 +1,5 @@
 import { describe, expect, spyOn, test } from 'bun:test';
-import { areaMezzCatch, backupHealWanted, confuse, interrupt, rest, SAVING_POWER, standStepTo } from './behaviors';
+import { areaMezzCatch, backupHealWanted, confuse, interrupt, interruptRank, rest, SAVING_POWER, standStepTo } from './behaviors';
 import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
 import { contact, enemy, obs, picture, report, sighting } from './fixtures';
@@ -73,6 +73,7 @@ describe('a shade in the pickers that go straight to the contacts (AbstractServe
             orders: () => ({ phase: 'engage', focus, cc: [] }),
             spells: { confuse: () => ({ spell: { name: 'Befuddling Cadence' }, range: 1350 }), interrupts: () => [{ spell: { name: 'Minor Lullaby' }, range: 2300 }] },
             picture: () => b.picture(),
+            members: () => b.picture().members,
             sdk: { getNearbyNpc: () => null, getNearbyPlayer: (id: number) => ({ objectId: id, distance: 500 }) },
             doing() {},
             result(_k: string, r: { message?: string }, id: number) { if (r.message?.includes(SHADE_REFUSED)) b.markUnattackable(id, 1, UNATTACKABLE_MS); },
@@ -610,6 +611,25 @@ describe('pickPackFocus and packCc', () => {
         const b = packCc([near, far, healer], [m('Bard', 'support'), m('Menta', 'nuker')], [], opts);
         expect(b.some(x => x.by === 'Menta' && x.targetId === 3) || b.some(x => x.by === 'Bard' && x.targetId === 3)).toBe(true);
         expect(b.every(x => x.targetId !== 1)).toBe(true);
+    });
+
+    test('the Bard\'s mezz stays on its target as it steps out of reach, while it is still free in sight (keep)', () => {
+        const strayed = enemy(4, 'midgard', { x: 2600, y: 0 });
+        expect(packCc([near, far], [m('Bard', 'support')], [{ targetId: 4, by: 'Bard' }], { ...opts, keep: [near, far, strayed] })).toEqual([{ targetId: 4, by: 'Bard' }]);
+        // Without keep, or gone from sight, the next one.
+        expect(packCc([near, far], [m('Bard', 'support')], [{ targetId: 4, by: 'Bard' }], opts)).toEqual([{ targetId: 2, by: 'Bard' }]);
+        expect(packCc([near, far], [m('Bard', 'support')], [{ targetId: 4, by: 'Bard' }], { ...opts, keep: [near, far] })).toEqual([{ targetId: 2, by: 'Bard' }]);
+    });
+
+    test('interrupts go first to a caster whose spell is on our healer or support, then on another of ours, then a healer', () => {
+        const roles = new Map<string, any>([['Druid', 'healer'], ['Bard', 'support'], ['Menta', 'nuker']]);
+        const on = (target: string, over = {}) => enemy(9, 'albion', { target, targetBySpell: true, ...over });
+        expect(interruptRank(on('Bard'), roles)).toBe(0);
+        expect(interruptRank(on('Druid'), roles)).toBe(0);
+        expect(interruptRank(on('Menta'), roles)).toBe(1);
+        expect(interruptRank(enemy(9, 'albion', { healer: true }), roles)).toBe(2);
+        expect(interruptRank(enemy(9, 'albion'), roles)).toBe(3);
+        expect(interruptRank(on('Menta', { targetBySpell: false, healer: true }), roles)).toBe(2);
     });
 
     test('the Bard goes for a cluster away from the focus, and an immune one is skipped', () => {

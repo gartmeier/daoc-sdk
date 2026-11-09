@@ -1011,6 +1011,17 @@ const INTERRUPT_WINDOW_MS = 2000;
  * Stop an enemy's cast with an instant spell, healers before others: Lullaby from far, a shout from close. Never at
  * one that is mezzed (it would wake it), nor at a shade, which the server refuses at the cast's start and which would take the turn from the mezz below. Instant, so it costs the Bard no crowd control time.
  */
+/**
+ * Who to interrupt first, lowest first: a caster whose spell is on one of our healers or supports (0), on another of ours (1),
+ * then a known healer (2), then the rest (3). Arena round 5, 2026-11-09: Albion's casters killed Oisin at 17 s and 36 s while
+ * the interrupts went to their healer.
+ */
+export function interruptRank(c: Contact, roles: ReadonlyMap<string, Role>): number {
+    const role = c.targetBySpell && c.target ? roles.get(c.target) : undefined;
+    if (role) return role === 'healer' || role === 'support' ? 0 : 1;
+    return c.healer ? 2 : 3;
+}
+
 export const interrupt = (): Behavior<TacticsSettings> => ({
     name: 'interrupt',
     interruptible: false,
@@ -1019,9 +1030,10 @@ export const interrupt = (): Behavior<TacticsSettings> => ({
         const spells = ctx.spells.interrupts();
         if (!spells.length) return false;
         const now = Date.now();
+        const roles = new Map(ctx.members().map(m => [m.name, m.role] as const));
         const casting = ctx.picture().contacts
             .filter(c => c.kind === 'player' && !c.stale && alive(c) && !c.cc && !untouchable(c, now) && now - (c.castingAt ?? 0) <= INTERRUPT_WINDOW_MS)
-            .sort((a, b) => Number(!!b.healer) - Number(!!a.healer));
+            .sort((a, b) => interruptRank(a, roles) - interruptRank(b, roles));
         for (const foe of casting) {
             const d = foeInView(ctx, foe.objectId)?.distance ?? Infinity;
             const sp = spells.find(s => d <= s.range);
