@@ -71,6 +71,14 @@ In `rvrRoaming`, which is what Midgard runs, the list keeps `tank` and this repl
 - Tank hold reads 0-3 % in RvR. It means nothing there: players have no threat table.
 - Template health is 698, the most of the 15.
 
+## RvR, as players tell it
+
+**Community, unverified** (research 2026-11-09; mixed eras, most for level 50):
+
+- A Warrior on the assist train stuns the train's target, then does damage; a wasted stun is 60 s of immunity, so the stun goes on a melee diving our casters or the target of a burst ([Blackthorn](https://blackthorn-daoc.com/wiki/warrior-guide), [Herald wiki](https://camelotherald.fandom.com/wiki/Warrior)). Slam needs Shields 42; at 24 his stuns are Numb (anytime, 2 s), Stun (after a block, 3 s), Disable (side, 4 s) and Incapacitate (after a block, 5 s).
+- Hammer is the usual group weapon for its stuns and snares and low endurance; Axe gives bleeds and attack slows ([Blackthorn](https://blackthorn-daoc.com/wiki/warrior-guide), [class library](https://www.darkageofcamelot.com/class-library-warrior/)).
+- Nothing found on when to guard or protect instead of swinging.
+
 ## Not supported yet
 
 - **Stuns on demand and Engage:** as for the Hero ([hero.md](hero.md)).

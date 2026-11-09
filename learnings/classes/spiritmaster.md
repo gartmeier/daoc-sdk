@@ -81,6 +81,13 @@ No caster was targeted at any of them. Her 5 s dated from a run where the real c
 
 She can't wear chain, and for a long time `equipUpgrades` tried it on every visit ("You have no skill in wearing this armor type!", 19 s a pass). **Verified:** at 19.9 she was stuck at 95 % load from armour in her bags. `shedLoad` and the sale cover it now, and [gear-care.md](../gear-care.md) says what's kept.
 
+## RvR, as players tell it
+
+**Community, unverified** (research 2026-11-09):
+
+- The usual RvR spec is 47 Darkness / 26 Suppression, and with a mezzer in the group she nukes one target while the others stay mezzed ([disorder.dk](https://disorder.dk/daoc/class-guide-midgard/)).
+- Her pet is weak in RvR: it intercepts some blows, about a third of the damage ([Uthgard](https://www.uthgard.net/forum/viewtopic.php?f=15&t=8273)). Nothing found on her power or positioning.
+
 ## Not supported yet
 
 - **Pet tactics beyond following the focus:** taking aggro, the pulsing damage shields (Spirit's Revenge, 5 s) and Convert Spirit. No behaviour casts those.

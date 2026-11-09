@@ -62,6 +62,13 @@ Nothing else needed from her at that camp: at any `ready.mana` from 10 to 35 her
 - **She mezzes more than she heals,** though the list has `heal` above `crowdControl`. The reports don't say whether the group wasn't hurt at those moments or she couldn't reach it.
 - **Mezzed herself as often as interrupted.** 40 casts refused with "You can't cast while mesmerized!" Enemy mezzes are among the largest failures in this group's reports.
 
+## RvR, as players tell it
+
+**Community, unverified** (research 2026-11-09):
+
+- A Pacification healer opens with a mezz, stuns an enemy healer for kill windows and pushes up to interrupt; an Augmentation or Mending healer heals, cures and calls the tanks back ([Blackthorn](https://blackthorn-daoc.com/wiki/healer-guide)). Sigrid at Pacification 4 is the second kind with the baseline mezz.
+- Cure mezz and cure disease are called very important, mezz and cure mezz on quickbinds; CC belongs on enemy support, and the group must not break it ([Uthgard](https://www.uthgard.net/forum/viewtopic.php?f=65&t=24011)).
+
 ## Not supported yet
 
 - **Stun on an enemy healer,** Halt Attack: asked for in the group's log since the first RvR rounds. Nothing picks a stun for a target.

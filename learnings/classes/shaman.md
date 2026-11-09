@@ -59,6 +59,13 @@ Ulfgar plays Buffer healer. **Community, unverified:** Uthgard calls Augmentatio
 - `rez: Thorgrim out of reach` came 21 times.
 
 
+## RvR, as players tell it
+
+**Community, unverified** (research 2026-11-09):
+
+- A group Shaman buffs, debuffs, diseases and support-heals: disease first on enemy healers, the assist train's target and peeling tanks (it cuts their healing and slows them), then DoTs ([Blackthorn](https://blackthorn-daoc.com/wiki/shaman-guide)).
+- He heals as cover, not in competition with the main healer, cures disease and poison, and stays alive: a dead Shaman's buffs go with him ([Blackthorn](https://blackthorn-daoc.com/wiki/shaman-guide)). The instant point-blank disease comes at Subterranean 27, beyond 24.
+
 ## Not supported yet
 
 - **Disease:** Infectious Spores and at Subterranean 27 Mold Cloud, the instant area disease every level 50 spec stops for (**community, unverified**). Nothing casts a debuff that isn't damage.
