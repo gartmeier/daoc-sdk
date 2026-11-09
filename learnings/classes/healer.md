@@ -20,6 +20,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 9 (2026-11-09, vs Hibernia, lost 4 kills / 7 deaths):** the round loaded the shared behaviors.ts mid-edit, and `cureMezz` threw "RANGE_MARGIN_3D is not defined" on nearly every turn. A member's list takes a throw as a turn spent, with a second's pause (MemberAgent.step), and the cure is above `heal`: Sigrid healed 5 times in 10 minutes. The round is marked tainted in the ledger. Since 83cf629 a member's list leaves a behaviour that throws out for 5 s, with the note, and goes on to the next one in the same turn; a kit guard of its own (f469716) hid the note and is gone again.
 
+**Round 11 (2026-11-09, vs Camelot, 6 kills / 6 deaths, 3D range):** 9 cures, 1 interrupted, none out of range; 1 Halt Attack; 11 heals; idle 20 %.
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
