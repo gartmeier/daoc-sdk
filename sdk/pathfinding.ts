@@ -10,7 +10,7 @@
 import type { Vec3 } from './types';
 import { estimateZ } from '../data/index';
 import { getZoneAt, type ZoneInfo } from '../data/zones';
-import { DEFAULT_EXTENTS, getNavmeshStore, zoneLabel, type NavMesh, type NavmeshStore } from './navmesh';
+import { DEFAULT_EXTENTS, getNavmeshStore, PolyFlags, zoneLabel, type NavMesh, type NavmeshStore, type NavPathPoint } from './navmesh';
 
 export interface PathRequest {
     regionId: number;
@@ -95,6 +95,23 @@ const BORDER_SNAP: Vec3 = { x: 128, y: 128, z: 4000 };
 const MAX_CHAIN = 128;
 /** chain(): a partial query ending this close to the leg start or an earlier end made no progress. */
 const CHAIN_STALL = 4;
+/**
+ * chain() weighs a way through water by run speed over swim speed: 191 against a real client's 85 at 100 % with no water
+ * speed (client/movement.ts PLAYER_BASE_SWIM_SPEED). A dry way round is taken while it is no slower than that.
+ */
+const SWIM_COST = 191 / 85;
+
+/** Length of a Detour path in run-speed units, its stretches in water (a segment starting on a Swim poly) at SWIM_COST. */
+function pathCost(points: readonly NavPathPoint[]): { cost: number; swims: boolean } {
+    let cost = 0, swims = false;
+    for (let i = 1; i < points.length; i++) {
+        const a = points[i - 1]!, b = points[i]!;
+        const wet = (a.flags & PolyFlags.Swim) !== 0;
+        swims ||= wet;
+        cost += Math.hypot(b.x - a.x, b.y - a.y) * (wet ? SWIM_COST : 1);
+    }
+    return { cost, swims };
+}
 
 function snapToMesh(mesh: NavMesh, p: Vec3): Vec3 | null {
     for (const ext of SNAP_EXTENTS) {
@@ -237,24 +254,39 @@ export class NavmeshPathProvider implements PathProvider {
         return r.success ? { ...r, message: r.message ? `${note}; ${r.message}` : note } : r;
     }
 
-    /** Chains Detour queries past the 256-poly corridor limit until `end` is reached or progress stops. */
+    /**
+     * The way from `start` to `end` on this mesh: the shortest, unless it swims and a way with no water at all is no slower
+     * (SWIM_COST). Detour weighs every poly alike, so a straight line across a river bend beat the bank round it.
+     */
     private chain(mesh: NavMesh, start: Vec3, end: Vec3): { points: Vec3[]; reached: boolean } {
+        const any = this.chainWith(mesh, start, end, 0);
+        if (!any.reached || !any.swims) return any;
+        const dry = this.chainWith(mesh, start, end, PolyFlags.Swim);
+        return dry.reached && dry.cost <= any.cost ? dry : any;
+    }
+
+    /** Chains Detour queries past the 256-poly corridor limit until `end` is reached or progress stops, leaving out polys with `exclude`. */
+    private chainWith(mesh: NavMesh, start: Vec3, end: Vec3, exclude: number): { points: Vec3[]; reached: boolean; cost: number; swims: boolean } {
         const points: Vec3[] = [start];
         const ends: Vec3[] = [start];
         let cur = start;
+        let cost = 0, swims = false;
         for (let i = 0; i < MAX_CHAIN; i++) {
-            const path = mesh.findPath(cur, end);
-            if (path.status === 'none' || path.points.length === 0) return { points, reached: false };
+            const path = mesh.findPath(cur, end, DEFAULT_EXTENTS, exclude);
+            if (path.status === 'none' || path.points.length === 0) return { points, reached: false, cost, swims };
+            const c = pathCost(path.points);
+            cost += c.cost;
+            swims ||= c.swims;
             for (const p of path.points.slice(1)) points.push({ x: p.x, y: p.y, z: p.z });
             const last = points[points.length - 1]!;
-            if (path.status === 'found') return { points, reached: true };
+            if (path.status === 'found') return { points, reached: true, cost, swims };
             // Partial: the first 256 polys of the best corridor, which may lead sideways before it
             // turns toward the goal. Continue while each query moves on; stop when it stalls or loops back.
-            if (ends.some(e => Math.hypot(last.x - e.x, last.y - e.y, last.z - e.z) < CHAIN_STALL)) return { points, reached: false };
+            if (ends.some(e => Math.hypot(last.x - e.x, last.y - e.y, last.z - e.z) < CHAIN_STALL)) return { points, reached: false, cost, swims };
             ends.push(last);
             cur = last;
         }
-        return { points, reached: false };
+        return { points, reached: false, cost, swims };
     }
 
     /** Where the straight line cur → to leaves the zone, snapped onto this mesh and the neighbour's. */

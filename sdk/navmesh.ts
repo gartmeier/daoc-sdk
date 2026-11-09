@@ -153,6 +153,8 @@ export class NavMesh {
     private readonly pathPts = new Float32Array(MAX_POLY * 3);
     private readonly pathFlags = new Uint16Array(MAX_POLY);
     private readonly count = new Int32Array(1);
+    /** Include and exclude flags for a query that leaves some polys out (findPath's `exclude`). */
+    private readonly filter = new Uint16Array(2);
     private readonly losFlag = new Uint8Array(1);
     private disposed = false;
 
@@ -175,12 +177,17 @@ export class NavMesh {
         return ok(s) ? this.out[1]! / SCALE : null;
     }
 
-    /** Straight path between two points that are already on (or within the default extents of) the mesh. */
-    findPath(start: Vec3, end: Vec3, halfExtents: Vec3 = DEFAULT_EXTENTS): NavPath {
+    /**
+     * Straight path between two points that are already on (or within the default extents of) the mesh. `exclude` leaves out polys
+     * with those flags (PolyFlags.Swim: water), start and end included: an end in water then has no path ('none').
+     */
+    findPath(start: Vec3, end: Vec3, halfExtents: Vec3 = DEFAULT_EXTENTS, exclude = 0): NavPath {
         this.check();
         this.count[0] = 0;
+        this.filter[0] = PolyFlags.All ^ PolyFlags.Disabled;
+        this.filter[1] = exclude;
         const s = this.lib.PathStraight(this.query, toRecast(start, this.start), toRecast(end, this.end), toRecast(halfExtents, this.ext),
-            DEFAULT_FILTER, DT_STRAIGHTPATH_ALL_CROSSINGS, this.count, this.pathPts, this.pathFlags);
+            exclude ? this.filter : DEFAULT_FILTER, DT_STRAIGHTPATH_ALL_CROSSINGS, this.count, this.pathPts, this.pathFlags);
         const n = Math.min(this.count[0]!, MAX_POLY);
         if (!ok(s) || n === 0) return { status: 'none', points: [] };
         const points: NavPathPoint[] = [];

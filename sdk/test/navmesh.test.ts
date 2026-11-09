@@ -72,6 +72,33 @@ describe('NavmeshPathProvider fallbacks and edge cases', () => {
     });
 });
 
+describe('NavmeshPathProvider and water', () => {
+    // From camelotHills 2000 east. The shortest way swims 1000 of it; the dry way bends round 800 north (or 1600 with `bend`).
+    const { x, y, z } = camelotHills;
+    const mesh = (bend: number): FakeMesh => ({
+        closestPoint: p => ({ ...p }),
+        findPath: (start, end, _ext, exclude = 0) => ({
+            status: 'found',
+            points: exclude
+                ? [{ ...start, flags: 1 }, { x: x + 1000, y: y + bend, z, flags: 1 }, { ...end, flags: 1 }]
+                : [{ ...start, flags: 1 }, { x: x + 500, y, z, flags: 2 }, { x: x + 1500, y, z, flags: 1 }, { ...end, flags: 1 }],
+        }),
+    });
+    const to = { x: x + 2000, y, z };
+
+    test('takes the dry way round while it is quicker than swimming across', async () => {
+        // Swimming: 1000 + 1000 × 191/85 ≈ 3247 at run speed. Round: 2 × hypot(1000, 800) ≈ 2561.
+        const r = await new NavmeshPathProvider({ store: fakeStore(mesh(800)), fallback: straight }).findPath({ regionId: 1, from: camelotHills, to });
+        expect(r.waypoints.map(p => p.y)).toEqual([y + 800, y]);
+    });
+
+    test('swims when the way round is slower', async () => {
+        // Round: 2 × hypot(1000, 1600) ≈ 3774.
+        const r = await new NavmeshPathProvider({ store: fakeStore(mesh(1600)), fallback: straight }).findPath({ regionId: 1, from: camelotHills, to });
+        expect(r.waypoints.every(p => p.y === y)).toBeTrue();
+    });
+});
+
 describe.skipIf(!ready)('Detour via Bun FFI (generated Camelot Hills meshes)', () => {
     test('snaps a DB spawn onto the ground within a few units', () => {
         // bear cub spawn in Camelot Hills (DB z 2262)
