@@ -3,18 +3,20 @@
 // with every cast he has 2.5-3 s long, casting nothing while a melee is on him: he gives ground instead.
 // learnings/classes/theurgist.md says what that was worth, and what it costs.
 
-import { assist, onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
+import { onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
 import { dist } from '../group/battleground';
 import type { Behavior } from '../group/member';
 import type { Character } from '../group/character';
 import type { Contact, MemberReport, Point } from '../group/types';
-import { thrifty } from './thrifty';
+import { nukerFight } from './cabalist';
 
 export interface TheurgistOptions {
     /** No nukes below this % power, nor his pets, which count as nukes (fnfPet). 40 is what was measured. */
     saveBelow?: number;
     /** Below the fight, as a group adds them. */
     chores?: Behavior<TacticsSettings>[];
+    /** Its nukes on a free enemy in reach while the focus is out of it (cabalist.ts offFocus). On by default. */
+    offFocus?: boolean;
     /** Give ground instead of casting while a melee is on him (giveGround). On by default. */
     giveGround?: boolean;
 }
@@ -81,11 +83,11 @@ export const giveGround = (): Behavior<TacticsSettings> => ({
     },
 });
 
-export function theurgist({ saveBelow = 40, chores = [], giveGround: give = true }: TheurgistOptions = {}): Character {
+export function theurgist({ saveBelow = 40, chores = [], giveGround: give = true, offFocus: off = true }: TheurgistOptions = {}): Character {
     return {
         role: 'nuker',
         ...(give ? { react: [giveGround()] } : {}),
-        fight: [saveBelow > 0 ? thrifty(assist(), saveBelow) : assist()],
+        fight: nukerFight(saveBelow, off),
         pet: { fnfFloor: saveBelow },
         ...(chores.length ? { chores } : {}),
     };

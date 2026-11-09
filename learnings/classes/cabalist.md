@@ -63,3 +63,11 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 - **Unverified:** send the simulacrum at the enemy healer or caster, since every swing of an NPC pet starts the 3 s interrupt timer (**server code**, GameLiving.cs:708: 100 % plus 5 % per level above the target). A player DoT interrupts only when its first tick lands (DamageOverTimeECSEffect.cs:60). Disease (Cursed Vigor) goes on the kill target to cut its healing. Nearsight (Obscuring Dust) goes on back-line healers and casters. Sources: https://www.uthgard.net/forum/viewtopic.php?p=378462, eden-daoc.net/viewtopic.php?p=11675 (snippet).
 - **Verified, arena round 5:** Morgana dealt 2836, the most in the group, plus 863 from her pet. 7 of her nukes were interrupted, and she was in melee 17 % of fight time.
+
+## DoTs and nukes off the focus (kit, from Camelot's round after round 6, 2026-11-09)
+
+**Verified, arena round 6** (camelot vs midgard, `groups/camelot/runs/20261109-211626.md`): the group holds its ground with the casters 700 behind the tank (spread formation). Morgana idled 51 turns on "assist: focus out of reach, holding ground", and 10 of her nukes went out of range. Taliesin idled 67 turns and Merlin 39 on the same reason.
+
+**The change** (`sdk/classes/cabalist.ts`; the Sorcerer and Theurgist kits use it too): `offFocus` sits right below `assist`. While the focus is beyond her nuke's reach, or held by crowd control, she casts her DoTs and then her top nuke on the nearest enemy player in reach, from where she stands. It skips anyone who is mezzed, assigned to crowd control or claimed for it in the last 4 s, a pet, or in another region. It never uses area spells. The DoT families go into assist's memory for that target, so they aren't recast if it becomes the focus. Nothing is cast while an enemy is in melee on her (`hammeredBy`). `cabalist({ offFocus: false })` turns it off. The kit now has a fight, so it is no longer a role-only kit.
+
+**To look for:** `nuke` results "(off the focus)", her damage against round 6's 2292, and fewer "focus out of reach" idles. Also whether a mezz breaks on a target she hit (`mezz on X broke` lines).
