@@ -139,6 +139,10 @@ The fewest deaths of the group, with the lowest damage of the three tanks: Slash
 - **A taunt starts the interrupt timer on its target** (**server code**, TauntSpellHandler.cs:30). Instants skip the interrupt check (SpellHandler.cs:597, :603). So Aggravate (Chants 15, instant, range 1350, every 30 s) interrupts an enemy caster from range without stopping his swing. Not used yet.
 - **Unverified:** keep the endurance chant up. Skip the AF chant when a Cleric's AF is on the group. Put shield stuns on the enemy healer or caster, never on a mezzed or stun-immune one. Guard the Cleric and peel melee off her. Sources: https://forums.freddyshouse.com/threads/paladin-chants.217766/, https://www.camelotherald.com/node/203
 
+## Persistence drains his power out of fights (found in arena round 26, 2026-11-10)
+
+**Verified:** the group sat in `recover` 6+ minutes on "waiting for Galahad's power", and he was at Mana 68/190 with End 100. Out of a fight, `wantedSongs` (sdk/group/songs.ts) falls back to `endurance`, and in travel it gives `speed`, then `endurance`. He has no power, health or speed chant, so `song()` keeps Chant of Persistence pulsing, at about 7 power a pulse, with nothing to stop it. Reported to the orchestrator: drop `endurance` out of a fight at high endurance, and have `song()` stop a chant nobody wants. The kit can't do it: the RvR tank list's own `song()` sits above the kit's and would restart the chant.
+
 ## Not supported yet
 
 All of these are his and no behaviour casts them:
