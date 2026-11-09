@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { EquipmentSlot, ObjectType, type SpellDetails, type Style, type StyleDetails } from '../types';
-import { canWield, foeLastResult, lastStyleLanded, pickStyle, procUnknown, raisesThreat, shedsThreat, tankStyles } from './styles';
+import { canWield, foeLastResult, heldElsewhere, lastStyleLanded, lastSwungAt, pickStyle, procUnknown, raisesThreat, shedsThreat, tankStyles } from './styles';
 import { defaultBehaviors } from './behaviors';
 
 const details = (d: Partial<StyleDetails>): StyleDetails => ({
@@ -197,5 +197,23 @@ describe('what the last swings came to', () => {
 describe('default melee', () => {
     test('it fights with styles on the melee list', () => {
         expect(defaultBehaviors().melee.map(b => b.name)).toContain('assistMelee');
+    });
+});
+
+describe('heldElsewhere: whom a player is on, from its last swing (the server never sends a player\'s target)', () => {
+    const now = Date.now();
+    const swing = (attacker: number, target: number, ago: number) => ({ id: ago, kind: 'melee' as const, attackerObjectId: attacker, targetObjectId: target, receivedAt: now - ago });
+    const state = (events: ReturnType<typeof swing>[]) => ({ combatEvents: events as any });
+
+    test('a player that last swung at someone else is held; at us, or at nobody lately, it is not', () => {
+        expect(heldElsewhere({ objectId: 50, kind: 'player' }, state([swing(50, 7, 1000)]), 1)).toBe(true);
+        expect(heldElsewhere({ objectId: 50, kind: 'player' }, state([swing(50, 7, 3000), swing(50, 1, 1000)]), 1)).toBe(false);
+        expect(heldElsewhere({ objectId: 50, kind: 'player' }, state([swing(50, 7, 9000)]), 1)).toBe(false);
+        expect(lastSwungAt(state([swing(50, 7, 9000)]), 50, now)).toBeNull();
+    });
+
+    test('a monster goes by the target the server gives it, as before', () => {
+        expect(heldElsewhere({ objectId: 60, kind: 'npc', targetObjectId: 7 }, state([]), 1)).toBe(true);
+        expect(heldElsewhere({ objectId: 60, kind: 'npc', targetObjectId: 1 }, state([swing(60, 7, 500)]), 1)).toBe(false);
     });
 });

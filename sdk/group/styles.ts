@@ -101,6 +101,25 @@ export function pickStyle(styles: readonly Style[], seen: StyleSeen, rules: Styl
     return first ? [first.name, plain.name] : [plain.name];
 }
 
+/** A swing this recent still says whom a player is on: about two of a slow weapon's. */
+export const SWING_WINDOW_MS = 8000;
+
+/** Whom `foe` last swung at in melee, within `windowMs`; null when it hasn't. */
+export function lastSwungAt(state: Pick<BotWorldState, 'combatEvents'>, foe: number, now = Date.now(), windowMs = SWING_WINDOW_MS): number | null {
+    const e = state.combatEvents.filter(e => e.kind === 'melee' && e.attackerObjectId === foe && now - e.receivedAt <= windowMs).at(-1);
+    return e?.targetObjectId ?? null;
+}
+
+/**
+ * Whether `target` is on someone else. A monster's target comes from the server; a player's never does, so it is read from
+ * its last swing (lastSwungAt). Without that every player read as "on us": no melee kit took a positional against players
+ * (Thorgrim landed only reactions in arena rounds 4-11, never Disable; the Midgard class session's heldBySwing, 21a41fb).
+ */
+export function heldElsewhere(target: { objectId: number; kind?: string; targetObjectId?: number | null }, state: Pick<BotWorldState, 'combatEvents'>, me: number): boolean {
+    const on = 'targetObjectId' in target && target.targetObjectId ? target.targetObjectId : target.kind === 'player' ? lastSwungAt(state, target.objectId) : null;
+    return !!on && on !== me;
+}
+
 /** A melee's style choice for assist() or a character: from its weapons and what just happened, with a backup. */
 export const fighterStyle = (rules: Partial<StyleRules> = {}): StylePick => ({ target, player, state, styles }) => pickStyle(
     styles.filter(s => canWield(s, state.equipment)),
@@ -108,7 +127,7 @@ export const fighterStyle = (rules: Partial<StyleRules> = {}): StylePick => ({ t
         last: lastStyleLanded(state, player.objectId),
         foeDid: foeLastResult(state, target.objectId, player.objectId),
         endurancePercent: player.endurancePercent,
-        held: 'targetObjectId' in target && !!target.targetObjectId && target.targetObjectId !== player.objectId,
+        held: heldElsewhere(target as { objectId: number; kind?: string; targetObjectId?: number | null }, state, player.objectId),
     },
     { ...STYLE_RULES, ...rules },
 );
