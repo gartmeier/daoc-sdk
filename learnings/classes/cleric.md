@@ -101,3 +101,8 @@ A Cleric's heals live in the skills list, the hybrid path: `castSpell` handles i
 - **Group heals** and **cures,** as for the Healer.
 
 **Arena round 21** (Camelot wiped Hibernia 5/0): 8 heals and 1 stun, plus 2 resisted. She was targeted 2 % of fight time and never in melee.
+
+## 20 concentration spells at most (server code, found in arena round 26, 2026-11-10)
+
+Her `buff:no_response` failures (5-8 a round, 39 in round 26) are the server's cap on concentration effects: "You can only cast up to 20 simultaneous concentration spells!" (SpellHandler.cs:31 `MAX_CONC_SPELLS = 20`, :836-839). It applies however much pool is left; she had Conc 57/210 at the time. Her plan has about 32 concentration buffs, so past 20 every one is refused. The SDK reads the refusal as "No cast observed" and retries each minute. Reported to the orchestrator: the fix is in `castSpell` (parse the line) and `planBuffs` (cap at 20), both shared code.
+
