@@ -1,2 +1,4 @@
 # Generated with LF, and compared byte for byte by sdk/test/api-docs.test.ts and docs:api:check.
 sdk/API.md text eol=lf
+# Shell scripts run under bash, which reads a CRLF as part of the command.
+*.sh text eol=lf

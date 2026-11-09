@@ -12,7 +12,7 @@ export { resistDebuff, matchingDebuff, debuffPays } from './debuff';
 export * from './styles';
 export { Coordinator, defineStrategy, roleForClass, type CoordinatorContext, type GroupStrategy } from './strategy';
 export { pveLeveling, decidePve, pickPullTarget, pickFocus, assignCc, PVE_SETTINGS, type PveSettings } from './pve';
-export { PORTAL_KEEPS, BATTLEGROUNDS, CAPITALS, portalKeepOf, capitalOf, inBattleground, inCapital, atPortalKeep, entryProblem, townTeleporter, viaWalkers, walkTogether, toPortalKeep, bindAtPortalKeep, wearsMedallion, getMedallion, wearMedallion, waitForPort, portTogether, enterBattleground, battlegroundExit, leaveBattleground, type MedallionResult, type PortalKeep, type Battleground, type Passage, type EnterResult } from './battleground';
+export { PORTAL_KEEPS, BATTLEGROUNDS, CAPITALS, portalKeepOf, capitalOf, inBattleground, inCapital, atPortalKeep, entryProblem, townTeleporter, viaWalkers, walkTogether, goHome, toPortalKeep, bindAtPortalKeep, wearsMedallion, getMedallion, wearMedallion, waitForPort, portTogether, enterBattleground, battlegroundExit, leaveBattleground, type MedallionResult, type PortalKeep, type Battleground, type Passage, type EnterResult } from './battleground';
 export { wearPerEvent, tooHighLevel, wornDown, GEAR_MAX_CON, GEAR_MIN_GAP, REPAIR_BELOW } from './gear-score';
 export { repairGear, takeFromVault, stashInVault, needsRepair, keepForLater, vaultDue, careDue, classCouldUse, nearestSmith, nearestVaultKeeper, CARE_RADIUS, REPAIR_RESERVE, type CareMember, type CareOptions } from './gear-care';
 export { cloakTrip, CAPITAL_RADIUS } from './cloak-trip';

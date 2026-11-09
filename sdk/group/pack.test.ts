@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from 'bun:test';
 import { areaMezzCatch, backupHealWanted, confuse, interrupt, rest, SAVING_POWER, standStepTo } from './behaviors';
 import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
-import { enemy, obs, picture, report, sighting } from './fixtures';
+import { contact, enemy, obs, picture, report, sighting } from './fixtures';
 import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings, noticePhantom, shouldBolt } from './pack';
 import { RVR_SETTINGS, rvrBehaviors, rvrRoaming } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
@@ -151,6 +151,15 @@ describe('decidePack: a pet in it', () => {
             const u = decidePack(ctx(picture(team(), [onPet({}, 12_000)]), { memory: { ...memory }, now: 2000 }));
             const direct = decidePack(ctx(picture(team(), [onPet({ target: 'Encha', targetPet: null }, 12_000)]), { memory: { ...memory }, now: 2000 }));
             expect(u.reason).toBe(direct.reason);
+        });
+
+        test('a monster on the Druid in a player fight gets a spare mezzer; the player stays the focus', () => {
+            const norseman = foe(51, 10_600, 10_000, { threat: true, target: 'Encha' });
+            const wolf = contact(70, { regionId: R, x: 9_950, y: 10_100, name: 'black wolf', level: 22, threat: true, target: 'Druid' });
+            const u = decidePack(ctx(picture(team(), [norseman, wolf]), { memory: { pack: 'stalk' } }));
+            expect(u).toMatchObject({ phase: 'engage', focus: 51 });
+            expect(u.cc!.some(a => a.targetId === 70)).toBe(true);
+            expect(u.cc!.filter(a => a.targetId === 70).length).toBe(1);
         });
 
         test('inside a keep\'s circle: it is a foe when it hits the pet too', () => {
@@ -627,6 +636,14 @@ describe('areaMezzCatch', () => {
     test('nothing when the focus would be caught', () => {
         expect(areaMezzCatch(t, [t, n, far], 350, 2)).toEqual([]);
         expect(areaMezzCatch(t, [t, n, far], 350, 3).length).toBe(2);
+    });
+
+    test('nothing with a monster near that isn\'t fighting us; one that is, or a player\'s pet, is no bar', () => {
+        const wolf = (over: Partial<Contact> = {}) => contact(9, { x: 420, y: 0, name: 'black wolf', ...over });
+        expect(areaMezzCatch(t, [t, n, wolf()], 350, null)).toEqual([]);
+        expect(areaMezzCatch(t, [t, n, wolf({ x: 700 })], 350, null).length).toBe(2);
+        expect(areaMezzCatch(t, [t, n, wolf({ threat: true, target: 'Bard' })], 350, null).length).toBe(2);
+        expect(areaMezzCatch(t, [t, n, wolf({ isPet: true, realm: 'midgard' })], 350, null).length).toBe(2);
     });
 });
 

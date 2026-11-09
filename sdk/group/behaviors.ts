@@ -867,12 +867,19 @@ const STEP_CLEAR = 500;
 /**
  * The free enemy players an area mezz on `target` would catch, `target` first, or none at all when the
  * focus stands in its radius: mezzing what we are about to hit wastes the spell. A shade is no catch: the server's area selection leaves it out (SpellHandler.cs:1477, :1599).
+ * None either with a monster that isn't fighting us near it (NEUTRAL_SPLASH): the mezz takes it in too, and it comes for us when it wakes.
+ * Round 1 of the pair rounds (2026-11-08): Captivate Audience round a Dwarf by a camp of black wolves (aggro level 0) at +0:36, and at
+ * +0:57, as it wore off, the wolves were on the Bard and the healers; they cut ~15 heals and killed three.
  */
 export function areaMezzCatch(target: Contact, contacts: readonly Contact[], radius: number, focus: number | null, now = Date.now()): Contact[] {
     const near = contacts.filter(c => c.kind === 'player' && !c.stale && alive(c) && !untouchable(c, now) && dist(c, target) <= radius);
     if (near.some(c => c.objectId === focus)) return [];
+    if (contacts.some(c => c.kind !== 'player' && !c.isPet && !c.threat && !c.stale && alive(c) && dist(c, target) <= radius + NEUTRAL_SPLASH)) return [];
     return near.filter(c => !c.cc && !immuneKinds(c).includes('mezz'));
 }
+
+/** areaMezzCatch keeps this much farther from a monster than the spell's radius: the target walks while the mezz is cast. */
+const NEUTRAL_SPLASH = 150;
 
 /** How near another member's mezz may be for a root to wait: the largest radius an area mezz has at these levels. */
 const MEZZ_SPLASH = 350;

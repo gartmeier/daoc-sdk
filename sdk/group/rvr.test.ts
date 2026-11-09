@@ -8,6 +8,8 @@ import { memoryView } from './publish';
 import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, homeOf, keepDangers, pickRvrFocus, RVR_SETTINGS, rvrFindings, rvrRoaming, type RvrSettings } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { aggroZones, safePath } from './terrain';
+import { getTerrainStore } from '../terrain';
+import { isDry, isWet } from './water';
 import type { Contact, GroupPicture, MemberReport, Orders, Point, Role } from './types';
 
 // Region 9999 has no spawns and no battleground: no aggro zones, keeps or home get in the way.
@@ -557,6 +559,8 @@ describe('decideRvr: crowd control assignments', () => {
 
 describe('battleground data (static, Thidranki)', () => {
     const T = 252;
+    // The client's terrain (bun run terrain:build): without it nothing is water.
+    const terrain = getTerrainStore().available();
     const realms = ['albion', 'midgard', 'hibernia'] as const;
 
     test('homeOf: our portal keep and arrival point; nothing outside a battleground', () => {
@@ -595,6 +599,60 @@ describe('battleground data (static, Thidranki)', () => {
         }
         expect(turn.albion).toBe(-turn.midgard!);
         expect(turn.hibernia).toBe(turn.albion!);
+    });
+
+    // Three of the default waypoints stood in a river before stayDry (Midgard's two, Hibernia's two, Albion's one).
+    test.skipIf(!terrain)('defaultPatrol: with stayDry (the default) every waypoint is dry, and no realm loses one; off, the river ones come back', () => {
+        for (const realm of realms) {
+            const loop = defaultPatrol(T, realm, 20);
+            expect(loop.every(w => isDry(T, w))).toBe(true);
+            expect(loop.length).toBe(defaultPatrol(T, realm, 20, { stayDry: false }).length);
+        }
+        expect(defaultPatrol(T, 'midgard', 20, { stayDry: false }).filter(w => isWet(T, w)).length).toBe(2);
+    });
+
+    test.skipIf(!terrain)('a fight that starts in a river is anchored on the bank; with stayDry off, where the group swims', () => {
+        // The group in the river between Hibernia and Midgard (its middle 320 west of the tank), a Midgard player on it.
+        const river = BATTLEGROUND_LAYOUTS[T]!.pairs!['hibernia|midgard']!;
+        const members = team({}, { x: river.x + 320, y: river.y }, T);
+        const on = enemy(61, 'midgard', { regionId: T, x: river.x + 900, y: river.y, threat: true, target: 'Tank', targetId: 1 });
+        const anchor = (stayDry: boolean) => decideRvr(ctx(picture(members, [on]), { settings: { stayDry, patrol: null } })).anchor!;
+        expect(isDry(T, anchor(true))).toBe(true);
+        expect(isWet(T, anchor(false))).toBe(true);
+    });
+
+    test('a focus beyond the leash on the far side of a monster camp does not draw the fight\'s anchor into the camp', () => {
+        // South of Hibernia's portal keep: the group out of every aggro zone, a Norseman 2900 east of its centre (beyond the 2000 leash),
+        // and a camp where the anchor would drift to (1500 toward him). Found by a search over aggroZones(252, 24).
+        const zones = aggroZones(T, 24);
+        const members = team({}, { x: 16_000, y: 24_600 }, T);
+        const norseman = enemy(61, 'midgard', { regionId: T, x: 18_580, y: 24_600, threat: true, target: 'Druid', targetId: 2 });
+        expect(zones.some(z => Math.hypot(z.x - 17_180, z.y - 24_600) < z.r)).toBe(true);
+        const d = decideRvr(ctx(picture(members, [norseman]), { settings: { patrol: null } }));
+        expect(d).toMatchObject({ phase: 'engage', focus: 61 });
+        expect(zones.every(z => Math.hypot(z.x - d.anchor!.x, z.y - d.anchor!.y) >= z.r)).toBe(true);
+    });
+
+    test('defaultPatrol with an opponent: a ring round the pair\'s spot, from the waypoint nearest home, the two going round opposite ways', () => {
+        const pairs = [['albion', 'hibernia'], ['albion', 'midgard'], ['hibernia', 'midgard']] as const;
+        for (const [a, b] of pairs) {
+            const spot = BATTLEGROUND_LAYOUTS[T]!.pairs![`${a}|${b}`]!;
+            const turn = (realm: (typeof realms)[number], opponent: (typeof realms)[number]) => {
+                const loop = defaultPatrol(T, realm, 24, { opponent });
+                expect(loop.length).toBeGreaterThanOrEqual(4);
+                for (const w of loop) {
+                    expect(Math.hypot(w.x - spot.x, w.y - spot.y)).toBeGreaterThan(2500);
+                    expect(Math.hypot(w.x - spot.x, w.y - spot.y)).toBeLessThan(5500);
+                    if (terrain) expect(isDry(T, w)).toBe(true);
+                }
+                const home = homeOf(T, realm)!.arrival;
+                const d = loop.map(w => Math.hypot(w.x - home.x, w.y - home.y));
+                expect(d[0]).toBe(Math.min(...d));
+                const angle = (w: Point) => Math.atan2(w.y - spot.y, w.x - spot.x);
+                return Math.sign(Math.sin(angle(loop[1]!) - angle(loop[0]!)));
+            };
+            expect(turn(a, b)).toBe(-turn(b, a));
+        }
     });
 
     test('falls back away from a larger group standing between us and our portal keep, toward the keep when they stand aside', () => {
@@ -683,6 +741,26 @@ describe('safePath avoid circles', () => {
     });
 });
 
+describe('decideRvr: monsters in a player fight', () => {
+    // A Norseman on the tank (the focus), a free Dwarf, a black wolf on the Druid and one on the tank.
+    const fightWith = (wolves: Contact[]) => decideRvr(ctx(picture(team(), [
+        foe(51, { threat: true, target: 'Tank', targetId: 1 }), foe(52, { name: 'Dwarf', x: 11_200 }), ...wolves,
+    ])));
+    const wolf = (id: number, target: string) => contact(id, { regionId: R, x: 9_800, y: 10_100, name: 'black wolf', level: 22, threat: true, target });
+
+    test('a monster on a healer is mezzed before a free player; one on the tank after; the player stays the focus', () => {
+        const d = fightWith([wolf(70, 'Druid'), wolf(71, 'Tank')]);
+        expect(d).toMatchObject({ phase: 'engage', focus: 51 });
+        // Mezzers in assignCc's order (support, then nukers): the Bard, Menta, Encha.
+        expect(d.cc).toEqual([{ targetId: 70, by: 'Bard' }, { targetId: 52, by: 'Menta' }, { targetId: 71, by: 'Encha' }]);
+    });
+
+    test('a monster already mezzed, or a player\'s pet, gets no mezz', () => {
+        const d = fightWith([wolf(70, 'Druid'), { ...wolf(72, 'Druid'), cc: { by: 'Bard', kind: 'mezz', until: Date.now() + 30_000 } }, contact(73, { regionId: R, x: 9_800, y: 10_100, isPet: true, threat: true, target: 'Druid', realm: 'midgard' })]);
+        expect(d.cc!.map(a => a.targetId).sort()).toEqual([52, 70]);
+    });
+});
+
 describe('rvrRoaming', () => {
     test('role lists without a town healer visit; tank list as specified', () => {
         expect(rvrRoaming.behaviors.tank.map(b => b.name)).toEqual(['release', 'hand', 'sprint', 'retreat', 'rejoinFight', 'rez', 'song', 'tank', 'guard', 'shedLoad', 'holdFormation', 'buff', 'rest']);
@@ -704,6 +782,11 @@ describe('rvrRoaming', () => {
         expect(trades.map(f => f.topic)).toEqual(['trades']);
         expect(trades[0]!.evidence).toBe('killed by player:midgard 3, npc:mature boar 1');
         expect(topics(run({}, '23→24'))).toEqual(['level']);
+        expect(topics(run({ wetInFights: 35, enemiesWetInFights: 40 }))).toEqual(['water']);
+        expect(topics(run({ wetInFights: 10 }))).toEqual([]);
+        // A third realm in a fight matters only in a pair round.
+        expect(topics(run({ threeWay: 2 }))).toEqual([]);
+        expect(rvrFindings(run({ threeWay: 2 }), { ...RVR_SETTINGS, opponent: 'midgard' }).map(f => f.topic)).toEqual(['pair']);
     });
 });
 

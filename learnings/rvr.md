@@ -99,11 +99,51 @@ A battleground has no merchants, and the recall stone doesn't work there. The wa
 - **Far members rejoin a fight:** `holdFormation` walks a member more than 3000 from the fight's anchor back to it (after a release); tank and melee from beyond `chaseLeash`. Before, released healers stood idle at the portal keep through the whole fight.
 - **Far from the fight, the way back comes first** (`rejoinFight`, in every RvR list right after `retreat`): over 5000 from the anchor a member walks back by `safePath` before any fight behaviour. Before it, `assist` walked straight at the focus and `killPlayer` failed `out_of_reach` before its first step. In round 10 Niamh died to the perturbed bwca four times on that line and Thorgrim logged 100 such failures; in round 11, none of either.
 
+## Water and pair rounds (2026-11-08)
+
+**Thidranki's rivers:** three run out from the Faste, one between each two realms' halves (Hibernia–Midgard to the north-east, Hibernia–Albion to the west, Midgard–Albion to the south-east), up to ~2900 wide where they meet the Faste. The navmesh has three bridges from the Faste's island, inside its guards; away from it a river can only be swum. Swimming is 85 against 191 running, which slows tanks, melee and healers and hardly a caster who stands and casts. The meeting point (34000, 32000) sits on the north river's bank, and before this five of the default patrol waypoints stood in water (Midgard's two, Hibernia's two, Albion's one).
+
+**`stayDry`** (`RvrSettings`, on by default; `--stayDry=false` for a control round): every place the group stops is on dry ground at least 300 from water (`sdk/group/water.ts`: `isWet`, `isDry`, `drySpot`). Patrol waypoints are nudged out of water, a leg in a river becomes the far bank, retreat and run spots move to the nearer bank, and a fight's anchor goes to the nearest bank, as does the pack's anchor on its focus (so the Hero goes into the water no farther than his leash). Crossing stays allowed: `safePath` weighs a water cell at 191/85, so routes cross where the river is narrow, and walks take a dry way round when it is no slower (walking.md "Navmesh routing").
+
+**Pair rounds** (`--opponent=<realm>` on both groups, `bash groups/pair-rounds.sh [rounds] [seconds]`): only two groups play and the third sits out, rotating through the pairings. Since 2026-11-05 about half the fights had players of both other realms in them, and they held most of the fight time and kills (Camelot 44 kills in them against 14 in one-realm fights; Midgard 38 deaths against 19), so a round's result said more about who came last than how a group played. With `opponent` the patrol is a ring of 4000 round the pair's spot on its river (`BattlegroundLayout.pairs`, 12000-14000 from the Faste), the realm first in the alphabet going round by increasing angle and the other the other way (Hibernia and Albion used to go the same way round).
+
+**Measured in every RvR report** (`Water:` line): % of member time alive in water, of fight time, and of the enemy players' fight time in our fights; each fight's water share and where it began; per member `wetPct` and `wetInFights`; `threeWay`, fights with both other realms. Findings: `water` when members swam 20 % of fight time or more, `pair` when a third realm joined a pair round.
+
+**First rotation, 2026-11-08** (10 minutes a round, level 24, Hibernia on the pack, the others roaming):
+
+| Round | Pair | Kills / deaths to players | Fight time in water (us / the enemies) | Three-way fights |
+|---|---|---|---|---|
+| 1 | Hibernia – Midgard | 11 / 2 – 5 / 11 | 7 % / 0 % – 4 % / 0 % | 0 of 5 – 0 of 4 |
+| 2 | Midgard – Camelot | 10 / 8 – 9 / 10 | 18 % / 33 % – 43 % / 28 % | 0 of 4 – 0 of 4 |
+| 3 | Camelot – Hibernia | 5 / 9 – 9 / 5 | 14 % / 0 % – 0 % / 3 % | 0 of 3 – 0 of 3 |
+
+No fight had a third realm in it. Water stayed low except round 2. There, Camelot had sat out round 1 by the north river, and its first fight began where it stood: 94 % of that fight in water, because Camelot's casters stand their ground and a dry anchor doesn't move them. That is left as it is: a caster or healer in water costs its side little. Since round 3, **all three groups go home before each round** (`groups/go-home.ts`, `goHome` in `sdk/group/battleground.ts`: the dead release, the living walk to their arrival point; about two minutes). Also from round 3, **nobody runs**: `pair-rounds.sh` passes `--retreat.margin=99 --pack.minTogether=1 --pack.minPack=1`, so a losing group fights to the last member, releases, rests at its keep and comes again. In round 1 Midgard ran with one or two left, and Hibernia followed it toward Midgard's keep. The pack's `retreats` count stays: it is its pull back between raids, not running away.
+
+**Monster adds:** round 1's long Hibernia–Midgard fight drifted to (46689, 24293), into a black wolf camp (L20-23). The wolves interrupted about 15 heals in two minutes and killed three Hibernians. The black wolves don't aggro (aggro level 0, 24 of them at L24), so no route avoids them; the Bard woke them. At +0:36 his area mezz Captivate Audience went round a Dwarf by the camp and caught wolves too, and at +0:57, as it wore off, they came for him and the healers. Fixed in three parts:
+- `areaMezzCatch` gives no area mezz on a spot with a monster that isn't fighting us within its radius + 150: the Bard mezzes that player alone.
+- In a player fight, monsters on us get mezzed (`monsterAdds`): those on a healer or the Bard before the free players, the rest after. With the pack, a member with a mezz and no player to mezz takes them. They are killed when they wake, after the players: with no player in the fight, the roaming logic fights the monsters on us.
+- The fight's anchor never drifts into an aggro zone, and the pack's Hero doesn't follow a player into one.
+
+The tank's peel of a monster on a healer was there already.
+
+**Rotations 2 and 3, 2026-11-08** (go home before each round, nobody runs; rotation 2 with the add fixes, rotation 3 also with the all-mezzed focus and `fightHoldMs`):
+
+| Round | Pair | Kills / deaths to players | Note |
+|---|---|---|---|
+| 4 | Hibernia – Midgard | 18 / 1 – 1 / 18 | Midgard came back one by one and was farmed |
+| 5 | Midgard – Camelot | 2 / 5 – 5 / 2 | cut at 6 min: the gateway went down (another session restarted its clients) |
+| 6 | Camelot – Hibernia | – | not run: no gateway |
+| 7 | Hibernia – Midgard | 20 / 0 – 0 / 20 | 4 fights, each a full wipe of Midgard |
+| 8 | Midgard – Camelot | 1 / 20 – 20 / 1 | the same |
+| 9 | Camelot – Hibernia | 14 / 1 – 1 / 14 | 3 fights, each a wipe of Hibernia |
+
+No fight had a third realm, and no wolves came in. With `fightHoldMs` the dead hold (seen live: `DEAD await_fight engage`), so a lost fight ends in a whole wipe and the group starts over together, as the user wanted. One exception stays unexplained: in round 8 Thorgrim released about 45 s after dying while the fight went on (no rez came; the report doesn't time a successful release). A member who died twice in one fight (Hrafna, round 7) had been rezzed in between (`accept_rez`), which `rez.inFight` allows. Midgard lost every fight: its casters' first nukes came 55-63 s in against the pack (mezzed at the opening), and its tank attacked once in round 8 (5 guards, 4 protects), with Bragi stuck twice. That is Midgard's open problem, not the rounds'.
+
 ## Resurrection
 
 A rez in RvR saves only the walk back, about 100 s: an RvR death costs no XP or constitution, and a release gives full health, power and endurance (`GamePlayer.cs:1668-1670`). It costs the rezzer half its pool at equal level, whatever the rank, so the strongest rank is always the one to cast. The member comes back with the spell's health and power, buffless, with 60 s of illness at -50 %. A released member loses its buffs as well, but its illness has mostly run out by the time it is back. So `RVR_SETTINGS.rez` is `{ holdMs: 60_000, sit: false, reserve: 25, inFight: true, fightHoldMs: 300_000 }`:
 
-- **Nobody releases until the fight is over** (user, 2026-11-08; `fightHoldMs`, the pack too): a corpse holds its release (activity `await_fight`) while the orders are `engage`, `retreat` or `pull`, or a fresh threat stands in its region. A wipe ends the hold: with nobody of ours alive in the region it releases at once. `holdMs` for a rezzer then counts from the fight's end, so a long fight doesn't use it up; `fightHoldMs` only caps a fight that never seems to end, counted from the death. A run that is winding down waits for a corpse still holding (`awaitingRez`). Unit-tested only, not yet live.
+- **Nobody releases until the fight is over** (user, 2026-11-08; `fightHoldMs`, the pack too): a corpse holds its release (activity `await_fight`) while the orders are `engage`, `retreat` or `pull`, or a fresh threat stands in its region. A wipe ends the hold: with nobody of ours alive in the region it releases at once. `holdMs` for a rezzer then counts from the fight's end, so a long fight doesn't use it up; `fightHoldMs` only caps a fight that never seems to end, counted from the death. A run that is winding down waits for a corpse still holding (`awaitingRez`). Live in pair rotation 3 (see "Water and pair rounds"): lost fights end in whole wipes; one early release (Thorgrim, round 8) unexplained.
 - **It pays only from what it has:** the rezzer never sits for it and must keep 25 % of its pool, so at equal level it needs 75 %. Without that a corpse doesn't wait for it, and releases.
 - **Any rank will do:** a 10 % rez counts.
 - **Also mid-fight, from where it stands,** when the group isn't under pressure (`rezPressure`): nobody within heal reach below the healing limit, no more free enemies than living members, no enemy on a caster or healer, and none on or next to the rezzer. Crowd control ordered on the rezzer comes first. Not in a retreat, or in travel, which can be a fall back.

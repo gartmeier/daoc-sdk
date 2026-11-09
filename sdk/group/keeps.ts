@@ -34,6 +34,16 @@ export interface BattlegroundLayout {
     arrival: Record<PlayerRealm, Point3>;
     /** Neutral ground about as far from every portal keep: the default patrols ring it. */
     meet: Point3;
+    /** Where two realms meet in a pair round (settings.opponent), by pairKey: their patrols ring it, one each way. */
+    pairs?: Record<string, Point>;
+}
+
+/** The key of two realms in BattlegroundLayout.pairs: their names in alphabetical order. */
+export const pairKey = (a: PlayerRealm, b: PlayerRealm) => [a, b].sort().join('|');
+
+/** Where `realm` and `opponent` meet in a pair round in this region; null without one. */
+export function pairMeet(regionId: number, realm: PlayerRealm, opponent: PlayerRealm): Point | null {
+    return BATTLEGROUND_LAYOUTS[regionId]?.pairs?.[pairKey(realm, opponent)] ?? null;
 }
 
 export const THIDRANKI = 252;
@@ -53,6 +63,14 @@ export const BATTLEGROUND_LAYOUTS: Record<number, BattlegroundLayout> = {
         ],
         arrival: { albion: { x: 38113, y: 53507, z: 4160 }, midgard: { x: 53568, y: 23643, z: 4530 }, hibernia: { x: 17367, y: 18248, z: 4320 } },
         meet: { x: 34000, y: 32000, z: 3836 },
+        // Three rivers run out from the Faste, one between each two realms' halves; the only dry ways over are its three
+        // bridges, inside its guards. Each pair meets on its own river, 12000-14000 from the Faste (about halfway to the
+        // map's edge): the river's middle there, from the client's terrain (water.ts). A ring of 4000 round it crosses it twice.
+        pairs: {
+            'hibernia|midgard': { x: 41069, y: 26768 },
+            'albion|hibernia': { x: 21155, y: 37017 },
+            'albion|midgard': { x: 46953, y: 40219 },
+        },
     },
 };
 

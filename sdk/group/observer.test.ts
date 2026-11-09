@@ -5,6 +5,8 @@ import { join } from 'path';
 import { findingsFor, formatReport, GroupObserver, saveReport, stampOf, type RunReport } from './observer';
 import { contact, enemy, picture, report } from './fixtures';
 import type { Capabilities, GroupEvent, MemberReport, PetReport } from './types';
+import { getTerrainStore } from '../terrain';
+import { BATTLEGROUND_LAYOUTS } from './keeps';
 
 const T0 = 1_800_000_000_000;
 
@@ -220,6 +222,33 @@ describe('GroupObserver', () => {
         for (let i = 21; i <= 30; i++) o.sample(picture(rp(100 + 300 * rpGain, 150), [], { seq: 3, phase: 'travel' }, at(i)));
         return o.report();
     };
+
+    // Thidranki's river between Hibernia and Midgard, from the client's terrain (bun run terrain:build); skipped without it.
+    test.skipIf(!getTerrainStore().available())('RvR: time in water, ours and the enemies\', per fight and member, and fights with both other realms', () => {
+        const river = BATTLEGROUND_LAYOUTS[252]!.pairs!['hibernia|midgard']!;
+        const land = BATTLEGROUND_LAYOUTS[252]!.arrival.hibernia;
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        const at = (i: number) => T0 + i * 1000;
+        // Tank and Druid in the river, Menta on land; a Midgard player in the river and a Hibernian on land; 10 s of it, then 10 s of travel on land.
+        const ms = (wet: boolean) => members({
+            Tank: { regionId: 252, ...(wet ? river : land) }, Druid: { regionId: 252, ...(wet ? river : land) }, Menta: { regionId: 252, ...land },
+        });
+        const foes = [
+            contact(300, { kind: 'player', name: 'Norseman', realm: 'midgard', threat: true, target: 'Tank', regionId: 252, ...river }),
+            contact(310, { kind: 'player', name: 'Celt', realm: 'hibernia', threat: true, target: 'Menta', regionId: 252, ...land }),
+        ];
+        for (let i = 1; i <= 10; i++) o.sample(picture(ms(true), foes, { seq: 2, phase: 'engage', focus: 300 }, at(i)));
+        for (let i = 11; i <= 20; i++) o.sample(picture(ms(false), [], { seq: 3, phase: 'travel' }, at(i)));
+        const r = o.report();
+        expect(r.totals).toMatchObject({ wetInFights: 67, enemiesWetInFights: 50, threeWay: 1 });
+        expect(r.totals.wetPct).toBe(Math.round(100 * 20 / 60));
+        expect(r.fights[0]).toMatchObject({ wetPct: 67, enemyWetPct: 50 });
+        expect(r.members.Tank).toMatchObject({ wetPct: 50, wetInFights: 100 });
+        expect(r.members.Menta).toMatchObject({ wetPct: 0, wetInFights: 0 });
+        const md = formatReport(r);
+        expect(md).toContain('Water: we swam 33% of the time alive and 67% of fight time, the enemies in our fights 50%. Fights with both other realms: 1 of 1.');
+        expect(md).toContain('in water: us 67%, them 50%');
+    });
 
     test('RvR: player kills, deaths to players, realm points, enemies seen and engagements; killers per member', () => {
         const r = rvrRun();

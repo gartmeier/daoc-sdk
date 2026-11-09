@@ -23,10 +23,12 @@ import { backupHeal, confuse, crowdControl, flee, interrupt, rest, rez, release,
 import { isAlive, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
-import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, onWhom, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { aggroZones } from './terrain';
+import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, monsterAdds, onWhom, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
+import { drySpot } from './water';
 
 export { focusHealed, pickPackFocus } from './rvr';
 
@@ -208,7 +210,13 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const keeps = keepDangers(regionId, realm, s);
     const inKeep = (c: Point) => !clearOf(c, keeps);
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, leader.z, { radius: 8000 });
-    const trip: Trip = { mem, now, regionId, level, avoid: keeps, travelLeg: s.travelLeg, zAt };
+    const dry = staysDry(s);
+    const trip: Trip = { mem, now, regionId, level, avoid: keeps, travelLeg: s.travelLeg, zAt, dry };
+    /** `q` as a place to stand: with stayDry, on the nearest bank (the one nearest `toward`) when it is in a river. */
+    const onLand = (q: Point, toward: Point): Point3 => {
+        const d = dry ? drySpot(regionId, q, { toward, ok: c => clearOf(c, keeps) }) : q;
+        return { x: Math.round(d.x), y: Math.round(d.y), z: zAt(d) };
+    };
     const ours = new Set(p.members.map(m => m.name));
     // A member whose pet is attacked counts as attacked, as in decideRvr.
     const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
@@ -219,7 +227,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     noticePhantom(mem, p.contacts, o.phase === 'engage' ? o.focus : null, now, k);
     const foes = p.contacts.filter(c => players(c) && !mem.phantoms[c.objectId] && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !inKeep(c)));
     const free = foes.filter(c => !c.cc).sort((a, b) => dist(a, centre) - dist(b, centre));
-    const stay: Point3 = { x: Math.round(centre.x), y: Math.round(centre.y), z: zAt(centre) };
+    const stay: Point3 = onLand(centre, centre);
     const facing = free[0] ? { x: free[0].x, y: free[0].y } : undefined;
     // Released members at the keep stay put until the pack is within gatherRadius of them (they are in `main` then).
     const pickups = homeSpot ? far.filter(m => dist(m, homeSpot) <= k.keepRadius) : [];
@@ -230,10 +238,12 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const areaRadius = 350;
 
     // Chasers are the Hero's: the anchor stands on the focus, so his leash lets him at it (never into a keep's circle).
+    // A focus in a river: the bank nearest it, so he goes in no farther than his leash.
+    // Nor into a monster camp: the casters reach a foe standing in one, and the Hero would bring its monsters into the fight.
     const onFocus = (c: Contact | null): Point3 => {
-        if (!c || inKeep(c)) return stay;
+        if (!c || inKeep(c) || !clearOf(c, aggroZones(regionId, level))) return stay;
         const x = Math.round(c.x / 200) * 200, y = Math.round(c.y / 200) * 200;
-        return { x, y, z: zAt({ x, y }) };
+        return onLand({ x, y }, c);
     };
     // The focus stays, unless it is out of reach or a healer is winning: then the next one, and that target rests a while.
     const keepFocus = (pool: readonly Contact[]): Contact | null => {
@@ -259,8 +269,17 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         stepLeg(trip, 'leave', mem.leaveTo, { from: centre, movers: main, replan: Infinity });
         return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'leave and rest', reason: `leave: ${why}` });
     };
-    const fight = (kind: string, focus: Contact | null, cc: { targetId: number; by: string }[], anchor: Point3, why: string): OrdersUpdate =>
-        say({ phase: 'engage', puller: null, retreatTo: null, focus: focus?.objectId ?? null, cc, anchor, ...(focus ? { facing: { x: focus.x, y: focus.y } } : {}), objective: `${kind} at (${anchor.x}, ${anchor.y})`, reason: `${kind}: ${focus ? tag(focus) : 'no target in reach'}, ${why}` });
+    // Monsters on us in a player fight (a camp it came near): whoever can mezz and has no player to mezz takes them, those on a
+    // healer or the Bard first (monsterAdds). Killed when they wake, after the players: decideRvr's calm fights monsters on us.
+    const withBeasts = (cc: { targetId: number; by: string }[], focus: Contact | null) => {
+        const beasts = monsterAdds(p.contacts.filter(c => c.regionId === regionId), focus?.objectId ?? null, here);
+        const ranked = [...beasts.first, ...beasts.last].filter(c => !cc.some(a => a.targetId === c.objectId));
+        if (!ranked.length) return cc;
+        const spare = main.filter(m => m.capabilities.cc && !cc.some(a => a.by === m.name));
+        return [...cc, ...assignCc(ranked, spare, o.cc.filter(a => ranked.some(c => c.objectId === a.targetId)), now)];
+    };
+    const fight = (kind: string, focus: Contact | null, cc0: { targetId: number; by: string }[], anchor: Point3, why: string): OrdersUpdate =>
+        say({ phase: 'engage', puller: null, retreatTo: null, focus: focus?.objectId ?? null, cc: withBeasts(cc0, focus), anchor, ...(focus ? { facing: { x: focus.x, y: focus.y } } : {}), objective: `${kind} at (${anchor.x}, ${anchor.y})`, reason: `${kind}: ${focus ? tag(focus) : 'no target in reach'}, ${why}` });
     const startRaid = (why: string): OrdersUpdate => {
         mem.pack = 'raid';
         mem.raidAt = now;

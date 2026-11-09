@@ -19,6 +19,7 @@ import { isAlive, type Blackboard } from './blackboard';
 import { CC_WALK, MEZZED } from './cc';
 import type { GroupEvent, GroupPicture, MemberCombat, MemberReport, Phase } from './types';
 import type { LiveReport } from './wire';
+import { isWet } from './water';
 
 export interface Finding {
     severity: 'high' | 'medium' | 'low';
@@ -63,6 +64,10 @@ export interface FightSummary {
     /** RvR: distinct enemy players among the fight's focus and attackers, and their realms. */
     enemyPlayers?: number;
     enemyRealms?: string[];
+    /** RvR: where the group's living stood when it began (their centre), and % of the fight's member samples (alive) in deep water (water.ts), and of its enemy players'. */
+    where?: { x: number; y: number };
+    wetPct?: number;
+    enemyWetPct?: number;
 }
 
 /** A member's pet in the run. */
@@ -145,6 +150,9 @@ export interface MemberStats {
     petDealt?: number;
     /** Absent for a member that had no pet and can't summon one. */
     pet?: PetStats;
+    /** RvR: % of its time alive, and of its fight time alive, that it swam (deep water, water.ts). */
+    wetPct?: number;
+    wetInFights?: number;
 }
 
 export interface RunReport {
@@ -176,6 +184,12 @@ export interface RunReport {
         alivePct?: number;
         /** RvR: deaths with fewer than two living members within 1500. */
         deathsAlone?: number;
+        /** RvR: % of member time alive in deep water (water.ts), of member fight time, and of enemy players' fight time (focus and attackers). */
+        wetPct?: number;
+        wetInFights?: number;
+        enemiesWetInFights?: number;
+        /** RvR: fights with players of both other realms in them: a third group joined. */
+        threeWay?: number;
     };
     /** % of run time per phase. */
     phases: Partial<Record<Phase, number>>;
@@ -223,6 +237,8 @@ interface Track {
     bot?: string;
     combat?: MemberCombat;
     pet: PetTrack;
+    /** Samples alive, and of those in deep water; fight samples (alive) in deep water. */
+    alive: number; wet: number; wetFight: number;
 }
 
 interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outcome' | 'adds' | 'openerMs' | 'enemyPlayers' | 'enemyRealms'> {
@@ -235,6 +251,8 @@ interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outc
     petsDown: string[];
     /** By member: the targets its pet accepted an order on in this fight. Ids are reused, so this goes with the fight. */
     ordered: Map<string, Set<number>>;
+    /** Member samples (alive) and those in deep water; the same for its enemy players. */
+    memberSamples: number; memberWet: number; enemySamples: number; enemyWet: number;
 }
 
 const pct = (a: number, b: number) => b > 0 ? Math.round(100 * a / b) : 0;
@@ -361,7 +379,14 @@ export class GroupObserver {
     private spreadSum = 0;
     private spreadSamples = 0;
     private strayedSamples = 0;
+    /** Over the closed fights: member samples (alive) and those in deep water, and the same for their enemy players. */
+    private fightMemberSamples = 0;
+    private fightWet = 0;
+    private fightEnemySamples = 0;
+    private fightEnemyWet = 0;
     private deathsAlone = 0;
+    /** Member samples (alive) in deep water. */
+    private wetSamples = 0;
     /** Enemy player contacts ever seen, by region:objectId. */
     private readonly enemies = new Set<string>();
     /** The samples behind every fight's tank hold. */
@@ -430,7 +455,7 @@ export class GroupObserver {
         for (const m of p.members) {
             let t = this.members.get(m.name);
             if (!t) {
-                t = { role: m.role, className: m.className, level0: m.level, level1: m.level, xp0: m.experience, xp1: m.experience, deaths: 0, actions: {}, failures: {}, fightSamples: 0, engageSamples: 0, idle: 0, idleReasons: {}, targeted: 0, inMelee: 0, moving: 0, minHp: m.hp, waitMs: {}, rp0: null, rp1: 0, killedBy: {}, pet: { kind: null, name: '', samples: 0, up: 0, focusSamples: 0, onFocus: 0, drewFocus: 0, intercepts: 0, interceptAt: -Infinity, steppedIn: null, intercepted: 0, ownerGone: false, afterOwner: 0, onRecast: 0, pulling: 0, allSamples: 0, dead: 0, drewOrdered: 0, deaths: 0, brokeCc: 0, hadSummons: false, summons: [], fnfSummons: 0 } };
+                t = { role: m.role, className: m.className, level0: m.level, level1: m.level, xp0: m.experience, xp1: m.experience, deaths: 0, actions: {}, failures: {}, fightSamples: 0, engageSamples: 0, idle: 0, idleReasons: {}, targeted: 0, inMelee: 0, moving: 0, minHp: m.hp, waitMs: {}, rp0: null, rp1: 0, killedBy: {}, alive: 0, wet: 0, wetFight: 0, pet: { kind: null, name: '', samples: 0, up: 0, focusSamples: 0, onFocus: 0, drewFocus: 0, intercepts: 0, interceptAt: -Infinity, steppedIn: null, intercepted: 0, ownerGone: false, afterOwner: 0, onRecast: 0, pulling: 0, allSamples: 0, dead: 0, drewOrdered: 0, deaths: 0, brokeCc: 0, hadSummons: false, summons: [], fnfSummons: 0 } };
                 this.members.set(m.name, t);
             }
             t.className = m.className;
@@ -443,6 +468,10 @@ export class GroupObserver {
                 t.rp1 = Math.max(t.rp1, m.realmPoints);
             }
             t.minHp = Math.min(t.minHp, m.hp);
+            if (!m.isDead) {
+                t.alive++;
+                if (isWet(m.regionId, m)) { t.wet++; this.wetSamples++; }
+            }
             samplePet(t.pet, m, p.at, p.orders.phase === 'pull' && p.orders.puller === m.name);
         }
         for (const c of p.contacts) if (c.kind === 'player') this.enemies.add(`${c.regionId}:${c.objectId}`);
@@ -454,7 +483,10 @@ export class GroupObserver {
         // Close a fight after 3 calm samples: a mob's target field flickers during a body pull.
         this.calm = fighting ? 0 : this.calm + 1;
         if (fighting && !this.fight) {
+            const up = p.members.filter(m => !m.isDead);
             this.fight = {
+                where: up.length ? { x: Math.round(up.reduce((a, m) => a + m.x, 0) / up.length), y: Math.round(up.reduce((a, m) => a + m.y, 0) / up.length) } : undefined,
+                memberSamples: 0, memberWet: 0, enemySamples: 0, enemyWet: 0,
                 start: Math.round((p.at - this.started) / 1000), at: p.at, focus: [], kills: [], petsDown: [], ordered: new Map(), maxAttackers: 0, deaths: [], retreated: false, attackers: new Set(), holdSamples: 0, heldSamples: 0,
                 engageAt: null, engaged: new Set(), firstNuke: new Map(), enemies: new Map(),
             };
@@ -475,7 +507,13 @@ export class GroupObserver {
         const tank = p.members.find(m => m.role === 'tank' && !m.isDead);
         const focus = p.contacts.find(c => c.objectId === p.orders.focus) ?? (tank ? p.contacts.find(c => c.objectId === tank.targetId) : undefined);
         if (focus && !f.focus.includes(focus.name)) f.focus.push(focus.name);
-        for (const c of focus ? [focus, ...threats] : threats) if (c.kind === 'player') f.enemies.set(`${c.regionId}:${c.objectId}`, c.realm);
+        for (const c of new Set(focus ? [focus, ...threats] : threats)) {
+            if (c.kind !== 'player') continue;
+            f.enemies.set(`${c.regionId}:${c.objectId}`, c.realm);
+            if (!isAlive(c)) continue;
+            f.enemySamples++;
+            if (isWet(c.regionId, c)) f.enemyWet++;
+        }
         // Only samples where the mob's target is known. The board keeps the last one while the mob
         // runs or is out of reach (the server sends none then), so those count; a reset clears it.
         // On a member's pet its target is known too, and it isn't the tank.
@@ -491,6 +529,8 @@ export class GroupObserver {
             if (m.isDead) continue;
             const t = this.members.get(m.name)!;
             t.fightSamples++;
+            f.memberSamples++;
+            if (isWet(m.regionId, m)) { t.wetFight++; f.memberWet++; }
             // Idle and moving count while engaged only: during a pull, waiting at the base is the job. A mezz on it is nothing its list could have done, and no idle finding's advice fits that.
             if (phase === 'engage') t.engageSamples++;
             if (phase === 'engage' && m.activity.kind === 'idle' && m.activity.detail !== MEZZED) { t.idle++; inc(t.idleReasons, m.activity.detail || 'nothing to do'); }
@@ -537,7 +577,14 @@ export class GroupObserver {
         if (f.enemies.size) {
             fight.enemyPlayers = f.enemies.size;
             fight.enemyRealms = [...new Set(f.enemies.values())].sort();
+            if (f.where) fight.where = f.where;
+            fight.wetPct = pct(f.memberWet, f.memberSamples);
+            fight.enemyWetPct = pct(f.enemyWet, f.enemySamples);
         }
+        this.fightWet += f.memberWet;
+        this.fightMemberSamples += f.memberSamples;
+        this.fightEnemyWet += f.enemyWet;
+        this.fightEnemySamples += f.enemySamples;
         this.fights.push(fight);
     }
 
@@ -655,7 +702,11 @@ export class GroupObserver {
                 minHp: t.minHp,
                 waitedFor: Object.fromEntries(Object.entries(t.waitMs).map(([k, v]) => [k, pct(v, durationMs)]).filter(([, v]) => (v as number) > 0)),
             };
-            if (rvr) stats.realmPoints = rpOf(t);
+            if (rvr) {
+                stats.realmPoints = rpOf(t);
+                stats.wetPct = pct(t.wet, t.alive);
+                stats.wetInFights = pct(t.wetFight, t.fightSamples);
+            }
             if (t.deaths) stats.killedBy = { ...t.killedBy };
             if (pet) {
                 stats.pet = pet;
@@ -684,6 +735,8 @@ export class GroupObserver {
                 enemiesSeen: this.enemies.size, engagements: this.fights.filter(f => f.enemyPlayers).length,
                 spreadAvg: this.spreadSamples ? Math.round(this.spreadSum / this.spreadSamples) : 0, strayedPct: pct(this.strayedSamples, this.spreadSamples),
                 alivePct: pct(this.aliveSamples, this.memberSamples), deathsAlone: this.deathsAlone,
+                wetPct: pct(this.wetSamples, this.aliveSamples), wetInFights: pct(this.fightWet, this.fightMemberSamples), enemiesWetInFights: pct(this.fightEnemyWet, this.fightEnemySamples),
+                threeWay: this.fights.filter(f => (f.enemyRealms?.length ?? 0) >= 2).length,
             });
         }
         report.findings = findingsFor(report);
@@ -840,6 +893,7 @@ export function formatReport(r: RunReport): string {
     ];
     const rvr = hasRvrTotals(r);
     if (rvr) lines.push(`RvR: ${t.enemiesSeen ?? 0} enemy players seen, ${t.engagements ?? 0} engagements, ${t.playerKills ?? 0} player kills, ${t.deathsToPlayers ?? 0} deaths to players, ${t.realmPoints ?? 0} realm points (${t.rpPerHour ?? 0}/h).`);
+    if (rvr && t.wetPct !== undefined) lines.push(`Water: we swam ${t.wetPct}% of the time alive and ${t.wetInFights}% of fight time, the enemies in our fights ${t.enemiesWetInFights}%. Fights with both other realms: ${t.threeWay} of ${t.engagements ?? 0}.`);
     if (rvr && t.alivePct !== undefined) lines.push(`Together: ${t.spreadAvg} units from the group's centre on average, ${t.strayedPct}% of the time beyond 2500; alive ${t.alivePct}% of the time; ${t.deathsAlone} deaths with fewer than two near.`);
     if (r.previous) lines.push(`Against the previous run: ${Object.entries(r.previous).map(([k, v]) => `${k} ${v}`).join(', ')}.`);
     lines.push('', '## Findings', '');
@@ -877,7 +931,7 @@ export function formatReport(r: RunReport): string {
     lines.push('', '## Fights', '');
     for (const f of r.fights) {
         const openers = Object.entries(f.openerMs ?? {}).map(([n, ms]) => `${n} ${ms === null ? 'none' : secs(ms)}`).join(', ');
-        lines.push(`- ${String(Math.floor(f.start / 60)).padStart(2, '0')}:${String(f.start % 60).padStart(2, '0')} ${f.focus.join(' / ') || '?'}: ${f.outcome} in ${Math.round(f.durationMs / 1000)} s, kills ${f.kills.length}, adds ${f.adds}, tank hold ${f.tankHold ?? '-'}%${f.enemyPlayers ? `, ${f.enemyPlayers} enemy players (${(f.enemyRealms ?? []).join(', ')})` : ''}${openers ? `, first nuke: ${openers}` : ''}${f.deaths.length ? `, died: ${f.deaths.join(', ')}` : ''}`);
+        lines.push(`- ${String(Math.floor(f.start / 60)).padStart(2, '0')}:${String(f.start % 60).padStart(2, '0')} ${f.focus.join(' / ') || '?'}: ${f.outcome} in ${Math.round(f.durationMs / 1000)} s, kills ${f.kills.length}, adds ${f.adds}, tank hold ${f.tankHold ?? '-'}%${f.enemyPlayers ? `, ${f.enemyPlayers} enemy players (${(f.enemyRealms ?? []).join(', ')})` : ''}${f.where ? ` at (${f.where.x}, ${f.where.y})` : ''}${f.wetPct || f.enemyWetPct ? `, in water: us ${f.wetPct ?? 0}%, them ${f.enemyWetPct ?? 0}%` : ''}${openers ? `, first nuke: ${openers}` : ''}${f.deaths.length ? `, died: ${f.deaths.join(', ')}` : ''}`);
     }
     lines.push('', '## Timeline (last events)', '', '```', ...r.timeline, '```', '');
     return lines.join('\n');

@@ -5,6 +5,7 @@
 import { findNpcSpawns, getZoneAt, getZonesInRegion } from '../../data/index';
 import { conLevel } from '../actions-helpers';
 import type { Point, Point3 } from './types';
+import { isWet } from './water';
 
 export interface Danger { x: number; y: number; r: number; name: string; level: number }
 
@@ -255,12 +256,16 @@ function avoidIndex(regionId: number, level: number, extra: readonly Danger[]): 
 const INSIDE_COST = 30;
 /** ... and off the map: only when there is no other way, from a spot off it say. */
 const OFF_MAP_COST = 1000;
+/** ... and in deep water: swimming is 85 against 191 running (client/movement.ts), so a cell of river takes 191/85 the time. A route crosses where the river is narrow. */
+const WATER_COST = 191 / 85 - 1;
 
 /**
  * Waypoints from `from` to `to` around every mob that would attack a group of `level`
  * (aggroZones, plus the wider danger circles): just [to] when the straight line is clear.
  * Coarse grid A* (400-unit cells) where a cell inside a zone costs INSIDE_COST times more,
- * so a route always exists and crosses zones only where there is no way around.
+ * so a route always exists and crosses zones only where there is no way around. Deep water
+ * (water.ts isWet) costs what swimming does (WATER_COST): a line across it is never clear, and
+ * the route crosses a river where that is quickest.
  * `avoid` adds circles to keep out of as well (the guards of an enemy keep: keepDangers
  * in rvr.ts); the index for each set of them is cached by their positions and radii.
  */
@@ -273,7 +278,7 @@ export function safePath(regionId: number, level: number, from: Point, to: Point
         const n = Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 100);
         for (let i = 1; i < n; i++) {
             const x = a.x + (b.x - a.x) * i / n, y = a.y + (b.y - a.y) * i / n;
-            if (idx.inside(x, y) || off(x, y)) return false;
+            if (idx.inside(x, y) || off(x, y) || isWet(regionId, { x, y })) return false;
         }
         return true;
     };
@@ -288,7 +293,7 @@ export function safePath(regionId: number, level: number, from: Point, to: Point
     const start = at(si, sj), goal = at(ti, tj);
     const penalty = new Float32Array(w * h);
     // With the margin: a diagonal step between two cells can't cut a corner of the map then.
-    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) penalty[at(i, j)] = mapped && !onMap(regionId, { x: cx(i), y: cy(j) }, MAP_MARGIN) ? OFF_MAP_COST : idx.inside(cx(i), cy(j)) ? INSIDE_COST : 0;
+    for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) penalty[at(i, j)] = mapped && !onMap(regionId, { x: cx(i), y: cy(j) }, MAP_MARGIN) ? OFF_MAP_COST : idx.inside(cx(i), cy(j)) ? INSIDE_COST : isWet(regionId, { x: cx(i), y: cy(j) }) ? WATER_COST : 0;
     const g = new Float64Array(w * h).fill(Infinity), prev = new Int32Array(w * h).fill(-1);
     const done = new Uint8Array(w * h);
     const hfn = (k: number) => Math.hypot((k % w) - ti, Math.floor(k / w) - tj);

@@ -38,8 +38,9 @@ import { isAlive, untouchable } from './blackboard';
 import { PET_SETTINGS, waitsForPet } from './pets';
 import { assignCc } from './pve';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
-import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, THIDRANKI, type KeepSettings, type PlayerRealm } from './keeps';
+import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, pairMeet, THIDRANKI, type KeepSettings, type PlayerRealm } from './keeps';
 import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
+import { drySpot, isDry } from './water';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
 export { BATTLEGROUND_LAYOUTS, homeOf, keepDangers, KEEP_CLEARANCE, THIDRANKI, type BattlegroundLayout, type Keep, type KeepSettings, type PlayerRealm } from './keeps';
@@ -81,8 +82,35 @@ export interface RvrSettings extends TacticsSettings, KeepSettings {
     travelLeg: number;
     /** Patrol this loop instead of defaultPatrol (a ring round the battleground's meeting point). */
     patrol: Point3[] | null;
+    /**
+     * A pair round against this realm only: the patrol rings the spot where the two meet (BattlegroundLayout.pairs) instead
+     * of the meeting point, the two going round opposite ways. Both groups need it; the third stays out of the battleground.
+     */
+    opponent?: PlayerRealm | null;
+    /**
+     * Stop only on dry ground (water.ts drySpot): patrol waypoints, legs, the fight's anchor, retreat spots. Swimming is 85
+     * against 191, so a fight in a river was won by whoever stood and cast. Crossing a river on the way stays allowed. Off: as before.
+     */
+    stayDry?: boolean;
     /** Choose the focus as the pack does (pickPackFocus: near, soft, a known healer last) and give up one a healer is winning. Off: pickRvrFocus. */
     softFocus?: SoftFocus;
+}
+
+/**
+ * Monsters fighting us in a fight with players: a camp the fight came near. They get mezzed like the players and are killed
+ * when they wake, after them. `first`: those on one of our healers or supports, which interrupt the heals (round 1 of the pair
+ * rounds, 2026-11-08: black wolves cut ~15 heals in two minutes and killed three); they go before the players. `last`: the
+ * rest, after them. Not a player's pet, not the focus, not one controlled already; nearest-dying order is the caller's.
+ */
+export function monsterAdds(candidates: readonly Contact[], focusId: number | null, members: readonly MemberReport[]): { first: Contact[]; last: Contact[] } {
+    const soft = new Set(members.filter(m => m.role === 'healer' || m.role === 'support').map(m => m.name));
+    const beasts = candidates.filter(c => c.kind !== 'player' && !c.isPet && c.objectId !== focusId && !c.cc && !c.stale && isAlive(c) && onWhom(c) !== null && members.some(m => m.name === onWhom(c)));
+    return { first: beasts.filter(c => soft.has(onWhom(c)!)), last: beasts.filter(c => !soft.has(onWhom(c)!)) };
+}
+
+/** settings.stayDry, on unless it says otherwise: a script's flag comes as the string 'false'. */
+export function staysDry(s: { stayDry?: unknown }): boolean {
+    return !/^(false|0|off|no)$/i.test(String(s.stayDry ?? true));
 }
 
 export interface SoftFocus {
@@ -136,6 +164,8 @@ export const RVR_SETTINGS: RvrSettings = {
     gatherRadius: 2500,
     travelLeg: 1500,
     patrol: null,
+    opponent: null,
+    stayDry: true,
 };
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -162,10 +192,14 @@ export function realmOfGroup(members: readonly { className: string }[]): Realm {
 
 /** Default patrol: waypoints on a ring of this radius round the meeting point. */
 const PATROL_RADIUS = 5500, PATROL_POINTS = 6;
+/** A pair round's patrol: a smaller ring round the pair's spot on their river, so the two meet within a minute or so. */
+const PAIR_RADIUS = 4000;
 /** Each waypoint stays this far outside aggro zones and keep circles: casters stand up to ~700 behind the anchor. */
 const PATROL_MARGIN = 900;
 /** Where an unsafe waypoint is tried next: [radius change, angle change in radians]. */
-const NUDGES: [number, number][] = [[0, 0], [-500, 0], [500, 0], [-1000, 0], [1000, 0], [0, 0.15], [0, -0.15], [-1000, 0.15], [-1000, -0.15]];
+const NUDGES: [number, number][] = [[0, 0], [-500, 0], [500, 0], [-1000, 0], [1000, 0], [0, 0.15], [0, -0.15], [-1000, 0.15], [-1000, -0.15],
+    // Wider, for a waypoint on a river where the three meet by the Faste (stayDry): last, so no earlier waypoint moves.
+    [0, 0.3], [0, -0.3], [-1000, 0.3], [-1000, -0.3], [1000, 0.3], [1000, -0.3], [-1500, 0.3], [-1500, -0.3]];
 /**
  * Which way each realm goes round (+1: increasing angle). Midgard and Albion start ~100° apart
  * on the ring and close that gap head-on; Hibernia comes round behind Albion.
@@ -175,22 +209,29 @@ const PATROL_TURN: Record<PlayerRealm, 1 | -1> = { albion: -1, midgard: 1, hiber
 /**
  * A loop of waypoints on a ring round the battleground's meeting point, starting at the one
  * nearest our arrival point. Each is nudged out of aggro zones and keep circles (PATROL_MARGIN),
- * or dropped when nothing near it is safe. Empty outside a known battleground.
+ * and with stayDry out of water, or dropped when nothing near it is safe. With an opponent, the
+ * ring is the pair's (PAIR_RADIUS round BattlegroundLayout.pairs), and the realm first in the
+ * alphabet goes round by increasing angle, the other the other way. Empty outside a known battleground.
  */
-export function defaultPatrol(regionId: number, realm: Realm, level: number, settings: Partial<KeepSettings> = {}): Point3[] {
+export function defaultPatrol(regionId: number, realm: Realm, level: number, settings: Partial<KeepSettings & Pick<RvrSettings, 'opponent' | 'stayDry'>> = {}): Point3[] {
     const bg = BATTLEGROUND_LAYOUTS[regionId];
     const home = homeOf(regionId, realm);
     if (!bg || !home || realm === 'none') return [];
     const blocked = [...aggroZones(regionId, level), ...keepDangers(regionId, realm, settings)];
-    const { meet } = bg;
-    const a0 = Math.atan2(home.arrival.y - meet.y, home.arrival.x - meet.x);
+    const dry = staysDry(settings);
+    const { opponent } = settings;
+    const pair = opponent && opponent !== realm ? pairMeet(regionId, realm, opponent) : null;
+    const centre = pair ?? bg.meet;
+    const radius = pair ? PAIR_RADIUS : PATROL_RADIUS;
+    const turn = pair ? (realm < opponent! ? 1 : -1) : PATROL_TURN[realm];
+    const a0 = Math.atan2(home.arrival.y - centre.y, home.arrival.x - centre.x);
     const out: Point3[] = [];
     for (let k = 0; k < PATROL_POINTS; k++) {
-        const a = a0 + PATROL_TURN[realm] * k * 2 * Math.PI / PATROL_POINTS;
+        const a = a0 + turn * k * 2 * Math.PI / PATROL_POINTS;
         const spot = NUDGES
-            .map(([dr, da]) => ({ x: Math.round(meet.x + Math.cos(a + da) * (PATROL_RADIUS + dr)), y: Math.round(meet.y + Math.sin(a + da) * (PATROL_RADIUS + dr)) }))
-            .find(p => clearOf(p, blocked, PATROL_MARGIN));
-        if (spot) out.push({ ...spot, z: estimateZ(regionId, spot.x, spot.y, meet.z, { radius: 8000 }) });
+            .map(([dr, da]) => ({ x: Math.round(centre.x + Math.cos(a + da) * (radius + dr)), y: Math.round(centre.y + Math.sin(a + da) * (radius + dr)) }))
+            .find(p => clearOf(p, blocked, PATROL_MARGIN) && (!dry || isDry(regionId, p)));
+        if (spot) out.push({ ...spot, z: estimateZ(regionId, spot.x, spot.y, bg.meet.z, { radius: 8000 }) });
     }
     // The first waypoint may have been dropped: start at the one nearest home.
     const first = out.reduce((best, p, i) => (dist(p, home.arrival) < dist(out[best]!, home.arrival) ? i : best), 0);
@@ -269,6 +310,8 @@ export interface Trip {
     avoid: Danger[];
     travelLeg: number;
     zAt(p: Point): number;
+    /** Legs and run spots end on dry ground (settings.stayDry). */
+    dry?: boolean;
 }
 
 function reachedBy(leg: Point, movers: readonly Point[], ageMs: number): boolean {
@@ -299,7 +342,20 @@ export function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; mo
     const next: Point = mem.route[0] ?? goal;
     const len = o.meet ? Math.min(t.travelLeg, Math.max(300, dist(from, goal) / 2)) : t.travelLeg;
     const f = Math.min(1, len / Math.max(1, dist(from, next)));
-    const { x, y } = keepOnMap(t.regionId, from, { x: Math.round(from.x + (next.x - from.x) * f), y: Math.round(from.y + (next.y - from.y) * f) });
+    let leg: Point = keepOnMap(t.regionId, from, { x: Math.round(from.x + (next.x - from.x) * f), y: Math.round(from.y + (next.y - from.y) * f) });
+    if (t.dry) {
+        // A leg in a river is the far bank (the nearest dry spot that gets us nearer the goal, toward the next route point),
+        // and the route points of the crossing are behind it then. No such bank: the leg stays where it is.
+        const ahead = dist(from, goal);
+        const bank = drySpot(t.regionId, leg, { toward: next, ok: q => clearOf(q, t.avoid) && dist(q, goal) < ahead });
+        if (bank !== leg) {
+            leg = bank;
+            const route: Point[] = mem.route;
+            const passed = route.reduce((best, q, k) => (dist(q, bank) < dist(route[best]!, bank) ? k : best), 0);
+            route.splice(0, Math.min(passed + 1, route.length - 1));
+        }
+    }
+    const { x, y } = leg;
     mem.leg = { x, y, z: t.zAt({ x, y }) };
     mem.legAt = t.now;
     mem.legFacing = { x: next.x, y: next.y };
@@ -322,7 +378,11 @@ export function spotAlong(t: Trip, from: Point, way: Point, distance: number): P
     // The whole way there clear first: round 7 (20261101-104807) ran Hibernia "toward our portal keep" straight
     // through the perturbed bwca camp between the middle and its keep, and the bwca killed five of its eight dead.
     const pathClear = (p: Point) => { for (let i = 1; i <= 10; i++) if (!clearOf({ x: from.x + (p.x - from.x) * i / 10, y: from.y + (p.y - from.y) * i / 10 }, blocked)) return false; return true; };
-    const spot = keepOnMap(t.regionId, from, spots.slice(0, 5).find(pathClear) ?? spots.find(p => clearOf(p, blocked)) ?? spots[0]!);
+    // With t.dry, a spot on dry ground first, and one in water moved to the nearest bank, the one on our side by preference.
+    const dryEnd = (p: Point) => !t.dry || isDry(t.regionId, p);
+    const near = spots.slice(0, 5);
+    const picked = keepOnMap(t.regionId, from, near.find(p => pathClear(p) && dryEnd(p)) ?? near.find(pathClear) ?? spots.find(p => clearOf(p, blocked)) ?? spots[0]!);
+    const spot = t.dry ? drySpot(t.regionId, picked, { toward: from, ok: q => clearOf(q, blocked) }) : picked;
     return { x: spot.x, y: spot.y, z: t.zAt(spot) };
 }
 
@@ -388,7 +448,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     if (home) mem.base = home.arrival;
     const keeps = keepDangers(regionId, realm, s);
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, leader.z, { radius: 8000 });
-    const trip: Trip = { mem, now, regionId, level, avoid: keeps, travelLeg: s.travelLeg, zAt };
+    const dry = staysDry(s);
+    const trip: Trip = { mem, now, regionId, level, avoid: keeps, travelLeg: s.travelLeg, zAt, dry };
     const ours = new Set(p.members.map(m => m.name));
     const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
     const inKeep = (c: Point) => !clearOf(c, keeps);
@@ -404,7 +465,12 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const counted = (big: readonly Contact[], all: readonly Contact[]) => (big.length === all.length ? enemiesText(all.length) : `${big.length} of ${enemiesText(all.length)}`);
     const homeAt = home?.arrival ?? null;
     const gone = missing.length ? `; missing ${missing.map(m => `${m.name} (region ${m.regionId})`).join(', ')}` : '';
-    const stay: Point3 = o.anchor ?? { x: Math.round(centre.x), y: Math.round(centre.y), z: zAt(centre) };
+    // Waiting where the group stands: on the nearest bank when that is in a river.
+    const standHere = (): Point3 => {
+        const q = dry ? drySpot(regionId, centre, { toward: centre, ok: c => clearOf(c, keeps) }) : centre;
+        return { x: Math.round(q.x), y: Math.round(q.y), z: zAt(q) };
+    };
+    const stay: Point3 = o.anchor ?? standHere();
     const calm = { focus: null, puller: null, cc: [], retreatTo: null, waiting: [] };
 
     // ── Who a fight here is with: enemies near the main body (any kind) or attacking one of it ──
@@ -484,9 +550,14 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
             const d = dist(centre, focus);
             const k = Math.min(FIGHT_DRIFT, Math.max(0, d - leash * LEASH_FIT)) / Math.max(1, d);
             const moved = { x: centre.x + (focus.x - centre.x) * k, y: centre.y + (focus.y - centre.y) * k };
-            if (clearOf(moved, keeps)) anchor = moved;
+            // Nor into a monster camp: round 1 of the pair rounds (2026-11-08) followed its focus into black wolves, which killed three.
+            if (clearOf(moved, keeps) && clearOf(moved, aggroZones(regionId, level))) anchor = moved;
         }
-        if (anchor !== mem.fightAnchor) mem.fightAnchor = { x: Math.round(anchor.x), y: Math.round(anchor.y), z: zAt(anchor) };
+        // A new anchor in a river goes to the nearest bank, so the fight stands on land: an enemy in the water swims to us.
+        if (anchor !== mem.fightAnchor) {
+            const spot = dry ? drySpot(regionId, anchor, { toward: centre, ok: q => clearOf(q, keeps) }) : anchor;
+            mem.fightAnchor = { x: Math.round(spot.x), y: Math.round(spot.y), z: zAt(spot) };
+        }
         // A mezz assignment that hasn't landed in CC_STALL_MS goes to another mezzer: ours may be held itself.
         const since: Record<string, number> = mem.ccSince ?? {};
         const bench: Record<string, number> = mem.ccBench ?? {};
@@ -500,7 +571,9 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         }
         // With softFocus healers aren't damaged, so they get the mezz first, then known casters.
         const ccRank = (c: Contact) => (soft ? (c.healer ? 0 : c.caster ? 1 : 2) : 0);
-        const adds = players.filter(c => c.objectId !== focus.objectId && !c.cc).sort((x, y) => ccRank(x) - ccRank(y));
+        // Monsters on us join the mezz list (monsterAdds): those on a healer or support before the players, the rest after.
+        const beasts = monsterAdds(candidates, focus.objectId, here);
+        const adds = [...beasts.first, ...players.filter(c => c.objectId !== focus.objectId && !c.cc).sort((x, y) => ccRank(x) - ccRank(y)), ...beasts.last];
         // That walk can take one past the cluster's radius, and the main body is no reason to drop it there.
         const onTheWay = here.filter(m => !main.includes(m) && o.cc.some(a => walker(a) === m && adds.some(c => c.objectId === a.targetId)));
         const mezzers = [...main, ...onTheWay].filter(m => !((bench[m.name] ?? 0) > now));
@@ -561,7 +634,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     if (low.length) return { ...calm, phase: 'recover', anchor: stay, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)` };
 
     // ── Patrol: the loop in legs, next waypoint once everyone stands at the leg that ends at this one ──
-    const key = `${regionId}:${realm}:${level}`;
+    const key = `${regionId}:${realm}:${level}:${s.opponent ?? ''}:${dry}`;
     if (!s.patrol && mem.patrolKey !== key) {
         mem.patrol = defaultPatrol(regionId, realm, level, s);
         mem.patrolKey = key;
@@ -580,7 +653,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     mem.camp = { x: wp.x, y: wp.y, z: wp.z, names: `patrol waypoint ${mem.wp + 1}/${loop.length}` };
     return {
         ...calm, phase: 'travel', anchor: mem.leg, facing: mem.legFacing,
-        objective: `patrol ${loop.length} waypoints${bg && !s.patrol ? ` round ${bg.name}'s meeting point` : ''}${gone}`,
+        objective: `patrol ${loop.length} waypoints${bg && !s.patrol ? (s.opponent ? ` round where we meet ${s.opponent}` : ` round ${bg.name}'s meeting point`) : ''}${gone}`,
         reason: `patrol to waypoint ${mem.wp + 1}/${loop.length} ${at(wp)}, ${Math.round(dist(centre, wp))} away`,
     };
 }
@@ -613,6 +686,17 @@ export function rvrFindings(r: RunReport, s: RvrSettings): Finding[] {
         for (const m of Object.values(r.members)) for (const [k, v] of Object.entries(m.killedBy ?? {})) killers[k] = (killers[k] ?? 0) + v;
         const by = Object.entries(killers).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', ');
         out.push({ severity: 'high', topic: 'trades', issue: `${lost} members died to players for ${kills} player kills`, evidence: by ? `killed by ${by}` : `${fights} fights`, suggestion: `Kill faster: switch to the weakest sooner (switchBelow ${s.switchBelow}), keep the other enemies mezzed (crowd control assignments), and retreat earlier (retreat.margin ${s.retreat.margin}, retreat.focusHp ${s.retreat.focusHp}).` });
+    }
+    if ((t.wetInFights ?? 0) >= 20) {
+        const swimmers = Object.entries(r.members).filter(([, m]) => (m.wetInFights ?? 0) >= 20).map(([n, m]) => `${n} ${m.wetInFights}%`).join(', ');
+        out.push({
+            severity: 'medium', topic: 'water', issue: `Members swam ${t.wetInFights}% of fight time`, evidence: `${swimmers}; the enemies in our fights ${t.enemiesWetInFights ?? 0}%; stayDry ${staysDry(s) ? 'on' : 'off'}`,
+            suggestion: !staysDry(s) ? 'Turn stayDry on: the fight\'s anchor, legs and retreat spots then stand on the nearest bank.' : `The anchor stands on dry ground, so the chases went in: lower chaseLeash (${s.chaseLeash}) to keep tank and melee nearer it.`,
+        });
+    }
+    if (s.opponent && (t.threeWay ?? 0) > 0) {
+        const realms = [...new Set(r.fights.flatMap(f => f.enemyRealms ?? []))].join(', ');
+        out.push({ severity: 'high', topic: 'pair', issue: `A third realm joined ${t.threeWay} of ${fights} fights in a pair round against ${s.opponent}`, evidence: `enemy realms seen in fights: ${realms}`, suggestion: 'Keep the third group out of the battleground in pair rounds (groups/pair-rounds.sh runs only the two), and leave these fights out of a comparison.' });
     }
     const cap = BATTLEGROUND_LAYOUTS[THIDRANKI]!.levels[1];
     for (const [name, m] of Object.entries(r.members)) {

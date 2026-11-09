@@ -36,7 +36,7 @@
 
 import { findNpcSpawns, getZonePointsFrom, nearestBindpoint, realmId, type NpcSpawnMatch, type ZonePoint } from '../../data/index';
 import type { Realm } from '../types';
-import { keepDangers } from './keeps';
+import { homeOf, keepDangers } from './keeps';
 import type { Member } from './member';
 import { safePath, type Danger } from './terrain';
 import type { Point, Point3 } from './types';
@@ -215,6 +215,36 @@ export async function walkTogether(members: Member[], to: Point & { z?: number }
         if ((i + 1) % 5 === 0 || last) opts.log?.(`leg ${i + 1}/${points.length}, ${Math.round(dist(me(members[0]!), to))} to go`);
     }
     return null;
+}
+
+/**
+ * Every member back to its realm's arrival point in the battleground it stands in (homeOf), each on its own and all at once,
+ * so the next round starts from the same place (groups/pair-rounds.sh). A dead one releases first, which lands it at its
+ * portal keep (bg_release_to_portal_keep). The living walk a route round aggro zones and the circles of keeps not theirs
+ * (safePath, keepDangers). Null when everyone arrived, else who didn't and why.
+ */
+export async function goHome(members: Member[], opts: { log?: (line: string) => void; tolerance?: number } = {}): Promise<string | null> {
+    const problems = await Promise.all(members.map(async (m): Promise<string | null> => {
+        if (me(m).isDead) {
+            const r = await m.actions.releaseAndRespawn();
+            opts.log?.(`${nameOf(m)}: release: ${r.message}`);
+            if (!r.success) return `${nameOf(m)}: release ${r.reason ?? 'failed'}`;
+        }
+        const p = me(m);
+        const home = homeOf(p.regionId, p.realm);
+        if (!home) return `${nameOf(m)}: no portal keep of ${p.realm} in region ${p.regionId}`;
+        const to = home.arrival;
+        const route = safePath(p.regionId, p.level, p, to, keepDangers(p.regionId, p.realm));
+        opts.log?.(`${nameOf(m)}: ${Math.round(dist(p, to))} from home, ${route.length} legs`);
+        for (const [i, pt] of route.entries()) {
+            const last = i === route.length - 1;
+            const w = last ? await m.actions.walkTo(to.x, to.y, { z: to.z, tolerance: opts.tolerance ?? 300 }) : await m.actions.walkTo(pt.x, pt.y, { tolerance: 300 });
+            if (!w.success && dist(me(m), last ? to : pt) > 600) return `${nameOf(m)}: ${w.reason ?? 'failed'} ${w.message} at ${at(m)}`;
+        }
+        return null;
+    }));
+    const bad = problems.filter((x): x is string => x !== null);
+    return bad.length ? bad.join('; ') : null;
 }
 
 /** Ask our realm's town teleporter within 4000 for the portal keep (walking to it first). */
