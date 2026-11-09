@@ -1055,14 +1055,19 @@ export const interrupt = (): Behavior<TacticsSettings> => ({
     name: 'interrupt',
     interruptible: false,
     async run(ctx) {
-        if (ctx.orders().phase !== 'engage') return false;
+        // Outside an engage (stalking, closing in, a pull back) only a cast at one of ours: the opening mezz is cast before our
+        // engage order. Arena round 21 (2026-11-10): Merlin's area mezz took Oisin, Niamh and Brigid 4 s after it, with Oisin's
+        // instant Minor Lullaby unused (Hibernia class session).
+        const engaged = ctx.orders().phase === 'engage';
         const spells = ctx.spells.interrupts();
         if (!spells.length) return false;
         const now = Date.now();
         const roles = new Map(ctx.members().map(m => [m.name, m.role] as const));
         const casting = ctx.picture().contacts
             .filter(c => c.kind === 'player' && !c.stale && alive(c) && !c.cc && !untouchable(c, now) && now - (c.castingAt ?? 0) <= INTERRUPT_WINDOW_MS)
+            .filter(c => engaged || (!!c.targetBySpell && !!c.target && roles.has(c.target)))
             .sort((a, b) => interruptRank(a, roles) - interruptRank(b, roles));
+        if (!casting.length) return false;
         for (const foe of casting) {
             const d = foeInView(ctx, foe.objectId)?.distance ?? Infinity;
             const sp = spells.find(s => d <= s.range);
@@ -1072,7 +1077,7 @@ export const interrupt = (): Behavior<TacticsSettings> => ({
             return true;
         }
         // None in reach: a support with ccFlank walks round the fight toward the first that is (spells: longest range first).
-        if (ctx.role !== 'support') return false;
+        if (ctx.role !== 'support' || !engaged) return false;
         const flank = ctx.settings.ccFlank ?? 0;
         if (!flank) return false;
         for (const foe of casting) {

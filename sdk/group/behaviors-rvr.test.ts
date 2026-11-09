@@ -7,7 +7,7 @@ import type { CastResult, KillPlayerOptions, KillPlayerResult } from '../actions
 import { executionContext } from '../execution-context';
 import type { CombatEvent, NearbyNpc, NearbyPlayer } from '../types';
 import { shaman } from '../classes/shaman';
-import { assist, ckey, crowdControl, fightRejoin, flee, guard, heal, holdFormation, isDown, leashFallback, onMember, peelTarget, pull, rejoinFight, rest, retreat, spareNuke, tank, type TacticsSettings } from './behaviors';
+import { assist, ckey, crowdControl, interrupt, fightRejoin, flee, guard, heal, holdFormation, isDown, leashFallback, onMember, peelTarget, pull, rejoinFight, rest, retreat, spareNuke, tank, type TacticsSettings } from './behaviors';
 import { withCharacter } from './character';
 import { rvrBehaviors } from './rvr';
 import { contact, enemy, picture, report } from './fixtures';
@@ -991,5 +991,27 @@ describe('spareNuke: a healer with nothing to heal', () => {
         const kit = withCharacter(rvrBehaviors().healer, shaman()).map(b => b.name);
         expect(kit.indexOf('assist')).toBe(kit.indexOf('position') - 1);
         expect(kit.indexOf('spareNuke')).toBe(kit.indexOf('position') + 1);
+    });
+});
+
+describe('interrupt outside an engage', () => {
+    const scene = (phase: Orders['phase'], foeOver: Partial<Contact>) => {
+        const s = stub({ name: 'Bard', role: 'support', at: { x: 10_000, y: 10_000 }, contacts: [foe(51, 11_000, 10_000, { castingAt: Date.now(), ...foeOver })], orders: { phase, focus: null } });
+        Object.assign(s.ctx.spells, { interrupts: () => [{ spell: { name: 'Minor Lullaby' }, range: 2300 }] });
+        return s;
+    };
+
+    test('a cast at one of ours while we close in is cut (arena round 21: the opening area mezz came before the engage order)', async () => {
+        const s = scene('travel', { target: 'Bard', targetBySpell: true });
+        expect(await interrupt().run(s.ctx)).toBe(true);
+        expect(s.calls.castSpell).toEqual([51]);
+    });
+
+    test('a cast at nobody of ours is left alone until the engage', async () => {
+        const s = scene('travel', {});
+        expect(await interrupt().run(s.ctx)).toBe(false);
+        expect(s.calls.castSpell).toEqual([]);
+        const e = scene('engage', {});
+        expect(await interrupt().run(e.ctx)).toBe(true);
     });
 });
