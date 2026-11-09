@@ -133,6 +133,12 @@ The fewest deaths of the group, with the lowest damage of the three tanks: Slash
 
 **Server code.** Aura of Indestructability (Chants 24, value 37, 17 power, 20 minutes; Aura of Defense at Chants 17) is a `PaladinArmorFactorBuff`: its own effect group (`PaladinAf`, EffectHelper.cs) in the uncapped `OtherBuff` category (SingleStatBuff.cs), so it adds to Crusader's Defense and to Nimue's AF buffs. `buff()` doesn't slot that type, so the kit's `selfBuff` chore (`sdk/classes/paladin.ts`) casts it between fights when no rank of it is on him. Not yet seen in a round: look for `buff` results naming it in his first Camelot round after commit.
 
+## Community, RvR at 20-24 (research 2026-11-09)
+
+- **Recasting a running chant turns it off** (**server code**, CastingComponent.cs:350). The heal chant works in combat only (CombatHealSpellHandler.cs).
+- **A taunt starts the interrupt timer on its target** (**server code**, TauntSpellHandler.cs:30). Instants skip the interrupt check (SpellHandler.cs:597, :603). So Aggravate (Chants 15, instant, range 1350, every 30 s) interrupts an enemy caster from range without stopping his swing. Not used yet.
+- **Unverified:** keep the endurance chant up. Skip the AF chant when a Cleric's AF is on the group. Put shield stuns on the enemy healer or caster, never on a mezzed or stun-immune one. Guard the Cleric and peel melee off her. Sources: https://forums.freddyshouse.com/threads/paladin-chants.217766/, https://www.camelotherald.com/node/203
+
 ## Not supported yet
 
 All of these are his and no behaviour casts them:

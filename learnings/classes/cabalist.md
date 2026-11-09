@@ -58,3 +58,8 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 - **The Spirit line beyond the pet's upkeep:** its level comes with the character's whatever the spec. What more Spirit buys for it hasn't been measured.
 - **Area DoT** and **disease:** no behaviour for either.
 - **Spirit debuffer:** Diminish Immunities at Spirit 22 (Body, 15, 8 s) matches her Body lifedrain, so `resistDebuff` would cast it wherever `debuffPays` says ([enchanter.md](enchanter.md)). Nobody has run the build.
+
+## Community, RvR at 20-24 (research 2026-11-09)
+
+- **Unverified:** send the simulacrum at the enemy healer or caster, since every swing of an NPC pet starts the 3 s interrupt timer (**server code**, GameLiving.cs:708: 100 % plus 5 % per level above the target). A player DoT interrupts only when its first tick lands (DamageOverTimeECSEffect.cs:60). Disease (Cursed Vigor) goes on the kill target to cut its healing. Nearsight (Obscuring Dust) goes on back-line healers and casters. Sources: https://www.uthgard.net/forum/viewtopic.php?p=378462, eden-daoc.net/viewtopic.php?p=11675 (snippet).
+- **Verified, arena round 5:** Morgana dealt 2836, the most in the group, plus 863 from her pet. 7 of her nukes were interrupted, and she was in melee 17 % of fight time.

@@ -71,3 +71,9 @@ That's a fix in `sdk/group/spells.ts`, not a kit: power and health regen as sepa
 - **Mezz cure:** Clear Mind, as for the Bard ([bard.md](bard.md)).
 - **Debuffs:** no behaviour casts stat debuffs.
 - **Pets** generally: a charm stays out of the automatic behaviours (`group-coordination.md`), though `petControl` orders one that is up. [pets.md](../pets.md) has how one is driven.
+
+## Community, RvR at 20-24 (research 2026-11-09)
+
+- **Unverified:** mezz the adds, crowd-control the enemy healer, debuff the kill target, then DoT and nuke. Never DoT or AoE a mezzed target. Snare a melee that chases you. Source: camelotherald.fandom.com/wiki/Sorcerer (search snippet only).
+- **Server code:** confusion on a Theurgist's pet kills it (ConfusionECSEffect.cs:42), so Mystify Mind (Mind 16 on Merlin, 2.5 s, 9 power) clears an enemy Theurgist's pets. Instants skip the interrupt check (SpellHandler.cs:597, :603). His 0 s debuffs (Imbalance, Magical Web, Banish Conviction, Enfeeble Body) can go out in melee, but they do no damage.
+- **Verified, arena round 5:** Merlin was targeted 34 % of fight time and in melee 19 %, with 5 nukes interrupted and 4 casts refused while he was mezzed or stunned.

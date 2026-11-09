@@ -23,6 +23,18 @@ export default cleric();                       // or cleric({ saveBelow: 30 })
 
 **Not played.** To look for: her nukes and damage a minute, and whether her heals, `no power` and the group's deaths get worse. In PvE, Camelot's `memberBehaviors` don't name her, so it applies there too.
 
+## Stun peel, and no Smite at players below 75 % (kit, arena round 6 on, 2026-11-09)
+
+**Verified, arena round 5** (Camelot won 10 kills / 5 deaths, `groups/camelot/runs/20261109-210152.md`): Nimue cast 16 nukes against 12 heals, idled 21 times on "saving power (< 50 %)", and the group waited in `recover` for her power. Each Smite was about 36 damage for 15 power. In round 3 she landed 2 heals in a whole round and died twice, once in Greater Revival's cast.
+
+**The change** (`sdk/classes/cleric.ts`):
+- `stunPeel` casts Stunning Flare (baseline Smite, 1500, 2.5 s, 9 power, 5 s stun; **server code**) on an enemy player in melee on one of our non-tanks, the healer first. With no such player, it stuns the enemy healer while our focus is at 60 % or less. It never stuns a mezzed or stun-immune target. It casts from where she stands, and only above 15 % power. It sits below `heal`, so a heal always comes first. A stun on the focus isn't marked as crowd control, because a stun doesn't break on damage and the nukers keep hitting. Whatever it lands on is marked stun-immune for 5 + 60 s.
+- Her kit's own Smite (50-75 % power) no longer goes at players. The RvR list's `spareNuke` still smites above 75 %. In PvE nothing changes.
+
+**To look for:** `stun` results in her report line, `heal` count against round 5's 12, and deaths of Merlin and Taliesin, who were in melee 19 % and 31 % of fight time.
+
+**Community, unverified** (the research agent's notes; web sources were thin, the server-code points are checked): stand at the back inside heal range (about 2000). Don't Smite at low Smite spec, except to finish a near-dead enemy when nobody needs heals. Heal the enemy's target first, then yourself. Buff Str/Con and Dex/Qui on the melee members first, then AF. Rez after the fight. **Server code:** instant spells skip the interrupt check (SpellHandler.cs:597, :603). A player is immune to spell stuns for 60 s after one ends (ECSGameEffect.cs:54).
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/cleric.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:

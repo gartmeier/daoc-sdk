@@ -70,3 +70,9 @@ From runs with no pets: `--pet.enabled=false` is the run to compare with.
 
 - **Speed:** Brisk Wind, as for the Sorcerer ([sorcerer.md](sorcerer.md)).
 - **Area root:** Field of Snow. `isRoot` wants a single target.
+
+## Community, RvR at 20-24 (research 2026-11-09)
+
+- **Server code:** a Theurgist's pet goes at one target, stays on it, dies with it and takes no orders (TheurgistPetBrain.cs). At most 16 at once. Confusion kills them (ConfusionECSEffect.cs:42).
+- **Unverified:** "you'll spend most of your time throwing pets on casters/healers": the pets are interrupters. Field of Snow (AoE snare) is a cheap AoE interrupt when a group closes in. Source: https://forums.freddyshouse.com/threads/theurgist-rvr-spec.54373/
+- **Verified, arena round 5:** Taliesin was targeted 45 % of fight time and in melee 31 %, both the group's highest. 5 nukes interrupted, 6 ice spirits summoned, and the pets dealt 0 damage. In round 3 two summons dealt 56.
