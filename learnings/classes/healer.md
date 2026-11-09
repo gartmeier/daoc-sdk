@@ -32,6 +32,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 18 (vs Hibernia, won by wipe 5 kills / 0 deaths):** 17 cures (4 interrupted), 2 Hinder Spirits (1 resisted), 4 heals; targeted 27 %, never in melee, idle 4 %. Against Hibernia's mezzers the cure is her main work.
 
+**Round 19 (vs Camelot, won by wipe 5 / 0 in 4 minutes):** 3 cure attempts, all `out_of_range` despite the 3D margin; she was moving 55 % of the fight, so the picture is likely behind her own walk. A miss fails at once, so it costs a turn, not a cast. If it keeps up, the cure could step toward the member (as `crowdControl` does) instead of casting from where she stands.
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
