@@ -77,5 +77,5 @@ export const stunCaster = (floor = 15): Behavior => ({
 
 /** offFocus (the Cabalist kit's): nukes on a free enemy in reach while the focus is out of it. Arena round 10: Niamh 1 nuke in a 79 s wipe. */
 export function mentalist({ offFocus = true }: { offFocus?: boolean } = {}): MentalistKit {
-    return { character: { role: 'nuker', react: [stunCaster()], fight: nukerFight(0, offFocus) } };
+    return { character: { role: 'nuker', urgent: [stunCaster()], fight: nukerFight(0, offFocus) } };
 }
