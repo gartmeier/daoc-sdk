@@ -83,6 +83,16 @@ So the client's mover takes z from `groundAt` (sdk/ground.ts) on every step and 
 - `GROUND_TUNING` holds the constants. `DAOC_NAVMESH=off` turns ground correction off with the routing; without `.terrain` files only the mesh − 2.5 rule applies.
 - Each runner process loads the meshes of the zones its bot walks through (20–50 MB each) on the first step there.
 
+## Slopes
+
+The navmesh covers steep ground: in Thidranki 99-100 % of dry spots at every slope up to 2:1 (63°) and beyond have a poly within 8 units. The server checks no z either. So Detour routes straight up a cliff a real client would slide down, and nothing but our own routes keeps a bot off one. `sdk/group/slope.ts` reads the slope from the client's terrain (`zoneNNN.terrain`, the steeper of the two triangles in each 256-unit cell):
+- `slopeAt(region, p)`: rise per unit, 0 without terrain. `isSteep` at `STEEP` 0.7 (35°). `isLevel(region, p, 300)`: `p` and 16 spots round it within 300 not steep: where a group can stand round a stop.
+- `slopeCost`: extra cost per unit walked, 0 up to `GENTLE` 0.5 (27°), rising to 2 at `CLIFF` 1.0 (45°), 6 beyond. `safePath` adds it to each 400-unit cell (the mean of 5 samples), and a straight line with any cliff, or more than 200 units over 35°, isn't clear. Routes go round hills and cross rivers where the banks are low.
+- `slopeAlong(region, a, b)`: units over 35° and over 45° on a straight way, and the steepest slope.
+- `drySpot` (water.ts) also looks for level ground within 800 of the nearest dry spot. A river's banks are often its steepest ground, so a stop in a river lands past the bank's top. With no level ground near, the nearest dry spot will do. `{ level: false }` turns this off.
+
+Thidranki's dry ground: half rises less than 0.28 per unit, 75 % less than 0.51, 90 % less than 0.94. The ground over 45° runs along the three rivers and round the map's edge. Walks between legs still use the navmesh (`walkTo`), so within a 1500 leg a member can still cut over a slope that `safePath` went round. The reports' `Slope:` line (observer) measures how much time that leaves on steep ground.
+
 ## Height (z) without navmeshes
 
 Without a navmesh there is **no terrain data**. When `z` isn't given, `StraightLinePathProvider` splits each leg every 1000 units and takes z from `estimateZ`. That function interpolates the heights of nearby spawns, bind points and startup locations.
