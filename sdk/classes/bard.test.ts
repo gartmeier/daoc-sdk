@@ -6,10 +6,10 @@ import { reachOfBuild } from './reach';
 import { bard } from './bard';
 
 describe('bard kit', () => {
-    test('the support role, with the mezz cure added below crowd control and songs in the pack', () => {
+    test('the support role, with the mezz cure in the pack list below flee', () => {
         expect(bard().role).toBe('support');
         const names = withCharacter(packBehaviors().support, bard()).map(b => b.name);
-        expect(names.indexOf('cureMezz')).toBeGreaterThan(names.indexOf('song'));
+        expect(names.indexOf('cureMezz')).toBeGreaterThan(names.indexOf('flee'));
         expect(names.indexOf('cureMezz')).toBeLessThan(names.indexOf('shedLoad'));
     });
 

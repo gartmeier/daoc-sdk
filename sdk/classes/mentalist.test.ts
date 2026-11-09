@@ -3,15 +3,51 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { buildPath, earnedSpecPoints, getBuild, specCost } from '../../data/builds';
 import { getClassSkills } from '../../data/index';
-import { mentalist } from './mentalist';
+import { withCharacter } from '../group/character';
+import { packBehaviors } from '../group/pack';
+import type { Contact } from '../group/types';
+import { mentalist, stunTarget } from './mentalist';
+import { reachOfBuild } from './reach';
 
 const BUDGET_AT_50 = earnedSpecPoints(10, 50);
 const pathOf = (name: string) => buildPath(getBuild('Mentalist', name)!);
 const lastSpell = (line: string) => Math.max(...getClassSkills('Mentalist').find(l => l.specKey === line)!.skills.map(s => s.specLevel));
 
 describe('mentalist kit', () => {
-    test('it keeps the role\'s fight, so a bot adds only what it changes', () => {
-        expect(mentalist().character).toEqual({ role: 'nuker' });
+    test('the nuker role with stunCaster above assist, in the pack', () => {
+        const c = mentalist().character;
+        expect(c.role).toBe('nuker');
+        expect(c.fight).toBeUndefined();
+        const names = withCharacter(packBehaviors().nuker, c).map(b => b.name);
+        expect(names.indexOf('stunCaster')).toBeGreaterThan(-1);
+        expect(names.indexOf('stunCaster')).toBeLessThan(names.indexOf('assist'));
+    });
+
+    test('Light nuker reaches Prismatic Flash at 24: a single-target stun', () => {
+        const flash = reachOfBuild(getBuild('Mentalist', 'Light nuker')!, 24).unused.find(k => k.name === 'Prismatic Flash')!;
+        expect(flash.info.type).toBe('Stun');
+        expect(flash.info.target).toBe('Enemy');
+        expect(flash.info.radius).toBe(0);
+    });
+
+    const members = [{ name: 'Oisin', role: 'support' as const }, { name: 'Niamh', role: 'nuker' as const }, { name: 'Brigid', role: 'healer' as const }];
+    const me = { x: 0, y: 0, regionId: 238 };
+    const foe = (id: number, o: Partial<Contact> = {}) => ({ objectId: id, kind: 'player', regionId: 238, x: 500, y: 0, stale: false, cc: null, castingAt: 1000, target: null, targetBySpell: false, ...o }) as Contact;
+
+    test('a caster on our Bard before one on a nuker, before a casting healer; the nearest of each', () => {
+        const list = [foe(1, { healer: true }), foe(2, { target: 'Niamh', targetBySpell: true }), foe(3, { target: 'Oisin', targetBySpell: true, x: 1400 }), foe(4, { target: 'Oisin', targetBySpell: true, x: 900 })];
+        expect(stunTarget(list, members, me, 1500, 2000)?.objectId).toBe(4);
+        expect(stunTarget(list.slice(0, 2), members, me, 1500, 2000)?.objectId).toBe(2);
+        expect(stunTarget(list.slice(0, 1), members, me, 1500, 2000)?.objectId).toBe(1);
+    });
+
+    test('none that is quiet, out of range, held, stun-immune, or a swing on us rather than a spell', () => {
+        const on = { target: 'Oisin', targetBySpell: true };
+        expect(stunTarget([foe(1, { ...on, castingAt: -5000 })], members, me, 1500, 2000)).toBeNull();
+        expect(stunTarget([foe(1, { ...on, x: 1600 })], members, me, 1500, 2000)).toBeNull();
+        expect(stunTarget([foe(1, { ...on, cc: { by: 'Oisin', kind: 'mezz', until: 9000 } })], members, me, 1500, 2000)).toBeNull();
+        expect(stunTarget([foe(1, { ...on, ccImmune: { stun: 3000 } })], members, me, 1500, 2000)).toBeNull();
+        expect(stunTarget([foe(1, { target: 'Oisin', targetBySpell: false })], members, me, 1500, 2000)).toBeNull();
     });
 });
 
