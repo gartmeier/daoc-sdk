@@ -1,17 +1,62 @@
 // The standard Druid: a starting point a bot imports into bots/<bot>/character.ts and tunes. The healer's list
-// already heals, roots and buffs from whatever the bot knows, and a Heal druid has no damage spell for a fight
-// to cast, so by default this holds only the role. A Nature build does have one. learnings/classes/druid.md
-// says what that reaches, and that it hasn't been played.
+// already heals, roots and buffs from whatever the bot knows. What is the class's own is her group heal (the
+// Conflux line, Regrowth 13/22): `heal` picks the cheapest single heal that covers one member, so it never casts
+// one. `groupHeal` does, when three or more of the group around her each miss most of what it restores.
+// A Nature build also has DoTs (dotsAbove). learnings/classes/druid.md says what was measured.
 
-import { assist } from '../group/behaviors';
+import { assist, stopSwinging } from '../group/behaviors';
 import type { Character } from '../group/character';
+import type { Behavior } from '../group/member';
+import type { MemberReport } from '../group/types';
+import type { SpellPick } from '../group/spells';
 import { thrifty } from './thrifty';
 
 export interface DruidOptions {
     /** For a Nature build: cast its DoTs on the focus, above this % power. Without a damage spell it does nothing. */
     dotsAbove?: number;
+    /** groupHeal: how many members (her too) must each miss `share` of what it restores. */
+    groupHealMin?: number;
+    /** groupHeal: below this % power she keeps it for single heals. */
+    groupHealAbove?: number;
 }
 
-export function druid({ dotsAbove }: DruidOptions = {}): Character {
-    return dotsAbove === undefined ? { role: 'healer' } : { role: 'healer', fight: [thrifty(assist(), dotsAbove)] };
+/** Each counts when it misses this share of the heal: more of the heal is wasted on it than this leaves. */
+const SHARE = 0.7;
+
+/** A group heal (no radius, target Group: every member within its range of the caster, SpellHandler.cs SelectTargets GROUP). */
+export const isGroupHeal = (s: Pick<SpellPick, 'type' | 'target' | 'radius' | 'pulse'>) => /^Heal$/.test(s.type) && s.target === 'Group' && s.radius === 0 && !s.pulse;
+
+/** The members a group heal of `value` would be worth casting for: alive, in our region, within `range` of us, missing SHARE of it. */
+export function groupHealTargets(me: { x: number; y: number; regionId: number }, members: readonly MemberReport[], range: number, value: number): MemberReport[] {
+    return members.filter(m => !m.isDead && m.regionId === me.regionId && Math.hypot(m.x - me.x, m.y - me.y) <= range
+        && (m.maxHp ?? 0) * (100 - m.hp) / 100 >= value * SHARE);
+}
+
+/** Renewing Conflux (or the best group heal she can pay for) when `min` members around her need it, in a fight. */
+export const groupHeal = (min = 3, above = 25): Behavior => ({
+    name: 'groupHeal',
+    interruptible: false,
+    async run(ctx) {
+        const o = ctx.orders();
+        if (!ctx.threats().length && o.phase !== 'engage' && o.phase !== 'retreat') return false;
+        const me = ctx.me();
+        if (me.maxMana > 0 && me.manaPercent < above) return false;
+        const sp = ctx.spells.all().filter(s => isGroupHeal(s) && s.power <= me.mana && s.spell.cooldownRemaining <= 0).sort((a, b) => b.value - a.value)[0];
+        if (!sp) return false;
+        const self = ctx.members().find(m => m.name === me.name);
+        const hurt = groupHealTargets({ x: me.x, y: me.y, regionId: self?.regionId ?? me.regionId }, ctx.members(), sp.range, sp.value);
+        if (hurt.length < min) return false;
+        await stopSwinging(ctx);
+        ctx.doing('heal', me.objectId, `${sp.spell.name} for ${hurt.map(m => m.name).join(', ')}`);
+        ctx.result('heal', await ctx.bot.castSpell(sp.spell), me.objectId);
+        return true;
+    },
+});
+
+export function druid({ dotsAbove, groupHealMin = 3, groupHealAbove = 25 }: DruidOptions = {}): Character {
+    return {
+        role: 'healer',
+        react: [groupHeal(groupHealMin, groupHealAbove)],
+        ...(dotsAbove === undefined ? {} : { fight: [thrifty(assist(), dotsAbove)] }),
+    };
 }

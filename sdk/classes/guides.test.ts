@@ -471,7 +471,7 @@ describe('thrifty', () => {
 });
 
 describe('the role-only kits', () => {
-    const kits: [string, () => { role?: Role; fight?: unknown; react?: unknown; chores?: unknown }][] = [['Spiritmaster', spiritmaster], ['Cabalist', cabalist], ['Druid', druid]];
+    const kits: [string, () => { role?: Role; fight?: unknown; react?: unknown; chores?: unknown }][] = [['Spiritmaster', spiritmaster], ['Cabalist', cabalist]];
 
     test.each(kits)('%s has its class\'s role and leaves every list as it is', (className, kit) => {
         const role = roleForClass(className);
