@@ -12,6 +12,7 @@ Hibernia's support: mezz and damage shouts from Music, songs and base buffs from
 
 - **The cure, server code.** Clarifying Harmonies (Music, baseline, CureMezz, single target, 3 s, range 1500) frees a mezzed member: the healer first, then the tank, then the most hurt (`mezzedMember`). It is Hibernia's only mezz cure. Arena rounds 2-3 had Brigid, Niamh and Oisin himself report "You can't cast while mesmerized!".
 - **Where it goes:** `urgent` (Character.urgent, f4135fd): in the pack's support list, below `flee` and above `interrupt`, `crowdControl`, `backupHeal`, `confuse` and `song`, so a mezzed healer doesn't wait for those. As `react` (6b7978c, round 5) it sat at `shedLoad` and got only the turns they left.
+- **interruptOnTheRun** (2026-11-10, from the round after 23): in `instant`, above `flee` (Character.instant, e72ffe8). With a melee on him `flee` takes every turn, so `interrupt` below it never ran; this casts only its instant (Minor Lullaby, range 2300, Amnesia), at the same casters in the same order (`interruptRank`), never walks, and returns false at once without a melee on him, so `flee` and `interrupt` keep their turns.
 - **A shout wouldn't reach.** `assist` would cast Concussive Yell (21, instant, range 700, recast 10 s). The pack stands at 1500, so it is still left out.
 
 **Community, unverified:** in small-man fights a Bard pairs with a caster (often a Mentalist) to cover mezz, mezz cure, heals and amnesia between them ([Eden forum](https://eden-daoc.net/viewtopic.php?p=4968)).
