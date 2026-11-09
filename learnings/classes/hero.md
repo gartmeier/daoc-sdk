@@ -99,3 +99,5 @@ Slam, the 9 s anytime stun, is Shields 42, past level 40 in this build, so it do
 - **Stuns held for a cast:** the kit stuns the focus as soon as it can, not when the focus starts a heal. The style choice comes a swing ahead, so holding it would need the cast seen before our swing.
 - **Engage** (Shields 7): no behaviour uses it.
 - **Guard in a fight:** `guard` runs only out of fights, so a Guard lost to a death stays down until the next quiet moment.
+
+**Verified, arena round 12** (against Albion, won 7 kills to 0, no deaths): Numb landed 6, Fire Blade 1; 1,261 damage. Still no Disable (side) or Incapacitate (block). Fire Blade fell from 6-12 a round to 1: the stun takes the swing whenever a target is off immunity, and Numb's 15 endurance each leaves less for it. Watch his endurance before adding more stuns.
