@@ -103,3 +103,5 @@ Slam, the 9 s anytime stun, is Shields 42, past level 40 in this build, so it do
 **Verified, arena round 12** (against Albion, won 7 kills to 0, no deaths): Numb landed 6, Fire Blade 1; 1,261 damage. Still no Disable (side) or Incapacitate (block). Fire Blade fell from 6-12 a round to 1: the stun takes the swing whenever a target is off immunity, and Numb's 15 endurance each leaves less for it. Watch his endurance before adding more stuns.
 
 **Arena round 13** (lost 1-4 to Midgard): 36 damage, no style landed. Mezzed at 6 s; after it, the group's peel orders switched his target every 1-3 s ("peel #494 off Oisin", "#492", "#495", "#493"), so he swung at nobody long enough to land a hit. That is the group's peel, not the kit (raised with the Hibernia group session).
+
+**Verified, arena round 15** (wiped Camelot 5-0, no deaths, one 68 s fight): Disable landed for the first time (1), Fire Blade 1; 487 damage.
