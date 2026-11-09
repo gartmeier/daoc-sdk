@@ -17,7 +17,7 @@ describe('mentalist kit', () => {
     test('the nuker role with stunCaster above assist, in the pack', () => {
         const c = mentalist().character;
         expect(c.role).toBe('nuker');
-        expect(c.fight).toBeUndefined();
+        expect(c.fight!.map(b => b.name)).toEqual(['assist', 'offFocus']);
         const names = withCharacter(packBehaviors().nuker, c).map(b => b.name);
         expect(names.indexOf('stunCaster')).toBeGreaterThan(-1);
         expect(names.indexOf('stunCaster')).toBeLessThan(names.indexOf('assist'));

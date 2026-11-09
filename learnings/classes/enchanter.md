@@ -59,3 +59,9 @@ export default enchanter({ heatAllies: 1.7 });   // the same-type damage others 
 ```
 
 Verified in a real `runGroup`, 40 s on a dummy with two clones: the level 50 cast 5 Empower Heat and 10 nukes with no failures, and the level 36 with `allies` unset cast no debuff and 14 nukes. Not yet played in a fight with a tank or in RvR.
+
+## Arena round 10: offFocus
+
+**Verified,** round 10 (2026-11-09, against Albion: Paladin, Cleric, Sorcerer, Cabalist, Theurgist): wiped in 79 s, 0 kills. Ciaran cast 2 nukes and moved 73 % of the fight; 2 more were `out_of_range`. The pack's soft focus was their back line, beyond reach; the casters walked toward it and died en route. Albion's casters fixed the same idling with `offFocus` (Cabalist kit, 6675df9: Morgana, Taliesin and Merlin had idled 39-67 turns on "focus out of reach").
+
+From round 11 the kit's fight is `nukerFight(0, true)` from `sdk/classes/cabalist.ts`: `assist`, then `offFocus`, which nukes the nearest free enemy player in reach (not crowd-controlled, not assigned or claimed for cc, so no mezz is woken) while the focus is out of reach, from where he stands, never into a melee swing. `enchanter({ offFocus: false })` leaves it out.

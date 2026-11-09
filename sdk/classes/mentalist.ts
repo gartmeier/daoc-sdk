@@ -6,6 +6,7 @@
 
 import { foeInView } from '../group/behaviors';
 import type { Character } from '../group/character';
+import { nukerFight } from './cabalist';
 import type { Behavior } from '../group/member';
 import type { Contact, MemberReport, Role } from '../group/types';
 
@@ -66,6 +67,7 @@ export const stunCaster = (floor = 15): Behavior => ({
     },
 });
 
-export function mentalist(): MentalistKit {
-    return { character: { role: 'nuker', react: [stunCaster()] } };
+/** offFocus (the Cabalist kit's): nukes on a free enemy in reach while the focus is out of it. Arena round 10: Niamh 1 nuke in a 79 s wipe. */
+export function mentalist({ offFocus = true }: { offFocus?: boolean } = {}): MentalistKit {
+    return { character: { role: 'nuker', react: [stunCaster()], fight: nukerFight(0, offFocus) } };
 }

@@ -98,3 +98,9 @@ No group behaviour uses charm or confusion, so neither is reachable through the 
 ## Sources
 
 Summarized in our own words: [Camelot Herald wiki: Mentalist](https://camelotherald.fandom.com/wiki/Mentalist) (CC-BY-SA) and [disorder.dk Hibernia class guide](https://disorder.dk/daoc/class-guide-hibernia/).
+
+## Arena round 10: offFocus
+
+**Verified,** round 10 (2026-11-09, against Albion: Paladin, Cleric, Sorcerer, Cabalist, Theurgist): wiped in 79 s, 0 kills. Niamh cast 1 nuke and moved 69 % of the fight; her two nukes before that were `out_of_range`. The pack's soft focus was their back line, beyond reach; the casters walked toward it and died en route. Albion's casters fixed the same idling with `offFocus` (Cabalist kit, 6675df9: Morgana, Taliesin and Merlin had idled 39-67 turns on "focus out of reach").
+
+From round 11 the kit's fight is `nukerFight(0, true)` from `sdk/classes/cabalist.ts`: `assist`, then `offFocus`, which nukes the nearest free enemy player in reach (not crowd-controlled, not assigned or claimed for cc, so no mezz is woken) while the focus is out of reach, from where she stands, never into a melee swing. `mentalist({ offFocus: false })` leaves it out.
