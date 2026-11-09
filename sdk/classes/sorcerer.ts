@@ -5,7 +5,7 @@
 import { type TacticsSettings } from '../group/behaviors';
 import type { Behavior } from '../group/member';
 import type { Character } from '../group/character';
-import { nukerFight } from './cabalist';
+import { meleeDebuff, nukerFight } from './cabalist';
 import { selfBuff } from './paladin';
 
 /** Shield Mind (Mind 16): mezzes on him last 10 % less (MesmerizeDurationBuff, CCSpellHandler.cs:212). buff() doesn't slot it. */
@@ -18,8 +18,10 @@ export interface SorcererOptions {
     chores?: Behavior<TacticsSettings>[];
     /** Its nukes on a free enemy in reach while the focus is out of it (cabalist.ts offFocus). On by default. */
     offFocus?: boolean;
+    /** Instant debuffs on a melee hitting him or a caster (cabalist.ts meleeDebuff, the instant slot). On by default. */
+    meleeDebuff?: boolean;
 }
 
-export function sorcerer({ saveBelow = 40, chores = [], offFocus: off = true }: SorcererOptions = {}): Character {
-    return { role: 'nuker', fight: nukerFight(saveBelow, off), chores: [...chores, selfBuff(SORCERER_SELF_BUFFS)] };
+export function sorcerer({ saveBelow = 40, chores = [], offFocus: off = true, meleeDebuff: debuff = true }: SorcererOptions = {}): Character {
+    return { role: 'nuker', ...(debuff ? { instant: [meleeDebuff()] } : {}), fight: nukerFight(saveBelow, off), chores: [...chores, selfBuff(SORCERER_SELF_BUFFS)] };
 }

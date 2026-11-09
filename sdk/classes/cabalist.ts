@@ -3,12 +3,13 @@
 // the class's own is spreading them: with the focus out of her reach she puts them on a free enemy in reach (offFocus),
 // which Albion's Sorcerer and Theurgist kits use for their nukes too. learnings/classes/cabalist.md says what has been measured.
 
-import { assist, ccHolds, ckey, claimedBy, foeInView, hammeredBy, isDown, noteNukeEnd, stopSwinging, type TacticsSettings } from '../group/behaviors';
+import { assist, ccHolds, ckey, claimedBy, foeInView, hammeredBy, isDown, noteNukeEnd, onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
+import { isAlive, untouchable } from '../group/blackboard';
 import { dist } from '../group/battleground';
 import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
-import { dotFamily } from '../group/spells';
-import type { Contact, Orders, Point } from '../group/types';
+import { dotFamily, type SpellPick } from '../group/spells';
+import type { Contact, MemberReport, Orders, Point } from '../group/types';
 import { thrifty } from './thrifty';
 
 export interface CabalistOptions {
@@ -16,7 +17,64 @@ export interface CabalistOptions {
     saveBelow?: number;
     /** DoTs and nukes on a free enemy in reach while the focus is out of it (offFocus). On by default. */
     offFocus?: boolean;
+    /** Instant debuffs on a melee hitting her or a caster (meleeDebuff, the instant slot). On by default. */
+    meleeDebuff?: boolean;
 }
+
+/** Instant debuffs that blunt a melee player, best first: fewer swings, then weaker ones, then worse aim. */
+export const MELEE_DEBUFFS: readonly string[] = ['CombatSpeedDebuff', 'StrengthDebuff', 'DexterityQuicknessDebuff', 'DexterityDebuff'];
+
+/**
+ * The next instant debuff to put on a melee: the top rank of the first of MELEE_DEBUFFS we can cast now and that isn't on it from us
+ * (`on`, by type). Single-target only: an area one (Imbalance, Banish Conviction) would wake a mezzed neighbour.
+ */
+export function nextMeleeDebuff(all: readonly SpellPick[], mana: number, on: ReadonlySet<string>): SpellPick | null {
+    for (const type of MELEE_DEBUFFS) {
+        if (on.has(type)) continue;
+        const top = all.filter(s => s.type === type && s.target === 'Enemy' && s.castTime === 0 && s.radius === 0 && s.range > 0 && s.power <= mana && s.spell.cooldownRemaining <= 0)
+            .sort((a, b) => b.spell.level - a.spell.level)[0];
+        if (top) return top;
+    }
+    return null;
+}
+
+/** Whom to debuff: a free enemy player or pet in melee on us, else on one of our soft members, nearest first, within `range`. */
+export function meleeDebuffTarget(me: Pick<MemberReport, 'name' | 'x' | 'y'>, members: readonly MemberReport[], threats: readonly Contact[], distanceTo: (id: number) => number, range: number, now = Date.now()): Contact | null {
+    const soft = members.filter(m => !m.isDead && m.role !== 'tank' && m.role !== 'melee');
+    const free = threats.filter(t => (t.kind === 'player' || !!t.isPet) && !t.stale && !t.cc && isAlive(t) && !untouchable(t, now) && distanceTo(t.objectId) <= range);
+    return free.find(t => onMember(t, me)) ?? free.filter(t => soft.some(m => onMember(t, m))).sort((a, b) => distanceTo(a.objectId) - distanceTo(b.objectId))[0] ?? null;
+}
+
+/**
+ * In the instant slot, above flee: while a melee is on her or a caster, her instant debuffs on it (Inflict Malaise, Enfeeble Body,
+ * Magical Web; a Theurgist's Friction; a Sorcerer's Enfeeble Body and Mesh of Force). An instant goes out under the swings, where
+ * every cast with a cast time is interrupted, and flee walks on the next turn. One per turn, each type once per its length. Arena
+ * round 11: Morgana in melee 55 % of fight time with nothing she could cast.
+ */
+export const meleeDebuff = (): Behavior<TacticsSettings> => ({
+    name: 'meleeDebuff',
+    interruptible: false,
+    async run(ctx) {
+        if (ctx.orders().phase !== 'engage') return false;
+        const me = ctx.me();
+        const self = ctx.members().find(m => m.name === ctx.name);
+        if (!self) return false;
+        const distanceTo = (id: number) => foeInView(ctx, id)?.distance ?? Infinity;
+        const target = meleeDebuffTarget(self, ctx.members(), ctx.threats(), distanceTo, 1500);
+        if (!target) return false;
+        const until: Map<string, number> = ctx.memory.get('debuffUntil') ?? new Map();
+        ctx.memory.set('debuffUntil', until);
+        const now = Date.now();
+        const on = new Set(MELEE_DEBUFFS.filter(type => (until.get(`${ckey(target)}:${type}`) ?? 0) > now));
+        const sp = nextMeleeDebuff(ctx.spells.all(), me.mana, on);
+        if (!sp || distanceTo(target.objectId) > sp.range) return false;
+        ctx.doing('debuff', target.objectId, sp.spell.name);
+        const c = await ctx.bot.castSpell(sp.spell, target.objectId, { approach: false });
+        ctx.result('debuff', c.success && c.resisted ? { ...c, success: false, reason: 'resisted' } : c, target.objectId);
+        until.set(`${ckey(target)}:${sp.type}`, Date.now() + (c.success && !c.resisted ? sp.duration * 1000 : 3000));
+        return true;
+    },
+});
 
 /** How long a cc claim keeps others' damage off its target: a mezz on its way. */
 const CC_CLAIM_MS = 4000;
@@ -79,6 +137,6 @@ export function nukerFight(saveBelow: number, withOffFocus: boolean): Behavior<T
     return [floor(assist()), ...(withOffFocus ? [floor(offFocus())] : [])];
 }
 
-export function cabalist({ saveBelow = 0, offFocus: off = true }: CabalistOptions = {}): Character {
-    return { role: 'nuker', fight: nukerFight(saveBelow, off) };
+export function cabalist({ saveBelow = 0, offFocus: off = true, meleeDebuff: debuff = true }: CabalistOptions = {}): Character {
+    return { role: 'nuker', ...(debuff ? { instant: [meleeDebuff()] } : {}), fight: nukerFight(saveBelow, off) };
 }

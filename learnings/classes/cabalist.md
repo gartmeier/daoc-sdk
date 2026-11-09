@@ -73,3 +73,12 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 **To look for:** `nuke` results "(off the focus)", her damage against round 6's 2292, and fewer "focus out of reach" idles. Also whether a mezz breaks on a target she hit (`mezz on X broke` lines).
 
 **Arena round 14** (Camelot wiped Midgard 5/0, one 72 s fight, `groups/camelot/runs/20261109-223037.md`): the group's root assignments put 2 Major Cripplings out. 1367 damage, no deaths, though she was in melee 52 % of fight time and targeted 25 %.
+
+## Instant debuffs under the swings (kit, from Camelot's round after round 22, 2026-11-10)
+
+**Why, verified:** in round 11 Morgana was in melee 55 % of fight time with nothing she could cast. Every cast with a cast time was interrupted, and flee took her turns. The orchestrator's `Character.instant` slot (e72ffe8) sits above flee.
+
+**The change** (`sdk/classes/cabalist.ts` `meleeDebuff`, used by the Sorcerer and Theurgist kits too): while a free enemy player or pet is in melee on her (else on one of our casters or the healer), she casts her instant single-target debuffs on it, one per turn, each type once per its length. The order is attack speed (Inflict Malaise, 5 %, 33 s), then strength (Enfeeble Body, 27, 60 s), then dexterity (Magical Web, 28, 60 s). Merlin casts Enfeeble Body, then Minor Mesh of Force (Dex/Qui 19). Taliesin casts Friction (attack speed 9 %, 120 s). Area debuffs (Imbalance, Banish Conviction) are left out, since they would wake a mezzed neighbour. A target under crowd control is skipped. `cabalist({ meleeDebuff: false })` and the same option on the other two kits turn it off. **Server code:** instants skip the interrupt check (SpellHandler.cs:597, :603).
+
+**To look for:** `debuff` results in the three casters' report lines, and whether their time in melee or their deaths change.
+

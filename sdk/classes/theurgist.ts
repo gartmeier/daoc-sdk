@@ -8,7 +8,7 @@ import { dist } from '../group/battleground';
 import type { Behavior } from '../group/member';
 import type { Character } from '../group/character';
 import type { Contact, MemberReport, Point } from '../group/types';
-import { nukerFight } from './cabalist';
+import { meleeDebuff, nukerFight } from './cabalist';
 
 export interface TheurgistOptions {
     /** No nukes below this % power, nor his pets, which count as nukes (fnfPet). 40 is what was measured. */
@@ -19,6 +19,8 @@ export interface TheurgistOptions {
     offFocus?: boolean;
     /** Give ground instead of casting while a melee is on him (giveGround). On by default. */
     giveGround?: boolean;
+    /** Friction on a melee hitting him or a caster (cabalist.ts meleeDebuff, the instant slot). On by default. */
+    meleeDebuff?: boolean;
 }
 
 /** flee() runs to the tank until within this of him; giveGround keeps inside it, so the two don't pull him back and forth. */
@@ -66,9 +68,10 @@ export const giveGround = (): Behavior<TacticsSettings> => ({
     },
 });
 
-export function theurgist({ saveBelow = 40, chores = [], giveGround: give = true, offFocus: off = true }: TheurgistOptions = {}): Character {
+export function theurgist({ saveBelow = 40, chores = [], giveGround: give = true, offFocus: off = true, meleeDebuff: debuff = true }: TheurgistOptions = {}): Character {
     return {
         role: 'nuker',
+        ...(debuff ? { instant: [meleeDebuff()] } : {}),
         ...(give ? { react: [giveGround()] } : {}),
         fight: nukerFight(saveBelow, off),
         pet: { fnfFloor: saveBelow },
