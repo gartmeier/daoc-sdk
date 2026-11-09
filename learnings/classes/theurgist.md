@@ -76,3 +76,11 @@ From runs with no pets: `--pet.enabled=false` is the run to compare with.
 - **Server code:** a Theurgist's pet goes at one target, stays on it, dies with it and takes no orders (TheurgistPetBrain.cs). At most 16 at once. Confusion kills them (ConfusionECSEffect.cs:42).
 - **Unverified:** "you'll spend most of your time throwing pets on casters/healers": the pets are interrupters. Field of Snow (AoE snare) is a cheap AoE interrupt when a group closes in. Source: https://forums.freddyshouse.com/threads/theurgist-rvr-spec.54373/
 - **Verified, arena round 5:** Taliesin was targeted 45 % of fight time and in melee 31 %, both the group's highest. 5 nukes interrupted, 6 ice spirits summoned, and the pets dealt 0 damage. In round 3 two summons dealt 56.
+
+## Gives ground instead of casting with a melee on him (kit, from Camelot's round after round 6, 2026-11-09)
+
+**Why, verified:** in arena round 1 he died "while casting Summon Aged Ice Spirit" with an enemy on him, and was interrupted 7 times. In round 5 he was in melee 31 % of fight time with 5 nukes interrupted. Every cast he has takes 2.5-3 s, and a swing, a miss too, starts a 3 s timer that ends any cast short of its half (**server code**, SpellHandler.cs). `flee()` runs him to the tank, and once he's there the list's `fnfPet` and `assist` cast into the hits.
+
+**The change** (`sdk/classes/theurgist.ts`, asked for by the Albion group session): `giveGround` (react, so above `fnfPet`, which withPets puts just above the fight) acts while an enemy is in melee on him, as `flee()` reads it. Near the tank (within 300) he steps to the tank's far side from the attackers, 130 out (inside flee's 150, so the two don't pull him back and forth). Already there, he steps a quarter turn round the tank. With no tank alive, the healer is the haven. He casts nothing while he does this: the peel is Nimue's stun (cleric kit) and Merlin's mezz (the group's peelMezz). `theurgist({ giveGround: false })` turns it off.
+
+**To look for:** his interrupts, deaths and in-melee share against round 5 (5, 1, 31 %), and `flee` turns that name the tank.
