@@ -76,6 +76,20 @@ describe('MemberAgent: the side tick', () => {
         expect(most).toBe(1);
     });
 
+    test('a turn behaviour that throws: a note, it sits out a while, and the turn goes on down the list', async () => {
+        // Arena round 9: a cure above heal threw every time and spent each turn plus a second; the healer healed 5 times.
+        let tries = 0, heals = 0;
+        const h = harness([
+            { name: 'cure', run() { tries++; throw new Error('RANGE_MARGIN_3D is not defined'); } },
+            { name: 'heal', run() { heals++; return true; } },
+        ]);
+        await Bun.sleep(300);
+        await h.end();
+        expect(tries).toBe(1);
+        expect(heals).toBeGreaterThanOrEqual(3);
+        expect(h.board.events().filter(e => e.kind === 'note').map(e => e.text)).toEqual(['cure threw: RANGE_MARGIN_3D is not defined']);
+    });
+
     test('an error is caught as a turn\'s is: a note, a pause, and the turns go on', async () => {
         let tries = 0, turns = 0;
         const h = harness([

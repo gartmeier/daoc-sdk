@@ -97,6 +97,8 @@ export function countCombatMessage(text: string, combat: MemberCombat, own?: Own
 const SIDE_SLOT_MS = 50;
 /** An error in a side behaviour: no tick for this long. */
 const SIDE_ERROR_PAUSE_MS = 1000;
+/** A behaviour that threw sits out this long; the turn goes on down the list meanwhile. */
+const BROKEN_PAUSE_MS = 5000;
 /** A mezz's own end, to its target: the spell's Message3, two wordings in spell.sql. */
 const MEZZ_OVER = /^You (?:are no longer entranced|recover from the mesmerize)\b/;
 /** How often a mezzed member looks up. */
@@ -403,7 +405,11 @@ export class MemberAgent<S = any> {
         }
     }
 
+    /** Behaviours that threw, by name, left out until then (BROKEN_PAUSE_MS). */
+    private readonly brokenUntil = new Map<string, number>();
+
     private async step(b: Behavior<S>, signal: AbortSignal): Promise<boolean> {
+        if ((this.brokenUntil.get(b.name) ?? 0) > Date.now()) return false;
         const controller = new AbortController();
         const onParent = () => controller.abort(signal.reason);
         signal.addEventListener('abort', onParent, { once: true });
@@ -422,9 +428,11 @@ export class MemberAgent<S = any> {
             await Promise.race([raw.catch(() => {}), Bun.sleep(2000)]);
             if (controller.signal.reason instanceof Interrupted) return true;
             if (!this.member.sdk.isConnected()) throw error;
+            // The turn goes on down the list, and this one sits out a while. It used to spend the turn plus a second: a cure above
+            // heal that threw every time (arena round 9, 2026-11-09, a file loaded mid-edit) left Sigrid 5 heals in a round.
             this.board.emit({ at: Date.now(), kind: 'note', member: this.ctx.name, text: `${b.name} threw: ${(error as Error)?.message ?? error}` });
-            await abortable(Bun.sleep(1000), signal).catch(() => {});
-            return true;
+            this.brokenUntil.set(b.name, Date.now() + BROKEN_PAUSE_MS);
+            return false;
         } finally {
             signal.removeEventListener('abort', onParent);
             this.current = null;
