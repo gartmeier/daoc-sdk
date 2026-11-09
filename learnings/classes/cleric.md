@@ -39,6 +39,8 @@ export default cleric();                       // or cleric({ saveBelow: 30 })
 
 **Arena round 10** (Camelot wiped Hibernia 5/0 in 4.6 min, `groups/camelot/runs/20261109-215403.md`): `stun` 4 with no failure, 4 heals. She was never targeted and never in melee, and nobody died.
 
+**Arena round 11** (Camelot took the cap from Midgard, 6/6): `stun` 3 landed, 1 resisted, 2 `out_of_range` at the edge, so she now casts only within 1450. 26 heals, no deaths. **Not done, on purpose:** Galahad's shield stun styles (Numb 2 s). StyleStun and spell stuns share one 60 s StunImmunity on players (EffectHelper.cs:281), so his 2 s stun would shut out her 5 s one.
+
 **To look for:** `stun` results in her report line, `heal` count against round 5's 12, and deaths of Merlin and Taliesin, who were in melee 19 % and 31 % of fight time.
 
 **Community, unverified** (the research agent's notes; web sources were thin, the server-code points are checked): stand at the back inside heal range (about 2000). Don't Smite at low Smite spec, except to finish a near-dead enemy when nobody needs heals. Heal the enemy's target first, then yourself. Buff Str/Con and Dex/Qui on the melee members first, then AF. Rez after the fight. **Server code:** instant spells skip the interrupt check (SpellHandler.cs:597, :603). A player is immune to spell stuns for 60 s after one ends (ECSGameEffect.cs:54).

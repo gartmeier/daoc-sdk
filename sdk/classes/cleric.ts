@@ -24,6 +24,8 @@ export interface ClericOptions {
 const STUN_MS = 5000;
 /** Its enemy healer is worth a stun once our focus is this low. */
 export const STUN_HEALER_BELOW = 60;
+/** The server measures in 3D and from where it last had us: 2 of 6 stuns at the edge came back out of range (arena round 11). */
+const STUN_RANGE_MARGIN = 50;
 /** Not with less power than this left: the heals come first. */
 const STUN_MIN_MANA = 15;
 
@@ -78,7 +80,7 @@ export const stunPeel = (opts: { healerBelow?: number; minMana?: number } = {}):
         const pick = stunTarget({ ...me, name: ctx.name, role: ctx.role, isDead: false }, ctx.members(), ctx.threats(), ctx.focus(), sp.range, opts.healerBelow, Date.now());
         if (!pick) return false;
         const seen = foeInView(ctx, pick.target.objectId);
-        if (!seen || isDown(ctx, seen) || seen.distance > sp.range) return ctx.skip('stunPeel: target out of reach');
+        if (!seen || isDown(ctx, seen) || seen.distance > sp.range - STUN_RANGE_MARGIN) return ctx.skip('stunPeel: target out of reach');
         await stopSwinging(ctx);
         ctx.doing('stun', pick.target.objectId, `${sp.spell.name} (${pick.why})`);
         const c = await ctx.bot.castSpell(sp.spell, pick.target.objectId, { approach: false });
