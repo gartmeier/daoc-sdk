@@ -21,6 +21,9 @@ describe('mentalist kit', () => {
         const names = withCharacter(packBehaviors().nuker, c).map(b => b.name);
         expect(names.indexOf('stunCaster')).toBeGreaterThan(-1);
         expect(names.indexOf('stunCaster')).toBeLessThan(names.indexOf('assist'));
+        // Round 18: 11 emergency heals and no Flash. As urgent it goes above them (and below her cc orders).
+        expect(names.indexOf('stunCaster')).toBeLessThan(names.indexOf('emergencyHeal'));
+        expect(names.indexOf('stunCaster')).toBeGreaterThan(names.indexOf('crowdControl'));
     });
 
     test('Light nuker reaches Prismatic Flash at 24: a single-target stun', () => {
