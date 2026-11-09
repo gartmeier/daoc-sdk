@@ -16,6 +16,12 @@ import type { Point } from './types';
 export const STEEP = 0.7;
 /** Rise per unit a route crosses only where there is no other way: 45°, the river banks and the hills round the map. */
 export const CLIFF = 1.0;
+/**
+ * Ground steeper than this, 56°, is a cliff face no route takes while there is a way round at all: a real client slides
+ * down it or falls (fall damage), and can't climb it. The banks of the west river are such a face 600-2400 high from
+ * x 17000 to 27000 (Hibernia group session, 2026-11-09).
+ */
+export const SHEER = 1.5;
 /** Below this a route walks as on the flat: 0.5 (27°) is a hill a real client runs up at full speed. */
 export const GENTLE = 0.5;
 /** How far round a stop the ground has to be level as well (isLevel). */
@@ -81,11 +87,12 @@ export function isLevel(regionId: number, p: Point, margin = LEVEL_MARGIN): bool
 
 /**
  * What a unit walked at `p` costs on top of a unit on the flat: nothing up to GENTLE, then rising to 2 at CLIFF (3× the
- * time, as a real client slows and zigzags), and 6 beyond (7×): a route goes round a cliff unless the way round is far longer.
+ * time, as a real client slows and zigzags), to 6 at SHEER (7×), and 60 beyond: a route goes round a steep bank unless
+ * the way round is far longer, and over a cliff face only when there is no other way (an aggro zone costs 30).
  */
 export function slopeCost(regionId: number, p: Point): number {
     const s = slopeAt(regionId, p);
-    return s <= GENTLE ? 0 : s <= CLIFF ? 2 * (s - GENTLE) / (CLIFF - GENTLE) : 6;
+    return s <= GENTLE ? 0 : s <= CLIFF ? 2 * (s - GENTLE) / (CLIFF - GENTLE) : s <= SHEER ? 2 + 4 * (s - CLIFF) / (SHEER - CLIFF) : 60;
 }
 
 export interface SlopeStretch {
@@ -97,12 +104,14 @@ export interface SlopeStretch {
     max: number;
 }
 
-/** How much of the straight way from `a` to `b` is steep, sampled every `step` units. */
-export function slopeAlong(regionId: number, a: Point, b: Point, step = 64): SlopeStretch {
+/** How much of the straight way from `a` to `b` is steep, sampled every `step` units; `skip` leaves samples out (water.ts isWet: a swimmer is over the bed). */
+export function slopeAlong(regionId: number, a: Point, b: Point, step = 64, skip?: (p: Point) => boolean): SlopeStretch {
     const d = Math.hypot(b.x - a.x, b.y - a.y), n = Math.max(1, Math.ceil(d / step));
     const out: SlopeStretch = { steep: 0, cliff: 0, max: 0 };
     for (let k = 0; k < n; k++) {
-        const s = slopeAt(regionId, { x: a.x + (b.x - a.x) * (k + 0.5) / n, y: a.y + (b.y - a.y) * (k + 0.5) / n });
+        const p = { x: a.x + (b.x - a.x) * (k + 0.5) / n, y: a.y + (b.y - a.y) * (k + 0.5) / n };
+        if (skip?.(p)) continue;
+        const s = slopeAt(regionId, p);
         out.max = Math.max(out.max, s);
         if (s > STEEP) out.steep += d / n;
         if (s > CLIFF) out.cliff += d / n;

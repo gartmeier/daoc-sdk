@@ -1000,3 +1000,41 @@ describe('decideRvr: a player under the enemy keep\'s guards', () => {
         expect(decide(under({ threat: true, target: 'Tank' }))).toMatchObject({ phase: 'engage', focus: 51 });
     });
 });
+
+describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('decideRvr with stayDry: enemies swimming', () => {
+    // A Hibernian group on its bank, three Midgard players in the river 2400 east (inside engageRadius), then ashore.
+    const T = 252;
+    const bank = { x: 38_500, y: 26_768 };
+    const swim = (x: number, over: Partial<Contact> = {}) => [101, 102, 103].map((id, i) => enemy(id, 'midgard', { regionId: T, x: x + i * 100, y: 26_768, ...over }));
+    const decide = (contacts: Contact[], o: { stayDry?: boolean; memory?: Record<string, any>; now?: number } = {}) =>
+        decideRvr(ctx(picture(team({}, bank, T), contacts), { memory: o.memory ?? { realm: 'hibernia' }, now: o.now, settings: { patrol: null, stayDry: o.stayDry ?? true } }));
+
+    test('no fight with those swimming: the group waits for them on dry ground, facing them; with stayDry off, it fights', () => {
+        const u = decide(swim(40_900));
+        expect(u.phase).toBe('travel');
+        expect(u.reason).toMatch(/wait ashore: 3 enemies swimming/);
+        expect(isDry(T, u.anchor!)).toBe(true);
+        expect(u.facing!.x).toBeGreaterThan(40_900);
+        expect(decide(swim(40_900), { stayDry: false }).reason).toMatch(/^(fight|hunt)/);
+    });
+
+    test('those swimming still count against us: eight of them and the group falls back instead of waiting', () => {
+        const eight = [...swim(40_900), ...[104, 105, 106, 107, 108].map((id, i) => enemy(id, 'midgard', { regionId: T, x: 40_900 + i * 100, y: 26_868 }))];
+        expect(eight.every(c => isWet(T, c))).toBe(true);
+        expect(decide(eight).reason).toMatch(/^fall back/);
+    });
+
+    test('one on us is fought in the water; once ashore they are fought', () => {
+        expect(decide(swim(40_900, { target: 'Tank', targetId: 1, threat: true })).phase).toBe('engage');
+        expect(decide(swim(39_400)).phase).toBe('engage');
+    });
+
+    test('the wait ends after ASHORE_WAIT_MS with them still swimming, and starts again after they were gone', () => {
+        const memory: Record<string, any> = { realm: 'hibernia' };
+        expect(decide(swim(40_900), { memory, now: 1000 }).reason).toMatch(/wait ashore/);
+        expect(decide(swim(40_900), { memory, now: 40_000 }).reason).toMatch(/wait ashore/);
+        expect(decide(swim(40_900), { memory, now: 47_000 }).reason).not.toMatch(/wait ashore/);
+        decide([], { memory, now: 50_000 });
+        expect(decide(swim(40_900), { memory, now: 51_000 }).reason).toMatch(/wait ashore/);
+    });
+});

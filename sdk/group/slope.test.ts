@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { getTerrainStore } from '../terrain';
 import { BATTLEGROUND_LAYOUTS, clearOf, keepDangers, type PlayerRealm } from './keeps';
 import { defaultPatrol } from './rvr';
-import { CLIFF, GENTLE, isLevel, isSteep, slopeAlong, slopeAt, slopeCost, STEEP } from './slope';
+import { CLIFF, GENTLE, isLevel, isSteep, SHEER, slopeAlong, slopeAt, slopeCost, STEEP } from './slope';
 import { aggroZones, safePath } from './terrain';
 import type { Point } from './types';
 import { drySpot, isDry, isWet } from './water';
@@ -31,10 +31,12 @@ describe.skipIf(!terrain)('slope in Thidranki', () => {
     const bank = { x: 26_300, y: 35_400 };
     const arrivals = BATTLEGROUND_LAYOUTS[T]!.arrival;
 
-    test('slopeCost: nothing up to GENTLE, 2 at CLIFF, 6 beyond; isSteep at STEEP', () => {
+    test('slopeCost: nothing up to GENTLE, 2 at CLIFF, 6 at SHEER, 60 beyond; isSteep at STEEP', () => {
         expect(slopeAt(T, bank)).toBeGreaterThan(CLIFF);
         expect(isSteep(T, bank)).toBe(true);
-        expect(slopeCost(T, bank)).toBe(6);
+        expect(slopeCost(T, bank)).toBeCloseTo(2 + 4 * (slopeAt(T, bank) - CLIFF) / (SHEER - CLIFF));
+        // The west river's north bank at x 19000: a cliff face.
+        expect(slopeCost(T, { x: 19_000, y: 36_000 })).toBe(60);
         for (const a of Object.values(arrivals)) {
             expect(slopeAt(T, a)).toBeLessThan(GENTLE);
             expect(slopeCost(T, a)).toBe(0);

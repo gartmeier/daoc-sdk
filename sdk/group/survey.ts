@@ -4,7 +4,7 @@
 //
 // Prints, per pair (BattlegroundLayout.pairs): how far the ring stays from water, how much of it is not level (slope.ts),
 // how many of its points are near camps or keep circles, and per realm the route from its arrival to its first waypoint
-// (length, swum, over 35° and over 45°). Then every RvR fight in groups/*/runs/<since...>.json with its wet share and the
+// (length, swum, dry ground over 35° and over 45°). Then every RvR fight in groups/*/runs/<since...>.json with its wet share and the
 // slope where it began. --png draws Thidranki at 64 units a pixel: water blue, slopes over 35° orange and over 45° red,
 // camps purple, keep circles black, rings yellow, waypoints and routes in the realms' colours, fights as crosses
 // (magenta at 30 % wet fight time or more). Reads only files; needs the client's terrain (bun run terrain:build).
@@ -134,7 +134,7 @@ if (import.meta.main) {
             const home = homeOf(T, realm)!.arrival, loop = defaultPatrol(T, realm, LEVEL, { opponent });
             const route = [home, ...safePath(T, LEVEL, home, loop[0]!, keepDangers(T, realm))];
             const len = route.slice(1).reduce((s, p, i) => s + Math.hypot(p.x - route[i]!.x, p.y - route[i]!.y), 0);
-            const sl = route.slice(1).map((p, i) => slopeAlong(T, route[i]!, p));
+            const sl = route.slice(1).map((p, i) => slopeAlong(T, route[i]!, p, 64, q => isWet(T, q)));
             console.log(`  ${realm}: ${loop.length} waypoints, route ${Math.round(len)} (straight ${Math.round(Math.hypot(home.x - spot.x, home.y - spot.y))} to the spot), swum ${swum(route)}, over 35° ${Math.round(sl.reduce((s, x) => s + x.steep, 0))}, over 45° ${Math.round(sl.reduce((s, x) => s + x.cliff, 0))}`);
             routes.set(realm, [...(routes.get(realm) ?? []), route]);
             loops.set(realm, [...(loops.get(realm) ?? []), loop]);

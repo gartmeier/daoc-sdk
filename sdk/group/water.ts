@@ -30,6 +30,23 @@ export function isWet(regionId: number, p: Point): boolean {
     return !!s && s.waterZ !== null && s.waterZ - s.z >= GROUND_TUNING.swimDepth;
 }
 
+/**
+ * How long a group that sees only enemies swimming waits on dry ground for them to come ashore before it goes on (they may
+ * swim on along the river). Hibernia's arena round 3, 2026-11-09: it saw Albion swimming 4949 off, ignored it and patrolled
+ * on, and Albion came ashore behind it and wiped it.
+ */
+export const ASHORE_WAIT_MS = 45_000;
+
+/**
+ * Whether to (still) wait for `swimming` enemies: from the first sighting for ASHORE_WAIT_MS, again once none swam.
+ * Memory: mem[key], its own per caller (the pack runs decideRvr with no players in it, which would end its wait).
+ */
+export function waitAshore(mem: Record<string, any>, swimming: number, now: number, key = 'ashoreSince'): boolean {
+    if (!swimming) { mem[key] = undefined; return false; }
+    mem[key] ??= now;
+    return now - mem[key] < ASHORE_WAIT_MS;
+}
+
 /** How far from water a stop stays (drySpot): casters stand up to ~700 behind the anchor, most of them 200-450. */
 export const DRY_MARGIN = 300;
 

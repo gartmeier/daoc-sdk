@@ -546,6 +546,11 @@ describe('decidePack: nobody walks alone', () => {
         const swim = (x: number, over: Partial<Contact> = {}) => [101, 102, 103].map((id, i) => enemy(id, 'midgard', { regionId: THID, x: x + i * 100, y: 26_768, ...over }));
         const decide = (contacts: Contact[], stayDry = true) => decidePack(ctx(picture(thid({}, bank), contacts), { memory: { realm: 'hibernia', pack: 'stalk' }, settings: { patrol: null, stayDry } }));
         expect(decide(swim(40_900)).reason ?? '').not.toMatch(/hunt|stalk|raid/);
+        // It waits for them on dry ground, facing them (Hibernia's arena round 3: it patrolled on, and they came ashore behind it).
+        const wait = decide(swim(40_900));
+        expect(wait.reason).toMatch(/wait ashore: 3 swimming/);
+        expect(wait.phase).toBe('travel');
+        expect(isWet(THID, wait.anchor!)).toBe(false);
         expect(decide(swim(40_900), false).reason).toMatch(/hunt|stalk|raid/);
         expect(decide(swim(40_900, { target: 'Tank', targetId: 1, threat: true })).phase).toBe('engage');
         expect(decide(swim(39_400)).reason).toMatch(/hunt|stalk|raid/);

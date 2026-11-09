@@ -41,7 +41,7 @@ import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, pairMeet, THIDRANKI, type KeepSettings, type PlayerRealm } from './keeps';
 import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
 import { isLevel } from './slope';
-import { drySpot, isDry } from './water';
+import { drySpot, isDry, isWet, waitAshore } from './water';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
 export { BATTLEGROUND_LAYOUTS, homeOf, keepDangers, KEEP_CLEARANCE, THIDRANKI, type BattlegroundLayout, type Keep, type KeepSettings, type PlayerRealm } from './keeps';
@@ -485,6 +485,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // keep guards are left alone unless they attack us, which lasts as long as its aim (6 s), and not as long as it is a threat: our own landed nukes keep it that (blackboard.ts hitByUs), and the fight would feed itself.
     // petControl holds the stance through that lapse (underGuards). An enemy pet that is a threat near us is in it whoever it aims at: a caster's target is on nobody's client for stretches.
     const inMain = new Set(main.map(m => m.name));
+    const swimming = (c: Contact) => dry && isWet(regionId, c);
     const inFight = (c: Contact) => {
         if (c.stale || !isAlive(c) || c.regionId !== regionId) return false;
         const near = dist(c, centre) <= s.engageRadius + (c.threat || c.objectId === o.focus ? FOCUS_SLACK : 0);
@@ -508,8 +509,12 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // ── Fighting: enemy players near us or on us; monsters only when they attack us and no player is about ──
     const candidates = contacts.filter(inFight);
     const players = candidates.filter(c => c.kind === 'player');
+    // With stayDry, a player swimming that isn't on us is no focus, mezz or reason to fight until it is ashore, as in the pack;
+    // it still counts against us (retreat, outnumbered). The hunt waits for it on dry ground (waitAshore).
+    const ashore = candidates.filter(c => !(c.kind === 'player' && swimming(c) && !onUs(c)));
+    const fighters = ashore.filter(c => c.kind === 'player');
     // Players first, while one is free: with all of them crowd-controlled, a pet on us is what's left to hit (pickRvrFocus takes the free first).
-    const pool = players.some(c => !c.cc) ? players : candidates;
+    const pool = fighters.some(c => !c.cc) ? fighters : ashore;
     if (pool.length) {
         // The trip is interrupted: it is planned again from wherever the fight ends.
         mem.legKind = null;
@@ -578,7 +583,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const ccRank = (c: Contact) => (soft ? (c.healer ? 0 : c.caster ? 1 : 2) : 0);
         // Monsters on us join the mezz list (monsterAdds): those on a healer or support before the players, the rest after.
         const beasts = monsterAdds(candidates, focus.objectId, here);
-        const adds = [...beasts.first, ...players.filter(c => c.objectId !== focus.objectId && !c.cc).sort((x, y) => ccRank(x) - ccRank(y)), ...beasts.last];
+        const adds = [...beasts.first, ...fighters.filter(c => c.objectId !== focus.objectId && !c.cc).sort((x, y) => ccRank(x) - ccRank(y)), ...beasts.last];
         // That walk can take one past the cluster's radius, and the main body is no reason to drop it there.
         const onTheWay = here.filter(m => !main.includes(m) && o.cc.some(a => walker(a) === m && adds.some(c => c.objectId === a.targetId)));
         const mezzers = [...main, ...onTheWay].filter(m => !((bench[m.name] ?? 0) > now));
@@ -617,14 +622,22 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
             stepLeg(trip, 'fall back', goal, { from: centre, movers: main, replan: way.home ? 1 : 2000 });
             return { ...calm, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: `fall back ${way.home ? 'toward our portal keep' : 'away from them'}${gone}`, reason: `fall back: ${counted(big, seen)} ${d} away vs ${main.length}` };
         }
-        const them = centroid(seen);
+        // With stayDry, those swimming aren't hunted into the river: with only such in sight, the group waits on dry ground for them (waitAshore).
+        const ashore = seen.filter(c => !swimming(c));
+        const wet = seen.length - ashore.length;
+        if (!ashore.length && waitAshore(mem, wet, now)) {
+            const them = centroid(seen);
+            return { ...calm, phase: 'travel', anchor: standHere(), facing: { x: Math.round(them.x), y: Math.round(them.y) }, objective: `wait for ${enemiesText(wet)} swimming${gone}`, reason: `wait ashore: ${enemiesText(wet)} swimming ${Math.round(dist(centre, them))} away` };
+        }
+        if (!wet) mem.ashoreSince = undefined;
+        const them = centroid(ashore);
         const d = Math.round(dist(centre, them));
         const unready = new Set([...deadHere, ...far].map(m => m.name).concat(low.map(w => w.name)));
-        if (unready.size <= HUNT_UNREADY) {
+        if (ashore.length && unready.size <= HUNT_UNREADY) {
             stepLeg(trip, 'hunt', them, { from: centre, movers: main, replan: HUNT_REPLAN });
-            return { ...calm, phase: 'travel', anchor: mem.leg, facing: them, objective: `hunt ${enemiesText(seen.length)} round ${at(them)}${gone}`, reason: `hunt ${enemiesText(seen.length)} ${d} away: ${seen.slice(0, 3).map(label).join(', ')}` };
+            return { ...calm, phase: 'travel', anchor: mem.leg, facing: them, objective: `hunt ${enemiesText(ashore.length)} round ${at(them)}${gone}`, reason: `hunt ${enemiesText(ashore.length)} ${d} away: ${ashore.slice(0, 3).map(label).join(', ')}` };
         }
-    }
+    } else mem.ashoreSince = undefined;
 
     // ── Regroup: wait for the dead to be rezzed or release, then meet those walking back from the portal keep ──
     if (deadHere.length) return { ...calm, phase: 'recover', anchor: stay, waiting: deadHere.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadHere)}: a rez or a release${gone}` };

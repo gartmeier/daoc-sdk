@@ -28,9 +28,12 @@ import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, mon
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import type { ColumnOrder, Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
-import { drySpot, isWet } from './water';
+import { drySpot, isWet, waitAshore } from './water';
 
 export { focusHealed, pickPackFocus } from './rvr';
+
+/** The pack's waitAshore memory key: decideRvr, run for its quiet times, has its own. */
+const PACK_ASHORE = 'packAshoreSince';
 
 export interface PackOptions {
     /** Stop this far from the nearest enemy of a group we mean to raid. */
@@ -510,7 +513,17 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     if (mem.hadDead && !dead.length && !far.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.hadDead = false; mem.pack = 'rebuff'; mem.rebuffAt = now; return say({ ...none, phase: 'recover', anchor: stay, reason: 'rebuffing: someone is back' }); }
     if (pickups.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.pack = 'home'; mem.legKind = null; stepLeg(trip, 'home', homeSpot!, { from: centre, movers: main, replan: Infinity }); return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'pick up the released', reason: `picking up ${pickups.map(m => m.name).join(', ')}` }); }
     const seen = free.filter(c => dist(c, centre) <= s.huntRadius);
-    if (!seen.length) { mem.holdSince = undefined; return say(calm()); }
+    if (!seen.length) {
+        mem.holdSince = undefined;
+        // Only enemies swimming in sight: wait for them on dry ground, facing them, instead of patrolling on (waitAshore).
+        const wet = p.contacts.filter(c => players(c) && swimming(c) && !c.stale && isAlive(c) && c.regionId === regionId && !inKeep(c) && dist(c, centre) <= s.huntRadius);
+        if (waitAshore(mem, wet.length, now, PACK_ASHORE)) {
+            const them = centroid(wet);
+            return say({ ...none, phase: 'travel', anchor: stay, facing: { x: Math.round(them.x), y: Math.round(them.y) }, objective: `wait for ${wet.length} swimming`, reason: `wait ashore: ${wet.length} swimming ${Math.round(dist(centre, them))} away` });
+        }
+        return say(calm());
+    }
+    mem[PACK_ASHORE] = undefined;
     const lead = seen[0]!;
     const d = dist(lead, centre);
     const onUsNow = seen.some(onUs);

@@ -199,7 +199,7 @@ export interface RunReport {
          * `anchor` the anchor itself in water, `loose` orders with no anchor.
          */
         wetWhere?: Record<string, number>;
-        /** RvR: % of member time alive on ground steeper than 35° (slope.ts), of member fight time, and of member travel time. */
+        /** RvR: % of member time alive on dry ground steeper than 35° (slope.ts), of member fight time, and of member travel time. */
         steepPct?: number;
         steepInFights?: number;
         steepInTravel?: number;
@@ -553,8 +553,10 @@ export class GroupObserver {
             t.minHp = Math.min(t.minHp, m.hp);
             if (!m.isDead) {
                 t.alive++;
-                if (isWet(m.regionId, m)) { t.wet++; this.wetSamples++; }
-                if (isSteep(m.regionId, m)) {
+                const wet = isWet(m.regionId, m);
+                if (wet) { t.wet++; this.wetSamples++; }
+                // A swimmer is over the river's bed, whatever its slope.
+                if (!wet && isSteep(m.regionId, m)) {
                     t.steep++;
                     this.steepSamples++;
                     const k = `${Math.round(m.x / STEEP_SQUARE) * STEEP_SQUARE},${Math.round(m.y / STEEP_SQUARE) * STEEP_SQUARE}`;
@@ -628,7 +630,7 @@ export class GroupObserver {
                 inc(this.wetWhere, phase === 'travel' || phase === 'gather' ? 'travel' : !anchor ? 'loose' : isWet(m.regionId, anchor) ? 'anchor' : Math.hypot(m.x - anchor.x, m.y - anchor.y) > WET_NEAR ? 'away' : 'near');
             }
             this.fightSteepSamples++;
-            if (isSteep(m.regionId, m)) { t.steepFight++; this.fightSteep++; }
+            if (!isWet(m.regionId, m) && isSteep(m.regionId, m)) { t.steepFight++; this.fightSteep++; }
             // Idle and moving count while engaged only: during a pull, waiting at the base is the job. A mezz on it is nothing its list could have done, and no idle finding's advice fits that.
             if (phase === 'engage') t.engageSamples++;
             if (phase === 'engage' && m.activity.kind === 'idle' && m.activity.detail !== MEZZED) { t.idle++; inc(t.idleReasons, m.activity.detail || 'nothing to do'); }

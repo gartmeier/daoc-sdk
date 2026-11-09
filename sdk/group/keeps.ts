@@ -76,8 +76,9 @@ export const BATTLEGROUND_LAYOUTS: Record<number, BattlegroundLayout> = {
             'hibernia|midgard': { x: 33000, y: 25000 },
             // 19.1k / 27.0k, the river 3000 north of the ring.
             'albion|hibernia': { x: 21000, y: 45000 },
-            // 24.4k / 11.4k, the river 3100 south of the ring.
-            'albion|midgard': { x: 54000, y: 35000 },
+            // 24.3k / 11.9k, the river 2900 south of the ring; 500 east and north of (54000, 35000), where Camelot's first
+            // round stood on the broken hillside west of the ring 12 % of its fight time.
+            'albion|midgard': { x: 54500, y: 35500 },
         },
     },
 };
