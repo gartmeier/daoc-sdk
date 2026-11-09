@@ -34,12 +34,14 @@ describe('the cleric kit', () => {
         expect(stunTarget({ ...me, x: -2000 }, members, [foe(1, { x: 650, y: 0, target: 'Merlin' })], undefined, 1500, 60, NOW)).toBeNull();
     });
 
-    test('the enemy healer once our focus is low, and not before', () => {
+    test('the enemy healer once our focus is low, else the focus itself, and not before', () => {
         const focus = foe(1, { hp: 40 });
         const healer = foe(2, { healer: true, y: 1400 });
         expect(stunTarget(me, members, [focus, healer], focus, 1500, 60, NOW)).toEqual({ target: healer, why: 'healer' });
         expect(stunTarget(me, members, [focus, healer], { ...focus, hp: 80 }, 1500, 60, NOW)).toBeNull();
-        expect(stunTarget(me, members, [focus], focus, 1500, 60, NOW)).toBeNull();
+        expect(stunTarget(me, members, [focus], focus, 1500, 60, NOW)).toEqual({ target: focus, why: 'focus' });
+        expect(stunTarget(me, members, [focus], { ...focus, hp: 80 }, 1500, 60, NOW)).toBeNull();
+        expect(stunTarget(me, members, [{ ...focus, ccImmune: { stun: NOW + 9000 } }], { ...focus, ccImmune: { stun: NOW + 9000 } }, 1500, 60, NOW)).toBeNull();
     });
 
     test('Nimue reaches Stunning Flare at 24: baseline, 1500, 5 s, 9 power', () => {

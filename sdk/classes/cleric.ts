@@ -31,11 +31,11 @@ type Who = Pick<MemberReport, 'name' | 'role' | 'isDead' | 'regionId' | 'x' | 'y
 
 /**
  * Whom to stun, if anyone: an enemy player in melee on a member who isn't the tank (a healer first, then the nearest
- * to us), else the enemy healer while our focus is at or below `healerBelow` %. Only players: a monster's stun
+ * to us), else the enemy healer while our focus is at or below `healerBelow` %, or with no healer in reach the focus itself. Only players: a monster's stun
  * shortens with every repeat, and a pet's owner is the one to stop. Never one under crowd control (a stun would
  * wake a mezz, and a stun on a stun is wasted), nor one immune to stuns, nor one beyond `range` of us.
  */
-export function stunTarget(me: Who, members: readonly Who[], threats: readonly Contact[], focus: Contact | undefined, range: number, healerBelow = STUN_HEALER_BELOW, now = Date.now()): { target: Contact; why: 'peel' | 'healer' } | null {
+export function stunTarget(me: Who, members: readonly Who[], threats: readonly Contact[], focus: Contact | undefined, range: number, healerBelow = STUN_HEALER_BELOW, now = Date.now()): { target: Contact; why: 'peel' | 'healer' | 'focus' } | null {
     const open = threats.filter(c => c.kind === 'player' && !c.isPet && !c.stale && !c.cc && !ccImmuneTo(c, 'stun', now) && c.regionId === me.regionId && dist(me, c) <= range);
     const soft = members.filter(m => !m.isDead && m.role !== 'tank' && m.regionId === me.regionId);
     const onSoft = open
@@ -45,7 +45,9 @@ export function stunTarget(me: Who, members: readonly Who[], threats: readonly C
     if (onSoft[0]) return { target: onSoft[0].c, why: 'peel' };
     if (!focus || focus.kind !== 'player' || focus.hp > healerBelow) return null;
     const healer = open.filter(c => c.healer && c.objectId !== focus.objectId).sort((a, b) => dist(me, a) - dist(me, b))[0];
-    return healer ? { target: healer, why: 'healer' } : null;
+    if (healer) return { target: healer, why: 'healer' };
+    // No healer to stop: the focus itself, so it can't heal itself, cast or run while the nukes land. A stun doesn't break on damage.
+    return open.some(c => c.objectId === focus.objectId) ? { target: focus, why: 'focus' } : null;
 }
 
 /** The top rank of a single-target stun we can cast now. */

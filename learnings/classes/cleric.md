@@ -33,6 +33,8 @@ export default cleric();                       // or cleric({ saveBelow: 30 })
 
 **Arena round 6** (camelot vs midgard, the first round with the kit): 15 heals, 7 nukes (`spareNuke`), and `stunPeel` twice: once interrupted, once `must_wait`. She was in melee 32 % of fight time herself, so heal and flee took most turns. 148 idle turns read "no smite at players below spareNuke's floor": those are turns with nothing to heal and no one to stun. The Midgard class session's Healer kit now uses `stunPeel` too (2a3e7ca), so keep its interface stable.
 
+**After round 6:** with no enemy healer in reach and the focus at 60 % or less, she stuns the focus itself, so it can't heal itself, cast or run while the nukes land. The Smite floor stays. The 148 "no smite at players" skips came at any power, since that check runs before the power floor, so they don't show power held back. A 9-power stun is a better use of those turns than a 15-power, 36-damage Smite.
+
 **To look for:** `stun` results in her report line, `heal` count against round 5's 12, and deaths of Merlin and Taliesin, who were in melee 19 % and 31 % of fight time.
 
 **Community, unverified** (the research agent's notes; web sources were thin, the server-code points are checked): stand at the back inside heal range (about 2000). Don't Smite at low Smite spec, except to finish a near-dead enemy when nobody needs heals. Heal the enemy's target first, then yourself. Buff Str/Con and Dex/Qui on the melee members first, then AF. Rez after the fight. **Server code:** instant spells skip the interrupt check (SpellHandler.cs:597, :603). A player is immune to spell stuns for 60 s after one ends (ECSGameEffect.cs:54).
