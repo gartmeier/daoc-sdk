@@ -8,14 +8,18 @@ Midgard's singing melee: damage adds, shouts and an instant mezz from Battlesong
 
 ## The kit
 
-`sdk/classes/skald.ts` sets the role to `melee`:
+`sdk/classes/skald.ts` sets the role to `melee` and adds `shoutMezz` as `react`:
 
 ```typescript
 import { skald } from '../../sdk/classes/skald';
 export default skald();
 ```
 
-**Why:** `roleForClass` makes a Skald `support`, a list that stands at range, heals and never swings, which is no use for a class with no heals. Midgard's `group.json` pins Bragi to `melee` for this; the kit carries it with the class. The melee list plays `song` and `meleeFight` already.
+**Why melee:** `roleForClass` makes a Skald `support`, a list that stands at range, heals and never swings, which is no use for a class with no heals. Midgard's `group.json` pins Bragi to `melee` for this; the kit carries it with the class. The melee list plays `song` and `meleeFight` already.
+
+**Why shoutMezz (2026-11-09, after arena round 4):** Crippling Shout is an instant mezz (range 700, 18 s, 30 s between uses) and the melee list has no `crowdControl`, so he never cast it. `shoutMezz` casts it in a fight at a free enemy player in reach that is hitting one of our soft members (healer, caster), else at an enemy healer; never at the focus, at someone's cc order, at what another member is casting cc at, at what one of ours or a pet is hitting (the blow would wake it) or at a mezz-immune one. Nothing else is worth the 30 s timer. It reports as `cc`, and marks the mezz on the board so the others leave it alone. Bragi's `character.ts` puts `interrupt()` (Warshriek on a caster) after it. Not measured yet: `cc` actions on Bragi and the healers' `crowd_controlled` and deaths in the next Midgard rounds.
+
+**Community, unverified:** a good Skald's RvR priority is denying enemy casters and healers with his instant shouts (damage, snare, short mezz), splitting off to them when they cast freely and staying on the assist train when the target is low ([Blackthorn Skald guide](https://blackthorn-daoc.com/wiki/skald-guide)). Damage-add chant in fights, speed out of them.
 
 ## Builds
 
@@ -67,9 +71,7 @@ About twice the damage, with the ranges apart. Styles, joining at once and the s
 
 ## An order nobody carries out
 
-**Server code.** `Spellbook.capabilities().cc` counts Crippling Shout (a mezz, range 700, instant, 18 s, 30 s between uses), but a member reports `cc` only when its list has `crowdControl`, and the melee list doesn't, so `assignCc` no longer hands Bragi an add. In round 11 it did, and the assignment did nothing ([rvr.md](../rvr.md)).
-
-**Not tried:** `{ ...skald(), react: [crowdControl({ assignedOnly: true })] }` in a character. An instant mezz from a melee at range 700 is what the shout is for, and it needs a run: it stops his swing each time, and range 700 is close for most of an add's life.
+**Server code.** `Spellbook.capabilities().cc` counts Crippling Shout, but a member reports `cc` only when its list has `crowdControl`, and the melee list doesn't, so `assignCc` no longer hands Bragi an add. In round 11 (2026-11-03) it did, and the assignment did nothing ([rvr.md](../rvr.md)). The kit's `shoutMezz` picks its own targets instead of waiting for an order.
 
 ## Not supported yet
 

@@ -212,7 +212,8 @@ describe('skald guide', () => {
     test('its table is what the rule gives', () => tableHolds('Skald', ['Even songs and Hammer', 'Battlesongs first', 'Hammer first']));
 
     test('the kit makes it melee, whose list sings and swings; a plain Skald is support', () => {
-        expect(skald()).toEqual({ role: 'melee' });
+        expect(skald().role).toBe('melee');
+        expect(skald().react!.map(b => b.name)).toEqual(['shoutMezz']);
         expect(roleForClass('Skald')).toBe('support');
         const list = defaultBehaviors().melee.map(b => b.name);
         expect(list).toContain('song');
@@ -227,7 +228,7 @@ describe('skald guide', () => {
         expect(damage(reachOfBuild(getBuild('Skald', 'Hammer first')!, 24))).toBe('Chant of the Charge');
     });
 
-    test('its shout is a mezz the coordinator can assign, which the melee list never casts', () => {
+    test('its shout is a mezz the melee list never casts: shoutMezz in the kit does', () => {
         expect(even().cc?.kind).toBe('mezz');
         expect(even().cc?.spell.name).toBe('Crippling Shout');
     });
