@@ -214,17 +214,26 @@ const PATROL_TURN: Record<PlayerRealm, 1 | -1> = { albion: -1, midgard: 1, hiber
  * ring is the pair's (PAIR_RADIUS round BattlegroundLayout.pairs), and the realm first in the
  * alphabet goes round by increasing angle, the other the other way. Empty outside a known battleground.
  */
+/** The ring the default patrol goes round: the pair's spot (PAIR_RADIUS) against an opponent, else the meeting point (PATROL_RADIUS); null outside a known battleground. */
+export function patrolRing(regionId: number, realm: Realm, opponent?: PlayerRealm | null): (Point & { r: number; pair: boolean }) | null {
+    const bg = BATTLEGROUND_LAYOUTS[regionId];
+    if (!bg || realm === 'none') return null;
+    const pair = opponent && opponent !== realm ? pairMeet(regionId, realm, opponent) : null;
+    return pair ? { x: pair.x, y: pair.y, r: PAIR_RADIUS, pair: true } : { x: bg.meet.x, y: bg.meet.y, r: PATROL_RADIUS, pair: false };
+}
+
 export function defaultPatrol(regionId: number, realm: Realm, level: number, settings: Partial<KeepSettings & Pick<RvrSettings, 'opponent' | 'stayDry'>> = {}): Point3[] {
     const bg = BATTLEGROUND_LAYOUTS[regionId];
     const home = homeOf(regionId, realm);
-    if (!bg || !home || realm === 'none') return [];
+    const ring = patrolRing(regionId, realm, settings.opponent);
+    if (!bg || !home || !ring) return [];
     const blocked = [...aggroZones(regionId, level), ...keepDangers(regionId, realm, settings)];
     const dry = staysDry(settings);
     const { opponent } = settings;
-    const pair = opponent && opponent !== realm ? pairMeet(regionId, realm, opponent) : null;
-    const centre = pair ?? bg.meet;
-    const radius = pair ? PAIR_RADIUS : PATROL_RADIUS;
-    const turn = pair ? (realm < opponent! ? 1 : -1) : PATROL_TURN[realm];
+    const pair = ring.pair;
+    const centre: Point = ring;
+    const radius = ring.r;
+    const turn = pair ? (realm < opponent! ? 1 : -1) : PATROL_TURN[realm as PlayerRealm];
     const a0 = Math.atan2(home.arrival.y - centre.y, home.arrival.x - centre.x);
     const out: Point3[] = [];
     for (let k = 0; k < PATROL_POINTS; k++) {
@@ -405,6 +414,13 @@ export function spotAlong(t: Trip, from: Point, way: Point, distance: number): P
     const spot = t.dry ? drySpot(t.regionId, picked, { toward: from, ok: q => clearOf(q, blocked) }) : picked;
     return { x: spot.x, y: spot.y, z: t.zAt(spot) };
 }
+
+/**
+ * In a pair round a group within its ring's radius plus this of the pair's spot is at the ring. Away from it, it sets out
+ * with one member short of power, and doesn't wait for members away from it (released at home: they walk out to it);
+ * at the ring it rests for them (decideRvr). Orchestrator, 2026-11-09: rounds lost minutes regrouping before the first fight.
+ */
+const AT_RING = 1500;
 
 /** rvrFindings' contact finding: the first fight with players this late in a pair round, or this long without one. */
 const SLOW_FIRST_FIGHT_S = 240, SLOW_QUIET_S = 300;
@@ -659,7 +675,14 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 
     // ── Regroup: wait for the dead to be rezzed or release, then meet those walking back from the portal keep ──
     if (deadHere.length) return { ...calm, phase: 'recover', anchor: stay, waiting: deadHere.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadHere)}: a rez or a release${gone}` };
-    if (far.length) {
+    // A pair round with no enemy in sight: away from the ring, go there with one short of power and without those away (they walk
+    // out to us, holdFormation); at it, rest for them. With an enemy in sight, as before: regroup first.
+    const ring = !s.patrol && s.opponent && !seen.length ? patrolRing(regionId, realm, s.opponent) : null;
+    const pairRing = ring?.pair ? ring : null;
+    const atRing = !!pairRing && dist(centre, pairRing) <= pairRing.r + AT_RING;
+    const onTheWay = !!pairRing && !atRing && low.length <= HUNT_UNREADY && low.every(w => w.why === 'power' || w.why === 'pet power');
+    if (far.length && atRing) return { ...calm, phase: 'recover', anchor: stay, waiting: [...far.map(m => ({ name: m.name, why: 'away' })), ...low], objective: `wait at the ring for ${names(far)}${gone}`, reason: `waiting at the ring for ${names(far)}, ${Math.round(dist(centre, centroid(far)))} away${low.length ? `, and ${low.map(w => `${w.name}'s ${w.why}`).join(', ')}` : ''}` };
+    if (far.length && !pairRing) {
         // A far tank walks back by himself: a leg toward a middle with him in it meets nobody. Only him to meet, they go to meet him: there is no base to wait at.
         const walking = farTank(here, s.gatherRadius);
         const meeting = far.filter(m => m !== walking);
@@ -667,7 +690,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         stepLeg(trip, 'gather', them, { from: centre, movers: main, replan: Infinity, meet: true });
         return { ...calm, phase: 'gather', anchor: mem.leg, facing: them, waiting: far.map(m => ({ name: m.name, why: 'away' })), objective: `regroup with ${names(far)}${gone}`, reason: `meeting ${names(far)}, ${Math.round(dist(centre, them))} away` };
     }
-    if (low.length) return { ...calm, phase: 'recover', anchor: stay, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)` };
+    if (low.length && !onTheWay) return { ...calm, phase: 'recover', anchor: stay, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)` };
 
     // ── Patrol: the loop in legs, next waypoint once everyone stands at the leg that ends at this one ──
     const key = `${regionId}:${realm}:${level}:${s.opponent ?? ''}:${dry}`;

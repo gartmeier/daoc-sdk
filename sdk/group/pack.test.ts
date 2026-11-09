@@ -565,6 +565,15 @@ describe('decidePack: nobody walks alone', () => {
         expect(distTo(u.anchor!, keep)).toBeLessThan(distTo(middle, keep));
     });
 
+    test('in a pair round nobody is picked up: the pack goes for its ring, the released one walks out to it', () => {
+        const m: any = { realm: 'hibernia' };
+        const u = decidePack(ctx(picture(thid({ Menta: { x: keep.x, y: keep.y } })), { memory: m, settings: { patrol: null, opponent: 'midgard' } }));
+        expect(u.waiting!.some(w => w.why === 'pickup')).toBe(false);
+        expect(u.phase).toBe('travel');
+        expect(u.reason).toMatch(/^patrol/);
+        expect(m.pack).not.toBe('home');
+    });
+
     test('once the pack is near, nobody is waiting and it rebuffs together', () => {
         const m: any = { realm: 'hibernia', pack: 'home', hadDead: true };
         const near = { x: keep.x + 300, y: keep.y };

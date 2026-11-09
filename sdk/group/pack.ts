@@ -24,7 +24,7 @@ import { isAlive, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
 import { aggroZones } from './terrain';
-import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, monsterAdds, onWhom, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import type { ColumnOrder, Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -294,7 +294,9 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const stay: Point3 = onLand(centre, centre);
     const facing = free[0] ? { x: free[0].x, y: free[0].y } : undefined;
     // Released members at the keep stay put until the pack is within gatherRadius of them (they are in `main` then).
-    const pickups = homeSpot ? far.filter(m => dist(m, homeSpot) <= k.keepRadius) : [];
+    // In a pair round nobody is picked up: those released walk out to the pack at its ring, which rests there for them (decideRvr).
+    const pairRound = !s.patrol && !!s.opponent && !!patrolRing(regionId, realm, s.opponent)?.pair;
+    const pickups = homeSpot && !pairRound ? far.filter(m => dist(m, homeSpot) <= k.keepRadius) : [];
     const pickupWait = pickups.map(m => ({ name: m.name, why: 'pickup' }));
     const dead = p.members.filter(m => m.isDead && m.regionId === regionId);
     const none = { focus: null, puller: null, cc: [], retreatTo: null };
@@ -478,7 +480,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             const to = spotAlong(trip, centre, runWay(centre, free, homeSpot), k.pullBack);
             return say({ ...none, phase: 'retreat', retreatTo: to, anchor: to, objective: 'go home to regroup', reason: 'broken pack: running' });
         }
-        else if (!far.length && !dead.length && main.length >= Math.min(k.minTogether, here.length)) {
+        else if ((!far.length || pairRound) && !dead.length && main.length >= Math.min(k.minTogether, here.length)) {
             if (mem.hadDead) { mem.pack = 'rebuff'; mem.rebuffAt = now; mem.hadDead = false; } else mem.pack = 'stalk';
         } else if (homeSpot && dist(centre, homeSpot) > 1000) {
             // Toward the keep, in legs everyone follows: a scattered pack comes together on the way, and stops as soon as it has.
@@ -494,7 +496,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     if (mem.pack === 'rebuff') {
         if (free.some(c => dist(c, centre) <= k.standoff)) mem.pack = 'stalk';
         else {
-            if (pickups.length || far.length || dead.length) { mem.pack = 'home'; mem.legKind = null; return say({ ...none, phase: 'recover', anchor: stay, reason: 'regrouping: someone is missing again' }); }
+            if (pickups.length || (far.length && !pairRound) || dead.length) { mem.pack = 'home'; mem.legKind = null; return say({ ...none, phase: 'recover', anchor: stay, reason: 'regrouping: someone is missing again' }); }
             const low = here.flatMap(m => [
                 ...(m.hp < k.rebuffReady.hp ? [{ name: m.name, why: 'health' }] : []),
                 ...(usesMana(m) && m.mana < k.rebuffReady.mana ? [{ name: m.name, why: powerWhy(m) }] : []),

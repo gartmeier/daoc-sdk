@@ -1074,3 +1074,32 @@ describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('stepLeg with stayDry: a 
         expect(wet.legKind).toBe('hunt');
     });
 });
+
+describe('decideRvr in a pair round: no regrouping on the way to the ring', () => {
+    // Hibernia against Midgard: the ring round (33000, 25000). Three at Hibernia's arrival, two released and walking out from 9k off.
+    const T = 252;
+    const ring = BATTLEGROUND_LAYOUTS[T]!.pairs!['hibernia|midgard']!;
+    const home = homeOf(T, 'hibernia')!.arrival;
+    const run = (base: Point, over: Partial<Record<string, Partial<MemberReport>>>, opponent: 'midgard' | null = 'midgard') =>
+        decideRvr(ctx(picture(team(over, base, T), []), { memory: { realm: 'hibernia' }, settings: { patrol: null, opponent } }));
+    const away = { Menta: { x: home.x + 9000, y: home.y + 2000 }, Encha: { x: home.x + 9200, y: home.y + 2000 } };
+
+    test('members away don\'t hold the group: it goes for the ring, and waits for them there', () => {
+        const u = run(home, away);
+        expect(u.phase).toBe('travel');
+        expect(u.reason).toMatch(/^patrol/);
+        const at = run({ x: ring.x - 4000, y: ring.y }, { Menta: { x: home.x, y: home.y }, Encha: { x: home.x + 100, y: home.y } });
+        expect(at.phase).toBe('recover');
+        expect(at.waiting).toEqual(expect.arrayContaining([{ name: 'Menta', why: 'away' }, { name: 'Encha', why: 'away' }]));
+        // Not a pair round: they are met halfway, as before.
+        expect(run(home, away, null).phase).toBe('gather');
+    });
+
+    test('one short of power sets out; two, or at the ring, rest first', () => {
+        expect(run(home, { Menta: { mana: 20 } }).reason).toMatch(/^patrol/);
+        expect(run(home, { Menta: { mana: 20 }, Encha: { mana: 20 } }).phase).toBe('recover');
+        expect(run({ x: ring.x - 4000, y: ring.y }, { Menta: { mana: 20 } }).phase).toBe('recover');
+        // Short of health is no power: rest first.
+        expect(run(home, { Menta: { hp: 40 } }).phase).toBe('recover');
+    });
+});
