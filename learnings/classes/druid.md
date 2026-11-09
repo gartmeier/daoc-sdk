@@ -96,3 +96,5 @@ What the class has that no behaviour uses:
 **From round 17** her kit's `urgent` starts with `rootDiver`: Holding Vines (Nature, 2.5 s, range 1500, 38 s; a root on a player holds half of that by the board, then ends on damage or expiry) on an enemy player swinging at a member who isn't the tank, our support first, then the nearest. Not on the focus (the group's damage would break it), not on one in someone's crowd control or assigned for it, not root-immune (60 s after one, `immunity_timer_flat_length`), by our view's 3D distance with a 60 margin, never with a melee on herself (`hammeredBy`), above 15 % power. A landed root is marked like `crowdControl`'s, so nobody hits it, and `flee` walks the member out of a rooted melee's reach (`rootedOnUs`).
 
 **Server code:** a speed song takes no effect in combat (`SpeedEnhancementSpellHandler.cs:69`), so a dived member can't outrun the melee without it.
+
+**Arena round 20** (wiped Midgard 5-1): Brigid 19 heals and 16 turns of "heal: not enough power" (dry). `rootDiver` uses the same 150 margin as the Flash from round 21. Watch her power: Renewing Conflux is 57 a cast, and her floor for it is 25 %.

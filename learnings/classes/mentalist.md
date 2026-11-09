@@ -112,3 +112,5 @@ From round 11 the kit's fight is `nukerFight(0, true)` from `sdk/classes/cabalis
 **Arena round 15** (wiped Camelot 5-0): Niamh was the one dived, 51 % of the fight in melee reach, 4 nukes. No Flash, as meant: `hammeredBy` holds it. A Mentalist at 24 has no instant spell to answer a melee on herself (Flash 2.5 s, Cripple Mind 3 s, Delirium 3 s), so that is the peel's and the others' crowd control.
 
 **Arena round 18** (wiped 0-5 by Midgard, 171 s): Niamh 11 heals, 10 nukes, 4 cc, no Flash. The role list's `emergencyHeal` (members under 40 %) sits above her kit, so in a long losing fight her turns go to heals first. Midgard ran two healers (17 mezz cures, 12 heals) and our focus moved across four targets; nothing died.
+
+**Verified, arena round 20** (wiped Midgard 5-1, the first win against them since round 9): 5 Prismatic Flashes, 2 of them `stun:out_of_range`, 8 nukes, 1,022 damage. The server checks range at the cast's end, and a melee chasing Oisin walks on during the 2.5 s cast: the margin under the range is now 150 (10 % of it, as `castSpell`'s own walk stops), from 60.

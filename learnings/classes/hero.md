@@ -105,3 +105,5 @@ Slam, the 9 s anytime stun, is Shields 42, past level 40 in this build, so it do
 **Arena round 13** (lost 1-4 to Midgard): 36 damage, no style landed. Mezzed at 6 s; after it, the group's peel orders switched his target every 1-3 s ("peel #494 off Oisin", "#492", "#495", "#493"), so he swung at nobody long enough to land a hit. That is the group's peel, not the kit (raised with the Hibernia group session).
 
 **Verified, arena round 15** (wiped Camelot 5-0, no deaths, one 68 s fight): Disable landed for the first time (1), Fire Blade 1; 487 damage.
+
+**Verified, arena round 20** (wiped Midgard 5-1): Disable 3, Numb 1, Fire Blade 1, Taunting Blade 1; 874 damage. The side stun now lands most.

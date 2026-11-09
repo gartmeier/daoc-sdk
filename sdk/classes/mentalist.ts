@@ -18,8 +18,12 @@ export interface MentalistKit {
 const CASTING_MS = 2500;
 /** A stun's length plus the player's 60 s immunity after it (immunity_timer_flat_length, CrowdControlECSEffect.cs:20). */
 const STUN_IMMUNE_MS = 60_000;
-/** The server measures a spell's range in 3D: a foe at the edge by our view can be out of it (round 9: stun:out_of_range). */
-const RANGE_MARGIN = 60;
+/**
+ * The server measures a spell's range in 3D, at the cast's end: a foe at the edge by our view, or one walking off during
+ * the 2.5 s cast, is out of it (round 9: 1 stun:out_of_range at a margin of 0, round 20: 2 of 5 at 60). castSpell's own
+ * walk into range stops 10 % of the range inside, at most 150 (actions.ts castSpell).
+ */
+const RANGE_MARGIN = 150;
 /** Who it saves first: the roles that hold the group up, then anyone, then a healer of theirs at work. */
 const SAVE_FIRST: readonly Role[] = ['support', 'healer'];
 

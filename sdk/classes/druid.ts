@@ -53,8 +53,8 @@ export const groupHeal = (min = 3, above = 25): Behavior => ({
     },
 });
 
-/** The server measures range in 3D: a margin under the spell's range by our view (as the Mentalist's Flash). */
-const RANGE_MARGIN = 60;
+/** The server measures range in 3D at the cast's end: a margin under the spell's range by our view, as the Mentalist's Flash (round 20: 2 of 5 Flashes out of range at 60). */
+const RANGE_MARGIN = 150;
 /** After a root ends a player takes no other for 60 s (immunity_timer_flat_length). */
 const ROOT_IMMUNE_MS = 60_000;
 /** Whose divers she roots first: the roles that hold the group up. A melee on the tank is the fight. */
