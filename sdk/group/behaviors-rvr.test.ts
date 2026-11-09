@@ -537,6 +537,14 @@ describe('crowdControl: immunity and refusals', () => {
         orders: { focus: 51, cc: [{ targetId: 52, by: 'Healer' }] }, castSpell, ...over,
     });
 
+    test('an enemy player swinging at us: no mezz with a cast time, it would be interrupted (hammeredBy)', async () => {
+        const s = cc(async () => ({ success: true, message: 'Cast' }), { contacts: [foe(51, 10_300, 10_000), foe(52, 11_000, 10_500), foe(53, 10_000, 10_650, { target: 'Healer' })] });
+        Object.assign(s.ctx.spells, { cc: () => ({ spell: { name: 'Mesmerize' }, kind: 'mezz', duration: 30, range: 1500, castTime: 2.5 }) });
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(false);
+        expect(s.calls.castSpell).toEqual([]);
+        expect(s.skips.at(-1)).toMatch(/would be interrupted/);
+    });
+
     test('"Your target is immune to this effect!" after the cast (effectImmune): no mezz on the board, and the target is left alone', async () => {
         const s = cc(async () => ({
             success: true, effectImmune: true, message: 'Cast Mesmerize on Norseman (target immune)',
@@ -658,6 +666,17 @@ describe('flee: only from what can follow us to the tank', () => {
         expect(await run(foe(52, 10_000, 12_200, { target: 'Nuker' }))).toEqual({ acted: false, walks: [] });
         expect((await run(foe(52, 10_000, 10_900, { target: 'Nuker' }))).walks).toEqual([{ x: ANCHOR.x, y: ANCHOR.y }]);
         expect((await run(contact(60, { regionId: R, x: 10_000, y: 12_200, threat: true, target: 'Nuker' }))).walks).toEqual([{ x: ANCHOR.x, y: ANCHOR.y }]);
+    });
+
+    test('at the tank with an enemy player still swinging: a step on, straight away from it (arena rounds 1-4: the Bard cast into the swings)', async () => {
+        const s = stub({ name: 'Nuker', role: 'nuker', at: { x: 10_000, y: 10_050 }, members: [tankM], contacts: [foe(52, 10_000, 10_200, { target: 'Nuker' })], orders: { focus: 99 } });
+        expect(await flee().run(s.ctx)).toBe(true);
+        expect(s.calls.walkTo).toHaveLength(1);
+        expect(s.calls.walkTo[0]!.y).toBeCloseTo(10_050 - 450, 0);
+        // A monster there is the tank's to take back, as before.
+        const m = stub({ name: 'Nuker', role: 'nuker', at: { x: 10_000, y: 10_050 }, members: [tankM], contacts: [contact(60, { regionId: R, x: 10_000, y: 10_200, threat: true, target: 'Nuker' })], orders: { focus: 99 } });
+        expect(await flee().run(m.ctx)).toBe(false);
+        expect(m.calls.walkTo).toEqual([]);
     });
 });
 

@@ -185,6 +185,26 @@ export function onMember(t: Contact, m: Point & { name: string }): boolean {
 }
 
 /**
+ * A free enemy in melee on us, if any: a swing, hit or miss, starts a timer of about 3 s that ends any cast reaching half way
+ * meanwhile (CLAUDE.md "Casters get interrupted"), so a spell with a cast time is wasted. Arena rounds 1-4, 2026-11-09: the
+ * Bard's 2.5 s mezz, cast at the tank with the melee still on him, was interrupted every time (cc interrupted 3/15/0/6).
+ */
+export function hammeredBy(ctx: Pick<MemberContext<any>, 'me' | 'threats'>): Contact | undefined {
+    const me = ctx.me();
+    return me ? ctx.threats().find(t => t.kind === 'player' && onMember(t, me)) : undefined;
+}
+
+/** Skipped, with the reason, when a spell with a cast time would only be interrupted (hammeredBy); null to cast. */
+function castBlocked(ctx: MemberContext<any>, what: string, sp: { castTime: number; spell: { name: string } }): string | null {
+    if (!(sp.castTime > 0)) return null;
+    const on = hammeredBy(ctx);
+    return on ? `${what}: ${sp.spell.name} would be interrupted, ${on.name} is in melee on me` : null;
+}
+
+/** How far a caster steps away from the one in melee on it, when there is no tank to run to or it is at the tank already. */
+const KITE_STEP = 450;
+
+/**
  * A monster casting at a member from where it stands, worth the tank's walk: not mezzed, not while the focus is
  * an enemy player (the orders ignore monsters while players are about, rvr.ts), and like an enemy player inside
  * the leash and clear of a keep's guards. Nothing else stops the walk, since it won't come to us. Not an enemy
@@ -652,8 +672,20 @@ export const flee = (): Behavior => ({
         const tank = tankToRunTo(ctx);
         const me = ctx.me();
         const rootedOnUs = (t: Contact) => t.cc?.kind === 'root' && t.target === me.name && dist(t, me) <= MELEE_REACH;
-        if (!tank || !ctx.threats().some(t => onMember(t, me) || rootedOnUs(t))) return false;
-        if (dist(me, tank) < 150) return ctx.skip('attacked, already at the tank');
+        const on = ctx.threats().find(t => onMember(t, me) || rootedOnUs(t));
+        if (!on) return false;
+        // At the tank (or none to run to) and an enemy player still swinging: step on away from it, past the tank, rather than
+        // stand and cast into its swings (hammeredBy). The tank's peel takes it meanwhile; a rooted one is left out of reach.
+        if (!tank || dist(me, tank) < 150) {
+            if (on.kind !== 'player') return tank ? ctx.skip('attacked, already at the tank') : false;
+            // Straight away from it; standing on it, any way will do.
+            const d = dist(me, on);
+            const away = d > 10 ? { x: me.x + (me.x - on.x) / d * KITE_STEP, y: me.y + (me.y - on.y) / d * KITE_STEP } : { x: me.x + KITE_STEP, y: me.y };
+            await stopSwinging(ctx);
+            ctx.doing('flee', on.objectId, `kite from ${on.name}`);
+            reportLeg(ctx, await ctx.bot.walkTo(away.x, away.y, { z: me.z, tolerance: 60, timeout: 3000 }));
+            return true;
+        }
         await stopSwinging(ctx);
         ctx.doing('flee', null, `to ${tank.name}`);
         reportLeg(ctx, await ctx.bot.walkTo(tank.x, tank.y, { z: tank.z, tolerance: 60, timeout: 6000 }));
@@ -684,6 +716,8 @@ export const heal = (opts: { emergencyOnly?: boolean; limits?: Partial<TacticsSe
         const sp = ctx.spells.heal(hurt.maxHp ? hurt.maxHp * (100 - hurt.hp) / 100 : undefined);
         // None at all is no shortage of power (spells.heal reads null for both).
         if (!sp) return ctx.spells.capabilities().heal ? ctx.skip('heal: not enough power') : false;
+        const blocked = castBlocked(ctx, 'heal', sp);
+        if (blocked) return ctx.skip(blocked);
         await stopSwinging(ctx);
         ctx.doing('heal', hurt.objectId, sp.spell.name);
         const c = await ctx.bot.castSpell(sp.spell, hurt.objectId);
@@ -846,6 +880,8 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
             await Bun.sleep(Math.min(held, CC_HELD_LOOK_MS));
             return true;
         }
+        const blocked = castBlocked(ctx, 'cc', sp);
+        if (blocked) return ctx.skip(blocked);
         ctx.doing('cc', target.objectId, sp.spell.name);
         await petOffForCc(ctx, target, sp.kind);
         // An area mezz goes on its neighbours too, and our pet's next swing would wake the one it is on.

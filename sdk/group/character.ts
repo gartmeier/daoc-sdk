@@ -4,6 +4,7 @@
 // The role is the character's job in a group: where it stands, what it may be ordered to do. The
 // character says how it does that job. Its behaviours go into the role's list at the fight:
 //
+//   urgent  above the role's main action (a mezz cure that must not wait for heals and songs)
 //   react   above the fight (a heal)
 //   fight   replaces the role's fight (tank, assist)
 //   chores  right below the fight
@@ -22,6 +23,12 @@ const ROLES: readonly Role[] = ['tank', 'healer', 'support', 'nuker', 'melee'];
 export interface Character<S = any> {
     /** Its job when group.json doesn't pin one, ahead of the role its class would get. */
     role?: Role;
+    /**
+     * Above the role's main action. In a list with a fight or position() that is react's place, ahead of it; in one with
+     * neither (the pack's healer and support), above its first heal, interrupt, crowd control or song, where react would go
+     * at shedLoad and get only the turns those leave.
+     */
+    urgent?: Behavior<S>[];
     react?: Behavior<S>[];
     fight?: Behavior<S>[];
     chores?: Behavior<S>[];
@@ -34,6 +41,8 @@ export interface Character<S = any> {
 
 /** The behaviours a role's list fights with. */
 export const ROLE_FIGHT: ReadonlySet<string> = new Set(['tank', 'assist', 'assistMelee']);
+/** A healer's or support's main work, in a list without a fight: a character's urgent behaviours go above the first of them. */
+const MAIN_ACTIONS: ReadonlySet<string> = new Set(['heal', 'interrupt', 'crowdControl', 'backupHeal', 'confuse', 'song']);
 
 /**
  * A role's list with a character's behaviours in it. A list without a fight (a healer's) takes them
@@ -47,8 +56,20 @@ export function withCharacter<S>(list: Behavior<S>[], character: Character<S> | 
     const stands = list.findIndex(b => b.name === 'position');
     const chores = list.findIndex(b => b.name === 'shedLoad');
     const at = first >= 0 ? first : stands >= 0 ? stands : chores >= 0 ? chores : list.length;
+    // No fight and no position (the pack's healer and support lists): urgent goes above the role's main action.
+    const main = first < 0 && stands < 0 ? list.findIndex(b => MAIN_ACTIONS.has(b.name)) : -1;
+    if (main >= 0 && main < at) return [
+        ...list.slice(0, main),
+        ...character.urgent ?? [],
+        ...list.slice(main, at),
+        ...character.react ?? [],
+        ...character.fight ?? [],
+        ...character.chores ?? [],
+        ...list.slice(at),
+    ];
     return [
         ...list.slice(0, at),
+        ...character.urgent ?? [],
         ...character.react ?? [],
         ...character.fight ?? list.filter(isFight),
         ...character.chores ?? [],
@@ -67,7 +88,7 @@ export async function loadCharacter(bot: string): Promise<Character | null> {
     const c = mod.default as Character | undefined;
     if (!c) throw new Error(`${path}: needs a default export`);
     if (c.role !== undefined && !ROLES.includes(c.role)) throw new Error(`${path}: role "${c.role}"; use one of ${ROLES.join(', ')}`);
-    for (const k of ['react', 'fight', 'chores'] as const) {
+    for (const k of ['urgent', 'react', 'fight', 'chores'] as const) {
         if (c[k] !== undefined && !Array.isArray(c[k])) throw new Error(`${path}: ${k} must be a list of behaviours`);
     }
     if (c.pet !== undefined && c.pet !== false && (typeof c.pet !== 'object' || c.pet === null)) throw new Error(`${path}: pet must be false or { fnfFloor }`);

@@ -25,6 +25,22 @@ describe('withCharacter', () => {
         expect(names(withCharacter(role, { react: [own('myHeal')] }))).toEqual(['release', 'myHeal', 'tank', 'shedLoad', 'buff', 'rest']);
     });
 
+    test('no fight and no position (the pack\'s support): urgent above its main action, react, fight and chores at shedLoad', () => {
+        const support = [release(), own('flee'), own('interrupt'), own('crowdControl'), own('song'), shedLoad(), buff(), rest()];
+        expect(names(withCharacter(support, { urgent: [own('cureMezz')], react: [own('myReact')], fight: [own('myFight')], chores: [own('myChore')] })))
+            .toEqual(['release', 'flee', 'cureMezz', 'interrupt', 'crowdControl', 'song', 'myReact', 'myFight', 'myChore', 'shedLoad', 'buff', 'rest']);
+        const healer = [release(), own('emergencyHeal'), own('flee'), heal(), own('crowdControl'), shedLoad(), rest()];
+        expect(names(withCharacter(healer, { urgent: [own('cureMezz')] })))
+            .toEqual(['release', 'emergencyHeal', 'flee', 'cureMezz', 'heal', 'crowdControl', 'shedLoad', 'rest']);
+        // React stays where it was: below heal and crowd control.
+        expect(names(withCharacter(healer, { react: [own('cureMezz')] })))
+            .toEqual(['release', 'emergencyHeal', 'flee', 'heal', 'crowdControl', 'cureMezz', 'shedLoad', 'rest']);
+    });
+
+    test('with a fight, urgent goes where react does, ahead of it', () => {
+        expect(names(withCharacter(role, { urgent: [own('cure')], react: [own('myHeal')] }))).toEqual(['release', 'cure', 'myHeal', 'tank', 'shedLoad', 'buff', 'rest']);
+    });
+
     test('a role list with no fight takes it where position() would keep it at range', () => {
         const healer = defaultBehaviors().healer;
         const list = names(withCharacter(healer, { fight: [own('myFight')] }));
