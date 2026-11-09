@@ -33,11 +33,11 @@ type Who = Pick<MemberReport, 'name' | 'role' | 'isDead' | 'regionId' | 'x' | 'y
 
 /**
  * Whom to stun, if anyone: an enemy player in melee on a member who isn't the tank (a healer first, then the nearest
- * to us; an enemy pet doing so counts), else the enemy healer while our focus is at or below `healerBelow` %, or with no healer in reach the focus itself. Otherwise only players: a monster's stun
+ * to us; an enemy pet doing so counts), else the enemy `marked` by the group (an enemy mezzer, at any health), else the enemy healer while our focus is at or below `healerBelow` %, or with no healer in reach the focus itself. Otherwise only players: a monster's stun
  * shortens with every repeat. Never one under crowd control (a stun would
  * wake a mezz, and a stun on a stun is wasted), nor one immune to stuns, nor one beyond `range` of us.
  */
-export function stunTarget(me: Who, members: readonly Who[], threats: readonly Contact[], focus: Contact | undefined, range: number, healerBelow = STUN_HEALER_BELOW, now = Date.now()): { target: Contact; why: 'peel' | 'healer' | 'focus' } | null {
+export function stunTarget(me: Who, members: readonly Who[], threats: readonly Contact[], focus: Contact | undefined, range: number, healerBelow = STUN_HEALER_BELOW, now = Date.now(), marked: number | null = null): { target: Contact; why: 'peel' | 'mezzer' | 'healer' | 'focus' } | null {
     const free = (c: Contact) => !c.stale && !c.cc && !ccImmuneTo(c, 'stun', now) && c.regionId === me.regionId && dist(me, c) <= range;
     const open = threats.filter(c => c.kind === 'player' && !c.isPet && free(c));
     // A peel takes an enemy pet too: a Spiritmaster's spirit warrior interrupted Morgana and Taliesin to death in arena round 8.
@@ -48,6 +48,9 @@ export function stunTarget(me: Who, members: readonly Who[], threats: readonly C
         .filter((x): x is { c: Contact; on: Who } => !!x.on)
         .sort((a, b) => Number(b.on.role === 'healer') - Number(a.on.role === 'healer') || dist(me, a.c) - dist(me, b.c));
     if (onSoft[0]) return { target: onSoft[0].c, why: 'peel' };
+    // The group's marked enemy mezzer, at any health: a stun ends its cast and holds the next for 5 s.
+    const mezzer = marked === null ? undefined : open.find(c => c.objectId === marked);
+    if (mezzer) return { target: mezzer, why: 'mezzer' };
     if (!focus || focus.kind !== 'player' || focus.hp > healerBelow) return null;
     const healer = open.filter(c => c.healer && c.objectId !== focus.objectId).sort((a, b) => dist(me, a) - dist(me, b))[0];
     if (healer) return { target: healer, why: 'healer' };
@@ -67,7 +70,10 @@ export function stunSpell(all: readonly SpellPick[], mana: number): SpellPick | 
  * isn't marked as crowd control (the nukers would hold off it); on anyone else it is, for its length. Either way the
  * target is marked immune to stuns for its length and the minute after.
  */
-export const stunPeel = (opts: { healerBelow?: number; minMana?: number } = {}): Behavior<TacticsSettings> => ({
+/** Camelot's marked enemy mezzer (groups/camelot/tactics.ts): set in engage while Merlin can't mezz it; null otherwise and in other groups. */
+export const camelotMezzer = (o: unknown): number | null => (o as { camMezzer?: number | null }).camMezzer ?? null;
+
+export const stunPeel = (opts: { healerBelow?: number; minMana?: number; marked?: (orders: unknown) => number | null } = {}): Behavior<TacticsSettings> => ({
     name: 'stunPeel',
     interruptible: false,
     async run(ctx) {
@@ -77,7 +83,7 @@ export const stunPeel = (opts: { healerBelow?: number; minMana?: number } = {}):
         if (me.maxMana > 0 && me.manaPercent < (opts.minMana ?? STUN_MIN_MANA)) return false;
         const sp = stunSpell(ctx.spells.all(), me.mana);
         if (!sp) return false;
-        const pick = stunTarget({ ...me, name: ctx.name, role: ctx.role, isDead: false }, ctx.members(), ctx.threats(), ctx.focus(), sp.range, opts.healerBelow, Date.now());
+        const pick = stunTarget({ ...me, name: ctx.name, role: ctx.role, isDead: false }, ctx.members(), ctx.threats(), ctx.focus(), sp.range, opts.healerBelow, Date.now(), opts.marked?.(o) ?? null);
         if (!pick) return false;
         const seen = foeInView(ctx, pick.target.objectId);
         if (!seen || isDown(ctx, seen) || seen.distance > sp.range - STUN_RANGE_MARGIN) return ctx.skip('stunPeel: target out of reach');
@@ -103,5 +109,5 @@ const notOnPlayers = (inner: Behavior<TacticsSettings>): Behavior<TacticsSetting
 });
 
 export function cleric({ saveBelow = 50, stun = true }: ClericOptions = {}): Character {
-    return { role: 'healer', fight: [...(stun ? [stunPeel()] : []), notOnPlayers(thrifty(assist(), saveBelow))] };
+    return { role: 'healer', fight: [...(stun ? [stunPeel({ marked: camelotMezzer })] : []), notOnPlayers(thrifty(assist(), saveBelow))] };
 }

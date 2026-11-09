@@ -41,6 +41,8 @@ export default cleric();                       // or cleric({ saveBelow: 30 })
 
 **Arena round 11** (Camelot took the cap from Midgard, 6/6): `stun` 3 landed, 1 resisted, 2 `out_of_range` at the edge, so she now casts only within 1450. 26 heals, no deaths. **Not done, on purpose:** Galahad's shield stun styles (Numb 2 s). StyleStun and spell stuns share one 60 s StunImmunity on players (EffectHelper.cs:281), so his 2 s stun would shut out her 5 s one.
 
+**After rounds 12 and 15** (Hibernia's opening mezz wiped Camelot twice): the Camelot group marks the enemy that mezzed one of us (`orders.camMezzer`, groups/camelot/tactics.ts). It's set while Merlin can't mezz it. `stunPeel` now stuns that marked enemy at any health, right after a peel and before the enemy healer, which ends its cast and holds it 5 s. `cleric()` reads Camelot's field (`camelotMezzer`). Elsewhere it is null, and a plain `stunPeel()` (the Midgard Healer kit's) doesn't read it.
+
 **To look for:** `stun` results in her report line, `heal` count against round 5's 12, and deaths of Merlin and Taliesin, who were in melee 19 % and 31 % of fight time.
 
 **Community, unverified** (the research agent's notes; web sources were thin, the server-code points are checked): stand at the back inside heal range (about 2000). Don't Smite at low Smite spec, except to finish a near-dead enemy when nobody needs heals. Heal the enemy's target first, then yourself. Buff Str/Con and Dex/Qui on the melee members first, then AF. Rez after the fight. **Server code:** instant spells skip the interrupt check (SpellHandler.cs:597, :603). A player is immune to spell stuns for 60 s after one ends (ECSGameEffect.cs:54).

@@ -3,7 +3,7 @@ import { getBuild } from '../../data/builds';
 import { rvrBehaviors } from '../group/rvr';
 import { withCharacter } from '../group/character';
 import type { Contact } from '../group/types';
-import { cleric, stunTarget } from './cleric';
+import { camelotMezzer, cleric, stunTarget } from './cleric';
 import { reachOfBuild } from './reach';
 
 const NOW = 1_000_000;
@@ -41,6 +41,18 @@ describe('the cleric kit', () => {
         expect(stunTarget(me, members, [foe(1, { x: 650, y: 0, target: 'Merlin', cc: { by: 'Merlin', kind: 'mezz', until: NOW + 5000 } })], undefined, 1500, 60, NOW)).toBeNull();
         expect(stunTarget(me, members, [foe(1, { x: 650, y: 0, target: 'Merlin', ccImmune: { stun: NOW + 30_000 } })], undefined, 1500, 60, NOW)).toBeNull();
         expect(stunTarget({ ...me, x: -2000 }, members, [foe(1, { x: 650, y: 0, target: 'Merlin' })], undefined, 1500, 60, NOW)).toBeNull();
+    });
+
+    test('the marked mezzer at any health, after a peel and before the enemy healer', () => {
+        const bard = foe(5, { hp: 100, y: 1300 });
+        const healer = foe(2, { healer: true, y: 1400 });
+        const focus = foe(1, { hp: 40 });
+        expect(stunTarget(me, members, [focus, healer, bard], focus, 1500, 60, NOW, 5)).toEqual({ target: bard, why: 'mezzer' });
+        const onMerlin = foe(3, { x: 650, y: 0, target: 'Merlin' });
+        expect(stunTarget(me, members, [onMerlin, bard], undefined, 1500, 60, NOW, 5)?.why).toBe('peel');
+        expect(stunTarget(me, members, [{ ...bard, ccImmune: { stun: NOW + 9000 } }], undefined, 1500, 60, NOW, 5)).toBeNull();
+        expect(camelotMezzer({ phase: 'engage', camMezzer: 5 })).toBe(5);
+        expect(camelotMezzer({ phase: 'engage' })).toBeNull();
     });
 
     test('the enemy healer once our focus is low, else the focus itself, and not before', () => {
