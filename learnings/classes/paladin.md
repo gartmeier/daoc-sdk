@@ -129,11 +129,14 @@ export default paladin({ twist: CHANT_TWIST });
 
 The fewest deaths of the group, with the lowest damage of the three tanks: Slash 18 against a Hero's Blades 24 and a Warrior's Axe 24. Template health is 616.
 
+## Self AF (kit, from arena round 5, 2026-11-09)
+
+**Server code.** Aura of Indestructability (Chants 24, value 37, 17 power, 20 minutes; Aura of Defense at Chants 17) is a `PaladinArmorFactorBuff`: its own effect group (`PaladinAf`, EffectHelper.cs) in the uncapped `OtherBuff` category (SingleStatBuff.cs), so it adds to Crusader's Defense and to Nimue's AF buffs. `buff()` doesn't slot that type, so the kit's `selfBuff` chore (`sdk/classes/paladin.ts`) casts it between fights when no rank of it is on him. Not yet seen in a round: look for `buff` results naming it in his first Camelot round after commit.
+
 ## Not supported yet
 
 All of these are his and no behaviour casts them:
 
 - **Crusader's Refreshment** (Chants 20), a group heal pulse: a `combatHeal` song, which gets a turn only with a twist. It heals nobody out of combat (`CombatHealSpellHandler`), so it isn't a between-fights `health` song.
-- **Aura of Indestructability** (Chants 24, value 37, 17 power, 20 minutes), a self AF. `slotOf` doesn't know `PaladinArmorFactorBuff`.
 - **Aggravate** (Chants 15), an instant taunt at range 1350, every 30 s. It would peel an add without walking.
 - Only one pulse plays at a time ([spells.md](../spells.md)), so without a twist (above) endurance, heal, AF and damage are a choice. Crusader's Defense counts as a spec AF, capped at level x 1.875 (45 at 24; `ArmorFactorCalculator`), so its 61 gives 45 at most.
