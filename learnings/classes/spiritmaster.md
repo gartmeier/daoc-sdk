@@ -10,6 +10,8 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 
 `sdk/classes/spiritmaster.ts` is a `nuker` whose fight is `assist()`, then `nukeInReach()`. **Why (2026-11-10, after arena round 20):** with the pack holding ground, `assist` skips when the focus is beyond her nukes ("focus out of reach, holding ground"), and she stood idle: 36 % of fight time in round 4, 22 % in 6, 45 % in 19, 39 % (53 skips) in 20, a round Hibernia won by wipe. A human caster nukes what is in reach instead. `nukeInReach` gets the turn only when `assist` has none: her best single-target nuke at a free enemy player in range (50 inside it), not the focus, never one under crowd control (a nuke wakes a mezz), healers first, then casters, the most hurt, the nearest; not while a melee is on her (`hammeredBy`). It reports as `nuke`. Her pet stays on the focus. Not measured yet: her idle share and damage in the next Midgard rounds.
 
+**Round 22 (2026-11-10, vs Camelot, won by wipe 5 kills / 1 death; with the group's standStep 1000):** idle 0 % (39 % in round 20), 14 nukes, 2039 damage, first nuke 3.1 s; 5 `nuke:out_of_range` and 3 interrupted. Whether the out-of-range ones are `assist`'s or `nukeInReach`'s the report doesn't say; if they keep coming, widen RANGE_MARGIN.
+
 Before that the kit held only the role. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.
 
 In PvE, Midgard's `memberBehaviors.hrafna` (the nuker's list plus `restOnPull`) overrides any character. In RvR nothing does.
