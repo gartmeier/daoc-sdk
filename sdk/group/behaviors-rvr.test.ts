@@ -668,11 +668,17 @@ describe('flee: only from what can follow us to the tank', () => {
         expect((await run(contact(60, { regionId: R, x: 10_000, y: 12_200, threat: true, target: 'Nuker' }))).walks).toEqual([{ x: ANCHOR.x, y: ANCHOR.y }]);
     });
 
-    test('at the tank with an enemy player still swinging: a step on, straight away from it (arena rounds 1-4: the Bard cast into the swings)', async () => {
+    test('at the tank with an enemy player still swinging: round the tank to its far side from it, inside 150 (arena rounds 1-4: the Bard cast into the swings)', async () => {
         const s = stub({ name: 'Nuker', role: 'nuker', at: { x: 10_000, y: 10_050 }, members: [tankM], contacts: [foe(52, 10_000, 10_200, { target: 'Nuker' })], orders: { focus: 99 } });
         expect(await flee().run(s.ctx)).toBe(true);
         expect(s.calls.walkTo).toHaveLength(1);
-        expect(s.calls.walkTo[0]!.y).toBeCloseTo(10_050 - 450, 0);
+        expect(s.calls.walkTo[0]!.y).toBeCloseTo(ANCHOR.y - 130, 0);
+        // Standing there already: a quarter turn round the tank, still within 150 of it.
+        const again = stub({ name: 'Nuker', role: 'nuker', at: { x: 10_000, y: 9_870 }, members: [tankM], contacts: [foe(52, 10_000, 10_050, { target: 'Nuker' })], orders: { focus: 99 } });
+        expect(await flee().run(again.ctx)).toBe(true);
+        const to = again.calls.walkTo[0]!;
+        expect(Math.hypot(to.x - ANCHOR.x, to.y - ANCHOR.y)).toBeCloseTo(130, 0);
+        expect(Math.abs(to.x - ANCHOR.x)).toBeCloseTo(130, 0);
         // A monster there is the tank's to take back, as before.
         const m = stub({ name: 'Nuker', role: 'nuker', at: { x: 10_000, y: 10_050 }, members: [tankM], contacts: [contact(60, { regionId: R, x: 10_000, y: 10_200, threat: true, target: 'Nuker' })], orders: { focus: 99 } });
         expect(await flee().run(m.ctx)).toBe(false);

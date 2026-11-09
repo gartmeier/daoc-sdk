@@ -201,8 +201,29 @@ function castBlocked(ctx: MemberContext<any>, what: string, sp: { castTime: numb
     return on ? `${what}: ${sp.spell.name} would be interrupted, ${on.name} is in melee on me` : null;
 }
 
-/** How far a caster steps away from the one in melee on it, when there is no tank to run to or it is at the tank already. */
+/** How far a caster steps away from the one in melee on it when there is no tank to run to. */
 const KITE_STEP = 450;
+/** How far from the tank a caster circles while melee is on it: inside flee's 150, so flee doesn't run it back through them. */
+export const HAVEN_ORBIT = 130;
+/** A spot this near where it stands is no step: a quarter turn round the haven instead. */
+const MIN_ORBIT_STEP = 80;
+
+/**
+ * Where to step with `attackers` on us, beside the haven (the tank): on its far side from them (their centre), HAVEN_ORBIT out,
+ * so the melee has to come round it and through the peel. Already there (they haven't moved): a quarter turn round the haven,
+ * the way away from them. From the Albion class session's Theurgist kit (giveGround, 2bf2c4d): a straight step away put the
+ * caster past 150 and flee ran it back to the tank through the melee, a ping-pong across the swinging player.
+ */
+export function giveGroundStep(me: Point, attackers: readonly Point[], haven: Point): Point {
+    const c = { x: attackers.reduce((s, a) => s + a.x, 0) / attackers.length, y: attackers.reduce((s, a) => s + a.y, 0) / attackers.length };
+    let ax = haven.x - c.x, ay = haven.y - c.y;
+    const len = Math.hypot(ax, ay) || 1;
+    ax /= len; ay /= len;
+    const spot = { x: haven.x + ax * HAVEN_ORBIT, y: haven.y + ay * HAVEN_ORBIT };
+    if (dist(me, spot) >= MIN_ORBIT_STEP) return spot;
+    const turns = [{ x: haven.x - ay * HAVEN_ORBIT, y: haven.y + ax * HAVEN_ORBIT }, { x: haven.x + ay * HAVEN_ORBIT, y: haven.y - ax * HAVEN_ORBIT }];
+    return dist(turns[0]!, c) >= dist(turns[1]!, c) ? turns[0]! : turns[1]!;
+}
 
 /**
  * A monster casting at a member from where it stands, worth the tank's walk: not mezzed, not while the focus is
@@ -674,16 +695,18 @@ export const flee = (): Behavior => ({
         const rootedOnUs = (t: Contact) => t.cc?.kind === 'root' && t.target === me.name && dist(t, me) <= MELEE_REACH;
         const on = ctx.threats().find(t => onMember(t, me) || rootedOnUs(t));
         if (!on) return false;
-        // At the tank (or none to run to) and an enemy player still swinging: step on away from it, past the tank, rather than
-        // stand and cast into its swings (hammeredBy). The tank's peel takes it meanwhile; a rooted one is left out of reach.
+        // At the tank (or none to run to) and an enemy player still swinging: rather than stand and cast into its swings
+        // (hammeredBy), circle the tank on its far side from them (giveGroundStep), staying within 150 so this branch keeps the
+        // turn; the tank's peel takes them meanwhile. With no tank, a step straight away. A rooted one is left out of reach.
         if (!tank || dist(me, tank) < 150) {
             if (on.kind !== 'player') return tank ? ctx.skip('attacked, already at the tank') : false;
-            // Straight away from it; standing on it, any way will do.
+            const players = ctx.threats().filter(t => t.kind === 'player' && (onMember(t, me) || rootedOnUs(t)));
             const d = dist(me, on);
-            const away = d > 10 ? { x: me.x + (me.x - on.x) / d * KITE_STEP, y: me.y + (me.y - on.y) / d * KITE_STEP } : { x: me.x + KITE_STEP, y: me.y };
+            const to = tank ? giveGroundStep(me, players, tank)
+                : d > 10 ? { x: me.x + (me.x - on.x) / d * KITE_STEP, y: me.y + (me.y - on.y) / d * KITE_STEP } : { x: me.x + KITE_STEP, y: me.y };
             await stopSwinging(ctx);
-            ctx.doing('flee', on.objectId, `kite from ${on.name}`);
-            reportLeg(ctx, await ctx.bot.walkTo(away.x, away.y, { z: me.z, tolerance: 60, timeout: 3000 }));
+            ctx.doing('flee', on.objectId, tank ? `round ${tank.name}, away from ${players.map(t => t.name).join(', ')}` : `kite from ${on.name}`);
+            reportLeg(ctx, await ctx.bot.walkTo(to.x, to.y, { z: me.z, tolerance: 30, timeout: 2500 }));
             return true;
         }
         await stopSwinging(ctx);
