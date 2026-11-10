@@ -6,7 +6,7 @@ import type { Contact } from '../group/types';
 import { getBuild } from '../../data/builds';
 import { Spellbook } from '../group/spells';
 import { getSpell } from '../../data/index';
-import { cabalist, meleeDebuffTarget, nearsightTarget, nextMeleeDebuff, offFocusTarget, underFire } from './cabalist';
+import { cabalist, meleeDebuffTarget, nearsightTarget, nextMeleeDebuff, offFocusTarget, quickcastWaitMs, underFire } from './cabalist';
 import { reachOfBuild } from './reach';
 import { sorcerer } from './sorcerer';
 import { theurgist } from './theurgist';
@@ -100,6 +100,12 @@ describe('meleeDebuff', () => {
             expect(list.indexOf('quickcast')).toBe(list.indexOf('flee') - 2);
         }
         expect(cabalist({ meleeDebuff: false }).instant!.map(b => b.name)).toEqual(['quickcast']);
+    });
+
+    test('a refused quickcast waits what the server says, not the 30 s lock', () => {
+        expect(quickcastWaitMs('You must wait 1 second to use this ability.')).toBe(1500);
+        expect(quickcastWaitMs('You must wait 12 more second to attempt to quick cast!')).toBe(12_500);
+        expect(quickcastWaitMs('You can not cast when your are in melee combat.')).toBeNull();
     });
 
     test('quickcast only under fire: a melee on us, or a cast cut in the last 5 s', () => {

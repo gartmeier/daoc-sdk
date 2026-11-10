@@ -152,6 +152,12 @@ export const QUICKCAST_REUSE_MS = 31_000;
 /** An interrupt this recent says the next cast would be cut too: a swing or a hit starts a 3 s timer. */
 const UNDER_FIRE_MS = 5000;
 
+/** A refusal that names a short wait ("You must wait 1 second to use this ability."): that long and a bit; null for any other. */
+export function quickcastWaitMs(message: string | undefined): number | null {
+    const m = /must wait (\d+) more second|must wait (\d+) second/i.exec(message ?? '');
+    return m ? (Number(m[1] ?? m[2]) + 0.5) * 1000 : null;
+}
+
 /** Whether a Quickcast is worth its 30 s now: a melee on us, or our last cast cut short this recently. */
 export function underFire(hammered: boolean, lastInterruptAt: number | undefined, now: number): boolean {
     return hammered || (lastInterruptAt !== undefined && now - lastInterruptAt < UNDER_FIRE_MS);
@@ -189,7 +195,12 @@ export const quickcastUnderFire = (): Behavior<TacticsSettings> => ({
         ctx.memory.set('quickcastReadyAt', now + QUICKCAST_REUSE_MS);
         const q = await ctx.bot.useAbility('Quickcast');
         ctx.result('quickcast', q);
-        if (!q.success) return true;
+        if (!q.success) {
+            // "You must wait 1 second to use this ability." (any ability, just after another): not the 30 s lock. Arena round 32.
+            const wait = quickcastWaitMs(q.message);
+            if (wait !== null) ctx.memory.set('quickcastReadyAt', Date.now() + wait);
+            return true;
+        }
         ctx.doing(pick.cc ? 'cc' : 'nuke', pick.target.objectId, `${pick.sp.spell.name} (quickcast)`);
         const c = await ctx.bot.castSpell(pick.sp.spell, pick.target.objectId, { approach: false });
         if (pick.cc) {

@@ -106,3 +106,5 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **To look for:** `nearsight` results in her report line, and whether Hibernia's opening mezz still lands from 1500.
 
+**Arena round 32** (Camelot wiped Midgard 5/0 in one 80 s fight, no deaths): `quickcast` went once each for Merlin, Morgana and Taliesin. Morgana's `nearsight` cast twice, was interrupted twice and resisted once. Taliesin's one Quickcast was refused with "You must wait 1 second to use this ability." and then sat out the full 31 s lock, so a refusal naming a wait now retries after that wait (`quickcastWaitMs`).
+
