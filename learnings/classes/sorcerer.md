@@ -89,3 +89,6 @@ That's a fix in `sdk/group/spells.ts`, not a kit: power and health regen as sepa
 **Arena round 21** (Camelot wiped Hibernia 5/0 in one 90 s fight, `groups/camelot/runs/20261109-231607.md`): the first Hibernia round with Shield Mind, the group's `--cure` against Hibernia, and its mezz-the-mezzer plan. Merlin cured 4 times (1 interrupted), cast 3 cc and dealt 421 damage, with no deaths. He was targeted 56 % and in melee 38 % of fight time. Against rounds 12 and 15 (1 kill, 12 deaths together), the opener no longer decided it.
 
 **Arena round 40** (Camelot wiped Hibernia 5/0, no deaths): Merlin cured 8 times (`--cure` against Hibernia), cast 2 cc, 5 debuffs and 1 quickcast, and dealt 260 damage.
+
+**Arena round 116** (Hibernia wiped Camelot 0/5): Merlin cast 11 debuffs (about 90 power), 3 cures and 3 cc, dealt 0 damage, and the group waited 17 % of the run on his power. His power is the group's mezzes and cures, so his `meleeDebuff` is now `selfOnly` and needs 50 % power: only on a melee on him, where nothing else of his can land anyway. Morgana and Taliesin keep the general rule (35 % on their own attacker, 60 % on another member's).
+

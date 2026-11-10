@@ -62,7 +62,7 @@ export function meleeDebuffTarget(me: Pick<MemberReport, 'name' | 'x' | 'y'>, me
  * every cast with a cast time is interrupted, and flee walks on the next turn. One per turn, each type once per its length. Arena
  * round 11: Morgana in melee 55 % of fight time with nothing she could cast.
  */
-export const meleeDebuff = (): Behavior<TacticsSettings> => ({
+export const meleeDebuff = (opts: { selfOnly?: boolean; minMana?: number } = {}): Behavior<TacticsSettings> => ({
     name: 'meleeDebuff',
     interruptible: false,
     async run(ctx) {
@@ -74,7 +74,9 @@ export const meleeDebuff = (): Behavior<TacticsSettings> => ({
         const target = meleeDebuffTarget(self, ctx.members(), ctx.threats(), distanceTo, 1500);
         if (!target) return false;
         // On us we can cast nothing else; on another member the power would otherwise go on nukes and the mezz.
-        if (me.maxMana > 0 && me.manaPercent < (onMember(target, self) ? DEBUFF_MIN_MANA : DEBUFF_FOR_OTHERS_MIN_MANA)) return false;
+        const onSelf = onMember(target, self);
+        if (opts.selfOnly && !onSelf) return false;
+        if (me.maxMana > 0 && me.manaPercent < Math.max(opts.minMana ?? 0, onSelf ? DEBUFF_MIN_MANA : DEBUFF_FOR_OTHERS_MIN_MANA)) return false;
         const until: Map<string, number> = ctx.memory.get('debuffUntil') ?? new Map();
         ctx.memory.set('debuffUntil', until);
         const now = Date.now();

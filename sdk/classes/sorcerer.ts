@@ -9,6 +9,9 @@ import { meleeDebuff, nukerFight, quickcastUnderFire } from './cabalist';
 import { selfBuff } from './paladin';
 
 /** Shield Mind (Mind 16): mezzes on him last 10 % less (MesmerizeDurationBuff, CCSpellHandler.cs:212). buff() doesn't slot it. */
+/** His power is the group's mezzes and cures: debuffs only on a melee on him, and only above this. Arena round 116: 11 debuffs, 0 damage, the group waiting 17 % of the run on his power. */
+export const SORCERER_DEBUFF_MIN_MANA = 50;
+
 export const SORCERER_SELF_BUFFS: readonly string[] = ['MesmerizeDurationBuff'];
 
 export interface SorcererOptions {
@@ -23,5 +26,5 @@ export interface SorcererOptions {
 }
 
 export function sorcerer({ saveBelow = 40, chores = [], offFocus: off = true, meleeDebuff: debuff = true }: SorcererOptions = {}): Character {
-    return { role: 'nuker', instant: [quickcastUnderFire(), ...(debuff ? [meleeDebuff()] : [])], fight: nukerFight(saveBelow, off), chores: [...chores, selfBuff(SORCERER_SELF_BUFFS)] };
+    return { role: 'nuker', instant: [quickcastUnderFire(), ...(debuff ? [meleeDebuff({ selfOnly: true, minMana: SORCERER_DEBUFF_MIN_MANA })] : [])], fight: nukerFight(saveBelow, off), chores: [...chores, selfBuff(SORCERER_SELF_BUFFS)] };
 }
