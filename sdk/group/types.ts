@@ -282,6 +282,14 @@ export interface Orders {
     column?: ColumnOrder | null;
     /** An enemy player is known: casters take wider slots (TacticsSettings.spreadOnSight). The pack sets it. */
     spread?: boolean;
+    /**
+     * Overrides of every member's settings, key by key (shallow: a nested object such as `heal` or `formation` replaces the
+     * member's whole value), read through MemberContext.settings from the next behaviour on. A decide sets it to change a
+     * run-start setting mid-run, e.g. a formation or heal limits once the enemy's classes are read (Contact.classGuess);
+     * null clears it. Keep the object the same while nothing changes: members rebuild their settings on a new object.
+     * Not a material change: no seq bump, no interrupt.
+     */
+    settings?: Record<string, unknown> | null;
     /** Why the coordinator decided this (for the observer and the log). */
     reason: string;
     issuedAt: number;

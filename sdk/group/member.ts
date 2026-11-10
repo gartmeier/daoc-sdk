@@ -121,10 +121,24 @@ export class MemberContext<S = any> {
      * @param memory Per-member scratch space, kept across turns (e.g. DoTs already on a mob).
      * @param onSide The side tick's context: the same member and memory, no say in the turn.
      */
-    constructor(private readonly agent: MemberAgent<S>, readonly settings: S, readonly memory = new Map<string, any>(), private readonly onSide = false) {
+    constructor(private readonly agent: MemberAgent<S>, private readonly baseSettings: S, readonly memory = new Map<string, any>(), private readonly onSide = false) {
         this.bot = agent.member.actions;
         this.sdk = agent.member.sdk;
         this.spells = agent.spells;
+    }
+
+    private mergedSettings: { patch: Orders['settings']; value: S } | null = null;
+
+    /**
+     * The member's settings, with the coordinator's Orders.settings on top (key by key, shallow): a strategy that reads the
+     * enemy's classes mid-run can switch a formation or heal limits for every member at once. Built again only when the
+     * patch object changes.
+     */
+    get settings(): S {
+        const patch = this.agent.board?.settingsPatch?.() ?? null;
+        if (!patch) return this.baseSettings;
+        if (this.mergedSettings?.patch !== patch) this.mergedSettings = { patch, value: { ...this.baseSettings, ...patch } as S };
+        return this.mergedSettings.value;
     }
 
     get role(): Role { return this.agent.member.role; }

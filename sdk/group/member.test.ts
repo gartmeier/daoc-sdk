@@ -26,6 +26,24 @@ function harness(behaviors: Behavior[], pet: PetState | null = null, noPlayer = 
     return { agent, board, state, sent, flags, end, running };
 }
 
+describe('MemberContext.settings: Orders.settings on top', () => {
+    test('a decide switches a setting mid-run for the next behaviour, and null gives the member its own back', async () => {
+        const seen: unknown[] = [];
+        const h = harness([{ name: 'look', run(ctx) { seen.push((ctx.settings as { formation?: unknown }).formation ?? 'own'); return false; } }]);
+        await Bun.sleep(40);
+        h.board.setOrders({ settings: { formation: 'wide' }, reason: 'enemy is caster-heavy' });
+        await Bun.sleep(40);
+        h.board.setOrders({ settings: null, reason: 'enemy left' });
+        await Bun.sleep(40);
+        await h.end();
+        expect(seen[0]).toBe('own');
+        expect(seen).toContain('wide');
+        expect(seen.at(-1)).toBe('own');
+        // Not material: no orders event for a settings change alone.
+        expect(h.board.events().filter(e => e.kind === 'orders')).toEqual([]);
+    });
+});
+
 describe('MemberAgent: out of the world', () => {
     // Run 161132 after the kick: "petenc: healer threw: null is not an object (evaluating 'me.constitutionLost')".
     test('no turn while there is no player: a relog takes a while, and every behaviour reads `me` as there', async () => {

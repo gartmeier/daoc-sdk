@@ -836,6 +836,11 @@ export class Blackboard {
         return { ...this.orders, cc: this.orders.cc.map(c => ({ ...c })), waiting: this.orders.waiting.map(w => ({ ...w })) };
     }
 
+    /** Orders.settings as it stands, without getOrders' copy: members read it on every ctx.settings. */
+    settingsPatch(): Orders['settings'] {
+        return this.orders.settings;
+    }
+
     /** Apply the coordinator's update. Returns true when the change is material (seq bumped). */
     setOrders(update: OrdersUpdate, now = Date.now()): boolean {
         const prev = this.orders;
