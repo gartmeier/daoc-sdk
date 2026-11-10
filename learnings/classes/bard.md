@@ -87,3 +87,5 @@ What the class has that no behaviour uses:
 **Arena round 21** (wiped 0-5 by Camelot, 99 s): 4 s after the engage Oisin, Niamh and Brigid were mezzed at once by an area mezz, and Oisin died mezzed 8 s later. The kit's cure can't help when the Bard is the one mezzed, and `interrupt()` runs only in the engage phase, so his instant Minor Lullaby (range 2300) can't cut a cast begun during the stalk. Asked the orchestrator to let it run earlier.
 
 **Verified, arena round 23** (wiped Midgard 5-1, no Bard death): 11 mezz cures, 13 interrupts, 4 mezzes. The first round with the cure high in his list (urgent), the earlier interrupt (before the engage) and Midgard's Sigrid as the group's focus.
+
+**Verified, arena round 28** (beat Camelot 9-0, no deaths): 21 interrupts, his most yet, and 7 mezzes; the first round with `interruptOnTheRun` in the instant slot (the report counts both kinds as `interrupt`).
