@@ -38,6 +38,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 25 (vs Hibernia, lost on the cap 6 / 8, instant slot in):** 3 Hinder Spirits, 10 cures, 3 heals; 2 cures and 2 heals refused while she was crowd-controlled herself. Hibernia's mezzes and amnesia hit every caster (`crowd_controlled` on all four).
 
+**Round 39 (vs Hibernia, wiped 1 / 5):** targeted 55 %, in melee 37 %; 1 heal, 2 cures, 3 Hinder Spirits (2 resisted). Hrafna was in melee 38 % too: Hibernia's melee went through to our casters, which is the group's positioning.
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
