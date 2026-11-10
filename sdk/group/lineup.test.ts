@@ -27,6 +27,28 @@ describe('hasMezz', () => {
 const c = (bot: string, role: LineupCandidate['role'], cc = false, className = ''): LineupCandidate =>
     ({ bot, className, role, healer: role === 'healer', front: role === 'tank' || role === 'melee', cc });
 
+describe('pickLineup with an any-of class', () => {
+    // Midgard: Warrior, Healer, Shaman, Skald, Spiritmaster; Berserker, Thane, Runemaster on the bench.
+    const pool = [c('thorgrim', 'tank', false, 'Warrior'), c('sigrid', 'healer', true, 'Healer'), c('ulfgar', 'healer', false, 'Shaman'),
+        c('bragi', 'tank', false, 'Skald'), c('hrafna', 'nuker', true, 'Spiritmaster'), c('ragnar', 'melee', false, 'Berserker'),
+        c('sigurd', 'tank', false, 'Thane'), c('gudrun', 'nuker', false, 'Runemaster')];
+
+    test('a Warrior or a Thane plays, the one of them who played fewer', () => {
+        // Round 130: hrafna, bragi, sigrid, gudrun, ulfgar, with no tank but the Skald.
+        const played = { thorgrim: 9, sigurd: 8, sigrid: 1, ulfgar: 0, bragi: 0, hrafna: 0, ragnar: 9, gudrun: 0 };
+        const choice = pickLineup({ pool, current: [], size: 5, played, classes: ['Healer', ['Warrior', 'Thane']] });
+        expect(choice.lineup).toContain('sigrid');
+        expect(choice.lineup).toContain('sigurd');
+        expect(choice.lineup).not.toContain('thorgrim');
+        expect(choice.why).toContain('Warrior/Thane sigurd');
+    });
+
+    test('met already by a class listed before it: no second one forced in', () => {
+        const choice = pickLineup({ pool, current: [], size: 5, played: { thorgrim: 0 }, classes: ['Warrior', ['Warrior', 'Thane']] });
+        expect(choice.lineup.filter(b => b === 'thorgrim' || b === 'sigurd')).toEqual(['thorgrim']);
+    });
+});
+
 describe('pickLineup with required classes', () => {
     // Hibernia: Hero, Druid, Bard, Mentalist, Enchanter; Blademaster, Warden, Eldritch on the bench.
     const pool = [c('cuchulainn', 'tank', false, 'Hero'), c('brigid', 'healer', false, 'Druid'), c('oisin', 'support', true, 'Bard'),

@@ -42,8 +42,8 @@ export function loadGroup(dir: string, opts: { lineup?: readonly string[] } = {}
     }
     if (def.leader && !def.members.some(m => m.bot === def.leader)) throw new Error(`${path}: leader ${def.leader} is not a member`);
     const classes = def.requires?.classes;
-    if (def.requires !== undefined && (typeof def.requires !== 'object' || (classes !== undefined && (!Array.isArray(classes) || classes.some(c => typeof c !== 'string')))))
-        throw new Error(`${path}: "requires" must be { "classes": ["<class>", ...] }`);
+    if (def.requires !== undefined && (typeof def.requires !== 'object' || (classes !== undefined && (!Array.isArray(classes) || classes.some(c => typeof c !== 'string' && (!Array.isArray(c) || !c.length || c.some(x => typeof x !== 'string')))))))
+        throw new Error(`${path}: "requires" must be { "classes": ["<class>" or ["<class>", "<class>"] (any one of), ...] }`);
     const out: GroupDefinition = { ...def, name: def.name || basename(dir) };
     // `{ lineup: undefined }` reads group.json as it is, whatever the command line says.
     const lineup = 'lineup' in opts ? opts.lineup : lineupArg();

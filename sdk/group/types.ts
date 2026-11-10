@@ -345,8 +345,9 @@ export interface GroupDefinition {
     /**
      * What every line-up must hold (sdk/group/lineup.ts pickLineup). `classes`: one of each, by class name (bot.env
      * CLASS), filled before the healer, front-liner and crowd controller, e.g. ["Druid", "Bard"] for their buffs and speed.
+     * A list in it is any one of those: ["Healer", ["Warrior", "Thane"]] is a Healer and a Warrior or Thane.
      */
-    requires?: { classes?: string[] };
+    requires?: { classes?: (string | string[])[] };
 }
 
 /** One entry of group.json's members or bench. */

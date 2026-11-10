@@ -93,8 +93,8 @@ export function pickLineup(o: {
     size?: number;
     played?: Readonly<Record<string, number>>;
     available?: ReadonlySet<string>;
-    /** Classes every line-up holds one of, filled first (group.json `requires.classes`). */
-    classes?: readonly string[];
+    /** Classes every line-up holds one of, filled first (group.json `requires.classes`); a list is any one of those. */
+    classes?: readonly (string | readonly string[])[];
 }): LineupChoice {
     const size = o.size ?? 5;
     const played = (bot: string) => o.played?.[bot] ?? 0;
@@ -106,11 +106,14 @@ export function pickLineup(o: {
     const picked: LineupCandidate[] = [];
     const notes: string[] = [];
     const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
-    for (const cls of o.classes ?? []) {
-        if (picked.length >= size || picked.some(c => same(c.className, cls))) continue;
-        const c = order.find(x => same(x.className, cls) && !picked.includes(x));
-        if (c) { picked.push(c); notes.push(`${cls} ${c.bot}`); }
-        else notes.push(`no ${cls} available`);
+    for (const need of o.classes ?? []) {
+        const any = typeof need === 'string' ? [need] : need;
+        const fits = (c: LineupCandidate) => any.some(cls => same(c.className, cls));
+        const label = any.join('/');
+        if (picked.length >= size || picked.some(fits)) continue;
+        const c = order.find(x => fits(x) && !picked.includes(x));
+        if (c) { picked.push(c); notes.push(`${label} ${c.bot}`); }
+        else notes.push(`no ${label} available`);
     }
     for (const need of ['healer', 'front', 'cc'] as const) {
         if (picked.length >= size || picked.some(c => c[need])) continue;
