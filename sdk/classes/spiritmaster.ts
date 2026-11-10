@@ -11,6 +11,12 @@ import type { Behavior } from '../group/member';
 import type { Contact } from '../group/types';
 import { quickcastUnderFire } from './cabalist';
 
+/**
+ * Her step toward an out-of-reach focus, whatever the group's standStep: a longer one against fanOut kept her walking
+ * 73 % of rounds 27, 32 and 34, with nukeInReach there for a focus she can't reach.
+ */
+export const HOLD_GROUND = 250;
+
 /** Kept inside a spell's range: positions are a moment old, and the server measures in 3D. */
 const RANGE_MARGIN = 50;
 
@@ -44,5 +50,5 @@ export const nukeInReach = (): Behavior<TacticsSettings> => ({
 });
 
 export function spiritmaster(): Character {
-    return { role: 'nuker', instant: [quickcastUnderFire()], fight: [assist(), nukeInReach()] };
+    return { role: 'nuker', instant: [quickcastUnderFire()], fight: [assist({ holdGround: HOLD_GROUND }), nukeInReach()] };
 }
