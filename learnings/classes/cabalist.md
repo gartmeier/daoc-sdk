@@ -118,3 +118,5 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **After round 97** (Camelot lost 11 of 14 rounds, 74-97): Morgana died first in 6 of the last 15 ledger rounds with a death (the group session's count). A pack's focus goes on known casters first, +100 for having been seen casting, plus nearness to its centre (`pickPackFocus`, sdk/group/rvr.ts). Hibernia's first focus after the engage was a "(100% caster)" Briton in rounds 93 and 97, and Morgana died first in both, at +18 s and +16 s. Her nearsight was the only cast of ours on the approach (travel phase), which flagged her as a caster before anyone else. Now `nearsight` runs in engage only. Whether she still draws the first focus is the thing to look for.
 
+**Arena round 99** (Hibernia wiped Camelot 0/5, the first round with engage-only nearsight): Hibernia's focus was still "Briton#481 (100% caster)" 1 s after the engage, and Morgana died first at +28 s. Keeping nearsight off the approach didn't change their pick. She's flagged within a second of the engage anyway, and nearness to their centre decides the rest. Her formation slot is the group's lever.
+
