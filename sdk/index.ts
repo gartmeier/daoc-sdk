@@ -186,6 +186,20 @@ export function findBotEnv(botName: string, repoRoot: string = REPO_ROOT): strin
 
 export type NamePattern = string | RegExp;
 
+/**
+ * Cuts a move short before it is sent (BotSDK.setMoveGuard): the destination and waypoints to send instead, or null to send
+ * it as asked. `from` is where we stand. A group with stayDry keeps its members out of the river this way (sdk/group/water.ts
+ * dryMoveGuard), for every walk, cast approach and chase alike.
+ */
+export type MoveGuard = (
+    from: { regionId: number; x: number; y: number; z: number },
+    to: { x: number; y: number; z?: number },
+    waypoints: readonly Vec3[],
+) => { to: { x: number; y: number; z?: number }; waypoints: Vec3[] } | null;
+
+/** A guarded move whose cut ends this close to us is refused (reason 'water'): there is nothing left of it to walk. */
+export const MOVE_GUARD_HERE = 48;
+
 /** Case-insensitive substring for strings; RegExp as given (g/y flags ignored). */
 export function nameMatcher(pattern: NamePattern): (name: string) => boolean {
     if (typeof pattern === 'string') {
@@ -318,6 +332,7 @@ export class BotSDK {
     /** Gateway's error text when another control connection took this bot over, else null. */
     private preemptedReason: string | null = null;
     private petAttackSentAt: number | null = null;
+    private moveGuard: MoveGuard | null = null;
 
     constructor(config: SDKConfig) {
         this.config = {
@@ -1050,7 +1065,27 @@ export class BotSDK {
 
     /** Walk/run to x,y (z optional) via the client's mover; optional waypoints and speed factor (≤1). */
     async sendMoveTo(x: number, y: number, z?: number, opts: { tolerance?: number; waypoints?: Vec3[]; speedFactor?: number } = {}): Promise<ActionResult> {
+        const guard = this.moveGuard;
+        const p = guard ? this.getPlayer() : null;
+        const cut = p && guard ? guard(p, { x, y, z }, opts.waypoints ?? []) : null;
+        if (p && cut) {
+            if (!cut.waypoints.length && Math.hypot(cut.to.x - p.x, cut.to.y - p.y) <= MOVE_GUARD_HERE) {
+                return { success: false, reason: 'water', message: `(${Math.round(x)}, ${Math.round(y)}) is in deep water: holding at the bank` };
+            }
+            ({ x, y, z } = cut.to);
+            opts = { ...opts, waypoints: cut.waypoints };
+        }
         return this.sendAction({ type: 'moveTo', x, y, z, ...opts, reason: 'SDK' });
+    }
+
+    /**
+     * Cut every move from here on (sendMoveTo, and so walkTo, walkToObject, castSpell's approach and killNpc's chase) by
+     * `guard`, or none with null. A move cut to where we stand is refused with reason 'water'. Returns a function that
+     * removes this guard (and no later one).
+     */
+    setMoveGuard(guard: MoveGuard | null): () => void {
+        this.moveGuard = guard;
+        return () => { if (this.moveGuard === guard) this.moveGuard = null; };
     }
 
     /** Stop moving (final position update with speed 0). */

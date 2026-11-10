@@ -19,6 +19,7 @@ import { type Blackboard, observeState, SHADE_REFUSED, steppedInFront, UNATTACKA
 import type { Character } from './character';
 import { petOrderedOn, petsAllowed } from './pets';
 import { Spellbook } from './spells';
+import { dryMoveGuard } from './water';
 import type { Activity, Capabilities, Contact, GroupPicture, MemberCombat, MemberReport, Orders, Role } from './types';
 
 export interface Behavior<S = any> {
@@ -234,6 +235,9 @@ export class MemberAgent<S = any> {
         this.lastMessageId = member.sdk.getGameMessages().at(-1)?.id ?? -1;
         this.unsubscribe.push(member.sdk.onStateUpdate(() => this.publish()));
         this.unsubscribe.push(board.onOrders((next, prev) => { if (this.affected(next, prev)) this.interrupt(`orders: ${next.phase}`); }));
+        // With stayDry (RvR and the pack have it, PvE has none), no move of ours ends in the river: casts from the bank (water.ts dryMoveGuard).
+        const unguard = (settings as { stayDry?: unknown }).stayDry === undefined ? null : member.sdk.setMoveGuard?.(dryMoveGuard(() => this.ctx.settings as { stayDry?: unknown }));
+        if (unguard) this.unsubscribe.push(unguard);
         this.publish();
     }
 

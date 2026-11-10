@@ -93,6 +93,10 @@ The navmesh covers steep ground: in Thidranki 99-100 % of dry spots at every slo
 
 Thidranki's dry ground: half rises less than 0.28 per unit, 75 % less than 0.51, 90 % less than 0.94. The ground over 45° runs along the three rivers and round the map's edge. Walks between legs still use the navmesh (`walkTo`), so within a 1500 leg a member can still cut over a slope that `safePath` went round. The reports' `Slope:` line (observer) measures how much time that leaves on steep ground.
 
+## Move guard
+
+`sdk.setMoveGuard(guard)` cuts every move before it is sent: `walkTo`, `walkToObject`, `castSpell`'s approach and `killNpc`'s chase all end in `sendMoveTo`. The guard gets where we stand, the destination and the waypoints, and returns a shorter move or null. A cut that ends within `MOVE_GUARD_HERE` (48) of us is refused with reason `water`, and the walk fails with that reason. It returns a remover. Group members with `stayDry` set `water.ts dryMoveGuard`: no move from dry ground ends in deep water, while a crossing to dry ground is left alone (learnings/rvr.md "Members keep out of the river themselves"). The check costs one terrain lookup per move, and a cell with no river at its corners is never sampled.
+
 ## Height (z) without navmeshes
 
 Without a navmesh there is **no terrain data**. When `z` isn't given, `StraightLinePathProvider` splits each leg every 1000 units and takes z from `estimateZ`. That function interpolates the heights of nearby spawns, bind points and startup locations.

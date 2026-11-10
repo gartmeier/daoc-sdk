@@ -41,7 +41,7 @@ import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, pairMeet, THIDRANKI, type KeepSettings, type PlayerRealm } from './keeps';
 import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
 import { isLevel } from './slope';
-import { drySpot, isDry, isWet, waitAshore } from './water';
+import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
 export { BATTLEGROUND_LAYOUTS, homeOf, keepDangers, KEEP_CLEARANCE, THIDRANKI, type BattlegroundLayout, type Keep, type KeepSettings, type PlayerRealm } from './keeps';
@@ -109,10 +109,7 @@ export function monsterAdds(candidates: readonly Contact[], focusId: number | nu
     return { first: beasts.filter(c => soft.has(onWhom(c)!)), last: beasts.filter(c => !soft.has(onWhom(c)!)) };
 }
 
-/** settings.stayDry, on unless it says otherwise: a script's flag comes as the string 'false'. */
-export function staysDry(s: { stayDry?: unknown }): boolean {
-    return !/^(false|0|off|no)$/i.test(String(s.stayDry ?? true));
-}
+export { staysDry };
 
 export interface SoftFocus {
     /** What a cast reaches: the nearer an enemy within it, the better. */

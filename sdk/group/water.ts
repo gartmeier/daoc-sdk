@@ -9,7 +9,8 @@
 
 import { getZoneAt } from '../../data/zones';
 import { GROUND_TUNING } from '../ground';
-import { getTerrainStore, sampleTerrain, type TerrainGrid } from '../terrain';
+import type { MoveGuard } from '../index';
+import { getTerrainStore, NO_WATER, sampleTerrain, type TerrainGrid } from '../terrain';
 import { isLevel } from './slope';
 import type { Point } from './types';
 
@@ -25,9 +26,26 @@ function gridAt(regionId: number, x: number, y: number): TerrainGrid | null {
 
 /** Whether a member at `p` swims: the river surface at least swimDepth above the bed, as the mover has it (groundAt). A bridge over it counts as water. */
 export function isWet(regionId: number, p: Point): boolean {
-    const grid = gridAt(regionId, p.x, p.y);
-    const s = grid ? sampleTerrain(grid, p.x, p.y) : null;
+    return wetAt(regionId, p.x, p.y);
+}
+
+/** isWet by coordinates. A cell with no river at its four corners is dry without sampling it (most of a map): moves ask this for every one sent. */
+function wetAt(regionId: number, x: number, y: number): boolean {
+    const g = gridAt(regionId, x, y);
+    if (!g) return false;
+    const cell = g.width / g.size, n = g.size;
+    const i = Math.floor((x - g.xoff) / cell), j = Math.floor((y - g.yoff) / cell);
+    if (i >= 0 && j >= 0 && i < n && j < n) {
+        const i1 = Math.min(i + 1, n - 1), j1 = Math.min(j + 1, n - 1), w = g.water;
+        if (w[j * n + i] === NO_WATER && w[j * n + i1] === NO_WATER && w[j1 * n + i] === NO_WATER && w[j1 * n + i1] === NO_WATER) return false;
+    }
+    const s = sampleTerrain(g, x, y);
     return !!s && s.waterZ !== null && s.waterZ - s.z >= GROUND_TUNING.swimDepth;
+}
+
+/** settings.stayDry, on unless it says otherwise: a script's flag comes as the string 'false'. */
+export function staysDry(s: { stayDry?: unknown }): boolean {
+    return !/^(false|0|off|no)$/i.test(String(s.stayDry ?? true));
 }
 
 /**
@@ -120,22 +138,53 @@ export const BANK_BACK = 40;
 const BANK_STEP = 32;
 
 /**
- * Where a move from `from` to `to` should end so a member on dry ground doesn't walk into the river at its end: null when
- * the move needs no cut (we already swim, `to` is dry, no terrain), else the spot BANK_BACK short of where the wet stretch
- * that ends at `to` begins (on our side of it, `from` itself when that stretch starts at our feet). A move that only crosses
- * a river to dry ground is left alone: travel legs and their crossings stay as safePath planned them. Albion, rounds 18-67:
- * its healer and casters walked into range of a target in the river and spent 13-49 % of fight time swimming.
+ * Where a walk along `from`, then `points`, should end so a member on dry ground doesn't walk into the river at its end:
+ * null when it needs no cut (we already swim, its end is dry, no terrain), else the waypoints it keeps and the spot BANK_BACK
+ * short of where the wet stretch that ends it begins (`from` itself when that stretch starts at our feet). A walk that only
+ * crosses a river to dry ground is left alone: travel legs, crossings, flight and the way home stay as planned.
+ */
+export function bankCut<P extends Point>(regionId: number, from: Point, points: readonly P[]): { to: Point; kept: P[] } | null {
+    const end = points[points.length - 1];
+    if (!end || !wetAt(regionId, end.x, end.y) || wetAt(regionId, from.x, from.y)) return null;
+    // From the end back towards us, segment by segment: the first dry sample is the far edge of the wet stretch.
+    for (let k = points.length - 1; k >= 0; k--) {
+        const a = k ? points[k - 1]! : from, b = points[k]!;
+        const d = Math.hypot(b.x - a.x, b.y - a.y);
+        if (d < 1) continue;
+        const ux = (b.x - a.x) / d, uy = (b.y - a.y) / d;
+        for (let t = d - BANK_STEP; t > -BANK_STEP; t -= BANK_STEP) {
+            const tt = Math.max(0, t);
+            if (wetAt(regionId, a.x + ux * tt, a.y + uy * tt)) continue;
+            const back = Math.max(0, tt - BANK_BACK);
+            return { to: { x: Math.round(a.x + ux * back), y: Math.round(a.y + uy * back) }, kept: points.slice(0, k) };
+        }
+    }
+    // Wet all the way back to our feet (the samples missed the dry strip we stand on): stay.
+    return { to: { x: from.x, y: from.y }, kept: [] };
+}
+
+/**
+ * Where a move from `from` to `to` should end so a member on dry ground doesn't walk into the river: bankCut on the
+ * straight line, with `to`'s other fields. Albion, rounds 18-67: its healer and casters walked into range of a target in the
+ * river and spent 13-49 % of fight time swimming.
  */
 export function bankStop<P extends Point>(regionId: number, from: Point, to: P): P | null {
-    if (isWet(regionId, from) || !isWet(regionId, to)) return null;
-    const d = Math.hypot(to.x - from.x, to.y - from.y);
-    if (d < 1) return null;
-    const ux = (to.x - from.x) / d, uy = (to.y - from.y) / d;
-    // From `to` back towards us: the first dry sample is the far edge of the wet stretch ending at `to`.
-    let edge = 0;
-    for (let t = d - BANK_STEP; t > 0; t -= BANK_STEP) {
-        if (!isWet(regionId, { x: from.x + ux * t, y: from.y + uy * t })) { edge = t + BANK_STEP; break; }
-    }
-    const t = Math.max(0, edge - BANK_STEP - BANK_BACK);
-    return { ...to, x: Math.round(from.x + ux * t), y: Math.round(from.y + uy * t) };
+    const cut = bankCut(regionId, from, [to]);
+    return cut && { ...to, x: cut.to.x, y: cut.to.y };
+}
+
+/**
+ * The move guard a member with stayDry sets (BotSDK.setMoveGuard, member.ts): every move that would end in the river ends
+ * on the bank instead, at our own height (the bank is near us; the mover stands us on the terrain), and one cut to where we
+ * stand is refused. `settings` is read on each move, so stayDry=false turns it off.
+ */
+export function dryMoveGuard(settings: () => { stayDry?: unknown }): MoveGuard {
+    return (from, to, waypoints) => {
+        // Most moves end on dry ground: one lookup, nothing built.
+        if (!wetAt(from.regionId, to.x, to.y) || !staysDry(settings())) return null;
+        const cut = bankCut(from.regionId, from, waypoints.length ? [...waypoints, to] : [to]);
+        if (!cut) return null;
+        const kept = cut.kept.map(w => ({ x: w.x, y: w.y, z: w.z ?? from.z }));
+        return { to: { x: cut.to.x, y: cut.to.y, z: kept.at(-1)?.z ?? from.z }, waypoints: kept };
+    };
 }

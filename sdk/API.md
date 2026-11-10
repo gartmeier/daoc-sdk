@@ -190,6 +190,7 @@
 | Signature | Description |
 |---|---|
 | `wasPreempted(): boolean` | True when the gateway dropped this connection because another control connection for the same bot took over (newest control connection wins). The game client is still running; only this SDK lost control. Cleared by the next connect(). |
+| `setMoveGuard(guard: MoveGuard \| null): () => void` | Cut every move from here on (sendMoveTo, and so walkTo, walkToObject, castSpell's approach and killNpc's chase) by `guard`, or none with null. A move cut to where we stand is refused with reason 'water'. Returns a function that removes this guard (and no later one). |
 
 ### State Access
 
