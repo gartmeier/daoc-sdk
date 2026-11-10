@@ -23,7 +23,7 @@ export interface LineupCandidate {
     healer: boolean;
     /** It stands in front: role tank or melee. */
     front: boolean;
-    /** It has a mesmerize at its level by its build. */
+    /** It has a single-target mesmerize at its level by its build (hasMezz). */
     cc: boolean;
 }
 
@@ -34,8 +34,10 @@ function specsAt(build: Build | null, level: number): Map<string, number> {
 }
 
 /**
- * Whether the class has a mesmerize at `level`: on a base line by the character's level, on a spec line by the build's
- * spec at that level (no build: base lines only).
+ * Whether the class has a single-target mesmerize at `level`: on a base line by the character's level, on a spec line by
+ * the build's spec at that level (no build: base lines only). An area mezz alone (the Eldritch's Paralyzing line) doesn't
+ * count: the coordinator assigns crowd control only to a single-target mezz or a root (Spellbook.capabilities), so the
+ * picker would fill the cc place with a member who never gets a target. A class kit plays an area mezz itself.
  */
 export function hasMezz(className: string, build: Build | null, level = 24): boolean {
     const cls = getClass(className);
@@ -43,7 +45,10 @@ export function hasMezz(className: string, build: Build | null, level = 24): boo
     const specs = specsAt(build, level);
     return classSpellLines(cls).some(line => {
         const reach = line.isBaseLine ? level : (specs.get(specKey(line.spec)) ?? 0);
-        return line.spells.some(s => s.level <= reach && getSpell(s.spellId)?.type === 'Mesmerize');
+        return line.spells.some(s => {
+            const spell = getSpell(s.spellId);
+            return s.level <= reach && spell?.type === 'Mesmerize' && !spell.radius;
+        });
     });
 }
 

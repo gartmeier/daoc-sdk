@@ -16,6 +16,12 @@ describe('hasMezz', () => {
         expect(hasMezz('Druid', null)).toBe(false);
         expect(hasMezz('Armsman', null)).toBe(false);
     });
+
+    test('an area mezz alone is no mezzer: the coordinator assigns crowd control only to a single-target mezz', () => {
+        // Lugh's build reaches Paralyzing Veil (radius 350) in Light; the Sorcerer has single-target mezzes besides its area one.
+        expect(hasMezz('Eldritch', { className: 'Eldritch', name: 't', targets: [{ level: 24, specs: { Light: 22, Mana: 9 } }] })).toBe(false);
+        expect(hasMezz('Sorcerer', null)).toBe(true);
+    });
 });
 
 const c = (bot: string, role: LineupCandidate['role'], cc = false): LineupCandidate =>
