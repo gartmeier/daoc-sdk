@@ -11,6 +11,7 @@ import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import type { Contact } from '../group/types';
 import { quickcastUnderFire } from './cabalist';
+import { isNearsightEffect } from './healer';
 
 /**
  * Her step toward an out-of-reach focus, whatever the group's standStep: a longer one against fanOut kept her walking
@@ -36,8 +37,11 @@ const LEG_REACH = 0.85;
  */
 export const LEG_MAX_GAP = 900;
 
-/** Whether a leg toward a focus `distance` away is worth walking, for a nuke of `range`. */
-export const legWorthIt = (distance: number, range: number): boolean => distance - range <= LEG_MAX_GAP;
+/** ... and this much more under an enemy Nearsight, whose range is a third shorter: round 102 she stood idle 55 % under Obscuring Dust. */
+export const NEARSIGHT_GAP = 500;
+
+/** Whether a leg toward a focus `distance` away is worth walking, for a nuke of `range` (already cut by any Nearsight). */
+export const legWorthIt = (distance: number, range: number, nearsighted = false): boolean => distance - range <= LEG_MAX_GAP + (nearsighted ? NEARSIGHT_GAP : 0);
 
 /** assist with stepFor's step, and after LONG_AFTER_MS with nothing cast, a leg toward the focus when even that step can't be taken. Named assist, as the role's fight is. */
 export const steppingAssist = (): Behavior<TacticsSettings> => {
@@ -59,7 +63,8 @@ export const steppingAssist = (): Behavior<TacticsSettings> => {
                 return true;
             }
             const seen = longNow && o.focus ? foeInView(ctx, o.focus) : null;
-            if (!seen || !sp || ctx.orders().phase !== 'engage' || !legWorthIt(seen.distance, sp.range)) return false;
+            const nearsighted = !!ctx.sdk.getState()?.effects.some(e => isNearsightEffect(e.name));
+            if (!seen || !sp || ctx.orders().phase !== 'engage' || !legWorthIt(seen.distance, sp.range, nearsighted)) return false;
             ctx.doing('move', o.focus, 'closing on the focus');
             await ctx.bot.walkToObject(seen, { range: sp.range * LEG_REACH, timeout: LEG_MS });
             return true;

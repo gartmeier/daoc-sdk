@@ -38,6 +38,8 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 
 **Rounds 54-55 (walk leg in):** r54 vs Camelot (won 5 / 2): 5 nukes, moving 48 %, idle 37 %. r55 vs Hibernia (won on the cap 8 / 2): 38 nukes, 4993 damage, idle 17 %, moving 19 %, her best round by far. Camelot's casters stand far back, Hibernia's close in. **Round 56 (vs Camelot, won on the cap 5 / 3):** moving 70 %, 5 nukes, 467 damage: the legs chased their back line. Since then a leg only toward a focus at most 900 beyond her range (`LEG_MAX_GAP`).
 
+**Round 102 (vs Camelot, wiped 1 / 5), effects sampled:** Obscuring Dust on her in 5 samples (about 75 s), mezzed in 4; idle 55 % ("focus out of reach" 47), 2 nukes. Sigrid, in melee 64 %, got one Nearsight cure off. With the range cut by a third the 900 gate refused most legs, so under an enemy Nearsight it allows 500 more (`NEARSIGHT_GAP`).
+
 **Quickcast (2026-11-10, after round 27):** she has the ability (`bun sdk/cli.ts Hrafna`) and nothing used it. The kit's `instant` is the Cabalist kit's `quickcastUnderFire` ([cabalist.md](cabalist.md)): with a melee on her, or a cast of hers interrupted in the last 5 s, Quickcast, then her cc order or her nuke on the focus, uninterruptible, at twice the power, once per 31 s. In round 27 she was targeted 73 % of the fight.
 
 Before that the kit held only the role. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.

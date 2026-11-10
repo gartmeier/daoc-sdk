@@ -46,5 +46,7 @@ describe('spiritmaster kit', () => {
         expect(legWorthIt(2000, 1500)).toBe(true);
         expect(legWorthIt(2400, 1500)).toBe(true);
         expect(legWorthIt(2401, 1500)).toBe(false);
+        expect(legWorthIt(2375, 975, true)).toBe(true);
+        expect(legWorthIt(2375, 975)).toBe(false);
     });
 });
