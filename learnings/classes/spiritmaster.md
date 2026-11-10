@@ -24,6 +24,8 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 
 **Round 36 (vs Hibernia, won by wipe 5 / 1; holdGround 250 and the group's focus hold):** moving 20 % (73 % in round 34), 13 nukes, 1601 damage, first at 7.3 s, no death; but idle 32 % ("focus out of reach, holding ground" 54 times) with no free enemy in her reach either. If that holds over more rounds, try holdGround 400-500.
 
+**Round 37 (vs Camelot, wiped 2 / 5):** `nuke:out_of_range` 15 times in 17 s, about one a second, and 1 nuke (139 damage). Holding ground, `assist` casts when our 3D distance says in range and, on the server's "too far away", tries the same focus the next turn: the loop `crowdControl` had in round 32. Asked of the orchestrator for `assist`; `nukeInReach` now leaves a target the server called out of range for 8 s (`FAR_MS`).
+
 **Quickcast (2026-11-10, after round 27):** she has the ability (`bun sdk/cli.ts Hrafna`) and nothing used it. The kit's `instant` is the Cabalist kit's `quickcastUnderFire` ([cabalist.md](cabalist.md)): with a melee on her, or a cast of hers interrupted in the last 5 s, Quickcast, then her cc order or her nuke on the focus, uninterruptible, at twice the power, once per 31 s. In round 27 she was targeted 73 % of the fight.
 
 Before that the kit held only the role. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.

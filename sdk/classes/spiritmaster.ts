@@ -17,6 +17,9 @@ import { quickcastUnderFire } from './cabalist';
  */
 export const HOLD_GROUND = 250;
 
+/** A target the server called out of range is left this long: round 37 had 15 such answers in 17 s on one target. */
+export const FAR_MS = 8000;
+
 /** Kept inside a spell's range: positions are a moment old, and the server measures in 3D. */
 const RANGE_MARGIN = 50;
 
@@ -24,10 +27,10 @@ const RANGE_MARGIN = 50;
  * What to nuke while the focus is out of reach: a free enemy player (no crowd control on it: a nuke wakes a mezz) within
  * `range`, not the focus, healers first, then casters, then the most hurt, then the nearest. Null when none.
  */
-export function inReachTarget(threats: readonly Contact[], focus: number | null, distanceTo: (id: number) => number, range: number, now = Date.now()): Contact | null {
+export function inReachTarget(threats: readonly Contact[], focus: number | null, distanceTo: (id: number) => number, range: number, now = Date.now(), far: ReadonlyMap<number, number> = new Map()): Contact | null {
     const rank = (c: Contact) => (c.healer ? 0 : c.caster ? 1 : 2);
     return threats
-        .filter(c => c.kind === 'player' && !c.isPet && !c.stale && isAlive(c) && !c.cc && !untouchable(c, now) && c.objectId !== focus && distanceTo(c.objectId) <= range - RANGE_MARGIN)
+        .filter(c => c.kind === 'player' && !c.isPet && !c.stale && isAlive(c) && !c.cc && !untouchable(c, now) && c.objectId !== focus && (far.get(c.objectId) ?? 0) <= now && distanceTo(c.objectId) <= range - RANGE_MARGIN)
         .sort((a, b) => rank(a) - rank(b) || a.hp - b.hp || distanceTo(a.objectId) - distanceTo(b.objectId))[0] ?? null;
 }
 
@@ -40,11 +43,15 @@ export const nukeInReach = (): Behavior<TacticsSettings> => ({
         if (o.phase !== 'engage' || hammeredBy(ctx)) return false;
         const sp = ctx.spells.nuke();
         if (!sp || sp.radius > 0) return false;
-        const target = inReachTarget(ctx.threats(), o.focus ?? null, id => foeInView(ctx, id)?.distance ?? Infinity, sp.range);
+        const far: Map<number, number> = ctx.memory.get('nukeFar') ?? new Map();
+        ctx.memory.set('nukeFar', far);
+        const target = inReachTarget(ctx.threats(), o.focus ?? null, id => foeInView(ctx, id)?.distance ?? Infinity, sp.range, Date.now(), far);
         if (!target) return false;
         ctx.doing('nuke', target.objectId, `${sp.spell.name} (focus out of reach)`);
         const c = await ctx.bot.castSpell(sp.spell, target.objectId, { approach: false });
         ctx.result('nuke', c, target.objectId);
+        // The server says it is farther than we see it: not again for a while, the next in reach gets the turn.
+        if (c.reason === 'out_of_range') far.set(target.objectId, Date.now() + FAR_MS);
         return true;
     },
 });

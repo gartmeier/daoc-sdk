@@ -31,5 +31,7 @@ describe('spiritmaster kit', () => {
         expect(inReachTarget([plain, healer, focus, mezzed, pet, edge], 3, distanceTo, 1500, now)?.objectId).toBe(2);
         expect(inReachTarget([plain, focus, mezzed, pet, edge], 3, distanceTo, 1500, now)?.objectId).toBe(1);
         expect(inReachTarget([focus, mezzed, pet, edge], 3, distanceTo, 1500, now)).toBeNull();
+        expect(inReachTarget([plain, healer], 3, distanceTo, 1500, now, new Map([[2, now + 5000]]))?.objectId).toBe(1);
+        expect(inReachTarget([plain, healer], 3, distanceTo, 1500, now, new Map([[2, now - 1]]))?.objectId).toBe(2);
     });
 });
