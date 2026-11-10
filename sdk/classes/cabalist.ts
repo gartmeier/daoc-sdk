@@ -217,6 +217,10 @@ export const quickcastUnderFire = (): Behavior<TacticsSettings> => ({
     },
 });
 
+/** After a try that didn't land, leave that target this long: arena round 33, 7 tries on Hibernia's casters in under a minute, none landed, 57 damage. */
+const NEARSIGHT_RETRY_MS = 20_000;
+/** Range 2300 came back "too far away" at 2250 (round 33): the server measures in 3D and from where it last had us. */
+const NEARSIGHT_MARGIN = 200;
 /** A nearsighted target, then the immunity after it: 120 s of Obscuring Dust and 60 s of NearsightImmunity. */
 const NEARSIGHT_HOLD_MS = 180_000;
 
@@ -248,20 +252,23 @@ export const nearsight = (opts: { marked?: (orders: unknown) => number | null } 
         const sp = ctx.spells.all().filter(s => s.type === 'Nearsight' && s.target === 'Enemy' && s.power <= me.mana && s.spell.cooldownRemaining <= 0)
             .sort((a, b) => b.spell.level - a.spell.level)[0];
         if (!sp) return false;
-        if (sp.castTime > 0 && hammeredBy(ctx)) return false;
+        const broken: { at: number } | undefined = ctx.memory.get('nukeBroken');
+        if (sp.castTime > 0 && underFire(!!hammeredBy(ctx), broken?.at, Date.now())) return false;
         const until: Map<number, number> = ctx.memory.get('nearsightUntil') ?? new Map();
         ctx.memory.set('nearsightUntil', until);
         const now = Date.now();
-        const t = nearsightTarget(me, ctx.picture().contacts, o, until, sp.range - RANGE_MARGIN, now, opts.marked?.(o) ?? null, id => claimedBy(ctx, 'cc', id, CC_CLAIM_MS).length > 0);
+        const t = nearsightTarget(me, ctx.picture().contacts, o, until, sp.range - NEARSIGHT_MARGIN, now, opts.marked?.(o) ?? null, id => claimedBy(ctx, 'cc', id, CC_CLAIM_MS).length > 0);
         if (!t) return false;
         const seen = foeInView(ctx, t.objectId);
-        if (!seen || isDown(ctx, seen) || seen.distance > sp.range - RANGE_MARGIN) return false;
+        if (!seen || isDown(ctx, seen) || seen.distance > sp.range - NEARSIGHT_MARGIN) return false;
         await stopSwinging(ctx);
         ctx.doing('debuff', t.objectId, sp.spell.name);
         const c = await ctx.bot.castSpell(sp.spell, t.objectId, { approach: false });
         const refused = !c.success ? null : c.effectImmune || c.alreadyOn ? 'immune' : c.resisted ? 'resisted' : null;
         ctx.result('nearsight', refused ? { ...c, success: false, reason: refused } : c, t.objectId);
-        until.set(t.objectId, Date.now() + (c.success && !refused ? NEARSIGHT_HOLD_MS : refused === 'immune' ? 60_000 : 4000));
+        until.set(t.objectId, Date.now() + (c.success && !refused ? NEARSIGHT_HOLD_MS : refused === 'immune' ? 60_000 : NEARSIGHT_RETRY_MS));
+        // Amnesia'd or held: the turn is lost anyway; out of power, the nukes come first.
+        if (!c.success && (c.reason === 'crowd_controlled' || c.reason === 'must_wait')) await Bun.sleep(Math.min(c.retryAfterMs ?? 2000, 3000));
         return true;
     },
 });

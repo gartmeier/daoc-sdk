@@ -108,3 +108,5 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **Arena round 32** (Camelot wiped Midgard 5/0 in one 80 s fight, no deaths): `quickcast` went once each for Merlin, Morgana and Taliesin. Morgana's `nearsight` cast twice, was interrupted twice and resisted once. Taliesin's one Quickcast was refused with "You must wait 1 second to use this ability." and then sat out the full 31 s lock, so a refusal naming a wait now retries after that wait (`quickcastWaitMs`).
 
+**Arena round 33** (Hibernia won the cap from Camelot 5/2; the 264 s fight beat recent wipes): `nearsight` tried 7 times in under a minute and landed none. It was amnesia'd twice, interrupted twice, resisted once, `out_of_range` at 2250 once, and `must_wait` once, and Morgana dealt 57 damage. Now a failed try leaves that target alone 20 s, she doesn't try while under fire (a melee on her or a cast cut in the last 5 s), and she casts from 2100.
+
