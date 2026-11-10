@@ -25,7 +25,12 @@ export function stepFor(outSince: number | null, now = Date.now()): number {
     return outSince !== null && now - outSince >= LONG_AFTER_MS ? LONG_STEP : HOLD_GROUND;
 }
 
-/** assist with stepFor's step. Named assist, as the role's fight is. */
+/** A leg of the walk in when even the long step can't be taken (standStepTo: the focus too far, or an enemy at the spot). Round 52 she stood 80 % of a fight that way. */
+const LEG_MS = 3000;
+/** ... to this share of the nuke's range from the focus. */
+const LEG_REACH = 0.85;
+
+/** assist with stepFor's step, and after LONG_AFTER_MS with nothing cast, a leg toward the focus when even that step can't be taken. Named assist, as the role's fight is. */
 export const steppingAssist = (): Behavior<TacticsSettings> => {
     const short = assist({ holdGround: HOLD_GROUND }), long = assist({ holdGround: LONG_STEP });
     return {
@@ -38,10 +43,17 @@ export const steppingAssist = (): Behavior<TacticsSettings> => {
             const was: number | null = ctx.memory.get('outSince') ?? null;
             const since = out ? was ?? Date.now() : null;
             ctx.memory.set('outSince', since);
-            const inner = stepFor(since) === LONG_STEP ? long : short;
-            const acted = await inner.run(ctx);
-            if (acted) ctx.memory.set('outSince', null);
-            return acted;
+            const longNow = stepFor(since) === LONG_STEP;
+            const acted = await (longNow ? long : short).run(ctx);
+            if (acted) {
+                ctx.memory.set('outSince', null);
+                return true;
+            }
+            const seen = longNow && o.focus ? foeInView(ctx, o.focus) : null;
+            if (!seen || !sp || ctx.orders().phase !== 'engage') return false;
+            ctx.doing('move', o.focus, 'closing on the focus');
+            await ctx.bot.walkToObject(seen, { range: sp.range * LEG_REACH, timeout: LEG_MS });
+            return true;
         },
     };
 };

@@ -42,6 +42,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 41 (vs Camelot, wiped 0 / 5):** 5 cures (3 interrupted), 3 Hinder Spirits, 3 heals; in melee 26 %. The group dealt about 2200 in all (Thorgrim 987, Hrafna 632, Bragi 331, Ulfgar 231), against about 6000 in the round 36 win. Midgard has lost rounds 34, 37, 39 and 41 by wipe, as Hibernia and Camelot improved; no kit behaviour failed outright.
 
+**Round 52 (vs Camelot, won by wipe 5 / 1; the group's calmFan):** moving 7 % (62 % in round 50), 15 heals, 4 cures, but idle 31 % with "heal: not enough power" 34 times. Since then her stun and Nearsight cure stop below 40 % power (`EXTRAS_FLOOR`); the mezz cure (6 % of her power) and the slow (2) stay.
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:

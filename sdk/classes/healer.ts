@@ -79,6 +79,9 @@ export function isNearsightEffect(name: string): boolean {
     return nearsightNames.has(name);
 }
 
+/** Her extras (the stun, the Nearsight cure) stop below this much power: heals first. Round 52: 34 heals refused for power. */
+export const EXTRAS_FLOOR = 40;
+
 /** Kept inside the cure's range: the server measures in 3D, and positions are a moment old. */
 const CURE_RANGE_MARGIN = 50;
 
@@ -99,6 +102,7 @@ export const cureNearsight = (): Behavior<TacticsSettings> => ({
     interruptible: false,
     async run(ctx) {
         const me = ctx.me();
+        if (me.maxMana > 0 && me.manaPercent < EXTRAS_FLOOR) return false;
         const sp = ctx.spells.all().find(s => s.type === 'CureNearsightCustom' && s.spell.cooldownRemaining <= 0 && s.power <= me.mana);
         if (!sp) return false;
         const self = ctx.members().find(m => m.name === ctx.name);
@@ -115,5 +119,5 @@ export const cureNearsight = (): Behavior<TacticsSettings> => ({
 });
 
 export function healer(): Character {
-    return { role: 'healer', instant: [hinder()], urgent: [unlessHammered(cureMezz())], react: [unlessHammered(cureNearsight())], fight: [unlessHammered(stunPeel())] };
+    return { role: 'healer', instant: [hinder()], urgent: [unlessHammered(cureMezz())], react: [unlessHammered(cureNearsight())], fight: [unlessHammered(stunPeel({ minMana: EXTRAS_FLOOR }))] };
 }
