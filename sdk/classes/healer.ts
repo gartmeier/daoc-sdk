@@ -24,9 +24,9 @@ export const unlessHammered = (inner: Behavior<TacticsSettings>): Behavior<Tacti
     run: ctx => (hammeredBy(ctx) ? ctx.skip(`${inner.name}: a melee is on us`) : inner.run(ctx)),
 });
 
-/** The instant enemy attack slow we can cast now: Hinder Spirit and its ranks. */
+/** The instant single-target enemy attack slow we can cast now: Hinder Spirit and its ranks. Not an area one, which would wake a mezz beside the target. */
 export function slowSpell(all: readonly SpellPick[], mana: number): SpellPick | null {
-    return all.filter(s => s.type === 'CombatSpeedDebuff' && s.target === 'Enemy' && s.castTime === 0 && s.range > 0 && s.power <= mana && s.spell.cooldownRemaining <= 0)
+    return all.filter(s => s.type === 'CombatSpeedDebuff' && s.target === 'Enemy' && s.castTime === 0 && s.range > 0 && s.radius === 0 && s.power <= mana && s.spell.cooldownRemaining <= 0)
         .sort((a, b) => b.spell.level - a.spell.level)[0] ?? null;
 }
 

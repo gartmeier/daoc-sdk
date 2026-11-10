@@ -16,6 +16,7 @@ describe('healer kit: Hinder Spirit', () => {
         const pick = { spell: { name: 'Hinder Spirit', level: 2, cooldownRemaining: 0 }, type: 'CombatSpeedDebuff', target: 'Enemy', range: 1500, radius: 0, power: 2, castTime: 0, duration: 20 } as any;
         expect(slowSpell([pick], 10)?.spell.name).toBe('Hinder Spirit');
         expect(slowSpell([{ ...pick, spell: { ...pick.spell, cooldownRemaining: 3 } }], 10)).toBeNull();
+        expect(slowSpell([pick, { ...pick, radius: 350, spell: { ...pick.spell, name: 'Field', level: 20 } }], 10)?.spell.name).toBe('Hinder Spirit');
     });
 
     test('the melee on her first, then one on a caster; never the tank\'s, nor one still slowed', () => {
