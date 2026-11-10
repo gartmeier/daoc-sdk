@@ -69,6 +69,14 @@ Ulfgar plays Buffer healer. **Community, unverified:** Uthgard calls Augmentatio
 - A group Shaman buffs, debuffs, diseases and support-heals: disease first on enemy healers, the assist train's target and peeling tanks (it cuts their healing and slows them), then DoTs ([Blackthorn](https://blackthorn-daoc.com/wiki/shaman-guide)).
 - He heals as cover, not in competition with the main healer, cures disease and poison, and stays alive: a dead Shaman's buffs go with him ([Blackthorn](https://blackthorn-daoc.com/wiki/shaman-guide)). The instant point-blank disease comes at Subterranean 27, beyond 24.
 
+## Status at wrap-up (2026-11-10, after arena round 119)
+
+**Proven:** Buffer healer is the right build here. As the second healer he carried 9-17 heals in rounds Sigrid was dived or controlled (rounds 25, 36, 43, 55, 117). Cave nuker was weighed and rejected (above).
+
+**Open:**
+- **Infectious Spores on the focus** (`disease`): cast in most rounds, often resisted; its effect on kill time is unmeasured.
+- **His damage** is 0-400 a round. Under a melee (in melee 20-60 % in many losses) every spell of his has a cast time, so `disease`, `assist` and `heal` all skip. Where he stands is the group's.
+
 ## Not supported yet
 
 - **Area disease:** at Subterranean 27 Mold Cloud, the instant area disease every level 50 spec stops for (**community, unverified**).

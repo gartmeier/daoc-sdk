@@ -112,6 +112,19 @@ Nothing else needed from her at that camp: at any `ready.mana` from 10 to 35 her
 - A Pacification healer opens with a mezz, stuns an enemy healer for kill windows and pushes up to interrupt; an Augmentation or Mending healer heals, cures and calls the tanks back ([Blackthorn](https://blackthorn-daoc.com/wiki/healer-guide)). Sigrid at Pacification 4 is the second kind with the baseline mezz.
 - Cure mezz and cure disease are called very important, mezz and cure mezz on quickbinds; CC belongs on enemy support, and the group must not break it ([Uthgard](https://www.uthgard.net/forum/viewtopic.php?f=65&t=24011)).
 
+## Status at wrap-up (2026-11-10, after arena round 119)
+
+**Proven in the arena** (Sigrid, rounds 6-119):
+- **Mezz cure** (`cureMezz`, urgent, 3D reach since 7557f12): 2-17 cures a round; against Hibernia's mezzers it is her main work (17 in round 18).
+- **Stop casting into swings** (`unlessHammered`) and the **40 % power floor** on her stun and Nearsight cure (`EXTRAS_FLOOR`): round 52's 34 "not enough power" went to none from round 55.
+- **Hinder Spirit in the instant slot** above `flee`: fires on her own attacker since round 25 (2-6 a round).
+- **Nearsight cure** (`cureNearsight`): fires against Camelot once it was in `urgent` (3-5 a round, rounds 67-88), with a 150 margin and a 20 s back-off after a server out_of_range.
+
+**Open:**
+- The **Nearsight gate** was loosened after round 110 (only a member under 50 % holds it; cdb48f1). Measured in rounds 114-119 only, and round 115 still had 2 interrupted: whether it now delays heals as in round 77 is not settled.
+- **She is the enemy's first target** in most losses (targeted 50-80 %, often crowd-controlled herself), and she is Midgard's only mezz cure. Nothing in the kit answers an area mezz on the group; that is positioning and peel (the group's).
+- **Halt Attack** (`stunPeel`, Albion's): 1-3 a round, often resisted or refused under crowd control; its worth is unmeasured.
+
 ## Not supported yet
 
 - **Group heals:** Eir's Glorious Touch is instant, for fights where several are hurt at once. A rule would have to count who is hurt.

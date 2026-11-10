@@ -83,6 +83,14 @@ In `rvrRoaming`, which is what Midgard runs, the list keeps `tank` and this repl
 - Hammer is the usual group weapon for its stuns and snares and low endurance; Axe gives bleeds and attack slows ([Blackthorn](https://blackthorn-daoc.com/wiki/warrior-guide), [class library](https://www.darkageofcamelot.com/class-library-warrior/)).
 - Nothing found on when to guard or protect instead of swinging.
 
+## Status at wrap-up (2026-11-10, after arena round 119)
+
+**Proven:** Thorgrim is the group's steadiest damage (1100-3600 a round) with Pillager and Plunderer. **Positionals against players**, through the shared `fighterStyle` reading a player's last swing (22fa45a): Disable landed in rounds 22 and 52, Cleave and Valkyrie's Shield now and then.
+
+**Open:**
+- **Shield stuns are rare** (Disable 1-2 in a few rounds). Whether a stun opener on a caster focus would beat the damage style is untested.
+- He is the enemy's main target in many rounds (targeted 50-90 %) and dies with little damage then (rounds 81, 106, 115). That is peel and focus, the group's.
+
 ## Not supported yet
 
 - **Stuns on demand and Engage:** as for the Hero ([hero.md](hero.md)).

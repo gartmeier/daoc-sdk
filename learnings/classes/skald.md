@@ -77,6 +77,14 @@ About twice the damage, with the ranges apart. Styles, joining at once and the s
 
 **Server code.** `Spellbook.capabilities().cc` counts Crippling Shout, but a member reports `cc` only when its list has `crowdControl`, and the melee list doesn't, so `assignCc` no longer hands Bragi an add. In round 11 (2026-11-03) it did, and the assignment did nothing ([rvr.md](../rvr.md)). The kit's `shoutMezz` picks its own targets instead of waiting for an order.
 
+## Status at wrap-up (2026-11-10, after arena round 119)
+
+**Proven:** **Warshriek interrupts** (the group's `interrupt()` in his character) at 2-12 a round. **Crippling Shout** (`shoutMezz`) fires 1-5 a round since its targets were widened (round 8). **No taunts at players** (`skaldStyle`): Plague went from 6-8 a round to none at players.
+
+**Open:**
+- **His damage swings** from 0 to 2100 a round, following his in-melee share: whether the focus is a melee in reach or a caster behind their line. That is focus choice, not his kit (the group's `hitInReach` came in round 49).
+- **He is among the deaths in most losses**, as the melee the enemy reaches first: no defensive kit answer at 24.
+
 ## Not supported yet
 
 - **Warshriek** (49 damage, instant, range 700, 15 s between uses, 11 power) and the other shouts: `assist` casts nukes only without `melee`, so a Skald on `meleeFight` never shouts. **Community, unverified:** weapon or shout damage is the class's main choice.

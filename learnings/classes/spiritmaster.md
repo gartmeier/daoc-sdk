@@ -122,6 +122,16 @@ She can't wear chain, and for a long time `equipUpgrades` tried it on every visi
 - The usual RvR spec is 47 Darkness / 26 Suppression, and with a mezzer in the group she nukes one target while the others stay mezzed ([disorder.dk](https://disorder.dk/daoc/class-guide-midgard/)).
 - Her pet is weak in RvR: it intercepts some blows, about a third of the damage ([Uthgard](https://www.uthgard.net/forum/viewtopic.php?f=15&t=8273)). Nothing found on her power or positioning.
 
+## Status at wrap-up (2026-11-10, after arena round 119)
+
+**Proven:**
+- **`nukeInReach`** and the **short step** (250) took her from 73 % walking (rounds 27-34) to 20-35 % with 14-38 nukes against Hibernia (rounds 36, 47, 55, 57, 76: up to 4993 damage).
+- **Quickcast under fire** (Albion's `quickcastUnderFire`): fires 1-2 a round when she is dived.
+
+**Open, unproven:**
+- **Against Camelot** she still stands or walks: their casters stay back, and Obscuring Dust (sampled about 75 s of round 102) cuts her range by a third. The walk-in changes in order: 54c83a3 (a 3 s leg after 4 s), 5c491b5 (only within 900 beyond range), 12cc19c (1400 under Nearsight), 51e9c19 (each leg restarts the wait). Since 51e9c19 (rounds 108-119): moving 17-68 %, 0-9 nukes. Round 104 gave 27 nukes (before it), rounds 106 and 110 none. The rounds since were mostly dives and crowd control on her, so none of these is settled.
+- **Power**: she runs dry in long fights ("no power" 22-33 in rounds 90 and 104), partly from pet heals, which are the shared pet behaviour's.
+
 ## Not supported yet
 
 - **Pet tactics beyond following the focus:** taking aggro, the pulsing damage shields (Spirit's Revenge, 5 s) and Convert Spirit. No behaviour casts those.
