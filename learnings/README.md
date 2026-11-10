@@ -17,7 +17,7 @@ Notes from live runs against the local OpenDAoC server. Each topic file says wha
 | [trading.md](trading.md) | trade, offerTrade, acceptTrade: range, stacks, 10 per side, who accepts, what resets an accept, failure reasons (not yet verified live) |
 | [death-and-rest.md](death-and-rest.md) | rest, death, release, quitting |
 | [grouping-and-chat.md](grouping-and-chat.md) | invite/accept, shared XP, follow, chat helpers, chat CLI, untrusted chat |
-| [group-coordination.md](group-coordination.md) | groups of bots: shared picture, coordinator, role behaviours, strategies, observer reports |
+| [group-coordination.md](group-coordination.md) | groups of bots: shared picture, coordinator, role behaviours, strategies, group tactics (sdk/group/tactics), observer reports |
 | [rvr.md](rvr.md) | battlegrounds: getting in and out, PvP rules, killPlayer, the rvr-roam strategy, three groups fighting each other |
 | [classes-and-races.md](classes-and-races.md) | what can be created, start points per class |
 | [classes/](classes/mentalist.md) | one class at a time: role, spec builds, how to play it, what has been tested. `bun data/class-sheet.ts <class>` gives the facts for any class, `bun sdk/classes/reach.ts <class> "<build>"` what a build reaches and which behaviour casts it |

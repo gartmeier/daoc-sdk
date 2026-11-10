@@ -298,6 +298,58 @@ export default defineStrategy(pveLeveling, {
 - **`findCamp` searches 60,000 units from the leader,** so it can come up empty in a region with camps. Moving the leader closer (a channeler) moves the search with it.
 - Settings worth knowing (all in `PVE_SETTINGS`): `minCon`/`maxCon`, `camp` (hunt here), `campLevelBand`/`campAggressiveWeight`, `huntRadius`, `baseClearance`, `ready`, `holdMs`, `assistAfterMs`, `heal.*`, `rest`, `combatRange`, `formation`, `pullDistance`, `engageRadius`, `avoidAggressive`/`aggroPad`/`maxAggroNeighbors`/`pullAggressive`, `roamMs`/`newCampMs`, `retreat.*`, `shedLoadAt`/`keepItems`, `tauntOpenMs`/`peelAfterMs`/`guard`, `slotSlack`, `basePlan`/`aggroTolerance`, `pet.*`.
 
+## Group tactics (`sdk/group/tactics/`)
+
+The 119-round arena (2026-11-09/10, `groups/arena-ledger.md`) left three realm groups whose private decide wrappers had converged on four ideas under different names. They are now a library shaped like the class kits: `sdk/group/tactics/` is the shared, tested module, and a group's `strategy.ts` / `rvr.ts` chooses and tunes its tactics and keeps its own experiments. Step 1 was a pure extraction: every group passes the options that reproduce what it did, and its decide gives the same orders as before.
+
+| Tactic | Module | What it does | Albion (`camelot/tactics.ts`) | Hibernia (`hibernia/rvr.ts`) | Midgard (`midgard/plan.ts`) |
+|---|---|---|---|---|---|
+| 1. Focus by enemy role | `focus-role.ts` | the best-ranked enemy by `classGuess.role` (flags as fallback) becomes the focus | `focusBackLine` (deeds), `focusByRole` with `CASTER_HEALER_CC`, or `HEALER_CASTER_CC` with 2+ healers read | `focusByRole` with `HEALER_STICKY`, with 2+ healers in `enemyMix` | `focusByRole` with `CC_HEALER_CASTER` |
+| 2. No thrash | `focus-hold.ts` | keep a focus against flips | `dwellHold` / `dwellRecord`, 8 s, within 2300 of a member | `finishLow` (< 40 %), `holdFocus` (`HOLD`), `dwellFocus` 6 s against a melee-heavy make-up | `holdFocus` (reach + 1200), `dwellFocus` 6 s held on the orders' focus |
+| 3. Peel | `peel.ts` | a diver on our back line first | `peelByMezz` (mezz on melee within 350 of a soft member), `rootMelee` | `peelFocus` with `PEEL_CASTER` (casting at the support or healer), `mezzMelee`, `leashTank` (800) | `peelFocus` with `PEEL_MELEE` (melee on a healer 1 s), train plan only |
+| 4. Make-up | `make-up.ts` | adapt to what the enemy is | `healersRead` ≥ 2 switches the role order, the peel by mezz and the Cabalist's roots | `readMakeUp` / `withMakeUp` (one constant `Orders.settings` patch per make-up), `meleeHeavy` gates | none |
+
+- **Options name roles and compositions,** never realms, races or opponents: `protect: ['healer']`, `order: ['cc', 'healer', 'caster']`, `stayOnDamage: ['Cabalist']` (our own class). Presets are named by what they do (`CC_HEALER_CASTER`, `PEEL_CASTER`); a group spreads one and tunes it. Albion's `focusRaces` (a race rule, off by default) stays in its own file as an experiment.
+- **A tactic returns the update itself when it doesn't change it,** so a group can chain them, or test `r === u` to fall through as Hibernia's `holdFocusOn` does (finish, peel, healer first, hold).
+- **Memory:** stateful tactics take their key (`clockAt('hibFocus', 'at')`, `clockPair('dwellId', 'dwellSince')`, `key: 'hibHealer'`), so the groups kept their memory layout and their tests unchanged.
+- **Per-group switches:** `settings.tactics.<focusByRole | focusHold | peel | makeUp>`, on unless false: `bun groups/hibernia/rvr.ts 300 --tactics.peel=false` (dotted flags reach nested settings), or `args: { tactics: { peel: false } }` over MCP. `makeUp=false` means "as if the make-up were never read": Hibernia's gates fall back to its settings and `Orders.settings` stays null; Albion counts no enemy healer. Each group's file header lists which of its steps each switch covers. So a later arena can A/B one tactic in one realm while the others play as set.
+- **Comparing two decides without a live round:** `compareDecides` (`compare.ts`) runs both over the same seeded board pictures (500 ms ticks around one spot, enemies moving, hurt, healed, controlled, reading roles, switching targets), each with its own orders and memory, with generated inner updates (random phases, flips, crowd control, "pick off" and "picking up" reasons) and with the real `decidePack` / `decideRvr`. It returns the first differing tick of each run.
+- **The proof of step 1:** each group has `tactics-equivalence.test.ts` against a frozen copy of its pre-library decide (`tactics-legacy.ts`, `rvr-legacy.ts`, `plan-legacy.ts`; only change: the inner decide can be passed in). Every run flag's variant and every exported wrapper alone, 12,000-30,000 ticks each: identical orders. Small mutations of the options (a 26 % peel threshold for 25, a 300 swing reach for 350, `/^pick off/` for `/^pick/`, dropping the reserved mezzer) each fail it. These tests are meant to break in step 2: retire a group's once it changes behaviour on purpose. A line-by-line review (one reader per group, a skeptic per finding) found no difference for Midgard. It found four for Albion and Hibernia, all on inputs no real tick produces: NaN health or anchor, a string focus id, a focus clock with no `since` (hand-seeded memory), and a class role outside `FoeRole`. Two more were closed: the back line's health test, and a settings object without `pack`.
+
+### Step 2 candidates (behaviour changes, one at a time, behind a switch, over arena rounds)
+
+Each line is a place where the variants differ; the option that expresses it is in brackets. Unify only on evidence from alternating rounds.
+
+- **Role order:** crowd control first (Midgard) vs casters first unless two healers (Albion) vs a healer only against two (Hibernia) [`order`]. Hibernia's notes say its healerFirst rarely fires since the class reads came in.
+- **Read or deeds:** Albion's role focus ignores the flags (`roleBy: 'read'`), covered by `focusBackLine`; the others fall back on them. A Druid reads `support` for 15-71 s while its heal flag is set at once (learnings/rvr.md), so `read-or-deed` looks better for healers.
+- **Healer count:** `healersRead` (read only, fresh) vs `enemyMix` (deeds count, stale ones too). One count for all.
+- **Pick rule:** up a rank only (`rank`) vs a sticky choice (`sticky`); Albion keeps a focus only while it is itself in reach (`keepNeedsReach`).
+- **Reach of a role focus:** pack reach + 700 / + 300 and within 1500 of a nuker / 1700 from a non-tank member [`near`, `nukerReach`]. Hibernia's nuker reach came from its casters idling "focus not in view"; nobody else measured it.
+- **Who is no candidate:** Albion skips one meleeing us, Hibernia doesn't skip pets, Midgard and Albion count a player at 0 % as alive (`dead: 'board'`), only Midgard skips untouchable ones [`skip`]. The pets and the untouchable ones look like plain gaps.
+- **Dwell:** 6 s vs 8 s; held on the clock's focus vs the orders' focus; let go for a pick under 30 % vs under `switchBelow` with the held one 20 over; within reach + 700 / + 1200 of the centre vs 2300 of a member; Hibernia only against a melee-heavy make-up [`DwellOptions`].
+- **Finish:** Hibernia keeps a focus under 40 % ahead of every switch (`finishLow`); the others protect only under 30 % (`finish`, `letGo`).
+- **Hold:** slack 700 vs 1200; `/^pick/` (Midgard, which also skips the pack's "picking up ...") vs `/^pick off/`; hold only near the anchor in force vs move the anchor onto it [`HoldOptions`].
+- **Peel:** focus a melee diver on our healers (Midgard, dropped from its arena plan in round 116: it pulled all five off the role focus) vs focus a caster casting at our support or healer (Hibernia) vs mezz the melee on any soft member and root their melee (Albion). Different threats rather than variants: a playbook question (below). Finish thresholds 30 vs 25.
+- **Make-up read:** Hibernia settles it once (60 % of 3+ read, held 60 s) for its settings patch, but its gates and Albion's switch read the picture every tick. One settled read for every gate would stop a gate flapping as contacts come and go.
+
+### Playbooks on top (sketch, not built)
+
+A playbook picks and tunes the library's tactics from **our** composition (member roles and classes) and **their** settled make-up, so any five bots from the 150 get a sensible plan without a group file of their own:
+
+```typescript
+// sdk/group/tactics/playbooks.ts (later)
+type Playbook = { name: string; fits(us: MemberReport[]): number; decide(inner: Decide, theirs: MakeUp | null): Decide; patches?: Record<MakeUp, object> };
+const MELEE_TRAIN: Playbook;   // 2+ tank/melee, ≤ 1 caster: holdFocus + dwell on the orders' focus, CC_HEALER_CASTER, PEEL_MELEE, the healer's mezz on their melee
+const CASTER_BURN: Playbook;   // 3+ nukers/cc: CASTER_HEALER_CC (HEALER_CASTER_CC against 2+ healers), sticky 8 s focus-only, peelByMezz + rootMelee, spread formation
+const BALANCED: Playbook;      // otherwise: HEALER_STICKY against 2+ healers, finishLow, PEEL_CASTER, dwell + mezzMelee + leashTank against melee-heavy
+export const pickPlaybook = (us: MemberReport[]) => [MELEE_TRAIN, CASTER_BURN, BALANCED].sort((a, b) => b.fits(us) - a.fits(us))[0];
+```
+
+- Selection reads our roles, never a realm: the arena's Midgard is a melee train, Albion a caster burn, Hibernia balanced, and a pickup group of any realm lands in whichever fits.
+- Their make-up switches within a playbook (Hibernia's `withMakeUp` patches, Albion's healer-count order), so a playbook is tactics × make-up.
+- A group keeps its own file for experiments: `settings.tactics.playbook = 'caster-burn'` to force one, the per-tactic switches to A/B inside it, and its own wrappers around the playbook's decide.
+- For solos, duos and trios most of it falls away (no peel without a back line, no make-up below 3 seen); an 8v8 or a zerg needs the role focus to spread (two foci, or one per healer) before it helps, and `compareDecides` can show how often two playbooks disagree on generated fights before a round is spent on it.
+
 ## The improvement loop (LLM observer)
 
 1. Run: `bun groups/<g>/hunt.ts 180`.
