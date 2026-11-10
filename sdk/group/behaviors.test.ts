@@ -105,12 +105,12 @@ describe('beyondLeash: tank and melee stay with the fight', () => {
         regionId = 252;
         try {
             const faste = { x: 33_089, y: 38_271 };
-            // 1700 west of the Faste's centre (its circle is 3000) and 500 from the anchor: inside the leash, under the guards.
+            // 1700 west of the Faste's centre (its circle is 4500) and 500 from the anchor: inside the leash, under the guards.
             const near = { x: faste.x - 1700, y: faste.y, z: 0 };
             expect(beyondLeash(ctxWith(2000, { x: near.x - 500, y: near.y, z: 0 }), enemy(7, 'albion', { regionId: 252, ...near }))).toBe(true);
             expect(beyondLeash(ctxWith(undefined, null), enemy(7, 'albion', { regionId: 252, ...near }))).toBe(true);
             // Outside the circle: only the leash counts.
-            expect(beyondLeash(ctxWith(2000, { x: faste.x - 4000, y: faste.y, z: 0 }), enemy(7, 'albion', { regionId: 252, x: faste.x - 3500, y: faste.y }))).toBe(false);
+            expect(beyondLeash(ctxWith(2000, { x: faste.x - 5500, y: faste.y, z: 0 }), enemy(7, 'albion', { regionId: 252, x: faste.x - 5000, y: faste.y }))).toBe(false);
         } finally {
             regionId = 9999;
         }

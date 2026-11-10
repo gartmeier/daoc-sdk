@@ -573,10 +573,10 @@ describe('battleground data (static, Thidranki)', () => {
 
     test('keepDangers: every keep not ours, the Faste by its owner (keepOwners overrides the DB)', () => {
         const of = (realm: (typeof realms)[number], over: Partial<RvrSettings> = {}) => keepDangers(T, realm, { ...RVR_SETTINGS, ...over }).map(d => `${d.name} ${d.r}`);
-        expect(of('hibernia')).toEqual(['Thidranki Faste 3000', 'Midgard Portal Keep 4500', 'Albion Portal Keep 4500']);
+        expect(of('hibernia')).toEqual(['Thidranki Faste 4500', 'Midgard Portal Keep 4500', 'Albion Portal Keep 4500']);
         expect(of('albion')).toEqual(['Hibernia Portal Keep 4500', 'Midgard Portal Keep 4500']);
-        expect(of('albion', { keepOwners: { 'Thidranki Faste': 'midgard' } })).toContain('Thidranki Faste 3000');
-        expect(of('midgard', { keepOwners: { 'Thidranki Faste': 'midgard' } })).not.toContain('Thidranki Faste 3000');
+        expect(of('albion', { keepOwners: { 'Thidranki Faste': 'midgard' } })).toContain('Thidranki Faste 4500');
+        expect(of('midgard', { keepOwners: { 'Thidranki Faste': 'midgard' } })).not.toContain('Thidranki Faste 4500');
     });
 
     test('defaultPatrol: waypoints clear of aggro zones and keep circles, from the one nearest home, Albion and Midgard going opposite ways', () => {
@@ -1117,5 +1117,28 @@ describe('decideRvr in a pair round: no regrouping on the way to the ring', () =
         expect(run({ x: ring.x - 4000, y: ring.y }, { Menta: { mana: 20 } }).phase).toBe('recover');
         // Short of health is no power: rest first.
         expect(run(home, { Menta: { hp: 40 } }).phase).toBe('recover');
+    });
+});
+
+describe('decideRvr: attacked by keep guards it cannot see', () => {
+    // Arena round 26, 2026-11-10: Hibernia rested 3909 from the Faste (Albion's), an Armswoman attacked, three died healing.
+    const T = 252;
+    const faste = BATTLEGROUND_LAYOUTS[T]!.keeps.find(k => k.name === 'Thidranki Faste')!;
+    const spot = { x: 29_571, y: 36_567 };
+    const run = (over: Partial<Record<string, Partial<MemberReport>>>) =>
+        decideRvr(ctx(picture(team(over, spot, T), []), { memory: { realm: 'hibernia' }, settings: { patrol: null, opponent: 'albion' } }));
+    const from = (p: Point) => Math.hypot(p.x - faste.x, p.y - faste.y);
+
+    test('in combat with nothing on the board, near an enemy keep: it walks off, away from the keep', () => {
+        const u = run({ Bard: { inCombat: true }, Menta: { hp: 40 } });
+        expect(u.phase).toBe('travel');
+        expect(u.reason).toMatch(/unseen .* Thidranki Faste: moving off/);
+        expect(from(u.anchor!)).toBeGreaterThan(from(spot));
+    });
+
+    test('out of combat it rests, outside the wider circle (4500) round the Faste', () => {
+        const u = run({ Menta: { hp: 40 } });
+        expect(u.phase).toBe('recover');
+        expect(from(u.anchor!)).toBeGreaterThanOrEqual(4500);
     });
 });

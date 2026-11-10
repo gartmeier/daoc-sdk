@@ -431,6 +431,9 @@ export function spotAlong(t: Trip, from: Point, way: Point, distance: number): P
  */
 const AT_RING = 1500;
 
+/** A group within a keep's circle plus this, in combat with nothing on the board on it, is under that keep's guards (decideRvr). */
+const GUARD_REACH = 1500;
+
 /** rvrFindings' contact finding: the first fight with players this late in a pair round, or this long without one. */
 const SLOW_FIRST_FIGHT_S = 240, SLOW_QUIET_S = 300;
 
@@ -681,6 +684,17 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
             return { ...calm, phase: 'travel', anchor: mem.leg, facing: them, objective: `hunt ${enemiesText(ashore.length)} round ${at(them)}${gone}`, reason: `hunt ${enemiesText(ashore.length)} ${d} away: ${ashore.slice(0, 3).map(label).join(', ')}` };
         }
     } else mem.ashoreSince = undefined;
+
+    // ── Attacked by guards: in combat near an enemy keep with nothing on the board on us. Keep guards are realm NPCs, never on
+    // the board (isKillable), so this is the only sign of them: walk off, away from that keep, instead of resting under them. ──
+    const guarded = keeps.find(k => dist(centre, k) < k.r + GUARD_REACH);
+    if (guarded && here.some(m => m.inCombat) && !contacts.some(c => !c.stale && isAlive(c) && onUs(c))) {
+        const dx = centre.x - guarded.x, dy = centre.y - guarded.y, d = Math.hypot(dx, dy);
+        const way = d < 1 ? { x: 1, y: 0 } : { x: dx / d, y: dy / d };
+        const goal = spotAlong(trip, centre, way, guarded.r + GUARD_REACH + 500 - d);
+        stepLeg(trip, 'off guards', goal, { from: centre, movers: main, replan: 1500 });
+        return { ...calm, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: `get away from ${guarded.name}'s guards${gone}`, reason: `attacked by something unseen ${Math.round(d)} from ${guarded.name}: moving off` };
+    }
 
     // ── Regroup: wait for the dead to be rezzed or release, then meet those walking back from the portal keep ──
     if (deadHere.length) return { ...calm, phase: 'recover', anchor: stay, waiting: deadHere.map(m => ({ name: m.name, why: 'dead' })), reason: `waiting for ${names(deadHere)}: a rez or a release${gone}` };

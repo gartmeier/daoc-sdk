@@ -90,8 +90,13 @@ export interface KeepSettings {
     keepOwners: Record<string, Realm>;
 }
 
-/** The Faste's guards stand up to ~1700 from its centre and aggro at 1000 (static archers at 2100). */
-export const KEEP_CLEARANCE: KeepSettings['keepClearance'] = { portal: 4500, keep: 3000 };
+/**
+ * The Faste's guards stand up to ~1700 from its centre and aggro at 1000 (static archers at 2100), and come out after
+ * what they aggroed on. 3000 until 2026-11-10: Hibernia rested 3900 from the centre, an Armswoman (1613 out in the DB)
+ * attacked, and three died healing (arena round 26). Keep guards are realm NPCs, never on the board (isKillable), so the
+ * group can't see them coming: rvr.ts moves off when attacked near a keep by nothing it sees.
+ */
+export const KEEP_CLEARANCE: KeepSettings['keepClearance'] = { portal: 4500, keep: 4500 };
 
 /** Our portal keep and where we arrive (and land after a release) in a battleground; null elsewhere. */
 export function homeOf(regionId: number, realm: Realm): { keep: Keep; arrival: Point3 } | null {
