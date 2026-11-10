@@ -114,6 +114,11 @@ export const stunCaster = (floor = 15): Behavior => ({
  * (Flash 2.5 s, Cripple Mind 3 s). Shares quickcastUnderFire's 31 s timer (memory 'quickcastReadyAt'), which comes next
  * for when the Flash can't go (stun-immune, out of reach): her nuke on the focus.
  */
+/** An enemy pet swinging at us (not a spell: Contact.targetBySpell), not crowd-controlled. */
+export function petOnMe(threats: readonly Contact[], name: string): Contact | undefined {
+    return threats.find(t => !!t.isPet && !t.stale && !t.cc && t.target === name && !t.targetBySpell && t.swinging);
+}
+
 export const quickFlash = (): Behavior => ({
     name: 'quickFlash',
     interruptible: false,
@@ -121,9 +126,10 @@ export const quickFlash = (): Behavior => ({
         if (ctx.orders().phase !== 'engage') return false;
         const now = Date.now();
         if (now < (ctx.memory.get('quickcastReadyAt') ?? 0) || !ctx.sdk.findAbility('Quickcast')) return false;
-        const foe = hammeredBy(ctx);
-        if (!foe || foe.kind !== 'player' || foe.cc || (foe.ccImmune?.stun ?? 0) > now) return false;
         const me = ctx.me();
+        // hammeredBy takes players only; an enemy pet swinging at her (Midgard's spirit warrior, round 39) interrupts as well.
+        const foe = hammeredBy(ctx) ?? petOnMe(ctx.threats(), me.name);
+        if (!foe || foe.cc || (foe.ccImmune?.stun ?? 0) > now) return false;
         const sp = ctx.spells.all().find(s => s.type === 'Stun' && s.target === 'Enemy' && s.radius === 0 && s.spell.cooldownRemaining <= 0);
         if (!sp || me.mana < 2 * ctx.spells.powerOf(sp)) return false;
         const view = foeInView(ctx, foe.objectId);

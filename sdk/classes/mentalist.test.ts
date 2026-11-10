@@ -6,7 +6,7 @@ import { getClassSkills } from '../../data/index';
 import { withCharacter } from '../group/character';
 import { packBehaviors } from '../group/pack';
 import type { Contact } from '../group/types';
-import { mentalist, noteTooFar, stunTarget, viewDistance, type TooFar } from './mentalist';
+import { mentalist, noteTooFar, petOnMe, stunTarget, viewDistance, type TooFar } from './mentalist';
 import { reachOfBuild } from './reach';
 
 const BUDGET_AT_50 = earnedSpecPoints(10, 50);
@@ -111,5 +111,16 @@ describe('the server "too far"', () => {
         expect(viewDistance(log, 7, 1050, 5000)).toBe(1050);
         noteTooFar(log, 7, 'out_of_range', 1300, 0);
         expect(viewDistance(log, 7, 1300, 10_001)).toBe(1300);
+    });
+});
+
+describe('quickFlash on a pet', () => {
+    const pet = (o: Partial<Contact> = {}) => ({ objectId: 9, kind: 'npc', isPet: true, stale: false, cc: null, target: 'Niamh', targetBySpell: false, swinging: true, ...o }) as Contact;
+    test('an enemy pet swinging at her, not one casting at her, held, or on someone else', () => {
+        expect(petOnMe([pet()], 'Niamh')?.objectId).toBe(9);
+        expect(petOnMe([pet({ targetBySpell: true })], 'Niamh')).toBeUndefined();
+        expect(petOnMe([pet({ cc: { by: 'Oisin', kind: 'mezz', until: 1 } })], 'Niamh')).toBeUndefined();
+        expect(petOnMe([pet({ target: 'Oisin' })], 'Niamh')).toBeUndefined();
+        expect(petOnMe([pet({ swinging: false })], 'Niamh')).toBeUndefined();
     });
 });

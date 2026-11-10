@@ -124,3 +124,5 @@ Niamh has the Quickcast ability (`bun sdk/cli.ts niamh`): the next spell can't b
 **Verified, arena round 30** (wiped Camelot 5-0): the first round with Quickcast. Niamh used it once (`quickcast` 1) among 3 stuns and 13 nukes, 1,675 damage, never in melee long (0 % of the fight).
 
 **Arena round 35** (wiped Camelot 6-0): Prismatic Flash 18 times out of range, retried at once each time with our view saying in range. From the next round the Hibernian kits back off: after the server's "That target is too far away!" at a target, it reads as out of reach for 10 s, unless our view puts it 200 nearer than when that was said (`viewDistance`, `noteTooFar` in `sdk/classes/mentalist.ts`, shared by the Flash, Quickcast Flash, `dazzle` and `rootDiver`).
+
+**Arena round 39** (beat Midgard 5-1): Niamh the one death, 33 % of the fight in melee reach, 5 nukes, 2 Flashes, no Quickcast. `hammeredBy` (shared) counts enemy players only, so a pet on her (Midgard's spirit warrior) never set off `quickFlash`. From the next round `quickFlash` also takes an enemy pet swinging at her when no player is (`petOnMe`); Ciaran's kit uses the same `quickFlash`.
