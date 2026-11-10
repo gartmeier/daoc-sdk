@@ -30,6 +30,8 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 
 **Round 44 (vs Camelot, won 6 / 4):** 3 nukes, 336 damage, idle 69 % ("focus out of reach, holding ground" 193 times in a 246 s fight); her pet dealt 2387. The 250 step left her standing when nothing else was in reach for minutes. Since then `steppingAssist`: a step of 250, and of 750 once the focus has been out of reach for 4 s with nothing cast meanwhile (a cast by `assist` or `nukeInReach` starts the wait again). Rounds 27-34 showed 750 every turn keeps her walking; this takes it only when standing gets nothing.
 
+**Round 45 (vs Hibernia, lost on the cap 5 / 9; still the plain 250 step):** 15 nukes, 1904 damage, idle 22 % but as "focus not in view" (19), not out of reach. Round 44's standing isn't every round's.
+
 **Quickcast (2026-11-10, after round 27):** she has the ability (`bun sdk/cli.ts Hrafna`) and nothing used it. The kit's `instant` is the Cabalist kit's `quickcastUnderFire` ([cabalist.md](cabalist.md)): with a melee on her, or a cast of hers interrupted in the last 5 s, Quickcast, then her cc order or her nuke on the focus, uninterruptible, at twice the power, once per 31 s. In round 27 she was targeted 73 % of the fight.
 
 Before that the kit held only the role. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.
