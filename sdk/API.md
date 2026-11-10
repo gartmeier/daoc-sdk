@@ -1188,6 +1188,8 @@ interface WalkOptions {
   speedFactor?: number;
   /** Fail after this long without getting closer (default 8000 ms). */
   stuckMs?: number;
+  /** Cancelled (an abort): whether to stop the mover, read at that moment (default: always). False leaves it running toward this walk's end, for a caller that sends the next move at once and wants no brake in between (a group member's slot walk while the travel legs go on, sdk/group/travel.ts). */
+  stopOnAbort?: () => boolean;
 }
 ```
 

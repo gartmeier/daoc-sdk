@@ -148,6 +148,23 @@ describe('walkTo', () => {
         expect(w.state.movement.moving).toBeFalse();
     });
 
+    test('stopOnAbort: false leaves the mover running for the next move, read when the abort comes', async () => {
+        const { w, bot } = world();
+        w.stepSize = 1;
+        let keep = true;
+        const run = async () => {
+            const controller = new AbortController();
+            setTimeout(() => controller.abort(new Error('cancelled')), 50);
+            await expect(executionContext.run({ signal: controller.signal }, () => bot.walkTo(570000, 511000, { stuckMs: 10_000, stopOnAbort: () => !keep }))).rejects.toThrow('cancelled');
+        };
+        await run();
+        expect(w.sentOf('stop')).toHaveLength(0);
+        expect(w.state.movement.moving).toBeTrue();
+        keep = false;
+        await run();
+        expect(w.sentOf('stop')).toHaveLength(1);
+    });
+
     test('walkToObject adopts the target z and stops in range', async () => {
         const { w, bot } = world({ nearbyNpcs: [makeNpc({ objectId: 201, name: 'sewer rat', x: 560600, y: 511000, z: 2300 })] });
         const r = await bot.walkToObject('sewer rat', { range: 100 });

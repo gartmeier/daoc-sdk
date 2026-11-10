@@ -23,6 +23,7 @@ import { chooseSong, SONG_SETTINGS, type SongSettings } from './songs';
 import type { Behavior, MemberContext } from './member';
 import { castRunning, instantSummonDue, petOffForCc, petsAllowed, type PetSettings } from './pets';
 import { keepOnMap, onMap, safePath } from './terrain';
+import { keepsTravelling, travelAim } from './travel';
 import type { BotWorldState, InventoryItem, NearbyNpc, NearbyPlayer, PlayerState, Style } from '../types';
 import type { BuffSlot, Contact, MemberReport, Point, Role } from './types';
 
@@ -1759,7 +1760,7 @@ export function fightRejoin(role: Role, chaseLeash: number | undefined): number 
 }
 
 /** One leg toward a slot, around known danger and the enemy keeps' guards. */
-async function walkTowardSlot(ctx: MemberContext<TacticsSettings>, slot: Point, leg: number, o: { speedFactor?: number; detail?: string } = {}): Promise<void> {
+async function walkTowardSlot(ctx: MemberContext<TacticsSettings>, slot: Point, leg: number, o: { speedFactor?: number; detail?: string; stopOnAbort?: () => boolean } = {}): Promise<void> {
     const me = ctx.me();
     const d = dist(me, slot);
     let to: Point = slot;
@@ -1769,7 +1770,7 @@ async function walkTowardSlot(ctx: MemberContext<TacticsSettings>, slot: Point, 
         to = { x: me.x + (next.x - me.x) * f, y: me.y + (next.y - me.y) * f };
     }
     ctx.doing('move', null, o.detail ?? ctx.orders().phase);
-    const w = await ctx.bot.walkTo(to.x, to.y, { tolerance: 80, ...(o.speedFactor ? { speedFactor: o.speedFactor } : {}) });
+    const w = await ctx.bot.walkTo(to.x, to.y, { tolerance: 80, ...(o.speedFactor ? { speedFactor: o.speedFactor } : {}), ...(o.stopOnAbort ? { stopOnAbort: o.stopOnAbort } : {}) });
     if (!w.success) { ctx.result('walk', w); await Bun.sleep(500); }
 }
 
@@ -1932,11 +1933,15 @@ export const holdFormation = (): Behavior<TacticsSettings> => ({
         const fromAnchor = dist(me, o.anchor);
         if (o.phase === 'engage' && fromAnchor < fightRejoin(ctx.role, ctx.settings.chaseLeash)) return false;
         const slot = formationSlot(ctx, o.anchor, o.facing);
-        const d = dist(me, slot);
+        // Travelling on (the leg's anchor says where to next): past the slot that way, so the walk doesn't brake at the
+        // slot before the next leg comes, and a new leg re-aims it without braking (travel.ts). The trip's last leg: the slot.
+        const aim = travelAim(me.regionId, slot, o);
+        const target = aim ? keepOnMap(me.regionId, slot, aim) : slot;
+        const d = dist(me, target);
         const safe = safeSpot(me.regionId, me.level, ctx.settings.aggroTolerance ?? -3);
         if (!needsSlot({ dSlot: d, dAnchor: fromAnchor, phase: o.phase, slack: ctx.settings.slotSlack, gatherRadius: (ctx.settings as { gatherRadius?: number }).gatherRadius, safe: safe(me) })) return false;
         await stopSwinging(ctx);
-        await walkTowardSlot(ctx, slot, o.phase === 'engage' && fromAnchor < FIGHT_REJOIN ? LEASH_REJOIN_LEG : 2500);
+        await walkTowardSlot(ctx, target, o.phase === 'engage' && fromAnchor < FIGHT_REJOIN ? LEASH_REJOIN_LEG : 2500, aim ? { stopOnAbort: () => !keepsTravelling(ctx.orders()) } : {});
         return true;
     },
 });

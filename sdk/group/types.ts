@@ -259,8 +259,12 @@ export interface Orders {
     phase: Phase;
     /** What the group is trying to do, in words ("hunt badger cubs around (296000, 640000)"). */
     objective: string;
-    /** Rally point: where the group stands between pulls, or the next leg while travelling. */
-    anchor: Point3 | null;
+    /**
+     * Rally point: where the group stands between pulls, or the next leg while travelling. A leg's anchor carries
+     * `onward`, where the trip goes on after it (rvr.ts legAnchor): members walking to their slots aim past them that
+     * way (travel.ts), so they don't stop at each leg. On the anchor, not beside it, so any order that sets another anchor drops it.
+     */
+    anchor: (Point3 & { onward?: Point | null }) | null;
     /** Where pulls come from: the formation faces it. */
     facing: Point | null;
     /** Primary target everyone assists on. */

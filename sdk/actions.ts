@@ -349,6 +349,12 @@ export interface WalkOptions {
     speedFactor?: number;
     /** Fail after this long without getting closer (default 8000 ms). */
     stuckMs?: number;
+    /**
+     * Cancelled (an abort): whether to stop the mover, read at that moment (default: always). False leaves it running
+     * toward this walk's end, for a caller that sends the next move at once and wants no brake in between (a group
+     * member's slot walk while the travel legs go on, sdk/group/travel.ts).
+     */
+    stopOnAbort?: () => boolean;
 }
 
 export interface RepairResult extends ActionResult {
@@ -6107,8 +6113,10 @@ export class BotActions {
         } catch (error) {
             // Cancelled (MCP cancel / runScript timeout): don't leave the mover running to the destination.
             // Unconditional: a moveTo may still be in flight when no snapshot shows us moving yet
-            // (stopping an idle mover is a no-op).
-            await this.helpers.cleanup(() => this.sdk.sendStop());
+            // (stopping an idle mover is a no-op). A caller with stopOnAbort may keep it going.
+            let stop = true;
+            try { stop = options.stopOnAbort?.() ?? true; } catch { /* stop */ }
+            if (stop) await this.helpers.cleanup(() => this.sdk.sendStop());
             throw error;
         }
         if (!result.success && result.reason === 'timeout') await this.helpers.cleanup(() => this.sdk.sendStop());

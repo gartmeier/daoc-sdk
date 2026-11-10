@@ -24,7 +24,7 @@ import { isAlive, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
 import { aggroZones } from './terrain';
-import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import type { ColumnOrder, Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -347,7 +347,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         mem.raidEnd = now;
         mem.leaveTo = spotAlong(trip, centre, runWay(centre, free.length ? free : foes, homeSpot), k.leave);
         stepLeg(trip, 'leave', mem.leaveTo, { from: centre, movers: main, replan: Infinity });
-        return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'leave and rest', reason: `leave: ${why}` });
+        return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'leave and rest', reason: `leave: ${why}` });
     };
     // Monsters on us in a player fight (a camp it came near): whoever can mezz and has no player to mezz takes them, those on a
     // healer or the Bard first (monsterAdds). Killed when they wake, after the players: decideRvr's calm fights monsters on us.
@@ -467,7 +467,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         if (free.some(c => onUs(c) || dist(c, centre) <= k.openAt)) mem.pack = 'stalk';
         else if (mem.leaveTo && dist(centre, mem.leaveTo) > 800 && now - mem.raidEnd < 30_000) {
             stepLeg(trip, 'leave', mem.leaveTo, { from: centre, movers: main, replan: Infinity });
-            return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'leave and rest', reason: 'leave: moving off' });
+            return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'leave and rest', reason: 'leave: moving off' });
         }
         else mem.pack = 'stalk';
     }
@@ -486,7 +486,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             // Toward the keep, in legs everyone follows: a scattered pack comes together on the way, and stops as soon as it has.
             if (dead.length) mem.hadDead = true;
             stepLeg(trip, 'home', homeSpot, { from: centre, movers: main, replan: Infinity });
-            return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'go home to regroup', reason: pickups.length ? `picking up ${pickups.map(m => m.name).join(', ')}` : `regrouping: ${main.length} together of ${here.length}` });
+            return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'go home to regroup', reason: pickups.length ? `picking up ${pickups.map(m => m.name).join(', ')}` : `regrouping: ${main.length} together of ${here.length}` });
         } else {
             if (dead.length) mem.hadDead = true;
             return say({ ...calm(), phase: 'recover', anchor: stay, reason: 'regrouping: waiting for the others' });
@@ -517,7 +517,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // ── Stalking ──
     if (dead.length) mem.hadDead = true;
     if (mem.hadDead && !dead.length && !far.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.hadDead = false; mem.pack = 'rebuff'; mem.rebuffAt = now; return say({ ...none, phase: 'recover', anchor: stay, reason: 'rebuffing: someone is back' }); }
-    if (pickups.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.pack = 'home'; mem.legKind = null; stepLeg(trip, 'home', homeSpot!, { from: centre, movers: main, replan: Infinity }); return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'pick up the released', reason: `picking up ${pickups.map(m => m.name).join(', ')}` }); }
+    if (pickups.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.pack = 'home'; mem.legKind = null; stepLeg(trip, 'home', homeSpot!, { from: centre, movers: main, replan: Infinity }); return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'pick up the released', reason: `picking up ${pickups.map(m => m.name).join(', ')}` }); }
     const seen = free.filter(c => dist(c, centre) <= s.huntRadius);
     if (!seen.length) {
         mem.holdSince = undefined;
@@ -553,7 +553,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             mem.movingOff = true;
             const goal = spotAlong(trip, centre, runWay(centre, seen, homeSpot), s.huntRadius);
             stepLeg(trip, 'avoid', goal, { from: centre, movers: main, replan: 2000 });
-            return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'keep away while resting', reason: `resting: ${who.map(m => m.name).join(', ')}, moving off (nearest ${Math.round(d)} away)` });
+            return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'keep away while resting', reason: `resting: ${who.map(m => m.name).join(', ')}, moving off (nearest ${Math.round(d)} away)` });
         }
         mem.movingOff = false;
         return say({ ...none, phase: 'recover', anchor: stay, objective: 'rest', waiting: who.map(m => ({ name: m.name, why: powerWhy(m) })), reason: `resting: ${who.map(m => m.name).join(', ')} (nearest enemy ${Math.round(d)} away)` });
@@ -571,7 +571,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             return fight('kill', focus, packCc(seen, main, [], { centre, focus, areaRadius, roots: true, now }), onFocus(focus), `${inSight.length} in sight vs ${main.length}`);
         }
         stepLeg(trip, 'prey', lead, { from: centre, movers: main, replan: 500 });
-        return say({ ...none, phase: 'travel', anchor: mem.leg, facing: { x: lead.x, y: lead.y }, objective: `hunt ${inSight.length} stragglers`, reason: `hunt ${tag(lead)}, ${Math.round(d)} away, ${inSight.length} in sight vs ${main.length}` });
+        return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: { x: lead.x, y: lead.y }, objective: `hunt ${inSight.length} stragglers`, reason: `hunt ${tag(lead)}, ${Math.round(d)} away, ${inSight.length} in sight vs ${main.length}` });
     }
     const refuse = main.length < k.minPack ? `only ${main.length} together`
         : crowd > k.maxFoes ? `${crowd} enemies together`
@@ -582,7 +582,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         if (onUsNow || d <= k.reach) return short.length ? startLeave(refuse) : startPull(`${refuse}, and they are on us`);
         const goal = spotAlong(trip, centre, runWay(centre, seen, homeSpot), s.huntRadius);
         stepLeg(trip, 'avoid', goal, { from: centre, movers: main, replan: 2000 });
-        return say({ ...none, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: 'keep away', reason: `refuse: ${refuse} (${seen.length} seen, nearest ${Math.round(d)} away)` });
+        return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'keep away', reason: `refuse: ${refuse} (${seen.length} seen, nearest ${Math.round(d)} away)` });
     }
     if (onUsNow || d <= k.openAt) return startRaid(`${crowd} enemies round the nearest, ${main.length} of us`);
     if (d <= k.standoff) {
@@ -599,7 +599,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const f = (d - (k.openAt - 100)) / d;
     const goal = { x: centre.x + (lead.x - centre.x) * f, y: centre.y + (lead.y - centre.y) * f };
     stepLeg(trip, 'stalk', goal, { from: centre, movers: main, replan: 800 });
-    return say({ ...none, phase: 'travel', anchor: mem.leg, ...(facing ? { facing } : {}), objective: `stalk ${seen.length} round (${Math.round(lead.x)}, ${Math.round(lead.y)})`, reason: `stalk ${tag(lead)}, ${Math.round(d)} away, ${crowd} together` });
+    return say({ ...none, phase: 'travel', anchor: legAnchor(mem), ...(facing ? { facing } : {}), objective: `stalk ${seen.length} round (${Math.round(lead.x)}, ${Math.round(lead.y)})`, reason: `stalk ${tag(lead)}, ${Math.round(d)} away, ${crowd} together` });
 }
 
 /** A fan-out step is this long at most (one turn, then it looks again). */

@@ -42,6 +42,7 @@ import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, pai
 import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
 import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
+import { ONWARD_MIN } from './travel';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
 export { BATTLEGROUND_LAYOUTS, homeOf, keepDangers, KEEP_CLEARANCE, THIDRANKI, type BattlegroundLayout, type Keep, type KeepSettings, type PlayerRealm } from './keeps';
@@ -368,6 +369,7 @@ export function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; mo
     if (mem.legKind !== kind || !mem.goal || dist(mem.goal, goal) > o.replan) {
         mem.legKind = kind;
         mem.leg = null;
+        mem.legOnward = null;
         mem.route = null;
     }
     if (!o.force && mem.leg && !reachedBy(mem.leg, o.movers, t.now - mem.legAt, swimming)) return;
@@ -401,6 +403,14 @@ export function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; mo
     // Facing on along the route: after a crossing's bank moved the leg, `next` lies behind it in the river.
     const on: Point = (mem.route as Point[]).find(q => dist(q, leg) > 300) ?? goal;
     mem.legFacing = { x: on.x, y: on.y };
+    // Where the trip goes on after this leg (travel.ts): nowhere on its last, where the leg is the goal.
+    mem.legOnward = dist(leg, on) >= ONWARD_MIN ? { x: Math.round(on.x), y: Math.round(on.y) } : null;
+}
+
+/** The leg in force as an order's anchor, with where the trip goes on after it (Orders.anchor.onward); null with no leg. */
+export function legAnchor(mem: Record<string, any>): (Point3 & { onward?: Point | null }) | null {
+    if (!mem.leg) return null;
+    return mem.legOnward ? { ...mem.leg, onward: mem.legOnward } : mem.leg;
 }
 
 /** Which way to run from `enemies`: toward home, unless they stand that way (within 60° of it), then straight away from them. */
@@ -547,7 +557,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const q = dry ? drySpot(regionId, centre, { toward: centre, ok: c => clearOf(c, keeps) }) : centre;
         return { x: Math.round(q.x), y: Math.round(q.y), z: zAt(q) };
     };
-    const stay: Point3 = o.anchor ?? standHere();
+    // Without the last leg's way on (Orders.anchor.onward): standing here goes nowhere.
+    const stay: Point3 = o.anchor ? { x: o.anchor.x, y: o.anchor.y, z: o.anchor.z } : standHere();
     const calm = { focus: null, puller: null, cc: [], retreatTo: null, waiting: [] };
 
     // ── Who a fight here is with: enemies near the main body (any kind) or attacking one of it ──
@@ -692,7 +703,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
             const way = runWay(centre, big, homeAt);
             const goal = way.home && homeAt ? homeAt : spotAlong(trip, centre, way, s.huntRadius);
             stepLeg(trip, 'fall back', goal, { from: centre, movers: main, replan: way.home ? 1 : 2000 });
-            return { ...calm, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: `fall back ${way.home ? 'toward our portal keep' : 'away from them'}${gone}`, reason: `fall back: ${counted(big, seen)} ${d} away vs ${main.length}` };
+            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `fall back ${way.home ? 'toward our portal keep' : 'away from them'}${gone}`, reason: `fall back: ${counted(big, seen)} ${d} away vs ${main.length}` };
         }
         // With stayDry, those swimming aren't hunted into the river: with only such in sight, the group waits on dry ground for them (waitAshore).
         const ashore = seen.filter(c => !swimming(c));
@@ -707,7 +718,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const unready = new Set([...deadHere, ...far].map(m => m.name).concat(low.map(w => w.name)));
         if (ashore.length && unready.size <= HUNT_UNREADY) {
             stepLeg(trip, 'hunt', them, { from: centre, movers: main, replan: HUNT_REPLAN });
-            return { ...calm, phase: 'travel', anchor: mem.leg, facing: them, objective: `hunt ${enemiesText(ashore.length)} round ${at(them)}${gone}`, reason: `hunt ${enemiesText(ashore.length)} ${d} away: ${ashore.slice(0, 3).map(label).join(', ')}` };
+            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: them, objective: `hunt ${enemiesText(ashore.length)} round ${at(them)}${gone}`, reason: `hunt ${enemiesText(ashore.length)} ${d} away: ${ashore.slice(0, 3).map(label).join(', ')}` };
         }
     } else mem.ashoreSince = undefined;
 
@@ -719,7 +730,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const way = d < 1 ? { x: 1, y: 0 } : { x: dx / d, y: dy / d };
         const goal = spotAlong(trip, centre, way, guarded.r + GUARD_REACH + 500 - d);
         stepLeg(trip, 'off guards', goal, { from: centre, movers: main, replan: 1500 });
-        return { ...calm, phase: 'travel', anchor: mem.leg, facing: mem.legFacing, objective: `get away from ${guarded.name}'s guards${gone}`, reason: `attacked by something unseen ${Math.round(d)} from ${guarded.name}: moving off` };
+        return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `get away from ${guarded.name}'s guards${gone}`, reason: `attacked by something unseen ${Math.round(d)} from ${guarded.name}: moving off` };
     }
 
     // ── Regroup: wait for the dead to be rezzed or release, then meet those walking back from the portal keep ──
@@ -737,7 +748,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const meeting = far.filter(m => m !== walking);
         const them = centroid(meeting.length ? meeting : far);
         stepLeg(trip, 'gather', them, { from: centre, movers: main, replan: Infinity, meet: true });
-        return { ...calm, phase: 'gather', anchor: mem.leg, facing: them, waiting: far.map(m => ({ name: m.name, why: 'away' })), objective: `regroup with ${names(far)}${gone}`, reason: `meeting ${names(far)}, ${Math.round(dist(centre, them))} away` };
+        return { ...calm, phase: 'gather', anchor: legAnchor(mem), facing: them, waiting: far.map(m => ({ name: m.name, why: 'away' })), objective: `regroup with ${names(far)}${gone}`, reason: `meeting ${names(far)}, ${Math.round(dist(centre, them))} away` };
     }
     if (low.length && !onTheWay) return { ...calm, phase: 'recover', anchor: stay, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)` };
 
@@ -758,9 +769,14 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         wp = loop[mem.wp]!;
     }
     stepLeg(trip, 'patrol', wp, { from: centre, movers: here, replan: Infinity, force: arrived });
+    // The leg that ends at the waypoint goes on to the next one: the group walks through it, not to a stop at it.
+    if (mem.leg && !mem.legOnward && dist(mem.leg, wp) < 1 && loop.length > 1) {
+        const next = loop[(mem.wp + 1) % loop.length]!;
+        if (dist(next, wp) >= ONWARD_MIN) mem.legOnward = { x: Math.round(next.x), y: Math.round(next.y) };
+    }
     mem.camp = { x: wp.x, y: wp.y, z: wp.z, names: `patrol waypoint ${mem.wp + 1}/${loop.length}` };
     return {
-        ...calm, phase: 'travel', anchor: mem.leg, facing: mem.legFacing,
+        ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing,
         objective: `patrol ${loop.length} waypoints${bg && !s.patrol ? (s.opponent ? ` round where we meet ${s.opponent}` : ` round ${bg.name}'s meeting point`) : ''}${gone}`,
         reason: `patrol to waypoint ${mem.wp + 1}/${loop.length} ${at(wp)}, ${Math.round(dist(centre, wp))} away`,
     };
