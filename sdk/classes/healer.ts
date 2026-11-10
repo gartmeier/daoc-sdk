@@ -12,6 +12,10 @@
 //   120 s) leaves a caster answered "too far away" from where it stands; she lifts it, our nuker first. Below heal. learnings/classes/healer.md says what, and what has
 //   been measured.
 
+//
+// Other kits import from here, so keep these names and signatures, or tell their class sessions first: slowTarget and
+// slowSpell (Hibernia's Enchanter), cureNearsight and unlessHammered (Hibernia's Druid), unlessHammered (Midgard's Shaman).
+
 import { cureMezz, foeInView, hammeredBy, onMember, type TacticsSettings } from '../group/behaviors';
 import { isAlive, untouchable } from '../group/blackboard';
 import { getSpells } from '../../data/index';
