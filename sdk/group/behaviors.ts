@@ -1663,6 +1663,8 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
             }
             // It died as we came, and attack has stopped the swing: no failure, and no pause before the next.
             if (!a.success && a.reason !== 'already_dead') ctx.result('melee', a, mob.objectId);
+            // Refused at the bank (dry move guard): the focus swims, so hold the bank WET_SKIP_MS instead of walking at it every turn. Ragnar logged 39 of these at 0 damage in arena round 146 (2026-11-10).
+            noteWet(ctx, mob.objectId, a);
             await waitOutSelfCc(a);
             if (a.reason === 'immune') await Bun.sleep(1500);
         } else if (opts.style && Date.now() - (ctx.memory.get('styleAt') ?? 0) > STYLE_SPACING_MS) {
