@@ -5,9 +5,10 @@
 // He has no crowd control, no instant heal and no spell stun at 24, so the Cleric's helpers find nothing for him.
 // learnings/classes/friar.md says why, and what is open.
 
-import { song } from '../group/behaviors';
+import { heal, song, type TacticsSettings } from '../group/behaviors';
+import type { Behavior } from '../group/member';
 import type { Character } from '../group/character';
-import { groupHeal, reachHurt } from './druid';
+import { groupHeal, quietlyAbove, reachHurt } from './druid';
 
 export interface FriarOptions {
     /** groupHeal: how many members (him too) must each miss most of its 33. */
@@ -16,14 +17,28 @@ export interface FriarOptions {
     groupHealAbove?: number;
     /** Saint's Vigor, the group's endurance, between his heals. On by default. */
     chant?: boolean;
+    /** topUp: heal a member below this % in his spare turns, above `topUpAbove` % power. 0: off. */
+    topUpBelow?: number;
+    topUpAbove?: number;
 }
 
-export function friar({ groupHealMin = 3, groupHealAbove = 30, chant = true }: FriarOptions = {}): Character {
+/**
+ * The healer list's heal again, with higher lines (`below` % for everyone), in his spare turns and only above `above` % power.
+ * Arena round 126 (2026-11-10): 9 heals, and still idle 55 % on "nothing to do" (48 turns) at the RvR lines of 75 / 70, while
+ * six of ours died in 131 s. His heals are small (Major Revival 136, about a fifth of a template's health), so one that lands at
+ * 85 % is one fewer to land under a burst. Below heal in his list: never ahead of a member under the real lines.
+ */
+export const topUp = (below = 85, above = 50): Behavior<TacticsSettings> => ({
+    ...quietlyAbove({ ...heal({ limits: { tank: below, other: below } }), name: 'topUp' }, above),
+    name: 'topUp',
+});
+
+export function friar({ groupHealMin = 3, groupHealAbove = 30, chant = true, topUpBelow = 85, topUpAbove = 50 }: FriarOptions = {}): Character {
     return {
         role: 'healer',
         // Below heal: the group heal only tops up while nobody is under the heal lines, and a 33-point heal never takes a
-        // turn from Major Revival (136). Then the walk, with nobody in his reach to heal.
-        react: [groupHeal(groupHealMin, groupHealAbove), reachHurt()],
+        // turn from Major Revival (136). Then single heals at the top-up line, then the walk, with nobody in his reach to heal.
+        react: [groupHeal(groupHealMin, groupHealAbove), ...(topUpBelow > 0 ? [topUp(topUpBelow, topUpAbove)] : []), reachHurt()],
         ...(chant ? { chores: [song()] } : {}),
     };
 }

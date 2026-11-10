@@ -16,9 +16,10 @@ export default friar();
 ```
 
 - **`react`: `groupHeal(3, 30)`** (the Druid's): Angelic Commendation, 33 to each member within 2000 of him, 3 s, 17 power, when three or more around him (him too) each miss most of it, above 30 % power. `heal` picks the cheapest single heal that covers one member, so without this nothing casts it. It sits below `heal`, so it only tops up while nobody is under the heal lines.
+- **`react`: `topUp(85, 50)`**: the healer list's `heal` again at 85 % for everyone, above 50 % power, below `heal` and the group heal. Arena round 126: 9 heals and still idle 55 % on "nothing to do" at the RvR lines of 75 / 70, while six of ours died in 131 s. His biggest heal is about a fifth of a template's health, so one that lands at 85 % is one fewer under a burst. `topUpBelow: 0` turns it off.
 - **`react`: `reachHurt()`** (the Druid's): with nobody in his reach to heal, one leg toward the most hurt member 2000-3500 away, never with a melee on him. Brigid's "nothing to do" idle fell with it (druid.md).
 - **`chores`: `song()`**: Saint's Vigor, his endurance chant (instant, free). No healer list plays a song, so without this it never plays. With no Paladin in the line-up it is the group's only endurance song, and styles stop silently below 15 % ([group-coordination.md](../group-coordination.md)).
-- Options `groupHealMin`, `groupHealAbove`, `chant`.
+- Options `groupHealMin`, `groupHealAbove`, `chant`, `topUpBelow`, `topUpAbove`.
 - **Not in the kit:** the Cleric's `instantHealSave` and `stunPeel`, and the Healer's slow: their spell filters find nothing in his book. He has no crowd control, no instant heal and no spell stun at 24.
 
 ## At 24, Group support (Rejuvenation 15, Enhancement 18, Staff 15, Parry 7)
@@ -41,6 +42,8 @@ export default friar();
 **Verified,** on the plain healer list before the kit:
 - Round 122 (2026-11-10, against Midgard, lost 0 / 6), the only healer: 0 heals, 1 rez; targeted 41 %, in melee 45 %, idle 38 % on "nothing to do"; died once. The enemy reads a Friar as a healer (`class-read.ts`), so he is a focus.
 - Round 124 (against Hibernia, lost 0 / 5), beside Nimue: 3 heals tried, 2 "That target is too far away!", 1 lost to an amnesia; idle 54 % on "nothing to do" (21 turns), 9 rez turns refused with Nimue under attack.
+
+- Round 126 (against Hibernia, lost 3 / 6), the first with the kit: 9 heals, Saint's Vigor twice, targeted 8 %, idle 55 % on "nothing to do"; no group heal or walk fired. Then `topUp` came in.
 
 ## Open
 
