@@ -50,7 +50,7 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 67 (vs Camelot, lost on the cap 3 / 9; Nearsight cure in urgent):** 3 `nearsight` cures, her first; 2 heals, 3 slows. Hrafna still idle 32 % ("focus out of reach" 74) with 7 nukes: Camelot's casters stand back even at her full range.
 
-**Round 77 (vs Camelot, wiped 3 / 5):** no heal at all; 2 Nearsight cures interrupted while she was targeted 51 %, in melee 47 %. In `urgent` the 6 s cure took the turns from heals. Since then it waits until nobody of ours is under 60 % and no enemy is on her (`nearsightCalm`).
+**Round 77 (vs Camelot, wiped 3 / 5):** no heal at all; 2 Nearsight cures interrupted while she was targeted 51 %, in melee 47 %. In `urgent` the 6 s cure took the turns from heals. Since then it waits until nobody of ours is under 60 % and no enemy is on her (`nearsightCalm`). **After round 110:** that gate held it back in nearly every fight, and the group's damage fell from about 4900 (round 104) to 590 (round 110) against Camelot, whose Dust was sampled on Hrafna for about 75 s in round 102. Now only a member under 50 % holds it; a melee on her still does (`unlessHammered`).
 
 **stunPeel under pressure (Albion's change, after round 84):** while a member is under 2+ enemy players or below 70 %, the Cleric kit's `stunPeel` only peels (a hitter on a non-tank); the enemy healer and focus stuns wait for calm. Same lesson as the Nearsight cure: a 2.5 s cast that isn't a heal delays one. Sigrid takes it as is.
 

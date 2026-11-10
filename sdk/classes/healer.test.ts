@@ -51,12 +51,9 @@ describe('healer kit: Cure Nearsight', () => {
         expect(nearsightedMember(me, [me, { ...nuker, effects: [] }], 1500)).toBeNull();
     });
 
-    test('only when nobody is low and no enemy is on her', () => {
-        const ok = [me, report('Hrafna', { hp: 80 })];
-        expect(nearsightCalm('Sigrid', ok, [])).toBe(true);
-        expect(nearsightCalm('Sigrid', [me, report('Hrafna', { hp: 50 })], [])).toBe(false);
-        expect(nearsightCalm('Sigrid', [me, report('Hrafna', { hp: 50, isDead: true })], [])).toBe(true);
-        expect(nearsightCalm('Sigrid', ok, [enemy(1, 'albion', { target: 'Sigrid' })])).toBe(false);
-        expect(nearsightCalm('Sigrid', ok, [enemy(1, 'albion', { target: 'Hrafna' })])).toBe(true);
+    test('only when nobody of ours is under half health', () => {
+        expect(nearsightCalm([me, report('Hrafna', { hp: 60 })])).toBe(true);
+        expect(nearsightCalm([me, report('Hrafna', { hp: 45 })])).toBe(false);
+        expect(nearsightCalm([me, report('Hrafna', { hp: 45, isDead: true })])).toBe(true);
     });
 });
