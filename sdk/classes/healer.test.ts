@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { getBuild } from '../../data/builds';
 import { enemy, report } from '../group/fixtures';
 import { reachOfBuild } from './reach';
-import { slowSpell, slowTarget } from './healer';
+import { isNearsightEffect, nearsightedMember, slowSpell, slowTarget } from './healer';
 
 const at = (x: number) => ({ x, y: 1000, z: 0 });
 const me = report('Sigrid', { role: 'healer', ...at(1000) });
@@ -32,5 +32,22 @@ describe('healer kit: Hinder Spirit', () => {
         const pet = { ...enemy(4, 'albion', { target: 'Sigrid', ...at(1050) }), kind: 'npc' as const, isPet: true, name: 'emerald simulacrum' };
         expect(slowTarget(me, members, [onCaster, pet], new Map(), near, 1500, now)?.objectId).toBe(4);
         expect(slowTarget(me, members, [{ ...pet, isPet: false }], new Map(), near, 1500, now)).toBeNull();
+    });
+});
+
+describe('healer kit: Cure Nearsight', () => {
+    test('Obscuring Dust reads as Nearsight, a buff does not', () => {
+        expect(isNearsightEffect('Obscuring Dust')).toBe(true);
+        expect(isNearsightEffect('Evasion')).toBe(false);
+    });
+
+    test('our nuker first, then a healer; only in 3D reach', () => {
+        const dusted = { effects: ['Obscuring Dust'] };
+        const nuker = report('Hrafna', { role: 'nuker', ...at(2000), ...dusted });
+        const shaman = report('Ulfgar', { role: 'healer', ...at(1500), ...dusted });
+        expect(nearsightedMember(me, [me, shaman, nuker], 1500)?.name).toBe('Hrafna');
+        expect(nearsightedMember(me, [me, shaman], 1500)?.name).toBe('Ulfgar');
+        expect(nearsightedMember(me, [me, { ...nuker, z: 1400 }], 1500)).toBeNull();
+        expect(nearsightedMember(me, [me, { ...nuker, effects: [] }], 1500)).toBeNull();
     });
 });
