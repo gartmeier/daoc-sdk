@@ -84,3 +84,5 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **Arena round 27** (Camelot wiped Midgard 5/2 in one 220 s fight, the first round with `meleeDebuff`): Merlin cast 9 debuffs, Morgana 4 and Taliesin 3, and 4 were resisted. Merlin then had 4 nukes and 2 mezzes refused for power, so debuffs now stop below 35 % power (`DEBUFF_MIN_MANA`). Taliesin had 10 nukes `out_of_range`, so `offFocus` now picks and casts 50 inside the spell's range, as Nimue's stun does.
 
+**Arena round 28** (Hibernia beat Camelot 9-0): debuffs Merlin 9, Morgana 7 and Taliesin 3. The damage loss came from Hibernia's mezz and amnesia (Merlin entranced, then amnesia'd, then dead; Morgana dead 3 s after one debuff), but Merlin and Taliesin each held the group 12 % of the run for power. Now a debuff on a melee hitting another member needs 60 % power (`DEBUFF_FOR_OTHERS_MIN_MANA`). One on a melee hitting the caster still needs 35 %, since then nothing else can be cast.
+

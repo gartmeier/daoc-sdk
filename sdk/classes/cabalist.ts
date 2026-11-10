@@ -23,6 +23,8 @@ export interface CabalistOptions {
 
 /** No debuffs below this % power: the mezz and the nukes come first. Arena round 27: Merlin's 9 debuffs, then 2 mezzes and 4 nukes refused for power. */
 export const DEBUFF_MIN_MANA = 35;
+/** For a melee on another member, while we could be casting: round 28, Merlin and Taliesin each held the group 12 % of the run for power. */
+export const DEBUFF_FOR_OTHERS_MIN_MANA = 60;
 /** The server measures in 3D and from where it last had us: keep this far inside a spell's range. */
 const RANGE_MARGIN = 50;
 
@@ -62,12 +64,13 @@ export const meleeDebuff = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         if (ctx.orders().phase !== 'engage') return false;
         const me = ctx.me();
-        if (me.maxMana > 0 && me.manaPercent < DEBUFF_MIN_MANA) return false;
         const self = ctx.members().find(m => m.name === ctx.name);
         if (!self) return false;
         const distanceTo = (id: number) => foeInView(ctx, id)?.distance ?? Infinity;
         const target = meleeDebuffTarget(self, ctx.members(), ctx.threats(), distanceTo, 1500);
         if (!target) return false;
+        // On us we can cast nothing else; on another member the power would otherwise go on nukes and the mezz.
+        if (me.maxMana > 0 && me.manaPercent < (onMember(target, self) ? DEBUFF_MIN_MANA : DEBUFF_FOR_OTHERS_MIN_MANA)) return false;
         const until: Map<string, number> = ctx.memory.get('debuffUntil') ?? new Map();
         ctx.memory.set('debuffUntil', until);
         const now = Date.now();
