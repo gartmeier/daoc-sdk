@@ -1025,3 +1025,14 @@ describe('interrupt outside an engage', () => {
         expect(await interrupt().run(e.ctx)).toBe(true);
     });
 });
+
+describe('interrupt after the server\'s "too far"', () => {
+    test('that target waits 10 s unless it comes 200 nearer (arena round 35: 15 at once)', async () => {
+        const s = stub({ name: 'Bard', role: 'support', at: { x: 10_000, y: 10_000 }, contacts: [foe(51, 11_000, 10_000, { castingAt: Date.now() })], orders: { phase: 'engage', focus: null },
+            castSpell: async () => ({ success: false, reason: 'out_of_range', message: 'That target is too far away!' }) });
+        Object.assign(s.ctx.spells, { interrupts: () => [{ spell: { name: 'Minor Lullaby' }, range: 2300 }] });
+        expect(await interrupt().run(s.ctx)).toBe(true);
+        expect(await interrupt().run(s.ctx)).toBe(false);
+        expect(s.calls.castSpell).toEqual([51]);
+    });
+});

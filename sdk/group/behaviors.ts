@@ -1083,12 +1083,20 @@ export const interrupt = (): Behavior<TacticsSettings> => ({
             .filter(c => engaged || (!!c.targetBySpell && !!c.target && roles.has(c.target)))
             .sort((a, b) => interruptRank(a, roles) - interruptRank(b, roles));
         if (!casting.length) return false;
+        // The server's "too far" at a target our view put in reach: that one waits 10 s unless it comes 200 nearer. Arena round 35
+        // (2026-11-10): Oisin's instant interrupt got it 15 times, retried at once each time (Hibernia class session).
+        const far: Map<number, { until: number; d: number }> = ctx.memory.get('interruptFar') ?? new Map();
+        ctx.memory.set('interruptFar', far);
         for (const foe of casting) {
             const d = foeInView(ctx, foe.objectId)?.distance ?? Infinity;
             const sp = spells.find(s => d <= s.range);
             if (!sp) continue;
+            const was = far.get(foe.objectId);
+            if (was && now < was.until && d > was.d - 200) continue;
             ctx.doing('interrupt', foe.objectId, sp.spell.name);
-            ctx.result('interrupt', await ctx.bot.castSpell(sp.spell, foe.objectId, { approach: false }), foe.objectId);
+            const r = await ctx.bot.castSpell(sp.spell, foe.objectId, { approach: false });
+            ctx.result('interrupt', r, foe.objectId);
+            if (r.reason === 'out_of_range') far.set(foe.objectId, { until: Date.now() + 10_000, d });
             return true;
         }
         // None in reach: a support with ccFlank walks round the fight toward the first that is (spells: longest range first).
