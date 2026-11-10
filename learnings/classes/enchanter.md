@@ -69,3 +69,9 @@ From round 11 the kit's fight is `nukerFight(0, true)` from `sdk/classes/cabalis
 ## Quickcast (from the round after 28)
 
 Ciaran has Quickcast. His kit's `instant` slot holds the Cabalist kit's `quickcastUnderFire` (Albion class session, 1f05f78): with a melee on him, or a cast of his cut in the last 5 s, Quickcast and then his cc assignment or his nuke on the focus, uninterruptible, twice the power, once per 31 s. Rounds 21 and 23: in melee 51-57 % of the fight, `nuke:interrupted` 3-5 a round.
+
+## Arena round 33: answers to a melee
+
+**Verified,** round 33 (beat Camelot 5-2, one 251 s fight): Ciaran moved 85 % of the fight, cast 2 nukes and died; `quickcastUnderFire` never fired (the focus was out of his reach). **Server code / data:** Light nuker at 24 reaches Prismatic Flash (stun, 2.5 s, 5 s) and two instants no behaviour cast: Blinding Scintillation (attack-speed debuff, value 11, 120 s, 12 power) and Dazzling Torch (melee-damage debuff, value 10, 30 s, 13 power), plus Field of Scintillation (the same with radius 350).
+
+From the next round his `instant` slot, above `flee`: `quickFlash` (the Mentalist kit's: Quickcast and Prismatic Flash on the melee hitting him), `dazzle` (Blinding Scintillation, else Dazzling Torch, at the melee on him, else on a soft member, by the Midgard Healer kit's `slowTarget`; never the area one, which would wake a mezz beside its target; never a crowd-controlled enemy), then `quickcastUnderFire`.
