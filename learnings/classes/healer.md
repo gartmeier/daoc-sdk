@@ -54,7 +54,7 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **stunPeel under pressure (Albion's change, after round 84):** while a member is under 2+ enemy players or below 70 %, the Cleric kit's `stunPeel` only peels (a hitter on a non-tank); the enemy healer and focus stuns wait for calm. Same lesson as the Nearsight cure: a 2.5 s cast that isn't a heal delays one. Sigrid takes it as is.
 
-**Round 87 (vs Hibernia, won by wipe 4 / 1):** 4 `nearsight:out_of_range`; the pick's margin went from 50 to 150, the cast being 6 s.
+**Round 87 (vs Hibernia, won by wipe 4 / 1):** 4 `nearsight:out_of_range`; the pick's margin went from 50 to 150, the cast being 6 s. Round 96 (vs Hibernia, wiped 0 / 5): 4 more at 150, so the member moves during the cast; since then a member the server called out of range is left 20 s instead of 8.
 
 ## Builds
 

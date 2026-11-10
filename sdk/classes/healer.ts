@@ -107,6 +107,8 @@ export function nearsightCalm(me: string, members: readonly Pick<MemberReport, '
 
 /** A cure on one member at most this often: its effect list can lag the cure by a report. */
 const NEARSIGHT_SPACING_MS = 8000;
+/** ... and this long after the server called it out of range. */
+const NEARSIGHT_FAR_MS = 20_000;
 
 /** Cure Nearsight on nearsightedMember's pick, in or out of a fight. */
 export const cureNearsight = (): Behavior<TacticsSettings> => ({
@@ -127,7 +129,10 @@ export const cureNearsight = (): Behavior<TacticsSettings> => ({
         ctx.memory.set(key, Date.now());
         // Its own kind in the reports, apart from the mezz cure's `cure`.
         ctx.doing('nearsight', m.objectId, sp.spell.name);
-        ctx.result('nearsight', await ctx.bot.castSpell(sp.spell, m.objectId, { approach: false }), m.objectId);
+        const c = await ctx.bot.castSpell(sp.spell, m.objectId, { approach: false });
+        ctx.result('nearsight', c, m.objectId);
+        // The server called it too far: that member is left 20 s, not 8 (round 96: 4 such answers at a margin of 150).
+        if (c.reason === 'out_of_range') ctx.memory.set(key, Date.now() + NEARSIGHT_FAR_MS - NEARSIGHT_SPACING_MS);
         return true;
     },
 });
