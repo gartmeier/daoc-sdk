@@ -4,7 +4,7 @@
 // our focus is low, and casting Smite at monsters in the time left, above a floor of power for the heals.
 // learnings/classes/cleric.md says what that reaches, and what the arena rounds showed.
 
-import { assist, foeInView, isDown, onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
+import { assist, foeInView, hammeredBy, isDown, onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
 import { dist } from '../group/battleground';
 import { ccImmuneTo, CC_IMMUNE_MS } from '../group/cc';
 import type { Character } from '../group/character';
@@ -102,6 +102,44 @@ export const stunPeel = (opts: { healerBelow?: number; minMana?: number; marked?
     },
 });
 
+/** Gift of the Heavens goes on a member this low; while a melee is on her (her heals with a cast time can't land) on one at HEAL_HAMMERED. */
+export const INSTANT_HEAL_BELOW = 30;
+export const INSTANT_HEAL_HAMMERED = 50;
+
+/** Her instant heal she can cast now: Gift of the Heavens (Rejuvenation 11, 40 %, 0 s, 0 power, 15 min timer) or a later rank. */
+export function instantHeal(all: readonly SpellPick[], mana: number): SpellPick | null {
+    return all.filter(s => s.type === 'Heal' && s.castTime === 0 && (s.target === 'Realm' || s.target === 'Group') && s.radius === 0 && s.power <= mana && s.spell.cooldownRemaining <= 0)
+        .sort((a, b) => b.spell.level - a.spell.level)[0] ?? null;
+}
+
+/** Who gets it: the lowest living member in reach at or below `below` %. */
+export function instantHealTarget(me: Pick<MemberReport, 'regionId' | 'x' | 'y'>, members: readonly MemberReport[], range: number, below: number): MemberReport | null {
+    return members.filter(m => !m.isDead && m.regionId === me.regionId && m.hp <= below && dist(me, m) <= range).sort((a, b) => a.hp - b.hp)[0] ?? null;
+}
+
+/**
+ * In the instant slot, above flee: Gift of the Heavens on a member about to die, or, with a melee on her, on one at half health.
+ * The heal list picks it only when nothing else covers, and skips every heal with a cast time while she's hammered, so it never
+ * went out where it counts. Arena round 48: 2 heals in a fight she spent 34 % in melee.
+ */
+export const instantHealSave = (): Behavior<TacticsSettings> => ({
+    name: 'instantHeal',
+    interruptible: false,
+    async run(ctx) {
+        if (ctx.orders().phase !== 'engage' && !ctx.threats().length) return false;
+        const me = ctx.me();
+        const sp = instantHeal(ctx.spells.all(), me.mana);
+        if (!sp) return false;
+        const below = hammeredBy(ctx) ? INSTANT_HEAL_HAMMERED : INSTANT_HEAL_BELOW;
+        const t = instantHealTarget(me, ctx.members(), sp.range - 50, below);
+        if (!t) return false;
+        ctx.doing('heal', t.objectId, `${sp.spell.name} on ${t.name} (instant)`);
+        const c = await ctx.bot.castSpell(sp.spell, t.name === ctx.name ? me.objectId : t.objectId, { approach: false });
+        ctx.result('heal', c, t.objectId);
+        return true;
+    },
+});
+
 /** Smite at monsters only: against players her spare power is the group's heals (spareNuke above 75 % still smites them). */
 const notOnPlayers = (inner: Behavior<TacticsSettings>): Behavior<TacticsSettings> => ({
     ...inner,
@@ -109,5 +147,5 @@ const notOnPlayers = (inner: Behavior<TacticsSettings>): Behavior<TacticsSetting
 });
 
 export function cleric({ saveBelow = 50, stun = true }: ClericOptions = {}): Character {
-    return { role: 'healer', fight: [...(stun ? [stunPeel({ marked: camelotMezzer })] : []), notOnPlayers(thrifty(assist(), saveBelow))] };
+    return { role: 'healer', instant: [instantHealSave()], fight: [...(stun ? [stunPeel({ marked: camelotMezzer })] : []), notOnPlayers(thrifty(assist(), saveBelow))] };
 }

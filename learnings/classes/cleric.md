@@ -106,3 +106,13 @@ A Cleric's heals live in the skills list, the hybrid path: `castSpell` handles i
 
 Her `buff:no_response` failures (5-8 a round, 39 in round 26) are the server's cap on concentration effects: "You can only cast up to 20 simultaneous concentration spells!" (SpellHandler.cs:31 `MAX_CONC_SPELLS = 20`, :836-839). It applies however much pool is left; she had Conc 57/210 at the time. Her plan has about 32 concentration buffs, so past 20 every one is refused. The SDK reads the refusal as "No cast observed" and retries each minute. Reported to the orchestrator: the fix is in `castSpell` (parse the line) and `planBuffs` (cap at 20), both shared code.
 
+## Gift of the Heavens as a save (kit, from Camelot's round after round 48, 2026-11-10)
+
+**Verified, arena round 48** (Midgard wiped Camelot 5/3): 2 heals in a fight where she was in melee 34 % of fight time. Since f4135fd the heal list skips every heal with a cast time while a melee is on her, and her instant heal is picked only when nothing else covers.
+
+**Server code:** Gift of the Heavens (Rejuvenation 11) is a Heal of 40 % of the target's health, 0 s cast, 0 power, recast 900 s, range 2000. Boon of the Heavens (60 %) is at 21, beyond her 19.
+
+**The change** (`instantHealSave` in `sdk/classes/cleric.ts`, in her instant slot above flee): in a fight it casts Gift on the lowest living member within 1950 at or below 30 %. While a melee is on her the line is 50 %, since nothing else of hers can land then. That's one save every 15 minutes.
+
+**To look for:** an instant heal in her `heal` results, and deaths of whoever was at the bottom.
+

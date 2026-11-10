@@ -3,7 +3,9 @@ import { getBuild } from '../../data/builds';
 import { rvrBehaviors } from '../group/rvr';
 import { withCharacter } from '../group/character';
 import type { Contact } from '../group/types';
-import { camelotMezzer, cleric, stunTarget } from './cleric';
+import { camelotMezzer, cleric, instantHeal, instantHealTarget, stunTarget } from './cleric';
+import { Spellbook } from '../group/spells';
+import { getSpell } from '../../data/index';
 import { reachOfBuild } from './reach';
 
 const NOW = 1_000_000;
@@ -77,3 +79,28 @@ describe('the cleric kit', () => {
         expect(withCharacter(rvrBehaviors().healer, cleric({ stun: false })).map(b => b.name)).not.toContain('stunPeel');
     });
 });
+
+describe('the cleric kit, instant heal', () => {
+    const all = () => {
+        const known = reachOfBuild(getBuild('Cleric', 'Healer')!, 24).known;
+        const spells = known.map(k => ({ name: k.name, level: k.level, internalId: k.info.id, lineName: k.line, lineIndex: 0, spellIndex: 0, cooldownRemaining: 0 }));
+        const sdk = { getSkills: () => ({ spells }), getPlayer: () => ({ mana: 999, maxHealth: 600, level: 24 }) } as any;
+        return new Spellbook(sdk, { getSpellInfo: (s: { internalId: number }) => getSpell(s.internalId) ?? null } as any).all();
+    };
+    test('Gift of the Heavens is her instant: 0 s, 0 power', () => {
+        const g = instantHeal(all(), 0)!;
+        expect([g.spell.name, g.castTime, g.power]).toEqual(['Gift of the Heavens', 0, 0]);
+    });
+    test('the lowest member in reach at or below the line', () => {
+        const at = (name: string, hp: number, x = 0, isDead = false) => ({ name, hp, x, y: 0, regionId: 238, isDead }) as any;
+        const ms = [at('Galahad', 45), at('Merlin', 25), at('Morgana', 10, 2500), at('Taliesin', 5, 0, true)];
+        expect(instantHealTarget({ x: 0, y: 0, regionId: 238 }, ms, 1950, 30)?.name).toBe('Merlin');
+        expect(instantHealTarget({ x: 0, y: 0, regionId: 238 }, [at('Galahad', 45)], 1950, 30)).toBeNull();
+        expect(instantHealTarget({ x: 0, y: 0, regionId: 238 }, [at('Galahad', 45)], 1950, 50)?.name).toBe('Galahad');
+    });
+    test('it goes in the instant slot, above flee', () => {
+        const list = withCharacter(rvrBehaviors().healer, cleric()).map(b => b.name);
+        expect(list.indexOf('instantHeal')).toBe(list.indexOf('flee') - 1);
+    });
+});
+
