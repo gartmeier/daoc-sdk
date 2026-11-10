@@ -116,3 +116,5 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **Arena rounds 61-66:** four straight Camelot wins: Midgard 5/0 (61), Hibernia 5/1 (64), Midgard 5/2 (65), Hibernia 5/0 (66). In each Hibernia win, Merlin cured 8-9 mezzes, Morgana landed `nearsight` 4 of 4, and Quickcast went 3-4 times across the casters. Morgana did 834-1768 damage a round.
 
+**After round 97** (Camelot lost 11 of 14 rounds, 74-97): Morgana died first in 6 of the last 15 ledger rounds with a death (the group session's count). A pack's focus goes on known casters first, +100 for having been seen casting, plus nearness to its centre (`pickPackFocus`, sdk/group/rvr.ts). Hibernia's first focus after the engage was a "(100% caster)" Briton in rounds 93 and 97, and Morgana died first in both, at +18 s and +16 s. Her nearsight was the only cast of ours on the approach (travel phase), which flagged her as a caster before anyone else. Now `nearsight` runs in engage only. Whether she still draws the first focus is the thing to look for.
+

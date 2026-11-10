@@ -238,8 +238,7 @@ export function nearsightTarget(me: Point & { regionId: number }, contacts: read
 
 /**
  * Obscuring Dust (Nearsight 35 %, range 2300, 2 s, 9 power, 120 s): an enemy caster's or healer's spell range goes to 65 %
- * (NearsightECSEffect.cs, SpellRangePercentCalculator.cs), 1500 to 975, from beyond its own reach. In a fight and on the approach
- * (travel with enemy players in reach), before her nukes. Arena rounds 12, 15, 24, 28, 30: Hibernia's casters mezzed,
+ * (NearsightECSEffect.cs, SpellRangePercentCalculator.cs), 1500 to 975, from beyond its own reach. In a fight, before her nukes. Arena rounds 12, 15, 24, 28, 30: Hibernia's casters mezzed,
  * amnesia'd and interrupted ours from range and won every time but one.
  */
 export const nearsight = (opts: { marked?: (orders: unknown) => number | null } = {}): Behavior<TacticsSettings> => ({
@@ -247,7 +246,8 @@ export const nearsight = (opts: { marked?: (orders: unknown) => number | null } 
     interruptible: false,
     async run(ctx) {
         const o = ctx.orders();
-        if (o.phase !== 'engage' && o.phase !== 'travel') return false;
+        // Engage only: on the approach it was the first cast of ours they saw, and a pack focus goes on known casters first (pickPackFocus): Morgana died first in 6 of 15 rounds.
+        if (o.phase !== 'engage') return false;
         const me = ctx.me();
         const sp = ctx.spells.all().filter(s => s.type === 'Nearsight' && s.target === 'Enemy' && s.power <= me.mana && s.spell.cooldownRemaining <= 0)
             .sort((a, b) => b.spell.level - a.spell.level)[0];
