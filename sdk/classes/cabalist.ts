@@ -141,6 +141,9 @@ export const offFocus = (): Behavior<TacticsSettings> => ({
     },
 });
 
+// Shared with other realms' kits: healer.ts (stunPeel, from cleric.ts), spiritmaster.ts, enchanter.ts and mentalist.ts use
+// quickcastUnderFire(); mentalist.ts also writes the 'quickcastReadyAt' memory key with QUICKCAST_REUSE_MS. Keep those names,
+// the no-argument call and the key, or tell the Hibernia and Midgard class sessions first.
 /** The server's Quickcast: one spell that can't be interrupted, at twice the power, then 30 s before the next (QuickCastAbilityHandler.cs). */
 export const QUICKCAST_REUSE_MS = 31_000;
 /** An interrupt this recent says the next cast would be cut too: a swing or a hit starts a 3 s timer. */
