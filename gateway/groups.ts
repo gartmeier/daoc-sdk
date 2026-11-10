@@ -359,6 +359,15 @@ function definitionProblem(def: any): string | null {
         if (!isObj(m) || typeof m.bot !== 'string' || !BOT.test(m.bot)) return `member ${i + 1} needs a "bot" folder name (letters, digits, _ and -)`;
         if (m.role !== undefined && !roleOf(m.role)) return `${m.bot} has role ${JSON.stringify(m.role).slice(0, 40)}; use one of ${ROLES.join(', ')}`;
     }
+    // The bench (bots that sit out) is not shown; it is checked only so that a bot is in one place.
+    if (def.bench !== undefined) {
+        if (!Array.isArray(def.bench) || def.bench.length > MAX_MEMBERS) return `"bench" must list at most ${MAX_MEMBERS} { "bot": "<name>" }`;
+        const playing = new Set(def.members.map((m: { bot: string }) => m.bot));
+        for (const [i, m] of def.bench.entries()) {
+            if (!isObj(m) || typeof m.bot !== 'string' || !BOT.test(m.bot)) return `bench entry ${i + 1} needs a "bot" folder name (letters, digits, _ and -)`;
+            if (playing.has(m.bot)) return `${m.bot} is both a member and on the bench`;
+        }
+    }
     return null;
 }
 

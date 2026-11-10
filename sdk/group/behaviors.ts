@@ -94,7 +94,7 @@ export interface TacticsSettings {
     tauntOpenMs: number;
     /** Tank: taunt an add off a caster or healer once it has been loose this long (ms): a mezz ordered on it gets that long to land. */
     peelAfterMs: number;
-    /** Tank: whom to keep Guard and Protect on, by name or role (empty: nobody). */
+    /** Tank: whom to keep Guard and Protect on, by name, role or class (empty: nobody). */
     guard: { guard: string; protect: string };
     /**
      * Tank and melee don't chase an enemy player standing farther than this from the anchor (the fight's
@@ -1446,7 +1446,7 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
 });
 
 /**
- * Tank: keep Guard and Protect on the members settings.guard names (a name or a role).
+ * Tank: keep Guard and Protect on the members settings.guard names (a name, a role or a class).
  * Guard blocks attacks on them with our shield while we stand within 256 of them
  * (GuardAbilityHandler.GUARD_DISTANCE); Protect moves 10 % per ability level of the
  * threat they cause to us while within 1000 (StandardMobBrain.AddToAggroList). Both
@@ -1464,7 +1464,7 @@ export const guard = (): Behavior<TacticsSettings> => ({
         for (const [ability, verb] of [['Guard', 'guarded'], ['Protect', 'protected']] as const) {
             const want = ability === 'Guard' ? ctx.settings.guard.guard : ctx.settings.guard.protect;
             if (!want || !ctx.sdk.findAbility(new RegExp(`^${ability}`, 'i'))) continue;
-            const m = ctx.members().find(x => !x.isDead && x.name !== ctx.name && (x.name === want || x.role === want));
+            const m = ctx.members().find(x => !x.isDead && x.name !== ctx.name && (x.name === want || x.role === want || x.className === want));
             if (!m || effects.includes(`${m.name} ${verb} by ${ctx.name}`)) continue;
             // Out of view a select doesn't take, and the ability lands on what we hold: "You can't guard yourself!" (GuardAbilityHandler.cs).
             if (!ctx.sdk.getNearbyPlayers().some(p => p.objectId === m.objectId)) continue;

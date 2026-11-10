@@ -24,7 +24,7 @@ export { CC_IMMUNE_MS, canControl, ccImmuneTo, immuneKinds, type CcImmunity, typ
 export { rvrRoaming, decideRvr, rvrBehaviors, rvrFindings, pickRvrFocus, homeOf, keepDangers, defaultPatrol, realmOfGroup, BATTLEGROUND_LAYOUTS, THIDRANKI, RVR_SETTINGS, type RvrSettings, type BattlegroundLayout, type Keep, type PlayerRealm } from './rvr';
 export { rvrPack, decidePack, packBehaviors, packCc, pickPackFocus, PACK_SETTINGS, PACK_OPTIONS, type PackSettings, type PackOptions } from './pack';
 export { GroupObserver, findingsFor, formatReport, saveReport, stampOf, inferPhase, type Finding, type FightSummary, type MemberStats, type PetStats, type RunReport } from './observer';
-export { loadGroup, connectBot, connectGroup, formGroup } from './roster';
+export { loadGroup, applyLineup, lineupArg, connectBot, connectGroup, formGroup } from './roster';
 export { runGroup, runGroupScript, groupArgs, type GroupRunOptions, type GroupRunResult } from './runner';
 export { GroupPublisher, EventOutbox, windDownClock, memoryView, planView, jsonSafe, type GroupPublishOptions, type PublisherDeps } from './publish';
 export { isLoggedEvent, WIRE_VERSION } from './wire';

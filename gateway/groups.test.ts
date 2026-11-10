@@ -307,6 +307,19 @@ describe('group discovery and /groups', () => {
         }
     });
 
+    test('a bench sits out: the group keeps its members, and a bot on both lists or a bad entry breaks it', () => {
+        write('groups/alpha/group.json', JSON.stringify({ leader: 'tank1', members: [{ bot: 'tank1' }, { bot: 'heal1' }], bench: [{ bot: 'nuke1' }] }));
+        const alpha = discoverGroups([root]).find(g => g.id === 'alpha')!;
+        expect(alpha.error).toBeNull();
+        expect(alpha.members.map(m => m.bot)).toEqual(['tank1', 'heal1']);
+        write('groups/alpha/group.json', JSON.stringify({ members: [{ bot: 'tank1' }], bench: [{ bot: 'tank1' }] }));
+        expect(discoverGroups([root]).find(g => g.id === 'alpha')!.error).toContain('both a member and on the bench');
+        write('groups/alpha/group.json', JSON.stringify({ members: [{ bot: 'tank1' }], bench: [{ name: 'x' }] }));
+        expect(discoverGroups([root]).find(g => g.id === 'alpha')!.error).toContain('bench entry 1');
+        write('groups/alpha/group.json', JSON.stringify({ members: [{ bot: 'tank1' }], bench: 'nuke1' }));
+        expect(discoverGroups([root]).find(g => g.id === 'alpha')!.error).toContain('"bench" must list');
+    });
+
     test('botIdentity and checkControlPassword (security.ts)', async () => {
         expect(botIdentity('tank1', [root])).toEqual({ username: 'tankuser', charName: 'Tanky' });
         expect(botIdentity('nuke1', [root])).toEqual({ username: 'nuke1', charName: 'Nuky' });
