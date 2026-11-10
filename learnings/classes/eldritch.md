@@ -53,6 +53,8 @@ The live line names differ from the data's: "Light Magic" is Way of the Sun (bas
 
 **Before the kit** (generic nuker list): round 121 (2026-11-10) 4 nukes, 431 damage, died; round 123 16 nukes, 1,952 damage, first nuke 1.2 s, no mezz.
 
+**With the kit** (2026-11-10 night): rounds 127 (solo, not grouped), 128, 129, 133, 134, 137. Against Midgard 11-13 nukes a round at 144-154 a nuke (122 before the kit, with Void Fissure in his picks). Against Albion he is their target every round (128, 133, 137: in melee 27-81 %, targeted 39-78 %, 2-3 nukes, died in two); the veil tried twice (a hill, an enemy pet's interrupt) and never landed. Since then the veil waits while any enemy aims at him (`unlessAimedAt`).
+
 ## Open
 
 - Not yet played with the kit: the Light-only nukes, the veil, the Flash.

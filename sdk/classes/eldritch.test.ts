@@ -56,4 +56,10 @@ describe('eldritch kit', () => {
         expect(list.indexOf('offFocus')).toBe(list.indexOf('assist') + 1);
         expect(eldritch({ areaMezz: false }).urgent!.map(b => b.name)).toEqual(['stunCaster']);
     });
+
+    test('the veil waits while an enemy aims at him', async () => {
+        const v = eldritch().urgent![1]!;
+        const ctx: any = { threats: () => [{ stale: false, cc: false, target: 'Lugh' }], name: 'Lugh', orders: () => { throw new Error('ran'); } };
+        expect(await v.run(ctx)).toBe(false);
+    });
 });
