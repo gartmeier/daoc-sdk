@@ -161,6 +161,18 @@ export const reachHurt = (): Behavior<TacticsSettings> => ({
     },
 });
 
+/** `inner` at most once per `ms` (counted from a turn it acted), quietly between. */
+export const atMostEvery = <S>(inner: Behavior<S>, ms: number): Behavior<S> => ({
+    ...inner,
+    async run(ctx) {
+        const key = `every:${inner.name}`;
+        if (Date.now() - (ctx.memory.get(key) ?? 0) < ms) return false;
+        const acted = await inner.run(ctx);
+        if (acted) ctx.memory.set(key, Date.now());
+        return acted;
+    },
+});
+
 /** `inner` only while no enemy aims at us, by swing or by spell (Contact.target): a long cast would only be interrupted. Quiet. */
 export const unlessAimedAt = <S>(inner: Behavior<S>): Behavior<S> => ({
     ...inner,
@@ -176,7 +188,8 @@ export function druid({ dotsAbove, groupHealMin = 3, groupHealAbove = 25 }: Drui
         // healer list), never under a melee, and in a fight only above 40 % of her 197 power.
         // Not while any enemy aims at her either (round 62: 2 of 2 cures interrupted by spells, 12 s of her time).
         // A hurt member beyond her heals' 2000 is "nothing to do" for heal(): walk into reach (round 76: idle 57 %, 8 deaths).
-        react: [reachHurt(), quietlyAbove(unlessAimedAt(unlessHammered(cureNearsight())), 40)],
+        // Round 81: 4 cures (120 of her 197 power), then 34 turns of "heal: not enough power": above 60 %, one per 20 s.
+        react: [reachHurt(), quietlyAbove(atMostEvery(unlessAimedAt(unlessHammered(cureNearsight())), 20_000), 60)],
         ...(dotsAbove === undefined ? {} : { fight: [thrifty(assist(), dotsAbove)] }),
     };
 }
