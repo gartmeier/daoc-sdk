@@ -67,6 +67,8 @@ export const steppingAssist = (): Behavior<TacticsSettings> => {
             if (!seen || !sp || ctx.orders().phase !== 'engage' || !legWorthIt(seen.distance, sp.range, nearsighted)) return false;
             ctx.doing('move', o.focus, 'closing on the focus');
             await ctx.bot.walkToObject(seen, { range: sp.range * LEG_REACH, timeout: LEG_MS });
+            // The wait starts over: a leg, then LONG_AFTER_MS standing to cast what is in reach, not legs back to back (round 106: moving 69 %, no nuke).
+            ctx.memory.set('outSince', Date.now());
             return true;
         },
     };
