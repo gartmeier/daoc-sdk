@@ -113,3 +113,5 @@ Slam, the 9 s anytime stun, is Shields 42, past level 40 in this build, so it do
 **Arena round 36** (wiped 1-5 by Midgard, 205 s): 177 damage, no style landed; dead 24 s in, fighting their caster #495, the group's focus. Engage (Shields 7, blocks a single attacker) is the build's one survival tool no behaviour uses, but it holds only while he doesn't swing; not tried.
 
 **Verified, arena round 49** (wiped 0-5 by Midgard): the first parry chain landed, Return Blade then Lunging Blade (the reacting tank's pick between stuns), beside Numb, Disable and Fire Blade one each; 535 damage.
+
+**Verified, arena round 89** (2-2 against Midgard, cap): the block reactions landed for the first time: Horizon Blade 2 and Incapacitate 1 (with Fire Blade and Numb one each). Against Midgard's melee the foe's last swing at him was a block often enough for `stunQueue`'s block branch to fire.
