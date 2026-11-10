@@ -124,3 +124,16 @@ describe('quickFlash on a pet', () => {
         expect(petOnMe([pet({ swinging: false })], 'Niamh')).toBeUndefined();
     });
 });
+
+describe('bestStun', () => {
+    const stun = (name: string, level: number, power: number, cooldownRemaining = 0) => ({ type: 'Stun', target: 'Enemy', radius: 0, power, spell: { name, level, cooldownRemaining } });
+    test('Prismatic Flash (15, 5 s) over Prismatic Flare (5, 3 s), whatever the book order; Flare when Flash is unpaid or cooling', async () => {
+        const { bestStun } = await import('./mentalist');
+        const book = [stun('Prismatic Flare', 5, 4), stun('Prismatic Flash', 15, 9)];
+        expect(bestStun(book)?.spell.name).toBe('Prismatic Flash');
+        expect(bestStun(book, 8)?.spell.name).toBe('Prismatic Flare');
+        expect(bestStun([stun('Prismatic Flare', 5, 4), stun('Prismatic Flash', 15, 9, 3)])?.spell.name).toBe('Prismatic Flare');
+        expect(bestStun([], 100)).toBeNull();
+    });
+});
+

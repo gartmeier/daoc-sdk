@@ -8,6 +8,7 @@ import { foeInView, hammeredBy, type TacticsSettings } from '../group/behaviors'
 import type { Character } from '../group/character';
 import { nukerFight, QUICKCAST_REUSE_MS, quickcastUnderFire } from './cabalist';
 import type { Behavior } from '../group/member';
+import type { SpellPick } from '../group/spells';
 import type { Contact, MemberReport, Role } from '../group/types';
 
 export interface MentalistKit {
@@ -77,6 +78,16 @@ export function stunTarget(contacts: readonly Contact[], members: readonly Pick<
 }
 
 /**
+ * The single-target stun to cast: the highest rank that is ready and, given `mana`, paid for. Both the Mentalist and the
+ * Eldritch know Prismatic Flare (Light 5, a 3 s stun, 4 power) and Prismatic Flash (Light 15, 5 s, 9 power) on the same line;
+ * the book lists Flare first, and a plain find took it (2026-11-10 night: Lugh "Died while casting Prismatic Flare").
+ */
+export function bestStun<T extends Pick<SpellPick, 'type' | 'target' | 'radius' | 'power'> & { spell: { level: number; cooldownRemaining: number } }>(all: readonly T[], mana = Infinity): T | null {
+    return all.filter(s => s.type === 'Stun' && s.target === 'Enemy' && s.radius === 0 && s.power <= mana && s.spell.cooldownRemaining <= 0)
+        .sort((a, b) => b.spell.level - a.spell.level)[0] ?? null;
+}
+
+/**
  * Prismatic Flash at stunTarget, in a fight, above `floor` % power. A stun ends a cast at once (OnHardCCStart). It is
  * marked on the board as stun immunity only, not as crowd control, so the group keeps hitting what it stunned.
  */
@@ -87,7 +98,7 @@ export const stunCaster = (floor = 15): Behavior => ({
         if (ctx.orders().phase !== 'engage') return false;
         const me = ctx.me();
         if (me.maxMana > 0 && me.manaPercent < floor) return false;
-        const sp = ctx.spells.all().find(s => s.type === 'Stun' && s.target === 'Enemy' && s.radius === 0 && s.power <= me.mana && s.spell.cooldownRemaining <= 0);
+        const sp = bestStun(ctx.spells.all(), me.mana);
         if (!sp) return false;
         // A melee on her would only interrupt the 2.5 s cast: flee's (quickFlash's, with Quickcast). An enemy pet too
         // (round 105: Albion's pets on her, stun:interrupted); hammeredBy counts players only.
@@ -131,7 +142,7 @@ export const quickFlash = (): Behavior => ({
         // hammeredBy takes players only; an enemy pet swinging at her (Midgard's spirit warrior, round 39) interrupts as well.
         const foe = hammeredBy(ctx) ?? petOnMe(ctx.threats(), me.name);
         if (!foe || foe.cc || (foe.ccImmune?.stun ?? 0) > now) return false;
-        const sp = ctx.spells.all().find(s => s.type === 'Stun' && s.target === 'Enemy' && s.radius === 0 && s.spell.cooldownRemaining <= 0);
+        const sp = bestStun(ctx.spells.all());
         if (!sp || me.mana < 2 * ctx.spells.powerOf(sp)) return false;
         const view = foeInView(ctx, foe.objectId);
         const far = tooFarOf(ctx.memory);
