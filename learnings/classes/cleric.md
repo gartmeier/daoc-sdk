@@ -116,3 +116,5 @@ Her `buff:no_response` failures (5-8 a round, 39 in round 26) are the server's c
 
 **To look for:** an instant heal in her `heal` results, and deaths of whoever was at the bottom.
 
+**Arena round 84** (Midgard wiped Camelot 5/0 in 75 s): she cast 3 stuns and 2 Smites, 0 heals, and Morgana, Taliesin and Merlin died within about 20 s. Those 13 s of casts can't be cut short, and each delays any heal behind it. Now, while a member is under 2+ enemy players (`burstOn`) or below 70 % within 2000, `stunPeel` only peels: a stun on a hitter on one of ours. The mezzer, healer and focus stuns wait for a calm moment. The Midgard Healer kit's `stunPeel()` gets the same rule.
+

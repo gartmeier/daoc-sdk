@@ -45,6 +45,14 @@ describe('the cleric kit', () => {
         expect(stunTarget({ ...me, x: -2000 }, members, [foe(1, { x: 650, y: 0, target: 'Merlin' })], undefined, 1500, 60, NOW)).toBeNull();
     });
 
+    test('under pressure only the peel: no mezzer, healer or focus stun', () => {
+        const focus = foe(1, { hp: 40 });
+        const bard = foe(5, { y: 1300 });
+        expect(stunTarget(me, members, [focus, bard], focus, 1500, 60, NOW, 5, false)).toBeNull();
+        const onMerlin = foe(3, { x: 650, y: 0, target: 'Merlin' });
+        expect(stunTarget(me, members, [onMerlin, focus], focus, 1500, 60, NOW, 5, false)?.why).toBe('peel');
+    });
+
     test('the marked mezzer at any health, after a peel and before the enemy healer', () => {
         const bard = foe(5, { hp: 100, y: 1300 });
         const healer = foe(2, { healer: true, y: 1400 });

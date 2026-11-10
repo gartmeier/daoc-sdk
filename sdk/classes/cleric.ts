@@ -4,7 +4,7 @@
 // our focus is low, and casting Smite at monsters in the time left, above a floor of power for the heals.
 // learnings/classes/cleric.md says what that reaches, and what the arena rounds showed.
 
-import { assist, foeInView, hammeredBy, isDown, onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
+import { assist, burstOn, foeInView, hammeredBy, isDown, onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
 import { dist } from '../group/battleground';
 import { ccImmuneTo, CC_IMMUNE_MS } from '../group/cc';
 import type { Character } from '../group/character';
@@ -26,6 +26,8 @@ const STUN_MS = 5000;
 export const STUN_HEALER_BELOW = 60;
 /** The server measures in 3D and from where it last had us: 2 of 6 stuns at the edge came back out of range (arena round 11). */
 const STUN_RANGE_MARGIN = 50;
+/** With a member of ours this low (or under two enemy players), only the peel: the rest of her turns are heals'. */
+export const STUN_ONLY_PEEL_BELOW = 70;
 /** Not with less power than this left: the heals come first. */
 const STUN_MIN_MANA = 15;
 
@@ -37,7 +39,7 @@ type Who = Pick<MemberReport, 'name' | 'role' | 'isDead' | 'regionId' | 'x' | 'y
  * shortens with every repeat. Never one under crowd control (a stun would
  * wake a mezz, and a stun on a stun is wasted), nor one immune to stuns, nor one beyond `range` of us.
  */
-export function stunTarget(me: Who, members: readonly Who[], threats: readonly Contact[], focus: Contact | undefined, range: number, healerBelow = STUN_HEALER_BELOW, now = Date.now(), marked: number | null = null): { target: Contact; why: 'peel' | 'mezzer' | 'healer' | 'focus' } | null {
+export function stunTarget(me: Who, members: readonly Who[], threats: readonly Contact[], focus: Contact | undefined, range: number, healerBelow = STUN_HEALER_BELOW, now = Date.now(), marked: number | null = null, offense = true): { target: Contact; why: 'peel' | 'mezzer' | 'healer' | 'focus' } | null {
     const free = (c: Contact) => !c.stale && !c.cc && !ccImmuneTo(c, 'stun', now) && c.regionId === me.regionId && dist(me, c) <= range;
     const open = threats.filter(c => c.kind === 'player' && !c.isPet && free(c));
     // A peel takes an enemy pet too: a Spiritmaster's spirit warrior interrupted Morgana and Taliesin to death in arena round 8.
@@ -48,6 +50,7 @@ export function stunTarget(me: Who, members: readonly Who[], threats: readonly C
         .filter((x): x is { c: Contact; on: Who } => !!x.on)
         .sort((a, b) => Number(b.on.role === 'healer') - Number(a.on.role === 'healer') || dist(me, a.c) - dist(me, b.c));
     if (onSoft[0]) return { target: onSoft[0].c, why: 'peel' };
+    if (!offense) return null;
     // The group's marked enemy mezzer, at any health: a stun ends its cast and holds the next for 5 s.
     const mezzer = marked === null ? undefined : open.find(c => c.objectId === marked);
     if (mezzer) return { target: mezzer, why: 'mezzer' };
@@ -83,7 +86,9 @@ export const stunPeel = (opts: { healerBelow?: number; minMana?: number; marked?
         if (me.maxMana > 0 && me.manaPercent < (opts.minMana ?? STUN_MIN_MANA)) return false;
         const sp = stunSpell(ctx.spells.all(), me.mana);
         if (!sp) return false;
-        const pick = stunTarget({ ...me, name: ctx.name, role: ctx.role, isDead: false }, ctx.members(), ctx.threats(), ctx.focus(), sp.range, opts.healerBelow, Date.now(), opts.marked?.(o) ?? null);
+        // Under pressure every turn of hers is a heal's: only the peel, which takes a hitter off one of ours. Arena round 84: 3 stuns and 2 Smites, 0 heals, while three died.
+        const pressed = burstOn(ctx) > 0 || ctx.members().some(m => !m.isDead && m.regionId === me.regionId && m.hp < STUN_ONLY_PEEL_BELOW && dist(me, m) < 2000);
+        const pick = stunTarget({ ...me, name: ctx.name, role: ctx.role, isDead: false }, ctx.members(), ctx.threats(), ctx.focus(), sp.range, opts.healerBelow, Date.now(), opts.marked?.(o) ?? null, !pressed);
         if (!pick) return false;
         const seen = foeInView(ctx, pick.target.objectId);
         if (!seen || isDown(ctx, seen) || seen.distance > sp.range - STUN_RANGE_MARGIN) return ctx.skip('stunPeel: target out of reach');
