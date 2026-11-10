@@ -15,6 +15,7 @@ import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import type { PlayerState } from '../types';
 import { abortable, executionContext } from '../execution-context';
+import { resolveVision, type NoticeClock, type VisionMode, type VisionOptions } from '../vision';
 import { type Blackboard, observeState, SHADE_REFUSED, steppedInFront, UNATTACKABLE_MS } from './blackboard';
 import type { Character } from './character';
 import { petOrderedOn, petsAllowed } from './pets';
@@ -204,6 +205,12 @@ export class MemberContext<S = any> {
 export interface MemberAgentOptions {
     /** Report monsters and enemy players within this distance (default 3000). */
     sightRadius?: number;
+    /**
+     * How members see enemy players and their pets (sdk/vision.ts): 'omniscient' (default) reports all the
+     * server sends, 'human' only what a player would notice: near, or ahead and not behind a hill.
+     * A run takes `--vision=human` (or `--vision.fovDegrees=120`) as a flag too (runGroup).
+     */
+    vision?: VisionMode | Partial<VisionOptions>;
     /** Pause when no behaviour acts (default 300 ms). */
     idleMs?: number;
     /** Shortest turn: a behaviour that "acts" faster than this is paced, so none can spin (default 250 ms). */
@@ -240,7 +247,12 @@ export class MemberAgent<S = any> {
     /** A mezz a turn was refused for, until the loop has waited it out: the last line then, and when its time is up. */
     private mezzed: { lastLine: number; until: number } | null = null;
 
+    private readonly vision: VisionOptions | null;
+    /** When each enemy came into this member's view, for vision.noticeMs (observeState). */
+    private readonly noticeClock: NoticeClock = new Map();
+
     constructor(readonly member: Member, readonly board: Blackboard, readonly behaviors: Behavior<S>[], settings: S, private readonly options: MemberAgentOptions = {}) {
+        this.vision = resolveVision(options.vision);
         this.sideBehaviors = behaviors.filter(b => b.side);
         this.spells = new Spellbook(member.sdk, member.actions);
         this.ctx = new MemberContext(this, settings);
@@ -285,7 +297,7 @@ export class MemberAgent<S = any> {
         }
         this.lastMessageId = state.gameMessages.at(-1)?.id ?? this.lastMessageId;
         const petRecast = state.pet === null && this.capabilities.pet === 'main' && (this.spells.summon()?.spell.cooldownRemaining ?? 0) > 0;
-        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat, petRecast, petOrderedOn: petOrderedOn(this.ctx) }, this.options.sightRadius);
+        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat, petRecast, petOrderedOn: petOrderedOn(this.ctx) }, this.options.sightRadius, this.vision, undefined, this.noticeClock);
         if (obs) this.board.publish(obs);
     }
 

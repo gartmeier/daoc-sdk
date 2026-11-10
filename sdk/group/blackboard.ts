@@ -42,6 +42,7 @@ import type { BotWorldState, CombatEvent, PetLoss, PlayerState, Realm } from '..
 import { isKillable, PLAYER_AIM_MS } from '../actions-helpers';
 import { isAttackable } from '../index';
 import { mobRunInMs } from '../mob-speed';
+import { canSee, noticed, pruneNoticeClock, terrainGround, type GroundAt, type NoticeClock, type VisionOptions } from '../vision';
 import { addLook, newEvidence, readClass, type FoeEvidence, type FoeLook } from './class-read';
 import { CC_IMMUNE_MS, npcCcLanded, readCcEnds, serverNameKey, type CcEnd, type CcImmunity, type CcKind, type NpcCcRun } from './cc';
 import type { Activity, Capabilities, MemberCombat, Contact, GroupEvent, GroupPicture, MemberReport, Orders, OrdersUpdate, PetReport, Point, Role, Sighting } from './types';
@@ -55,6 +56,8 @@ export interface BlackboardOptions {
     viewRadius?: number;
     /** Events kept for late readers (default 5000). */
     maxEvents?: number;
+    /** Ground heights for the sight lines of members with human vision (default: the client heightmaps, sdk/vision.ts). */
+    ground?: GroundAt;
     /** A contact stays a threat this long after its last hostile sign (default 4000). */
     hostileMs?: number;
     /**
@@ -114,6 +117,11 @@ export interface Observation {
     intercepts?: { mobId: number; at: number }[];
     /** Crowd control the server told this member has ended, from the last CC_END_MS of messages. */
     ccEnds?: CcEnd[];
+    /**
+     * With human vision (sdk/vision.ts): the way the member faced and its sight rules, so the board can
+     * tell a contact it should see from one behind it or behind a hill. Absent with omniscient sight.
+     */
+    sight?: { heading: number; vision: VisionOptions };
 }
 
 const SWING_WINDOW_MS = 2000;
@@ -199,10 +207,6 @@ function interceptsOf(state: BotWorldState): NonNullable<Observation['intercepts
     return [...found].map(([mobId, at]) => ({ mobId, at }));
 }
 
-/**
- * Turn one member's snapshot into its report and sightings (pure). Sightings are
- * monsters it could fight, players of other realms and those realms' pets, within `sightRadius`.
- */
 /** An enemy player's look in one snapshot: its visible gear and what its combat events showed. Nothing when there is nothing. */
 interface Seen { effects: Set<number>; styles: Set<number>; weapons: Set<number>; cast: boolean; swung: boolean }
 function lookFor(gear: { slot: number; model: number }[] | undefined, seen: Seen | undefined): { look?: FoeLook } {
@@ -216,7 +220,17 @@ function lookFor(gear: { slot: number; model: number }[] | undefined, seen: Seen
     return Object.keys(look).length ? { look } : {};
 }
 
-export function observeState(state: BotWorldState, self: MemberSelf, sightRadius = 3000): Observation | null {
+/**
+ * Turn one member's snapshot into its report and sightings (pure). Sightings are
+ * monsters it could fight, players of other realms and those realms' pets, within `sightRadius`.
+ *
+ * With `vision` (human sight, sdk/vision.ts) an enemy player or enemy pet is reported only when the
+ * member would notice it: near, or in its view cone with the ground out of the way, or it is the
+ * member's target, or it swung or cast at the member or its pets lately (the hit says where it is).
+ * One it only sees is reported once it has been in view `vision.noticeMs`, by `noticeClock`, which the caller keeps
+ * between snapshots (none: at once). Monsters are reported as before.
+ */
+export function observeState(state: BotWorldState, self: MemberSelf, sightRadius = 3000, vision: VisionOptions | null = null, ground: GroundAt = terrainGround, noticeClock?: NoticeClock): Observation | null {
     const p = state.player;
     if (!state.inGame || !p) return null;
     const now = state.timestamp;
@@ -282,6 +296,14 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
             if (age < SWING_WINDOW_MS) lastSpell.add(by);
         }
     }
+    const viewer = { regionId: p.regionId, x: p.x, y: p.y, z: p.z, heading: p.heading };
+    const notices = (id: number, at: { x: number; y: number; z: number }) => {
+        if (!vision || id === p.targetObjectId) return true;
+        const on = aim.get(id)?.targetId;
+        if (on !== undefined && (on === p.objectId || ownPets.has(on))) return true;
+        return canSee(viewer, at, vision, ground) && noticed(noticeClock, id, now, vision.noticeMs);
+    };
+    if (noticeClock) pruneNoticeClock(noticeClock, now);
     const sightings: Sighting[] = [];
     for (const n of state.nearbyNpcs) {
         const spell = spellAim.get(n.objectId);
@@ -295,6 +317,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         // An enemy realm's pet can be fought (isAttackable); a monster's stays out, like a town NPC.
         const enemyPet = n.isPet && isAttackable(n, p);
         if (!enemyPet && !isKillable(n, p)) continue;
+        if (enemyPet && !notices(n.objectId, n)) continue;
         // A caster pet's entry names its target only on its victim's client, for moments (live): as for a player, the fight says it, and that reaches every client.
         // Not a monster's: its entry is the word, as a 0 says it let go (a reset, a leash), and a pet killer's run-in reads that (PET_KILLER_RUN_IN_MS).
         // On its victim's client a caster stays named through the server's 0 (NearbyNpc.targetBySpell): to the group that's the spell the other clients read, by the board's rules for one (a mezz, a dead member).
@@ -322,6 +345,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
             if (o.lastSeenAgo < DEAD_ENTRY_MS) deaths.push(o.objectId);
             continue;
         }
+        if (!notices(o.objectId, o)) continue;
         sightings.push({
             objectId: o.objectId, kind: 'player', name: o.name, level: o.level, realm: o.realm,
             x: o.x, y: o.y, z: o.z, hp: o.healthPercent, targetId: aim.get(o.objectId)?.targetId ?? null, inCombat: o.inCombat,
@@ -347,7 +371,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     if (report.pet && self.petOrderedOn != null) report.pet.orderedOn = self.petOrderedOn;
     const intercepts = interceptsOf(state);
     const ccEnds = readCcEnds(state.gameMessages ?? [], state.timestamp - CC_END_MS);
-    return { report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(petHits.size ? { petHits: [...petHits] } : {}), ...(intercepts.length ? { intercepts } : {}), ...(ccEnds.length ? { ccEnds } : {}) };
+    return { report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(petHits.size ? { petHits: [...petHits] } : {}), ...(intercepts.length ? { intercepts } : {}), ...(ccEnds.length ? { ccEnds } : {}), ...(vision ? { sight: { heading: p.heading, vision } } : {}) };
 }
 
 const isBlow = (e: CombatEvent) => e.kind === 'melee' || e.kind === 'spellEffect';
@@ -486,6 +510,7 @@ export class Blackboard {
     private readonly staleAfterMs: number;
     private readonly forgetAfterMs: number;
     private readonly viewRadius: number;
+    private readonly ground: GroundAt;
     private readonly maxEvents: number;
     private readonly hostileMs: number;
     private readonly hostileRadius: number;
@@ -494,6 +519,7 @@ export class Blackboard {
         this.staleAfterMs = options.staleAfterMs ?? 5000;
         this.forgetAfterMs = options.forgetAfterMs ?? 60_000;
         this.viewRadius = options.viewRadius ?? 2500;
+        this.ground = options.ground ?? terrainGround;
         this.maxEvents = options.maxEvents ?? 5000;
         this.hostileMs = options.hostileMs ?? 4000;
         this.hostileRadius = options.hostileRadius ?? 2500;
@@ -657,11 +683,14 @@ export class Blackboard {
         const isPlayer = (id: number) => this.contacts.get(`${r.regionId}:${id}`)?.kind === 'player';
         for (const id of [...obs.deaths.filter(isPlayer), ...obs.deaths.filter(id => !isPlayer(id))]) this.kill(`${r.regionId}:${id}`, r.name, now, foeKills.has(id));
         // Contacts this member should see but doesn't: gone (died out of our sight, despawned, left).
+        // With human vision only where it looks and the ground lets it (observeState filters players and enemy pets so).
+        const viewer = obs.sight && { regionId: r.regionId, x: r.x, y: r.y, z: r.z, heading: obs.sight.heading };
+        const shouldSee = (c: Contact) => !viewer || (c.kind !== 'player' && !c.isPet) || canSee(viewer, c, obs.sight!.vision, this.ground);
         for (const [key, c] of this.contacts) {
             if (seen.has(key) || c.regionId !== r.regionId) continue;
             const i = c.seenBy.indexOf(r.name);
             if (i >= 0) c.seenBy.splice(i, 1);
-            if (!r.isDead && Math.hypot(c.x - r.x, c.y - r.y) < this.viewRadius && r.at - c.lastSeen > 1500) this.forget(key, c);
+            if (!r.isDead && Math.hypot(c.x - r.x, c.y - r.y) < this.viewRadius && r.at - c.lastSeen > 1500 && shouldSee(c)) this.forget(key, c);
         }
     }
 

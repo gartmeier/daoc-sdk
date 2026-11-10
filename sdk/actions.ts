@@ -96,6 +96,7 @@ import { castRoom, mobRunInMs } from './mob-speed';
 import { EquipmentSlot, isWeapon, ObjectType } from './types';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
 import { groundTargetSnap } from './ground';
+import { lineOfSight, terrainGround } from './vision';
 import { isDelveOf, parseDelve } from './delve';
 import { botFolder, loadBuild } from './build';
 import { findNpcSpawns, getClass, getSpecialization, getSpell, getSpellLine, getSpells, getZonePoint, realmId, specKey, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
@@ -171,6 +172,35 @@ const SPELL_WALK_MARGIN = 150;
 /** After that "too far away" the next walk at the same target stops short by as much again as the target leaves in a cast, by our own readings, and at most at this share of the range, for this long or until a cast at it lands: from the margin again it failed again, for as long as the target walked. */
 const SPELL_WALK_NEARER_SHARE = 0.5;
 const SPELL_TOO_FAR_MS = 30_000;
+/**
+ * After "You can't see your target" (the client's honest LoS answer, sdk/vision.ts): the farthest castSpell steps toward
+ * the target, in SIGHT_STEP_SAMPLE steps, for a spot it sees it from over the terrain, keeping SIGHT_STEP_KEEP off it.
+ */
+export const SIGHT_STEP_MAX = 800;
+/**
+ * With `approach: false` (a member holding its ground) the step is at most this long, and only to a spot that sees the
+ * target, like the group's standStep into range. Live, arena round 141: Hrafna's held nukes got 68 refusals in 144 checks.
+ */
+export const SIGHT_STEP_SHORT = 300;
+const SIGHT_STEP_SAMPLE = 100;
+const SIGHT_STEP_KEEP = 150;
+
+/**
+ * Where to step after a cast refused for sight: the first point every SIGHT_STEP_SAMPLE units along the straight line
+ * toward `to` (up to `max`, staying SIGHT_STEP_KEEP off it) from which `to` is in sight over the terrain, else the
+ * farthest of them, or null with `clearOnly`. Null too when there is no room for a step.
+ */
+export function sightStep(regionId: number, from: Vec3, to: Vec3, ground: (regionId: number, x: number, y: number) => number | null = terrainGround, max = SIGHT_STEP_MAX, clearOnly = false): Vec3 | null {
+    const d = Math.hypot(to.x - from.x, to.y - from.y);
+    const reach = Math.min(max, d - SIGHT_STEP_KEEP);
+    let spot: Vec3 | null = null;
+    for (let s = SIGHT_STEP_SAMPLE; s <= reach; s += SIGHT_STEP_SAMPLE) {
+        const x = from.x + ((to.x - from.x) * s) / d, y = from.y + ((to.y - from.y) * s) / d;
+        spot = { x, y, z: ground(regionId, x, y) ?? from.z + ((to.z - from.z) * s) / d };
+        if (lineOfSight(regionId, spot, to, ground)) return spot;
+    }
+    return clearOnly ? null : spot;
+}
 /** What a replace wants left of a charm's range: the server measures at the end of the cast, in 3D, from its own positions (SpellHandler.cs:941-945). Live, readings of 994 and 999 of 1000 lost the pet, and 989 and 997 went. */
 const CHARM_REPLACE_MARGIN = 60;
 /** A roaming mob's speed (StandardMobState.cs:141, NpcMovementComponent.cs:18), and a little over: a replace that has to walk anyway goes where one roaming away through the whole cast stays in range. */
@@ -2312,6 +2342,7 @@ export class BotActions {
      * The walk into range stops inside it by the smaller of 10 % of the range and 150, in 3D, by what the target reads as it goes. A target that moves on from there gets the server's "That target is too far away!" at the cast's end: reason out_of_range, and the caller goes again: for 30 s or until a cast at it lands, the next walk at it stops short by as much again as it left in a cast, by our own readings, at most at half the range. A height it can't climb leaves the first reading inside the range good enough, and the cast goes from there.
      * A target that dies on the way ends the walk at once, with nothing cast: reason already_dead, with targetDied, a friend's too. A corpse that gets up ends it as well, reason invalid_target in the Corpse spell's own words. An id gone just after its death reads already_dead with targetDied, and one merely out of view not_found.
      * Reason refused for a song with no instrument in hand, naming the song and the instrument we wear, with retryAfterMs of 60 s: only a change of hand cures it. Reason interrupted has retryAfterMs 2200, the server's own wait (SpellHandler.cs:372). A mezz's or a stun's line beside the 0x0B reads crowd_controlled, and so does Amnesia's, which ends a cast with no 0x0B and no line of the cast's own (AmnesiaSpellHandler.cs:50). An item's recast line ("... to discharge this item!") answers the useItem and says nothing of the cast.
+     * Reason not_visible: "You can't see your target from here!", a hill between us by the client's LoS answer (sdk/vision.ts lineOfSight). castSpell then steps toward the target to the first spot that sees it over the terrain (sightStep), up to SIGHT_STEP_MAX (with `approach: false` only up to SIGHT_STEP_SHORT, and only when such a spot is that near), and casts once more; its message then says so.
      */
     async castSpell(spell: NamePattern | Spell, target?: ObjectTarget | null, options: CastOptions = {}): Promise<CastResult> {
         const base = { spell: null as Spell | null, target: null as Obj | null, castTimeMs: null as number | null, completed: false, resisted: false, damage: 0, messages: [] as GameMessage[] };
@@ -2396,11 +2427,31 @@ export class BotActions {
         if (obj && !onPet && obj.objectId !== p.objectId) await this.sdk.sendFaceObject(obj.objectId);
 
         const from = { reading: obj?.distance ?? 0, at: Date.now() };
-        const cast = await this.castOnce(sp, obj, info, options, targetId, baseline, p);
+        let cast = await this.castOnce(sp, obj, info, options, targetId, baseline, p);
+        // A hill between us (the client answers the server's LoS check from the terrain): step to where we see it, and once more.
+        if (cast.reason === 'not_visible' && obj && !onPet && targetId !== null && obj.objectId !== p.objectId && await this.stepIntoSight(obj, options.approach === false)) {
+            const seen = this.sdk.getObject(targetId);
+            if (seen) {
+                obj = seen;
+                await this.sdk.sendFaceObject(targetId);
+                const again = await this.castOnce(sp, obj, info, options, targetId, maxCombatEventId(this.helpers.state()), this.helpers.player() ?? p);
+                cast = { ...again, message: `${again.message} (stepped into sight after "${cast.message}")` };
+            }
+        }
         if (targetId !== null) this.tooFar = cast.reason === 'out_of_range' ? { id: targetId, ...from } : this.tooFar?.id === targetId ? null : this.tooFar;
         // The turret goes with the spell, and the server's selection stays on the deleted NPC where a later Pet spell would land (backToTarget).
         if (reselect) await this.backToTarget(reselect.previous, reselect.turret);
         return cast;
+    }
+
+    /** After a cast refused for sight: walk to sightStep's spot, a short one that sees the target when `holding`. False with no step to take or a walk that failed. */
+    private async stepIntoSight(obj: Obj, holding: boolean): Promise<boolean> {
+        const me = this.helpers.player();
+        if (!me) return false;
+        const spot = holding ? sightStep(me.regionId, me, obj, terrainGround, SIGHT_STEP_SHORT, true) : sightStep(me.regionId, me, obj);
+        if (!spot) return false;
+        const w = await this.walkTo(spot.x, spot.y, { z: spot.z, tolerance: 40, timeout: 8000 });
+        return w.success;
     }
 
     /** castSpell's cast, and its one more try on "You must select a target". */
