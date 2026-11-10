@@ -118,3 +118,5 @@ What the class has that no behaviour uses:
 **Arena round 81** (wiped Midgard 5-0): 4 Nearsight cures at 30 power each (120 of her 197), then 34 turns of "heal: not enough power". From the next round the cure waits below 60 % power (was 40) and goes at most once per 20 s (`atMostEvery`).
 
 **Arena round 83** (wiped 0-5 by Midgard, 105 s): with the 60 % / 20 s limits, still 3 Nearsight cures (18 s of casting) against 3 heals. From the next round, in a fight the cure goes only while every member is at 85 % or more (`whileCalm`); out of fights it is free.
+
+**Verified, arena round 85** (lost 2-5 to Midgard, 171 s): with `whileCalm`, no Nearsight cure in the fight and 14 heals (3 in round 83).
