@@ -1313,6 +1313,8 @@ export function castFailureReason(text: string, fallback: string = 'refused'): s
     // First: these name a mob, and a mob's name can hold any word below. This charm refusal passes once the mob is out of combat (CharmSpellHandler.cs:340-344, Spells.txt:84).
     if (/^you can't charm .+ is in combat!$/.test(t)) return 'in_combat';
     if (t.includes(NO_INSTRUMENT)) return 'refused';
+    // The 20-concentration-effect cap (CONCENTRATION_CAP): refused, its words kept, so a buff's retry backs off (buffRetryMs).
+    if (t.includes('simultaneous concentration spells')) return 'refused';
     if (CAST_WIPED.test(text) || HELD_LINE.test(text)) return 'crowd_controlled';
     // Release Clump at what is no turret of ours (Spells.txt:169, TurretSpellHandler.cs:30). The same words with a full stop are a Pet spell with no pet (Spells.txt:112, SpellHandler.cs:653).
     if (t.endsWith('on a creature you are controlling')) return 'invalid_target';

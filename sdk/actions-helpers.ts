@@ -247,8 +247,16 @@ export const FOLLOW_UP = 'as a follow up';
 /** A song with no instrument in hand (SpellHandler.cs:581, :894): the server asks for the active weapon's type, and any instrument will do (:252-261). */
 export const NO_INSTRUMENT = 'you are not wielding the right type of instrument';
 
+/**
+ * "You can only cast up to 20 simultaneous concentration spells!" (SpellHandler.cs:31 MAX_CONC_SPELLS, :836-839), sent as a
+ * resist, whatever is left of the pool. Read as no_response before: a Cleric with ~32 concentration buffs planned retried each
+ * one every 60 s (arena round 26, 2026-11-10: 39 a round).
+ */
+export const CONCENTRATION_CAP = 'simultaneous concentration spells';
+
 /** Spell refusals and interruptions (SpellHandler.cs, CastingComponent.cs). */
 export const CAST_REFUSALS = [
+    CONCENTRATION_CAP,
     "you can't cast while sitting",
     "you don't have enough power",
     'you do not have enough power',

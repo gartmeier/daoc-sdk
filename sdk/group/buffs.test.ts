@@ -77,6 +77,17 @@ describe('buff plan', () => {
 });
 
 describe('concentration', () => {
+    test('at 20 concentration effects (the server\'s cap) no concentration buff is next, a timed one still is; non-plan ones are dropped first', () => {
+        const tasks = planBuffs('Oisin', group({ Oisin: { effects: ["Oak's Stoutness"] } }));
+        expect(nextBuff(tasks, { current: 68, max: 70, effects: 19 })?.target).toBe('Cuchulainn');
+        expect(nextBuff(tasks, { current: 68, max: 70, effects: 20 })).toBeNull();
+        expect(nextBuff(planBuffs('Ciaran', group()), { current: 0, max: 0, effects: 20 })?.spell.name).toBe('Powerbarrier');
+        const stray = { index: 0, concentration: 2, name: 'Stray Buff', ownerName: 'Cuchulainn' };
+        const full = Array.from({ length: 20 }, (_, i) => ({ ...stray, index: i }));
+        expect(surplusConcentration(tasks, full, { current: 68 }, group()).length).toBe(20);
+        expect(surplusConcentration(tasks, full.slice(0, 19), { current: 68 }, group())).toEqual([]);
+    });
+
     test('nextBuff takes the first task that fits, counts our active buffs and reserves room for ones waiting to retry', () => {
         const tasks = planBuffs('Oisin', group({ Oisin: { effects: ["Oak's Stoutness"] } }));
         expect(nextBuff(tasks, { current: 68, max: 70 })?.target).toBe('Cuchulainn');

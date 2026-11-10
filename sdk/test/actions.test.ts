@@ -14199,6 +14199,17 @@ describe('pets', () => {
                     });
                 });
 
+                test('the 20-concentration-effect cap: refused with its words, not no_response (arena round 26: 39 retries a round)', async () => {
+                    const LINE = 'You can only cast up to 20 simultaneous concentration spells!';
+                    const { bot } = castWith(world => world.message(LINE, { type: 'resisted' }));
+                    const t0 = Date.now();
+                    const r = await bot.castSpell(nuke, 700);
+                    expect(r).toMatchObject({ success: false, reason: 'refused' });
+                    expect(r.message).toContain('concentration');
+                    expect(Date.now() - t0).toBeLessThan(1000);
+                    expect(castFailureReason(LINE, 'interrupted')).toBe('refused');
+                });
+
                 describe('a cast that ends with no line of its own', () => {
                     const BLANK = 'Your mind goes blank and you forget what you were doing!';
                     const began = (world: FakeWorld, sp: { name: string }, ms = 3000) => {

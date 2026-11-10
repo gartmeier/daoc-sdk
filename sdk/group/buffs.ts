@@ -118,16 +118,24 @@ export function planBuffs(caster: string, members: MemberReport[], opts: BuffOpt
 }
 
 /**
- * The next buff to cast within the caster's concentration: walk the plan in order,
+ * The server's cap on a caster's concentration effects, whatever its pool has left: "You can only cast up to 20 simultaneous
+ * concentration spells!" (SpellHandler.cs:31 MAX_CONC_SPELLS, :836-839). A Cleric with ~32 planned hit it every round (arena
+ * round 26, 2026-11-10). `effects`: how many it holds now (state.concentrationEffects).
+ */
+export const MAX_CONC_EFFECTS = 20;
+
+/**
+ * The next buff to cast within the caster's concentration (and its MAX_CONC_EFFECTS): walk the plan in order,
  * counting what our own active buffs tie up, and reserving room for buffs that
  * wait out a retry delay. Null when everything that fits is up.
  */
-export function nextBuff(tasks: BuffTask[], conc: { current: number; max: number }, waiting: (t: BuffTask) => boolean = () => false): BuffTask | null {
+export function nextBuff(tasks: BuffTask[], conc: { current: number; max: number; effects?: number }, waiting: (t: BuffTask) => boolean = () => false): BuffTask | null {
     let budget = conc.max;
+    const capped = (conc.effects ?? 0) >= MAX_CONC_EFFECTS;
     for (const t of tasks) {
         const cost = t.spell.concentration;
         if (t.covered) { if (t.ours) budget -= cost; continue; }
-        if (cost > budget) continue;
+        if (cost > budget || (capped && cost > 0)) continue;
         if (waiting(t)) { budget -= cost; continue; }
         if (cost > conc.current) continue;
         return t;
@@ -142,11 +150,12 @@ const sameSpell = (full: string, shown: string) => (shown.endsWith('..') ? full.
 
 /**
  * Our concentration buffs to drop: on a living member, but not one of our tasks
- * there, while some task of ours lacks the concentration to go up. Pulsing songs
+ * there, while some task of ours lacks the concentration to go up, or we hold MAX_CONC_EFFECTS already. Pulsing songs
  * (no concentration) are never dropped.
  */
 export function surplusConcentration(tasks: BuffTask[], active: ConcEntry[], conc: { current: number }, members: MemberReport[]): ConcEntry[] {
-    const short = tasks.some(t => !t.covered && t.spell.concentration > conc.current);
+    const missing = tasks.filter(t => !t.covered && t.spell.concentration > 0);
+    const short = missing.some(t => t.spell.concentration > conc.current) || (missing.length > 0 && active.length >= MAX_CONC_EFFECTS);
     if (!short) return [];
     const living = new Set(members.filter(m => !m.isDead).map(m => m.name));
     return active.filter(a => a.concentration > 0 && living.has(a.ownerName)
