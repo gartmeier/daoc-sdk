@@ -494,6 +494,10 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     }
 
     if (mem.pack === 'rebuff') {
+        // A monster on one of ours: the calm side fights it (decideRvr), rebuff or not. Arena round 46 (2026-11-10): a mature boar
+        // interrupted 75 heals in 9 minutes of "rebuffing ... waiting for Cuchulainn's health" and the Hero never swung at it.
+        const beastOnUs = p.contacts.some(c => c.kind !== 'player' && !c.isPet && !c.stale && isAlive(c) && c.regionId === regionId && here.some(m => m.name === onWhom(c)));
+        if (beastOnUs) return say(calm());
         if (free.some(c => dist(c, centre) <= k.standoff)) mem.pack = 'stalk';
         else {
             if (pickups.length || (far.length && !pairRound) || dead.length) { mem.pack = 'home'; mem.legKind = null; return say({ ...none, phase: 'recover', anchor: stay, reason: 'regrouping: someone is missing again' }); }

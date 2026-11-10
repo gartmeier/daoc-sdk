@@ -592,6 +592,15 @@ describe('decidePack: nobody walks alone', () => {
         expect(u.phase).not.toBe('engage');
     });
 
+    test('rebuffing with a monster on one of ours: it is fought, not rested through (arena round 46: a boar, 9 minutes)', () => {
+        const near = { x: keep.x, y: keep.y };
+        const boar = contact(77, { regionId: THID, x: keep.x + 100, y: keep.y, threat: true, target: 'Druid', level: 22 });
+        const m: any = { realm: 'hibernia', pack: 'rebuff', rebuffAt: 0 };
+        const u = decidePack(ctx(picture(thid({ Tank: { hp: 40 } }, near), [boar]), { memory: m, now: 1000, settings: { patrol: null } }));
+        expect(u.phase).toBe('engage');
+        expect(u.focus).toBe(77);
+    });
+
     test('rebuff waits out its time and everyone\'s health and power, then stalks', () => {
         const near = { x: keep.x, y: keep.y };
         const m: any = { realm: 'hibernia', pack: 'rebuff', rebuffAt: 0 };
