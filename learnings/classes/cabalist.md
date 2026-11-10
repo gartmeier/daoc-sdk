@@ -110,3 +110,5 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **Arena round 33** (Hibernia won the cap from Camelot 5/2; the 264 s fight beat recent wipes): `nearsight` tried 7 times in under a minute and landed none. It was amnesia'd twice, interrupted twice, resisted once, `out_of_range` at 2250 once, and `must_wait` once, and Morgana dealt 57 damage. Now a failed try leaves that target alone 20 s, she doesn't try while under fire (a melee on her or a cast cut in the last 5 s), and she casts from 2100.
 
+**Arena round 35** (Hibernia wiped Camelot 6/0, 123 s): with the backoff, `nearsight` landed 4 of 4. Hibernia's melee then sat on our casters instead: Morgana and Merlin were each in melee 72 % of fight time, Morgana cast 10 debuffs and 2 quickcasts, and her damage was 290.
+
