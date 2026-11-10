@@ -92,3 +92,13 @@ That's a fix in `sdk/group/spells.ts`, not a kit: power and health regen as sepa
 
 **Arena round 116** (Hibernia wiped Camelot 0/5): Merlin cast 11 debuffs (about 90 power), 3 cures and 3 cc, dealt 0 damage, and the group waited 17 % of the run on his power. His power is the group's mezzes and cures, so his `meleeDebuff` is now `selfOnly` and needs 50 % power: only on a melee on him, where nothing else of his can land anyway. Morgana and Taliesin keep the general rule (35 % on their own attacker, 60 % on another member's).
 
+## Status at the end of the arena (2026-11-10, rounds 1-119)
+
+**Proven:**
+- Shield Mind is kept up (mezzes on him 10 % shorter).
+- `quickcastUnderFire` went 1-3 times a round.
+- `offFocus` and `meleeDebuff` run. Since 4f49b87 his debuffs go only on a melee on him, above 50 % power, after 11 debuffs drained him in round 116. In round 118: 3 debuffs, 6 cures, and no waiting on power.
+
+**Open:**
+- Hibernia often mezzes or focuses him first (up to 63 % targeted), and then the group's only cure is gone.
+- Mystify Mind (confusion) and the area debuffs are unused.

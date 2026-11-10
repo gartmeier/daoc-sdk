@@ -124,3 +124,14 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **Arena round 101** (Camelot wiped Hibernia 5/2 in 130 s; the first round with the group's Lurikeen focus and the kits' focus-first nearsight and stun): Morgana survived, with 1689 damage, 17 nukes and 4 nearsights. Merlin cured 7 and cast 10 debuffs. Only Galahad and Merlin died. This was after five straight losses to Hibernia (rounds 91-99).
 
+## Status at the end of the arena (2026-11-10, rounds 1-119)
+
+**Proven:**
+- `nearsight` (Obscuring Dust) lands 3-4 a round with a 20 s backoff. The orchestrator measured 120+ "too far" answers on Hibernia's casters in round 35.
+- `offFocus`, `meleeDebuff` and `quickcastUnderFire` run in all three nuker kits.
+- `nukerFight`, `quickcastUnderFire` and `QUICKCAST_REUSE_MS` are used by other realms' kits (see the comment in cabalist.ts).
+
+**Open:**
+- Morgana was the first to die in about 40 % of the losses. Hibernia's pack focus scores known casters plus nearness to its centre, and moving her nearsight to engage only didn't change it.
+- Her slot and the group's peel are the levers, and they belong to the group.
+- Her pet isn't used to protect her.

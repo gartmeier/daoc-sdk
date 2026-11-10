@@ -150,3 +150,15 @@ All of these are his and no behaviour casts them:
 - **Crusader's Refreshment** (Chants 20), a group heal pulse: a `combatHeal` song, which gets a turn only with a twist. It heals nobody out of combat (`CombatHealSpellHandler`), so it isn't a between-fights `health` song.
 - **Aggravate** (Chants 15), an instant taunt at range 1350, every 30 s. It would peel an add without walking.
 - Only one pulse plays at a time ([spells.md](../spells.md)), so without a twist (above) endurance, heal, AF and damage are a choice. Crusader's Defense counts as a spec AF, capped at level x 1.875 (45 at 24; `ArmorFactorCalculator`), so its 61 gives 45 at most.
+
+## Status at the end of the arena (2026-11-10, rounds 1-119)
+
+**Proven:**
+- `selfBuff` keeps Aura of Indestructability up between fights (seen in his buff actions from round 6).
+- The chant twist runs inside `tank`.
+- Since 91d6e4c the shared `song()` no longer drains his power with Persistence out of fights.
+
+**Open:**
+- Galahad was the focus 50-80 % of fight time in most rounds. Nothing in the kit protects him beyond chants.
+- Aggravate as an instant interrupt on enemy casters was considered and not built. It would need a raw cast mid-swing that doesn't lose his target.
+- Shield stun styles are deliberately unused. They share the 60 s StunImmunity with Nimue's Stunning Flare.

@@ -122,3 +122,15 @@ Her `buff:no_response` failures (5-8 a round, 39 in round 26) are the server's c
 
 **Arena rounds 101 and 103** (two wipes of Hibernia, 5/2 and 5/0, with the group's Lurikeen focus and the caster-focus stun): `stun` 1 and then 5 with no failure, 5-6 heals, and she was barely targeted. Before that, Camelot had lost five straight to Hibernia (91-99).
 
+## Status at the end of the arena (2026-11-10, rounds 1-119)
+
+**Proven:**
+- `stunPeel` landed 1-5 stuns a round. Its order is: peel a melee or pet off a non-tank; Camelot's `camMezzer`; a caster focus at any health; the enemy healer while the focus is ≤ 60 %; the focus ≤ 60 %. The offensive cases run only when no member is under burst or below 70 %.
+- Instant Gift of the Heavens fired; its cooldown was seen after round 52.
+- No Smite at players below spareNuke's floor.
+- From round 101, the group's Lurikeen focus plus the caster-focus stun lined up with 4 wins in 6 against Hibernia.
+
+**Open:**
+- Against Hibernia she was sometimes the first focus (round 107: 73 % targeted, 0 heals). The likely cause is the list's opening `spareNuke` Smite flagging her as a caster. That's group- and orchestrator-side.
+- No way to heal through a melee on her beyond the one 15-minute instant.
+- Cure Nearsight needs Rejuvenation 20 (she has 19), and the build is the group's.

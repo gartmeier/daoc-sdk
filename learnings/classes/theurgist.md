@@ -89,3 +89,14 @@ From runs with no pets: `--pet.enabled=false` is the run to compare with.
 
 **Arena rounds 101-106:** six straight Camelot wins, three over Hibernia (5/2, 5/0, 5/0) and three over Midgard (5/1, 4/3 cap, 5/0). Taliesin dealt 1010-2666 a round (2666 in the 371 s round 104) and died once in six rounds.
 
+## Status at the end of the arena (2026-11-10, rounds 1-119)
+
+**Proven:**
+- Top or second damage in most wins (up to 2666 in round 104).
+- `quickcastUnderFire` 1-3 times a round, plus `meleeDebuff` (Friction) and `offFocus`.
+- The shared `flee` now circles the tank with `giveGroundStep`. His own `giveGround` acts only with no tank alive.
+
+**Open:**
+- His ice spirits (`fnfPet`) rarely show any damage in reports; whether they land is unverified.
+- Field of Snow (area snare) and Ice Blast (snare nuke) are unused.
+- Confusing Gust needs Wind 4, which costs his 5 spare points. Declined for now because it would lock out Merlin's mezz.
