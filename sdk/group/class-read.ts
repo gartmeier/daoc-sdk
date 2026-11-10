@@ -269,8 +269,8 @@ function raceId(name: string): number | null {
 
 /** Seen swinging this long and never casting: 1 after QUIET_MS[0], 2 after QUIET_MS[1]. */
 const QUIET_MS = [10_000, 25_000];
-/** A class with this many cast-time spells at the level is one that casts in a fight. */
-const CASTER_SPELLS = 5;
+/** A class with this many cast-time spells at the level is one that casts in a fight: a Thane (17 at 24), not a Paladin (5) or Champion (4), whose bots go whole rounds without one. */
+const CASTER_SPELLS = 8;
 function quietLevel(ev: FoeEvidence): number {
     return ev.cast ? 0 : QUIET_MS.filter(ms => ev.swingMs >= ms).length;
 }
