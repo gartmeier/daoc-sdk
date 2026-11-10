@@ -1,6 +1,6 @@
 [submodule "server/core"]
 	path = server/core
-	url = https://github.com/OpenDAoC/OpenDAoC-Core.git
+	url = https://github.com/gartmeier/OpenDAoC-Core.git
 [submodule "server/db"]
 	path = server/db
 	url = https://github.com/gartmeier/OpenDAoC-Database.git

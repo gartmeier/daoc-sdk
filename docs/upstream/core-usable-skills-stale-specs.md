@@ -1,6 +1,6 @@
 # Upstream PR draft: stale skill list after `/player class`
 
-For [OpenDAoC/OpenDAoC-Core](https://github.com/OpenDAoC/OpenDAoC-Core). The fix is [core-usable-skills-stale-specs.patch](core-usable-skills-stale-specs.patch), branch `fix/usable-skills-stale-specs` in `server/core`. It is based on f0aaa1ea2 (tag 2026.09.36, our pin) and applies unchanged to upstream `master` a4dc4ed15, where `GamePlayerUtils.cs` hasn't changed since. Nothing is pushed or opened yet.
+For [OpenDAoC/OpenDAoC-Core](https://github.com/OpenDAoC/OpenDAoC-Core). The fix is [core-usable-skills-stale-specs.patch](core-usable-skills-stale-specs.patch), branch [`fix/usable-skills-stale-specs`](https://github.com/gartmeier/OpenDAoC-Core/tree/fix/usable-skills-stale-specs) of our fork. It is based on f0aaa1ea2 (tag 2026.09.36) and applies unchanged to upstream `master` a4dc4ed15, where `GamePlayerUtils.cs` hasn't changed since. The PR isn't opened yet.
 
 ---
 
@@ -51,7 +51,6 @@ Both directions on a local server built from 2026.09.36, with a headless client 
 
 ## Our side
 
-- `server/core` follows the `server/db` pattern (docs/SERVER.md): branch `daoc-sdk` merges every fix branch and adds a README notice ([core-daoc-sdk-readme-notice.patch](core-daoc-sdk-readme-notice.patch), GPLv3 5(a)). These branches exist only in this worktree's submodule so far.
-- Still to do, the user's call: create the fork `gartmeier/OpenDAoC-Core`, push `daoc-sdk` and `fix/usable-skills-stale-specs`, point `.gitmodules` at the fork and the `server/core` pin at `daoc-sdk`, open the upstream PR from the fix branch, rebuild `daoc-sdk-gameserver:latest`.
-- To recreate the branches from the patches: in `server/core`, `git switch -c fix/usable-skills-stale-specs f0aaa1ea2 && git am ../../docs/upstream/core-usable-skills-stale-specs.patch`, then `git switch -c daoc-sdk f0aaa1ea2 && git merge --no-ff fix/usable-skills-stale-specs && git am ../../docs/upstream/core-daoc-sdk-readme-notice.patch`.
+- `server/core` follows the `server/db` pattern (docs/SERVER.md): it pins branch `daoc-sdk` of [gartmeier/OpenDAoC-Core](https://github.com/gartmeier/OpenDAoC-Core), which merges every fix branch and adds a README notice ([core-daoc-sdk-readme-notice.patch](core-daoc-sdk-readme-notice.patch), GPLv3 5(a)).
+- Still to do, the user's call: open the upstream PR from the fix branch, and rebuild `daoc-sdk-gameserver:latest`, which restarts the shared stack.
 - Once the server runs the fix, the SDK-side workaround (1ce87c8, `trainBuild`/`trainSpec` read the trainer window) can stay: it costs one window request. The relog advice in learnings/builds.md "What the server does" no longer applies then.
