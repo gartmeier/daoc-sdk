@@ -15,7 +15,8 @@ describe('levelCaps', () => {
 });
 
 describe('templateFor', () => {
-    const realms: Record<string, 'albion' | 'midgard' | 'hibernia'> = { Warrior: 'midgard', Skald: 'midgard', Healer: 'midgard', Shaman: 'midgard', Spiritmaster: 'midgard', Paladin: 'albion', Cleric: 'albion', Sorcerer: 'albion', Cabalist: 'albion', Theurgist: 'albion', Hero: 'hibernia', Druid: 'hibernia', Bard: 'hibernia', Mentalist: 'hibernia', Enchanter: 'hibernia' };
+    const realms: Record<string, 'albion' | 'midgard' | 'hibernia'> = { Warrior: 'midgard', Skald: 'midgard', Healer: 'midgard', Shaman: 'midgard', Spiritmaster: 'midgard', Paladin: 'albion', Cleric: 'albion', Sorcerer: 'albion', Cabalist: 'albion', Theurgist: 'albion', Hero: 'hibernia', Druid: 'hibernia', Bard: 'hibernia', Mentalist: 'hibernia', Enchanter: 'hibernia',
+        Armsman: 'albion', Friar: 'albion', Wizard: 'albion', Blademaster: 'hibernia', Warden: 'hibernia', Eldritch: 'hibernia', Berserker: 'midgard', Thane: 'midgard', Runemaster: 'midgard' };
 
     test('every class fills the 14 slots and every row fits', () => {
         for (const className of Object.keys(CLASS_KITS)) {
@@ -55,6 +56,39 @@ describe('templateFor', () => {
         const pieces = templateFor('Warrior', 'midgard', 24, WARRIOR);
         expect(accessorySlots(item({ name: pieces.find(p => p.slot === EquipmentSlot.RightRing)!.name }))).toEqual([35, 36]);
         expect(accessorySlots(item({ name: pieces.find(p => p.slot === EquipmentSlot.Neck)!.name }))).toEqual([29]);
+    });
+
+    test('the bench classes: their armour, their weapons, and a bonus on every trained line', async () => {
+        const { getBuild } = await import('../../data/builds/index');
+        const bench: [string, string, number, number[]][] = [
+            ['Armsman', 'Polearm hybrid', ObjectType.Plate, [ObjectType.SlashingWeapon, ObjectType.Shield, ObjectType.PolearmWeapon]],
+            ['Friar', 'Group support', ObjectType.Leather, [ObjectType.Staff]],
+            ['Wizard', 'Ice', ObjectType.Cloth, [ObjectType.Staff]],
+            ['Blademaster', 'Group damage with Slam', ObjectType.Reinforced, [ObjectType.Blades, ObjectType.Blades]],
+            ['Warden', 'Support', ObjectType.Scale, [ObjectType.Blades, ObjectType.Shield]],
+            ['Eldritch', 'Light nuker', ObjectType.Cloth, [ObjectType.Staff]],
+            ['Berserker', 'Left Axe, Hammer, high Parry', ObjectType.Studded, [ObjectType.Hammer, ObjectType.LeftAxe]],
+            ['Thane', 'Even hybrid with Parry', ObjectType.Chain, [ObjectType.Hammer, ObjectType.Shield]],
+            ['Runemaster', 'Darkness nuker', ObjectType.Cloth, [ObjectType.Staff]],
+        ];
+        for (const [className, buildName, armor, weapons] of bench) {
+            const specs = getBuild(className, buildName)!.targets.find(t => t.level >= 24)!.specs;
+            const pieces = templateFor(className, realms[className]!, 24, specs);
+            expect(pieces.find(p => p.slot === EquipmentSlot.Torso)!.objectType).toBe(armor);
+            expect(pieces.filter(p => p.slot >= 10 && p.slot <= 13).map(p => p.objectType)).toEqual(weapons);
+            const totals = templateTotals(pieces);
+            const trained = Object.values(specs).filter(v => v >= 2).length;
+            expect([...totals].filter(([, v]) => v === 5).length).toBeGreaterThanOrEqual(trained);
+        }
+        const offHand = templateFor('Berserker', 'midgard', 24, {}).find(p => p.slot === EquipmentSlot.LeftHand)!;
+        expect(offHand.hand).toBe(2);
+        // A Friar swings his staff: no focus on it. A Wizard's is a focus.
+        expect(templateTotals(templateFor('Friar', 'albion', 24, {})).has(165)).toBe(false);
+        expect(templateTotals(templateFor('Wizard', 'albion', 24, {})).get(165)).toBe(24);
+    });
+
+    test('a female class name finds its kit', () => {
+        expect(templateFor('Armswoman', 'albion', 24, {}).map(p => p.id)).toEqual(templateFor('Armsman', 'albion', 24, {}).map(p => p.id));
     });
 
     test('the two-hander goes on last, so it ends up held', () => {
