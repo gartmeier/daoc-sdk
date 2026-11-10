@@ -29,6 +29,14 @@ export function stepFor(outSince: number | null, now = Date.now()): number {
 const LEG_MS = 3000;
 /** ... to this share of the nuke's range from the focus. */
 const LEG_REACH = 0.85;
+/**
+ * ... and only with the focus at most this far beyond her range: farther is a caster behind their line, and chasing it
+ * kept her walking 70 % of round 56 (Camelot) for 5 nukes, where Hibernia, closer in, gave 38 (round 55).
+ */
+export const LEG_MAX_GAP = 900;
+
+/** Whether a leg toward a focus `distance` away is worth walking, for a nuke of `range`. */
+export const legWorthIt = (distance: number, range: number): boolean => distance - range <= LEG_MAX_GAP;
 
 /** assist with stepFor's step, and after LONG_AFTER_MS with nothing cast, a leg toward the focus when even that step can't be taken. Named assist, as the role's fight is. */
 export const steppingAssist = (): Behavior<TacticsSettings> => {
@@ -50,7 +58,7 @@ export const steppingAssist = (): Behavior<TacticsSettings> => {
                 return true;
             }
             const seen = longNow && o.focus ? foeInView(ctx, o.focus) : null;
-            if (!seen || !sp || ctx.orders().phase !== 'engage') return false;
+            if (!seen || !sp || ctx.orders().phase !== 'engage' || !legWorthIt(seen.distance, sp.range)) return false;
             ctx.doing('move', o.focus, 'closing on the focus');
             await ctx.bot.walkToObject(seen, { range: sp.range * LEG_REACH, timeout: LEG_MS });
             return true;

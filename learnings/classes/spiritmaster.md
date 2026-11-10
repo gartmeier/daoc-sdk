@@ -36,7 +36,7 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 
 **Round 52 (vs Camelot, won by wipe 5 / 1; the group's calmFan):** idle 80 % ("focus out of reach, holding ground" 96), moving 7 %, 7 nukes. Even the 750 step is refused when the focus is more than 650 beyond her range or an enemy stands near the spot (`standStepTo`, STEP_CLEAR 500), and with fanOut calmed nothing else brought her in. Since then, after 4 s with the focus out of reach and nothing cast, `steppingAssist` walks one leg (3 s) toward the focus, to 85 % of her nuke's range.
 
-**Rounds 54-55 (walk leg in):** r54 vs Camelot (won 5 / 2): 5 nukes, moving 48 %, idle 37 %. r55 vs Hibernia (won on the cap 8 / 2): 38 nukes, 4993 damage, idle 17 %, moving 19 %, her best round by far. Camelot's casters stand far back, Hibernia's close in.
+**Rounds 54-55 (walk leg in):** r54 vs Camelot (won 5 / 2): 5 nukes, moving 48 %, idle 37 %. r55 vs Hibernia (won on the cap 8 / 2): 38 nukes, 4993 damage, idle 17 %, moving 19 %, her best round by far. Camelot's casters stand far back, Hibernia's close in. **Round 56 (vs Camelot, won on the cap 5 / 3):** moving 70 %, 5 nukes, 467 damage: the legs chased their back line. Since then a leg only toward a focus at most 900 beyond her range (`LEG_MAX_GAP`).
 
 **Quickcast (2026-11-10, after round 27):** she has the ability (`bun sdk/cli.ts Hrafna`) and nothing used it. The kit's `instant` is the Cabalist kit's `quickcastUnderFire` ([cabalist.md](cabalist.md)): with a melee on her, or a cast of hers interrupted in the last 5 s, Quickcast, then her cc order or her nuke on the focus, uninterruptible, at twice the power, once per 31 s. In round 27 she was targeted 73 % of the fight.
 

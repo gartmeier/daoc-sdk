@@ -5,7 +5,7 @@ import { enemy } from '../group/fixtures';
 import type { Behavior } from '../group/member';
 import { packBehaviors } from '../group/pack';
 import { rvrBehaviors } from '../group/rvr';
-import { HOLD_GROUND, inReachTarget, LONG_AFTER_MS, LONG_STEP, spiritmaster, stepFor } from './spiritmaster';
+import { HOLD_GROUND, inReachTarget, legWorthIt, LONG_AFTER_MS, LONG_STEP, spiritmaster, stepFor } from './spiritmaster';
 
 describe('spiritmaster kit', () => {
     test('a nuker whose fight is assist, then nukeInReach, in every list', () => {
@@ -40,5 +40,11 @@ describe('spiritmaster kit', () => {
         expect(stepFor(null, now)).toBe(HOLD_GROUND);
         expect(stepFor(now - LONG_AFTER_MS + 1, now)).toBe(HOLD_GROUND);
         expect(stepFor(now - LONG_AFTER_MS, now)).toBe(LONG_STEP);
+    });
+
+    test('a walk in only toward a focus not far beyond her range', () => {
+        expect(legWorthIt(2000, 1500)).toBe(true);
+        expect(legWorthIt(2400, 1500)).toBe(true);
+        expect(legWorthIt(2401, 1500)).toBe(false);
     });
 });
