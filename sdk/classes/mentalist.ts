@@ -6,8 +6,7 @@
 
 import { foeInView, hammeredBy, type TacticsSettings } from '../group/behaviors';
 import type { Character } from '../group/character';
-import { offFocus as offFocusNuke, QUICKCAST_REUSE_MS, quickcastUnderFire } from './cabalist';
-import { steppingAssist } from './spiritmaster';
+import { nukerFight, QUICKCAST_REUSE_MS, quickcastUnderFire } from './cabalist';
 import type { Behavior } from '../group/member';
 import type { Contact, MemberReport, Role } from '../group/types';
 
@@ -151,13 +150,12 @@ export const quickFlash = (): Behavior => ({
 });
 
 /**
- * Assist that steps in (the Spiritmaster kit's steppingAssist: after 4 s with the focus beyond the nuke's range and nothing cast,
- * one leg toward it), then offFocus. Round 62: Niamh walked 1,200 → 3,500 from the focus in 16 s as the pack's fanOut stepped
- * her back, and "focus out of reach, holding ground" took 17-61 turns a round; the Midgard Spiritmaster went from 80 % idle
- * on the same reason with it (round 52).
+ * The role's assist, then offFocus (the Cabalist kit's nukerFight). Rounds 64 and 66 tried the Spiritmaster kit's
+ * steppingAssist here and reverted it: its step is 250 (750 after 4 s), shorter than Hibernia's standStep of 900, so the
+ * casters stepped in less, not more (Ciaran 2-3 nukes, "focus out of reach, holding ground" 13-14 turns).
  */
 export function casterFight(withOffFocus = true): Behavior<TacticsSettings>[] {
-    return [steppingAssist(), ...(withOffFocus ? [offFocusNuke()] : [])];
+    return nukerFight(0, withOffFocus);
 }
 
 export function mentalist({ offFocus = true }: { offFocus?: boolean } = {}): MentalistKit {
