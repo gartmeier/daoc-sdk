@@ -93,6 +93,18 @@ describe('readClass', () => {
         expect(g.classes[0]).toBe('Healer');
     });
 
+    test('a Hero from a Champion: the same scale, shield and blades, and no cast in 25 s leans tank', () => {
+        const ev = newEvidence('Celt', 'hibernia', 24);
+        addLook(ev, { gear: [[21, 840], [22, 431], [23, 432], [25, 428], [27, 429], [28, 430], [10, 473], [11, 60]] }, 24, 1000);
+        const tied = readClass(ev)!;
+        expect(tied.classes.slice(0, 2).sort()).toEqual(['Champion', 'Hero']);
+        expect(tied.p[0]).toBe(tied.p[1]!);
+        for (let t = 1000; t <= 31_000; t += 250) addLook(ev, { swung: true }, 24, t);
+        const g = readClass(ev)!;
+        expect(g.classes[0]).toBe('Hero');
+        expect(g.role).toBe('tank');
+    });
+
     test('effects no class of the realm has count for nothing', () => {
         const g = read('Dwarf', 'midgard', { effects: [65000] });
         expect(g.basis).toEqual(['race Dwarf']);

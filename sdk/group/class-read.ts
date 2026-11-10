@@ -276,7 +276,7 @@ function quietLevel(ev: FoeEvidence): number {
 }
 
 /** Per evidence kind, how much a class that couldn't show it is kept. */
-const MISS = { quiet: [1, 0.3, 0.1], armour: 0.02, armourBelow: 0.3, weapon: 0.02, shieldSize: 0.1, dual: 0.05, effect: 0.05, style: 0.05, base: 0.05, uncreatable: 0.3 };
+const MISS = { quiet: [1, 0.3, 0.1], quietLight: [1, 0.7, 0.5], armour: 0.02, armourBelow: 0.3, weapon: 0.02, shieldSize: 0.1, dual: 0.05, effect: 0.05, style: 0.05, base: 0.05, uncreatable: 0.3 };
 
 /** The guess from everything known of one enemy player. Null for a realm with no classes (a monster's). */
 export function readClass(ev: FoeEvidence): ClassGuess | null {
@@ -353,7 +353,11 @@ export function readClass(ev: FoeEvidence): ClassGuess | null {
     // A fighter seen swinging for a while that never once started a cast: not a class that casts in its fights.
     const quiet = quietLevel(ev);
     if (quiet) {
-        for (const [k, v] of w) if (k.castTimed.filter(at => at <= L).length >= CASTER_SPELLS) w.set(k, v * MISS.quiet[quiet]!);
+        // A light hybrid (a Champion's 4, a Paladin's 5) only leans: its bot may go a round without one, and its other spells decide it anyway.
+        for (const [k, v] of w) {
+            const n = k.castTimed.filter(at => at <= L).length;
+            if (n) w.set(k, v * (n >= CASTER_SPELLS ? MISS.quiet : MISS.quietLight)[quiet]!);
+        }
         basis.push(`no casts in ${Math.round(ev.swingMs / 1000)} s of swinging`);
     }
 
