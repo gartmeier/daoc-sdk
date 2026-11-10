@@ -91,7 +91,9 @@ describe('the cleric kit', () => {
     test('in the RvR healer list the stun goes below heal, and before her Smite', () => {
         const list = withCharacter(rvrBehaviors().healer, cleric()).map(b => b.name);
         expect(list.indexOf('stunPeel')).toBeGreaterThan(list.indexOf('heal'));
-        expect(list.indexOf('stunPeel')).toBe(list.indexOf('assist') - 1);
+        expect(list.indexOf('stunPeel')).toBe(list.indexOf('topUp') - 1);
+        expect(list.indexOf('topUp')).toBe(list.indexOf('assist') - 1);
+        expect(withCharacter(rvrBehaviors().healer, cleric({ topUpBelow: 0 })).map(b => b.name)).not.toContain('topUp');
         expect(withCharacter(rvrBehaviors().healer, cleric({ stun: false })).map(b => b.name)).not.toContain('stunPeel');
     });
 });

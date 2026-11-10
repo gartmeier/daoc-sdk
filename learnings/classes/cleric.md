@@ -132,6 +132,8 @@ Her `buff:no_response` failures (5-8 a round, 39 in round 26) are the server's c
 - No Smite at players below spareNuke's floor.
 - From round 101, the group's Lurikeen focus plus the caster-focus stun lined up with 4 wins in 6 against Hibernia.
 
+**Changed, 2026-11-10 night (Albion session):** the kit's fight has the Friar kit's `topUp` between the stun and her Smite: a member below 85 % gets a heal in her spare turns, above 50 % power (`cleric({ topUpBelow: 0 })` off). Round 128: 5 heals in a 197 s fight and idle 32 % on "no smite at players" while all five died.
+
 **Open:**
 - Against Hibernia she was sometimes the first focus (round 107: 73 % targeted, 0 heals). The likely cause is the list's opening `spareNuke` Smite flagging her as a caster. That's group- and orchestrator-side.
 - No way to heal through a melee on her beyond the one 15-minute instant.

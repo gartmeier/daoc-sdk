@@ -11,6 +11,7 @@ import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import type { SpellPick } from '../group/spells';
 import type { Contact, MemberReport } from '../group/types';
+import { topUp } from './friar';
 import { thrifty } from './thrifty';
 
 export interface ClericOptions {
@@ -18,6 +19,8 @@ export interface ClericOptions {
     saveBelow?: number;
     /** Stun peels and the enemy healer (stunPeel). On by default. */
     stun?: boolean;
+    /** The Friar kit's topUp: heal a member below this % in her spare turns, above 50 % power. 0: off. */
+    topUpBelow?: number;
 }
 
 /** Stunning Flare's length at 24; a player is immune to stuns for 60 s after one ends (immunity_timer_flat_length). */
@@ -154,6 +157,10 @@ const notOnPlayers = (inner: Behavior<TacticsSettings>): Behavior<TacticsSetting
     run: ctx => (ctx.focus()?.kind === 'player' ? ctx.skip(`${inner.name}: no smite at players below spareNuke's floor`) : inner.run(ctx)),
 });
 
-export function cleric({ saveBelow = 50, stun = true }: ClericOptions = {}): Character {
-    return { role: 'healer', instant: [instantHealSave()], fight: [...(stun ? [stunPeel({ marked: camelotMezzer })] : []), notOnPlayers(thrifty(assist(), saveBelow))] };
+/**
+ * Below the stun and above her Smite, topUp (friar.ts) at 85 %: arena round 128 (2026-11-10), 5 heals in a 197 s fight and idle 32 %
+ * on "no smite at players" while all five died. Her turns there were going nowhere.
+ */
+export function cleric({ saveBelow = 50, stun = true, topUpBelow = 85 }: ClericOptions = {}): Character {
+    return { role: 'healer', instant: [instantHealSave()], fight: [...(stun ? [stunPeel({ marked: camelotMezzer })] : []), ...(topUpBelow > 0 ? [topUp(topUpBelow, 50)] : []), notOnPlayers(thrifty(assist(), saveBelow))] };
 }
