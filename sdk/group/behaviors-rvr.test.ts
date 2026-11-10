@@ -853,6 +853,28 @@ describe('refusals that come back at once: reported, so the agent paces them (me
         expect(near.used()).toBe(1);
     });
 
+    test('guard: a second tank refused ("already guarding") takes the next back-liner instead of the same healer every 10 s', async () => {
+        // Round 129, 2026-11-10: Sigurd and Thorgrim both on settings.guard 'healer'; the server refused Sigurd each time.
+        const healer = report('Sigrid', { role: 'healer', regionId: R, x: 10_000, y: 10_000, objectId: 7 });
+        const nuker = report('Gudrun', { role: 'nuker', regionId: R, x: 10_050, y: 10_000, objectId: 8 });
+        const s = stub({ name: 'Sigurd', role: 'tank', at: ANCHOR, members: [healer, nuker], orders: { phase: 'travel', focus: null }, settings: { ...LEASHED, guard: { guard: 'healer' } } as TacticsSettings });
+        const selected: number[] = [];
+        Object.assign(s.ctx.sdk, {
+            findAbility: (re: RegExp) => (re.test('Guard') ? { name: 'Guard' } : null),
+            getNearbyPlayers: () => [{ objectId: 7 }, { objectId: 8 }],
+            sendSetTarget: async (id: number) => { selected.push(id); return { success: true, message: '' }; },
+        });
+        const answer = (id: number) => (id === 7 ? 'Thorgrim is already guarding Sigrid!' : 'You are now guarding Gudrun.');
+        (s.ctx.bot as unknown as { useAbility: unknown }).useAbility = async () => ({ success: true, message: '', messages: [{ text: answer(selected.at(-1)!) }] });
+        (s.ctx.bot as unknown as { isDead: unknown }).isDead = () => false;
+        expect(await guard().run(s.ctx)).toBe(true);
+        expect(selected).toEqual([7]);
+        // The next try, after the 10 s pause: Sigrid is taken, Gudrun gets the Guard.
+        s.ctx.memory.set('GuardAt', 0);
+        expect(await guard().run(s.ctx)).toBe(true);
+        expect(selected).toEqual([7, 8]);
+    });
+
     test('a leg cut by its own timeout is no failure: flee, tank and assist hand the next turn the decision that way, so a report gets no walk:timeout from them', async () => {
         const walk = { success: false, reason: 'timeout', message: 'Walk timed out after 6000ms' };
         const tankM = report('Tank', { role: 'tank', regionId: R, x: ANCHOR.x, y: ANCHOR.y, objectId: 3 });

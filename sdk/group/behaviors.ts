@@ -1455,7 +1455,13 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
  * Cuchulainn" / "Ciaran protected by Cuchulainn". Using one again on the same member
  * cancels it, so this acts only when that effect is missing. Out of fights only: it
  * selects the member as our target.
+ *
+ * Two tanks: the server keeps one Guard (one Protect) per member and refuses a second ("Thorgrim is already guarding
+ * Sigrid!", GuardAbilityHandler.cs). That member is then taken for GUARD_TAKEN_MS, and ours goes to the next back-liner
+ * in BACK_LINE order, so two tanks cover two members (round 129: Sigurd retried Sigrid every 10 s).
  */
+const GUARD_TAKEN_MS = 120_000;
+const BACK_LINE: readonly Role[] = ['healer', 'nuker', 'support'];
 export const guard = (): Behavior<TacticsSettings> => ({
     name: 'guard',
     async run(ctx) {
@@ -1465,7 +1471,12 @@ export const guard = (): Behavior<TacticsSettings> => ({
         for (const [ability, verb] of [['Guard', 'guarded'], ['Protect', 'protected']] as const) {
             const want = ability === 'Guard' ? ctx.settings.guard.guard : ctx.settings.guard.protect;
             if (!want || !ctx.sdk.findAbility(new RegExp(`^${ability}`, 'i'))) continue;
-            const m = ctx.members().find(x => !x.isDead && x.name !== ctx.name && (x.name === want || x.role === want || x.className === want));
+            const taken: Map<string, number> = ctx.memory.get(`${ability}Taken`) ?? new Map();
+            ctx.memory.set(`${ability}Taken`, taken);
+            for (const [name, until] of taken) if (until <= Date.now()) taken.delete(name);
+            const free = ctx.members().filter(x => !x.isDead && x.name !== ctx.name && !taken.has(x.name));
+            const m = free.find(x => x.name === want || x.role === want || x.className === want)
+                ?? (taken.size ? BACK_LINE.map(r => free.find(x => x.role === r)).find(x => !!x) : undefined);
             if (!m || effects.includes(`${m.name} ${verb} by ${ctx.name}`)) continue;
             // Out of view a select doesn't take, and the ability lands on what we hold: "You can't guard yourself!" (GuardAbilityHandler.cs).
             if (!ctx.sdk.getNearbyPlayers().some(p => p.objectId === m.objectId)) continue;
@@ -1478,6 +1489,8 @@ export const guard = (): Behavior<TacticsSettings> => ({
             const r = await ctx.bot.useAbility(new RegExp(`^${ability}`, 'i'));
             // "You are now guarding Brigid, but you must stand closer." is a success (it works once we are near).
             const on = r.messages.find(x => /You are now (guarding|protecting)/.test(x.text));
+            const busy = r.messages.find(x => / is already (guarding|protecting) /.test(x.text));
+            if (busy) taken.set(m.name, Date.now() + GUARD_TAKEN_MS);
             ctx.result(ability.toLowerCase(), on ? { ...r, success: true, message: on.text } : r);
             return true;
         }
