@@ -4,7 +4,7 @@
 
 import { BotSDK, bestNameMatch, distanceBetween, isAttackable, nameMatcher, type NamePattern } from './index';
 import { executionContext, executionWait, throwIfExecutionAborted } from './execution-context';
-import { getClass, getSpells, type StatName } from '../data/index';
+import { getClass, getSpell, getSpells, type StatName } from '../data/index';
 import { EquipmentSlot, isWeapon, ObjectType } from './types';
 import type {
     BotWorldState,
@@ -253,6 +253,22 @@ export const NO_INSTRUMENT = 'you are not wielding the right type of instrument'
  * one every 60 s (arena round 26, 2026-11-10: 39 a round).
  */
 export const CONCENTRATION_CAP = 'simultaneous concentration spells';
+
+/**
+ * A spell's range as the server judges it with the effects on us: max(32, range * SpellRange % / 100), where Nearsight
+ * takes its value off the 100 (CastingComponent.cs:183-187, SpellRangePercentCalculator.cs, NearsightECSEffect.cs:17).
+ * Effects of a kind don't stack, so the strongest counts. Arena round 35 (2026-11-10): under Albion's Obscuring Dust (-35 %)
+ * Hibernia's casters got "That target is too far away!" over 120 times at targets our raw ranges put in reach.
+ */
+export function effectiveSpellRange(range: number, effects: readonly { spellId: number; isNegative?: boolean }[] | null | undefined): number {
+    if (!(range > 0) || !effects?.length) return range;
+    let off = 0;
+    for (const e of effects) {
+        const info = e.spellId ? getSpell(e.spellId) : undefined;
+        if (info?.type === 'Nearsight') off = Math.max(off, info.value ?? 0);
+    }
+    return off > 0 ? Math.max(32, Math.floor(range * Math.max(0, 100 - off) / 100)) : range;
+}
 
 /** Spell refusals and interruptions (SpellHandler.cs, CastingComponent.cs). */
 export const CAST_REFUSALS = [

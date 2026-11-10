@@ -3,7 +3,7 @@
 
 import type { SpellInfo } from '../../data/index';
 import type { BotActions } from '../actions';
-import { petSpellKind, worstPowerCost } from '../actions-helpers';
+import { effectiveSpellRange, petSpellKind, worstPowerCost } from '../actions-helpers';
 import type { BotSDK } from '../index';
 import type { Spell } from '../types';
 import type { CcKind } from './cc';
@@ -96,11 +96,15 @@ export function toPick(spell: Spell, info: SpellInfo): SpellPick {
     };
 }
 
+/** Our spells as picks, each range as the server judges it now: cut by a Nearsight on us (effectiveSpellRange). */
 export function spellsOf(sdk: BotSDK, bot: BotActions): SpellPick[] {
     const out: SpellPick[] = [];
+    const effects = sdk.getState?.()?.effects;
     for (const spell of sdk.getSkills().spells ?? []) {
         const info = bot.getSpellInfo(spell);
-        if (info) out.push(toPick(spell, info));
+        if (!info) continue;
+        const pick = toPick(spell, info);
+        out.push(pick.range > 0 ? { ...pick, range: effectiveSpellRange(pick.range, effects) } : pick);
     }
     return out;
 }

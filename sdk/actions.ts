@@ -7,6 +7,7 @@
 import { BotSDK, bestNameMatch, headingBetween, isAttackable, nameMatcher, type NamePattern } from './index';
 import { abortable, executionContext, throwIfExecutionAborted, withExecutionDeadline } from './execution-context';
 import {
+    effectiveSpellRange,
     ABILITY_REFUSALS,
     ActionHelpers,
     ALREADY_CASTING,
@@ -101,6 +102,7 @@ import { findNpcSpawns, getClass, getSpecialization, getSpell, getSpellLine, get
 import { buildProblems, freeLevels, linesOverTarget, nextBuildStep, type BuildState } from '../data/builds/rule';
 import type { Build } from '../data/builds/types';
 import type {
+    Effect,
     ActionResult,
     BotWorldState,
     DialogBox,
@@ -1273,9 +1275,9 @@ function modifiedSpec(lineName: string, specs: readonly Specialization[]): numbe
     }
 }
 
-/** The range a cast is judged by. */
-function spellRange(info: SpellInfo | null, options: CastOptions): number {
-    return options.range ?? (info && info.range > 0 ? info.range : DEFAULT_SPELL_RANGE);
+/** The range a cast is judged by: the spell's, cut by a Nearsight on us (effectiveSpellRange), unless the caller gives one. */
+function spellRange(info: SpellInfo | null, options: CastOptions, effects?: readonly Effect[]): number {
+    return options.range ?? (info && info.range > 0 ? effectiveSpellRange(info.range, effects) : DEFAULT_SPELL_RANGE);
 }
 
 /** Where castSpell's walk stops for this range. */
@@ -2377,7 +2379,7 @@ export class BotActions {
         if (obj && !onPet) {
             const refused = this.castTargetRefusal(sp, info, obj, player);
             if (refused) return fail(refused.message, refused.reason, { ...base, spell: sp, target: obj });
-            const range = spellRange(info, options);
+            const range = spellRange(info, options, this.helpers.state()?.effects);
             if (obj.distance > range && options.approach !== false) {
                 const walk = await this.walkIntoSpellRange(obj, range, info?.castTime ?? 0, o => this.castTargetRefusal(sp, info, o, player));
                 if (!walk.success) return { ...fail(walk.message, walk.reason ?? 'out_of_reach', base), spell: sp, target: walk.target ?? obj, ...(walk.targetDied ? { targetDied: true as const } : {}) };
@@ -3069,7 +3071,7 @@ export class BotActions {
         const limit = pulsing ? Math.min(info.value, bySpec) : Math.min(p.level, info.value);
         if (t.level > limit) return { message: `${name} is too strong for ${sp.name}: level ${t.level}, above ${limit}${limit === bySpec ? `, which is 110 % of our spec of ${spec}` : ''}`, reason: 'refused', target: t };
         if (!pulsing && (t.inCombat || (t.targetObjectId !== null && pets.has(t.targetObjectId)) || mobInCombatLately(s, t.objectId))) return { message: `We can't charm ${name} while it is in combat`, reason: 'in_combat', target: t };
-        const range = spellRange(info, options);
+        const range = spellRange(info, options, this.helpers.state()?.effects);
         const within = range - CHARM_REPLACE_MARGIN;
         if (options.approach === false && t.distance > within) return { message: `${name} is ${t.distance} from us: with a pet to lose ${sp.name} wants it within ${within} of its ${range}`, reason: 'out_of_range', target: t };
         return null;
@@ -3079,7 +3081,7 @@ export class BotActions {
     private async walkToCharm(sp: Spell, info: SpellInfo, options: SummonPetOptions): Promise<SummonRefusal | null> {
         const wanted = options.target ?? this.helpers.player()?.targetObjectId;
         const t = wanted === null || wanted === undefined ? null : this.helpers.resolveAny(wanted);
-        const range = spellRange(info, options);
+        const range = spellRange(info, options, this.helpers.state()?.effects);
         const within = range - CHARM_REPLACE_MARGIN;
         if (!t || t.distance <= within) return null;
         const stop = Math.max(range * SPELL_WALK_NEARER_SHARE, Math.min(within, spellWalkStop(range), range - MOB_ROAM_SPEED * info.castTime - CHARM_WALK_SLACK));

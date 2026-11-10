@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { getSpell, getSpellLines, getSpells } from '../../data/index';
 import type { BotActions } from '../actions';
-import { worstPowerCost } from '../actions-helpers';
+import { effectiveSpellRange, worstPowerCost } from '../actions-helpers';
 import type { BotSDK } from '../index';
 import { makePlayer } from '../test/fixtures';
 import type { PlayerState, Spell } from '../types';
@@ -388,5 +388,27 @@ describe('Spellbook: pets (real spell rows)', () => {
             expect(empty.powerOf({ power: 10 })).toBe(10);
             expect(empty.powerOf({ power: -25 })).toBe(0);
         });
+    });
+});
+
+describe('Nearsight on us: every spell range as the server judges it (arena round 35)', () => {
+    test('effectiveSpellRange: Obscuring Dust (-35 %) takes 2300 to 1495, 1500 to 975; the strongest counts, 32 is the floor', () => {
+        const dust = { spellId: 587, isNegative: true };
+        expect(effectiveSpellRange(2300, [dust])).toBe(1495);
+        expect(effectiveSpellRange(1500, [dust])).toBe(975);
+        expect(effectiveSpellRange(1500, [{ spellId: 586, isNegative: true }, dust])).toBe(975);
+        expect(effectiveSpellRange(1500, [])).toBe(1500);
+        expect(effectiveSpellRange(0, [dust])).toBe(0);
+    });
+
+    test('the Spellbook reads them cut while it is on us', () => {
+        const spells = NIAMH.map(p => ({ ...p.spell, cooldownRemaining: 0 }));
+        const effects: { spellId: number; isNegative: boolean }[] = [];
+        const sdk = { getSkills: () => ({ spells }), getPlayer: () => ({ mana: 100 }), getState: () => ({ effects }) } as unknown as BotSDK;
+        const bot = { getSpellInfo: (s: Spell) => getSpell(s.internalId) ?? null } as unknown as BotActions;
+        const book = new Spellbook(sdk, bot);
+        const full = book.nuke({ dotted: new Set() })!.range;
+        effects.push({ spellId: 587, isNegative: true });
+        expect(book.nuke({ dotted: new Set() })!.range).toBe(Math.floor(full * 0.65));
     });
 });
