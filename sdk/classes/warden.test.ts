@@ -5,7 +5,7 @@ import { packBehaviors } from '../group/pack';
 import { songKind } from '../group/songs';
 import type { SpellPick } from '../group/spells';
 import { reachOfBuild } from './reach';
-import { BUBBLE_EVERY_MS, bladeturns, bubbleNow, damageAdd, warden } from './warden';
+import { BUBBLE_EVERY_MS, bladeturns, bubbleNow, DAMAGE_ADD_MISSING_MS, damageAdd, damageAddNow, warden } from './warden';
 
 const build = () => reachOfBuild(getBuild('Warden', 'Support')!, 24);
 /** A pick as the Spellbook makes it, from the build's known spells. */
@@ -40,25 +40,36 @@ describe('warden kit', () => {
         expect(bubbleNow({ ...ok, sinceLast: 5000 })).toBe(false);
     });
 
-    test('damageAdd: in a fight it starts the damage chant even when song() would pick endurance', async () => {
+    test('damageAdd: never cast while its effect showed within 12 s, nor twice in 15 s', () => {
+        const at = (o: Partial<Parameters<typeof damageAddNow>[0]>) => damageAddNow({ now: 100_000, seenAt: undefined, castAt: undefined, startedAt: 0, ready: true, ...o });
+        expect(at({})).toBe(true);
+        // A run's first 12 s: it may be pulsing from the round before.
+        expect(at({ startedAt: 95_000 })).toBe(false);
+        // Seen 6 s ago (the gap between two pulses that made song() cancel it in round 145): no cast.
+        expect(at({ seenAt: 94_000 })).toBe(false);
+        expect(at({ seenAt: 100_000 - DAMAGE_ADD_MISSING_MS })).toBe(true);
+        expect(at({ castAt: 90_000 })).toBe(false);
+        expect(at({ ready: false })).toBe(false);
+    });
+
+    test('damageAdd casts Nature\'s Retaliation, not her endurance chant', async () => {
         // The top rank per kind, as Spellbook.songs() gives them.
         const songs = picks().filter(s => songKind(s)).map(s => ({ ...s, kind: songKind(s)! }))
             .filter((s, _, all) => !all.some(o => o.kind === s.kind && o.spell.level > s.spell.level));
         const cast: string[] = [];
-        const memory = new Map<string, any>([['songSince', 0]]);
         const ctx: any = {
             spells: { songs: () => songs },
-            memory,
-            orders: () => ({ phase: 'engage', cc: [] }),
-            members: () => [],
-            me: () => ({ endurancePercent: 20, attacking: false }),
-            settings: {},
+            memory: new Map<string, any>([['damageAddSince', 0]]),
+            me: () => ({ attacking: false }),
             sdk: { getState: () => ({ effects: [] }) },
             bot: { isDead: () => false, castSpell: async (sp: { name: string }) => { cast.push(sp.name); return { success: true }; } },
             doing() {}, result() {},
         };
         expect(await damageAdd().run(ctx)).toBe(true);
         expect(cast).toEqual(["Nature's Retaliation"]);
+        // Right after: no second cast, which would end the pulse.
+        expect(await damageAdd().run(ctx)).toBe(false);
+        expect(cast).toHaveLength(1);
     });
 
     test('in the pack\'s healer list: the group heal above her heals, the damage add and the bubble in her idle turns', () => {

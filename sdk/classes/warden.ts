@@ -1,16 +1,15 @@
 // The standard Warden: a starting point a bot imports into bots/<bot>/character.ts and tunes. The healer's list already
 // heals, buffs and rezzes from whatever the bot knows. What is the class's own:
 // - Her pulsing damage add, Nature's Retaliation (Nurture 19, instant, no power, group within 1500): the healer's list has no
-//   song(), so it was never cast. `damageAdd` is song() with her damage chant alone: song() itself would play her endurance
-//   chant (Attack Unending) in a fight, ahead of damage (songs.ts wantedSongs), and one pulse of hers ends the other.
+//   song(), so it was never cast. `damageAdd` keeps it on, fight or not, and never stops it: song() would play her endurance
+//   chant in a fight (songs.ts wantedSongs), and it recast a running pulse whose effect dropped out between pulses, ending it.
 // - Her group bladeturn, Nature's Shield (Nurture 18, 4 s, 12 % power, every member within 1250, absorbs one melee hit):
 //   buff() keeps it up out of a fight; `bladeturnInFight` puts it back once ours is gone, only while the fight is calm.
 // - Group Revigoration (33-41 to everyone, 3 s) through the Druid kit's groupHeal, when four or more each miss most of it.
 // Her single heals are half a Druid's rate (Major Regeneration 136 per 3.2 s), so a line-up with her as its only healer
 // starts its heals earlier (groups/hibernia/rvr.ts ownMakeUp). learnings/classes/warden.md says why.
 
-import { hammeredBy, song, type TacticsSettings } from '../group/behaviors';
-import type { MemberContext } from '../group/member';
+import { hammeredBy, type TacticsSettings } from '../group/behaviors';
 import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import type { SpellPick } from '../group/spells';
@@ -62,20 +61,48 @@ export const bladeturnInFight = (): Behavior<TacticsSettings> => ({
     },
 });
 
+/** Her damage chant's effect missing this long before she casts it again (a pulse's effect drops out between pulses). */
+export const DAMAGE_ADD_MISSING_MS = 12_000;
+/** At most one cast per this long: a cast at a pulse still running ends it ("You cancel your effect."). */
+export const DAMAGE_ADD_EVERY_MS = 15_000;
+
+/** Cast it now: its effect unseen for DAMAGE_ADD_MISSING_MS (or never seen), our last cast DAMAGE_ADD_EVERY_MS ago, ready. */
+export function damageAddNow(o: { now: number; seenAt: number | undefined; castAt: number | undefined; startedAt: number; ready: boolean }): boolean {
+    const unseenSince = o.seenAt ?? o.startedAt;
+    return o.ready && o.now - unseenSince >= DAMAGE_ADD_MISSING_MS && o.now - (o.castAt ?? -Infinity) >= DAMAGE_ADD_EVERY_MS;
+}
+
 /**
- * song() over her damage chant alone (a pulsing DamageAdd: songs.ts 'damage'): in a fight it starts Nature's Retaliation and
- * keeps it, after the fight it stops it once, as song() does with a song nobody wants. Her speed and endurance chants stay
- * unplayed: the Bard's speed is faster (174 % against 138 %), and a second pulse of hers would end the damage add.
+ * Nature's Retaliation kept on, in a fight and out of one: free, instant, and nothing else of hers needs the pulse slot (her
+ * speed and endurance chants stay unplayed: the Bard's speed is faster, 174 % against 138 %). Never stopped. Round 145: the
+ * shared song() took it for stopped whenever its effect dropped out between pulses for 6 s and cast it again, which ends a
+ * pulse that runs ("You cancel your effect.", twice in one fight). So it is cast only once its effect has been missing for
+ * DAMAGE_ADD_MISSING_MS, at most once per DAMAGE_ADD_EVERY_MS. Swinging, it goes out raw (castSpell would select her and drop
+ * the swing's target), as song() does.
  */
 export function damageAdd(): Behavior<TacticsSettings> {
-    const inner = song();
     return {
-        ...inner,
         name: 'damageAdd',
-        run(ctx) {
-            const spells = Object.create(ctx.spells, { songs: { value: () => ctx.spells.songs().filter(s => s.kind === 'damage') } });
-            const view = Object.create(ctx, { spells: { value: spells } }) as MemberContext<TacticsSettings>;
-            return inner.run(view);
+        interruptible: false,
+        async run(ctx) {
+            if (ctx.bot.isDead()) return false;
+            const sp = ctx.spells.songs().find(s => s.kind === 'damage');
+            if (!sp) return false;
+            const now = Date.now();
+            const startedAt: number = ctx.memory.get('damageAddSince') ?? now;
+            ctx.memory.set('damageAddSince', startedAt);
+            if ((ctx.sdk.getState()?.effects ?? []).some(e => e.name === sp.spell.name)) ctx.memory.set('damageAddSeen', now);
+            if (!damageAddNow({ now, seenAt: ctx.memory.get('damageAddSeen'), castAt: ctx.memory.get('damageAddCast'), startedAt, ready: sp.spell.cooldownRemaining <= 0 })) return false;
+            ctx.memory.set('damageAddCast', now);
+            ctx.doing('song', null, sp.spell.name);
+            if (ctx.me().attacking) {
+                if (sp.spell.skillIndex !== undefined) await ctx.sdk.sendUseSkill(sp.spell.skillIndex);
+                else await ctx.sdk.sendCastSpell(sp.spell.lineIndex, sp.spell.spellIndex);
+                ctx.result('damageAdd', { success: true, message: `${sp.spell.name} (sent while swinging)` });
+                return false;
+            }
+            ctx.result('damageAdd', await ctx.bot.castSpell(sp.spell));
+            return true;
         },
     };
 }
