@@ -161,6 +161,16 @@ export const reachHurt = (): Behavior<TacticsSettings> => ({
     },
 });
 
+/** `inner` out of a fight, or in one only while every living member in our region is at or above `hp` %. Quiet. */
+export const whileCalm = <S>(inner: Behavior<S>, hp: number): Behavior<S> => ({
+    ...inner,
+    run: ctx => {
+        if (!ctx.threats().length) return inner.run(ctx);
+        const region = ctx.members().find(m => m.name === ctx.name)?.regionId;
+        return ctx.members().some(m => !m.isDead && m.regionId === region && m.hp < hp) ? false : inner.run(ctx);
+    },
+});
+
 /** `inner` at most once per `ms` (counted from a turn it acted), quietly between. */
 export const atMostEvery = <S>(inner: Behavior<S>, ms: number): Behavior<S> => ({
     ...inner,
@@ -189,7 +199,8 @@ export function druid({ dotsAbove, groupHealMin = 3, groupHealAbove = 25 }: Drui
         // Not while any enemy aims at her either (round 62: 2 of 2 cures interrupted by spells, 12 s of her time).
         // A hurt member beyond her heals' 2000 is "nothing to do" for heal(): walk into reach (round 76: idle 57 %, 8 deaths).
         // Round 81: 4 cures (120 of her 197 power), then 34 turns of "heal: not enough power": above 60 %, one per 20 s.
-        react: [reachHurt(), quietlyAbove(atMostEvery(unlessAimedAt(unlessHammered(cureNearsight())), 20_000), 60)],
+        // Round 83: still 3 cures (18 s of casting) against 3 heals in a 105 s wipe: in a fight only while nobody is under 85 %.
+        react: [reachHurt(), quietlyAbove(atMostEvery(whileCalm(unlessAimedAt(unlessHammered(cureNearsight())), 85), 20_000), 60)],
         ...(dotsAbove === undefined ? {} : { fight: [thrifty(assist(), dotsAbove)] }),
     };
 }
