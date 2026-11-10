@@ -86,3 +86,6 @@ From runs with no pets: `--pet.enabled=false` is the run to compare with.
 **To look for:** his interrupts, deaths and in-melee share against round 5 (5, 1, 31 %), and `flee` turns that name the tank.
 
 **Arena round 14** (Camelot wiped Midgard 5/0): top damage at 1892, no deaths, 3 interrupts. He was targeted 46 % and in melee 54 % of fight time, so flee's circling round Galahad kept him alive rather than out of reach.
+
+**Arena rounds 101-106:** six straight Camelot wins, three over Hibernia (5/2, 5/0, 5/0) and three over Midgard (5/1, 4/3 cap, 5/0). Taliesin dealt 1010-2666 a round (2666 in the 371 s round 104) and died once in six rounds.
+
