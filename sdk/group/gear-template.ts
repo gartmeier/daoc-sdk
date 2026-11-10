@@ -37,6 +37,9 @@ export const SKILL_PROPERTY: Record<string, number> = {
     Darkness: 60, Suppression: 61, Summoning: 98, Chants: 22, Slash: 44, Enhancement: 30, Rejuvenation: 42,
     'Mind Magic': 38, 'Body Magic': 21, 'Matter Magic': 37, 'Spirit Magic': 47, 'Cold Magic': 34, 'Earth Magic': 29, 'Wind Magic': 51,
     Blades: 72, Regrowth: 77, Nurture: 78, Music: 80, Light: 65, Mentalism: 76, Mana: 67,
+    // The bench classes (2026-11-10): eProperty.cs Skill_*.
+    Polearm: 41, 'Two Handed': 20, Staff: 48, Hammer: 53, 'Left Axe': 55, Stormcalling: 63, Runecarving: 62,
+    'Celtic Dual': 81, Blunt: 73, 'Fire Magic': 32,
 };
 /** A skill bonus is wasted on a line left at 1. */
 const TRAINED = 2;
@@ -68,8 +71,12 @@ interface ClassKit {
     twoHand?: number;
     /** Type_Damage on a shield is its size. */
     shield?: 1 | 2 | 3;
+    /** A weapon for the left hand, for a dual wielder (instead of a shield). */
+    offHand?: number;
+    /** A staff is a focus, unless the class swings it (a Friar). */
+    focus?: false;
 }
-const { Chain, Plate, Scale, Reinforced, Cloth, Axe, Hammer, SlashingWeapon, CrushingWeapon, Blades, Blunt, Staff } = ObjectType;
+const { Chain, Plate, Scale, Reinforced, Studded, Leather, Cloth, Axe, Hammer, SlashingWeapon, CrushingWeapon, Blades, Blunt, Staff, PolearmWeapon, LeftAxe } = ObjectType;
 const MELEE = ['STR', 'DEX', 'CON', 'QUI'] as const;
 const SMALL = 1, MEDIUM = 2, LARGE = 3;
 export const CLASS_KITS: Record<string, ClassKit> = {
@@ -88,13 +95,27 @@ export const CLASS_KITS: Record<string, ClassKit> = {
     Bard: { armor: Reinforced, stats: ['CHA', 'DEX', 'CON'], mainHand: Blunt, shield: SMALL },
     Mentalist: { armor: Cloth, stats: ['INT', 'DEX', 'CON'], twoHand: Staff },
     Enchanter: { armor: Cloth, stats: ['INT', 'DEX', 'CON'], twoHand: Staff },
+    // The bench classes (2026-11-10). Armour: the best the class's AlbArmor/HibArmor/MidArmor ability reaches by 24
+    // (data/generated/specializations.json): Armsman plate at 15, Friar the Acolyte's leather, Blademaster the Guardian's
+    // reinforced, Warden scale at 20, Berserker the Viking's studded, Thane chain at 12. Shield sizes from the Shield ability.
+    // Armsman: a slash polearm held (its floor reads Slash, data/builds/armsman.ts), sword and large shield in the bag.
+    Armsman: { armor: Plate, stats: MELEE, mainHand: SlashingWeapon, twoHand: PolearmWeapon, shield: LARGE },
+    Friar: { armor: Leather, stats: [...MELEE, 'PIE'], twoHand: Staff, focus: false },
+    Wizard: { armor: Cloth, stats: ['INT', 'DEX', 'CON'], twoHand: Staff },
+    // Celtic Dual 21 is the build's damage; its Shields 13 has no Slam yet (42), so a second blade over a shield.
+    Blademaster: { armor: Reinforced, stats: MELEE, mainHand: Blades, offHand: Blades },
+    Warden: { armor: Scale, stats: ['EMP', 'DEX', 'CON'], mainHand: Blades, shield: MEDIUM },
+    Eldritch: { armor: Cloth, stats: ['INT', 'DEX', 'CON'], twoHand: Staff },
+    Berserker: { armor: Studded, stats: MELEE, mainHand: Hammer, offHand: LeftAxe },
+    Thane: { armor: Chain, stats: [...MELEE, 'PIE'], mainHand: Hammer, shield: MEDIUM },
+    Runemaster: { armor: Cloth, stats: ['PIE', 'DEX', 'CON'], twoHand: Staff },
 };
 
 const ARMOR_SLOTS = [EquipmentSlot.Head, EquipmentSlot.Hands, EquipmentSlot.Feet, EquipmentSlot.Torso, EquipmentSlot.Legs, EquipmentSlot.Arms] as const;
 const ARMOR_NAMES = ['Helm', 'Gloves', 'Boots', 'Hauberk', 'Leggings', 'Sleeves'];
 /** Each piece's resists, one piece to a resist so that a delve reads plainly. */
 const ARMOR_RESISTS: (keyof typeof RESISTS)[][] = [['Crush', 'Slash'], ['Thrust', 'Heat'], ['Cold'], ['Matter', 'Body'], ['Spirit'], ['Energy']];
-const ARMOR_ABS: Record<number, number> = { [Cloth]: 0, [Chain]: 27, [Scale]: 27, [Reinforced]: 19, [Plate]: 34 };
+const ARMOR_ABS: Record<number, number> = { [Cloth]: 0, [Leather]: 10, [Studded]: 19, [Chain]: 27, [Scale]: 27, [Reinforced]: 19, [Plate]: 34 };
 /** About half of real weights: a replaced set rides in the backpack until the next sale. */
 const ARMOR_WEIGHT = [16, 16, 16, 40, 28, 24];
 const CLOTH_WEIGHT = 10;
@@ -108,6 +129,9 @@ const MODELS: Record<string, readonly number[]> = {
     [`${Plate}/albion`]: [93, 89, 90, 46, 87, 88],
     [`${Scale}/hibernia`]: [840, 431, 432, 428, 429, 430],
     [`${Reinforced}/hibernia`]: [835, 386, 387, 383, 384, 385],
+    // The most common model per slot in data/generated/items.json.
+    [`${Leather}/albion`]: [62, 137, 138, 134, 37, 136],
+    [`${Studded}/midgard`]: [831, 273, 274, 270, 271, 272],
 };
 const MAIN_HANDS: Record<number, WeaponLook> = {
     [Axe]: { model: 319, speed: 38, weight: 30, damage: 2, name: 'Axe' },
@@ -120,6 +144,12 @@ const MAIN_HANDS: Record<number, WeaponLook> = {
 const TWO_HANDS: Record<number, WeaponLook> = {
     [Axe]: { model: 9, speed: 52, weight: 45, damage: 2, name: 'Greataxe' },
     [Staff]: { model: 19, speed: 46, weight: 45, damage: 1, name: 'Staff' },
+    [PolearmWeapon]: { model: 68, speed: 48, weight: 50, damage: 2, name: 'Halberd' },
+};
+/** Left-hand weapons, Hand 2, from the DB's most common looks. */
+const OFF_HANDS: Record<number, WeaponLook> = {
+    [LeftAxe]: { model: 316, speed: 27, weight: 25, damage: 2, name: 'Left Axe' },
+    [Blades]: { model: 444, speed: 27, weight: 18, damage: 2, name: 'Offhand Blade' },
 };
 interface WeaponLook { model: number; speed: number; weight: number; damage: number; name: string }
 const SHIELDS = {
@@ -165,9 +195,11 @@ export interface TemplatePiece {
 const evenly = (total: number, n: number) => Array.from({ length: n }, (_, i) => Math.floor(total / n) + (i < total % n ? 1 : 0));
 
 /** A class's whole template at a level, for the lines its build target trains. */
-export function templateFor(className: string, realm: Realm, level: number, specs: Record<string, number>): TemplatePiece[] {
+export function templateFor(shownName: string, realm: Realm, level: number, specs: Record<string, number>): TemplatePiece[] {
+    const classInfo = getClass(shownName, realm);
+    // A female character's class shows under its female name (Armswoman, Sorceress): the kit goes by the class.
+    const className = classInfo?.name ?? shownName;
     const kit = CLASS_KITS[className];
-    const classInfo = getClass(className, realm);
     if (!kit || !classInfo) throw new Error(`no gear template for ${className}`);
     const models = MODELS[`${kit.armor}/${realm}`];
     if (!models) throw new Error(`no armour models for type ${kit.armor} in ${realm}`);
@@ -209,10 +241,15 @@ export function templateFor(className: string, realm: Realm, level: number, spec
         const s = SHIELDS[kit.shield];
         weapons.push({ ...base, id: id(EquipmentSlot.LeftHand), slot: EquipmentSlot.LeftHand, itemType: EquipmentSlot.LeftHand, objectType: ObjectType.Shield, name: `${label} ${s.name}`, dpsAf: caps.dpsAf, spdAbs: s.speed, hand: 2, damageType: kit.shield, weight: s.weight, model: s.model, bonuses: [] });
     }
+    if (kit.offHand) {
+        if (kit.shield) throw new Error(`${className}: a shield and an off-hand weapon share the left hand`);
+        const w = OFF_HANDS[kit.offHand]!;
+        weapons.push({ ...base, id: id(EquipmentSlot.LeftHand), slot: EquipmentSlot.LeftHand, itemType: EquipmentSlot.LeftHand, objectType: kit.offHand, name: `${label} ${w.name}`, dpsAf: caps.dpsAf, spdAbs: w.speed, hand: 2, damageType: w.damage, weight: w.weight, model: w.model, bonuses: [] });
+    }
     if (kit.twoHand) {
         const w = TWO_HANDS[kit.twoHand]!;
         // A focus at a spell's level gives the full discount (SpellHandler.cs:1204-1222), and no spell of a line goes above the character's level.
-        const focus = kit.twoHand === Staff ? [{ property: ALL_FOCUS_LEVELS, value: level }] : [];
+        const focus = kit.twoHand === Staff && kit.focus !== false ? [{ property: ALL_FOCUS_LEVELS, value: level }] : [];
         weapons.push({ ...base, id: id(EquipmentSlot.TwoHand), slot: EquipmentSlot.TwoHand, itemType: EquipmentSlot.TwoHand, objectType: kit.twoHand, name: `${label} ${w.name}`, dpsAf: caps.dpsAf, spdAbs: w.speed, hand: 1, damageType: w.damage, weight: w.weight, model: w.model, bonuses: focus });
     }
     return [...armor, ...accessories, ...weapons];

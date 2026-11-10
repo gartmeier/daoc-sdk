@@ -335,5 +335,13 @@ export interface GroupDefinition {
     name: string;
     /** Bot whose control connection a group script opens first (default: the first member). */
     leader?: string;
-    members: { bot: string; role?: Role }[];
+    members: GroupEntry[];
+    /** Bots of the group that sit out: the same shape as members. A line-up moves bots between the two (sdk/group/lineup.ts). */
+    bench?: GroupEntry[];
+}
+
+/** One entry of group.json's members or bench. */
+export interface GroupEntry {
+    bot: string;
+    role?: Role;
 }

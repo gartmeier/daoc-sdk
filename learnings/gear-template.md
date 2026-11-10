@@ -29,6 +29,15 @@ Left out on purpose: casting speed (cap 10 %), melee speed (10 %), fatigue, spel
 - **Accessories (eight pieces):** the stats that matter to the class, each 18 + 18 on two pieces, 5 on each line the build trains above 1, the AF bonus, and for a class with power 13 power and 12 pool.
 - **Stats by class:** melee STR DEX CON QUI, plus its power stat for a Paladin or Skald; everyone else its power stat, DEX and CON. `CLASS_KITS` holds it. A character's stat line then reads base plus exactly 36.
 - **Weapons:** DPS 84 and quality 100 on the class's own type. Warrior, Paladin and Hero one-hander and large shield; Skald axe, small shield and greataxe (held, as before); Cleric mace and medium shield; Healer and Shaman hammer and small shield; Druid and Bard club and small shield.
+- **The bench classes (2026-11-10, not yet worn live):** armour is the best the class's AlbArmor/HibArmor/MidArmor ability reaches by 24 (`data/generated/specializations.json`), shield sizes from its Shield ability.
+  - Armsman: plate, a slash halberd held (a polearm's damage floor reads the 1H line of its damage type, `data/builds/armsman.ts`), with a sword and large shield.
+  - Friar: leather, a staff with no focus bonus (`focus: false`: he swings it), stats STR DEX CON QUI PIE.
+  - Blademaster: reinforced, blade and an off-hand blade, no shield: Celtic Dual 21 is the build's damage and its Shields 13 has no Slam yet.
+  - Warden: scale, blade and medium shield. Thane: chain, hammer and medium shield, stats with PIE.
+  - Berserker: studded, hammer and a left axe.
+  - Wizard, Eldritch, Runemaster: cloth and a focus staff.
+  - An off-hand weapon (`offHand`) goes in the left hand with Hand 2, so a kit has either it or a shield.
+  - A female character's class name (Armswoman) finds the kit by the class.
 - **Focus casters:** a staff with ALL Spell Lines 24, no shield or right hand: they don't have the skill.
 - **No bonuses on weapons but the focus:** so the totals don't depend on which weapon is out.
 - **The Bard keeps Bard Initiate Lute.** A song only needs an instrument out (`SpellHandler.cs` `CheckInstrument`). Wearing the club puts it away, and `bot.takeMeleeSlot`, the SDK's weapon switch, only takes melee weapons in hand, so the script takes the lute off and puts it on again last.

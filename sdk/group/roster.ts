@@ -13,18 +13,51 @@ import type { GroupDefinition, Role } from './types';
 
 const ROLES: readonly Role[] = ['tank', 'healer', 'support', 'nuker', 'melee'];
 
-/** Read and check groups/<name>/group.json. */
-export function loadGroup(dir: string): GroupDefinition {
+/** The bots a `--lineup=a,b,c` argument names, or undefined without one. */
+export function lineupArg(argv: readonly string[] = process.argv): string[] | undefined {
+    const arg = argv.find(a => a.startsWith('--lineup='));
+    return arg ? arg.slice('--lineup='.length).split(',').map(s => s.trim()).filter(Boolean) : undefined;
+}
+
+/**
+ * Read and check groups/<name>/group.json. `members` play, `bench` sits out.
+ *
+ * `lineup` (when not given: a `--lineup=a,b,c` in process.argv) picks those bots out of members and bench as the members, the
+ * rest go to the bench, and the leader stays if it plays, else the first of the line-up leads. That is for the group
+ * scripts that only act on bots (gear-template, train, battleground, ...): a run that publishes to the gateway (hunt, rvr)
+ * is checked against the group.json on disk, so its line-up must be written there first (lineup.ts writeLineup).
+ */
+export function loadGroup(dir: string, opts: { lineup?: readonly string[] } = {}): GroupDefinition {
     const path = join(dir, 'group.json');
     if (!existsSync(path)) throw new Error(`no group.json in ${dir}; create one with: bun groups/create-group.ts <group> <bot> <bot> ...`);
     const def = JSON.parse(readFileSync(path, 'utf-8')) as GroupDefinition;
     if (!Array.isArray(def.members) || !def.members.length) throw new Error(`${path}: "members" must list at least one { "bot": "<name>" }`);
-    for (const m of def.members) {
+    if (def.bench !== undefined && !Array.isArray(def.bench)) throw new Error(`${path}: "bench" must be a list of { "bot": "<name>" }`);
+    const seen = new Set<string>();
+    for (const m of [...def.members, ...(def.bench ?? [])]) {
         if (!m.bot || !findBotEnv(m.bot)) throw new Error(`${path}: no bots/${m.bot}/bot.env`);
         if (m.role && !ROLES.includes(m.role)) throw new Error(`${path}: ${m.bot} has role "${m.role}"; use one of ${ROLES.join(', ')}`);
+        if (seen.has(m.bot)) throw new Error(`${path}: ${m.bot} is listed twice (members and bench hold each bot once)`);
+        seen.add(m.bot);
     }
     if (def.leader && !def.members.some(m => m.bot === def.leader)) throw new Error(`${path}: leader ${def.leader} is not a member`);
-    return { ...def, name: def.name || basename(dir) };
+    const out: GroupDefinition = { ...def, name: def.name || basename(dir) };
+    // `{ lineup: undefined }` reads group.json as it is, whatever the command line says.
+    const lineup = 'lineup' in opts ? opts.lineup : lineupArg();
+    if (!lineup) return out;
+    return applyLineup(out, lineup, path);
+}
+
+/** The group with `lineup` as its members, in that order, and everyone else on the bench. */
+export function applyLineup(def: GroupDefinition, lineup: readonly string[], where = def.name): GroupDefinition {
+    const all = [...def.members, ...(def.bench ?? [])];
+    const unknown = lineup.filter(b => !all.some(m => m.bot === b));
+    if (unknown.length) throw new Error(`${where}: line-up ${unknown.join(', ')} not in members or bench`);
+    if (!lineup.length) throw new Error(`${where}: an empty line-up`);
+    const members = lineup.map(b => all.find(m => m.bot === b)!);
+    const bench = all.filter(m => !lineup.includes(m.bot));
+    const leader = def.leader && lineup.includes(def.leader) ? def.leader : lineup[0]!;
+    return { ...def, leader, members, bench };
 }
 
 /** A control (or observe) connection to a bot by name, requiring a live client. */
