@@ -19,13 +19,16 @@ export const STUN_IMMUNE_MS = 60_000;
 /** When our stun last landed on each target, by object id. One per bot: the kit is made once per character. */
 export type StunLog = Map<number, number>;
 
-/** Record our last swing if it landed a stun: "You perform your X perfectly!" on a styled hit (lastStyleLanded), at the target that swing hit. */
-export function noteStun(log: StunLog, state: BotWorldState, me: number): void {
+/**
+ * Record our last swing if it landed a stun: "You perform your X perfectly!" on a styled hit (lastStyleLanded), at the target
+ * that swing hit. `stuns` names the stun styles and their lengths (the Blademaster kit passes its own).
+ */
+export function noteStun(log: StunLog, state: BotWorldState, me: number, stuns: Readonly<Record<string, number>> = HERO_STUNS): void {
     const name = lastStyleLanded(state, me);
-    if (!name || !(name in HERO_STUNS)) return;
+    if (!name || !(name in stuns)) return;
     const swing = state.combatEvents.filter(e => e.kind === 'melee' && e.attackerObjectId === me).at(-1);
     if (!swing?.targetObjectId) return;
-    const ends = swing.receivedAt + HERO_STUNS[name]!;
+    const ends = swing.receivedAt + stuns[name]!;
     if ((log.get(swing.targetObjectId) ?? 0) < ends) log.set(swing.targetObjectId, ends);
 }
 
