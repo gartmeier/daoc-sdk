@@ -25,6 +25,8 @@ In `rvrRoaming`, which is what Midgard runs, the list keeps `tank` and this repl
 
 **Round 22 (2026-11-10, vs Camelot, won by wipe 5 / 1):** Disable landed twice, his first stun style in any round, beside Pillager 3; 1321 damage, no death.
 
+**Stuns once per immunity (2026-11-11, Midgard session):** the kit's style is now the Hero kit's `heroStyle` ([hero.md](hero.md)), on the tank's fight. At Shields 18 a Warrior has the Hero's Numb, Stun, Disable and Incapacitate under the same names (a test holds it), so against a player off stun immunity the next swing is Incapacitate after a block, else Disable from the side with Numb behind it; between stuns the reacting tank's pick as before. Why: rounds 4-119 landed Disable once or twice in a few rounds, while the Hero on `heroStyle` lands a stun every round, and a stun stops a cast for certain. The cost is Pillager's attack slow and 15 endurance a stun. Not measured on him yet: his stuns, Pillager and damage per round in the next rounds he plays.
+
 **Not played.** To look for: landed reactions in the log, his damage a minute and his endurance. Pillager's slow goes on less often if reactions land instead.
 
 ## Builds
@@ -88,7 +90,7 @@ In `rvrRoaming`, which is what Midgard runs, the list keeps `tank` and this repl
 **Proven:** Thorgrim is the group's steadiest damage (1100-3600 a round) with Pillager and Plunderer. **Positionals against players**, through the shared `fighterStyle` reading a player's last swing (22fa45a): Disable landed in rounds 22 and 52, Cleave and Valkyrie's Shield now and then.
 
 **Open:**
-- **Shield stuns are rare** (Disable 1-2 in a few rounds). Whether a stun opener on a caster focus would beat the damage style is untested.
+- **Shield stuns are rare** (Disable 1-2 in a few rounds). Whether a stun opener on a caster focus would beat the damage style is untested. Since 2026-11-11 the kit swings them (`heroStyle`); to compare: his damage and the group's kill time against rounds 4-119.
 - He is the enemy's main target in many rounds (targeted 50-90 %) and dies with little damage then (rounds 81, 106, 115). That is peel and focus, the group's.
 
 ## Not supported yet
