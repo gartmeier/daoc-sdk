@@ -12,6 +12,8 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 
 **Round 22 (2026-11-10, vs Camelot, won by wipe 5 kills / 1 death; with the group's standStep 1000):** idle 0 % (39 % in round 20), 14 nukes, 2039 damage, first nuke 3.1 s; 5 `nuke:out_of_range` and 3 interrupted. Whether the out-of-range ones are `assist`'s or `nukeInReach`'s the report doesn't say; if they keep coming, widen RANGE_MARGIN.
 
+**Round 27 (vs Camelot, wiped 2 / 5, one fight of 229 s):** moving 73 %, targeted 73 %, 4 nukes, 1 out of range. Against round 22 (moving 52 %, targeted 19 %) the group's longer step may walk her into their casters; told the group session.
+
 Before that the kit held only the role. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.
 
 In PvE, Midgard's `memberBehaviors.hrafna` (the nuker's list plus `restOnPull`) overrides any character. In RvR nothing does.
