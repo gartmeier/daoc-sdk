@@ -100,7 +100,7 @@ describe('mentalist builds, as the guide tells them', () => {
     });
 });
 
-describe('the server's "too far"', () => {
+describe('the server "too far"', () => {
     test('holds 10 s, unless our view puts the target 200 nearer than when it was said', () => {
         const log: TooFar = new Map();
         noteTooFar(log, 7, 'resisted', 1300, 0);
