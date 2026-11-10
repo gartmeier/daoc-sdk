@@ -120,3 +120,5 @@ From round 11 the kit's fight is `nukerFight(0, true)` from `sdk/classes/cabalis
 ## Quickcast (from the round after 28)
 
 Niamh has the Quickcast ability (`bun sdk/cli.ts niamh`): the next spell can't be interrupted, at twice its power, then 30 s before the next (`QuickCastAbilityHandler.cs`; Albion class session, 1f05f78). Her kit's `instant` slot, above `flee`: `quickFlash` first, Quickcast and Prismatic Flash on the melee hitting her (`hammeredBy`), not on one stun-immune or crowd-controlled, within range less 150; then the Cabalist kit's `quickcastUnderFire` (her cc assignment, else her nuke on the focus) when the Flash can't go. They share one 31 s timer. Round 15 is why: dived 51 % of the fight with nothing to answer with.
+
+**Verified, arena round 30** (wiped Camelot 5-0): the first round with Quickcast. Niamh used it once (`quickcast` 1) among 3 stuns and 13 nukes, 1,675 damage, never in melee long (0 % of the fight).
