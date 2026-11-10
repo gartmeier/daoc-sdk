@@ -995,12 +995,23 @@ const CC_FAR_REST_MS = 8000;
 
 /** Where a caster steps to bring `focus` in range, or null when it is too far off or the step ends next to a free enemy. */
 export function standStepTo(me: Point, focus: Point & { distance: number }, range: number, step: number, contacts: readonly Contact[]): Point | null {
+    const s = standStep(me, focus, range, step, contacts);
+    return 'to' in s ? s.to : null;
+}
+
+/**
+ * standStepTo with the reason it gives none: 'far' (no standStep, or the focus beyond range + standStep) or 'enemies' (a free
+ * enemy player within STEP_CLEAR of the step's end). assist's skip names which, as the two read the same in a report: Hibernia's
+ * Enchanter idled 8-30 % of fights against Albion on "focus out of reach, holding ground" (arena 2026-11-09/10), and nothing
+ * there could say whether the step's clearance or the distance held him (learnings/classes/enchanter.md).
+ */
+export function standStep(me: Point, focus: Point & { distance: number }, range: number, step: number, contacts: readonly Contact[]): { to: Point } | { none: 'far' | 'enemies' } {
     const need = focus.distance - range + 100;
-    if (step <= 0 || need > step) return null;
+    if (step <= 0 || need > step) return { none: 'far' };
     const d = dist(me, focus);
-    if (d < 1) return null;
+    if (d < 1) return { none: 'far' };
     const to = { x: me.x + (focus.x - me.x) * need / d, y: me.y + (focus.y - me.y) * need / d };
-    return contacts.some(c => c.kind === 'player' && !c.stale && alive(c) && !c.cc && dist(c, to) <= STEP_CLEAR) ? null : to;
+    return contacts.some(c => c.kind === 'player' && !c.stale && alive(c) && !c.cc && dist(c, to) <= STEP_CLEAR) ? { none: 'enemies' } : { to };
 }
 /** A step in stays this far from any free enemy player. */
 const STEP_CLEAR = 500;
@@ -1581,10 +1592,10 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
                 const stand = !!ctx.settings.standGround || opts.holdGround !== undefined;
                 if (stand && seen.distance > sp.range) {
                     // Just out of reach: a short step in, unless that means walking onto enemies (standStep). Further: hold.
-                    const step = standStepTo(ctx.me(), seen, sp.range, opts.holdGround ?? ctx.settings.standStep ?? 0, ctx.picture().contacts);
-                    if (!step) return skipping('assist: focus out of reach, holding ground', mob.objectId);
+                    const step = standStep(ctx.me(), seen, sp.range, opts.holdGround ?? ctx.settings.standStep ?? 0, ctx.picture().contacts);
+                    if (!('to' in step)) return skipping(step.none === 'enemies' ? 'assist: focus out of reach, enemies by the step' : 'assist: focus out of reach, holding ground', mob.objectId);
                     ctx.doing('move', mob.objectId, 'step in range');
-                    noteWet(ctx, mob.objectId, await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 }));
+                    noteWet(ctx, mob.objectId, await ctx.bot.walkTo(step.to.x, step.to.y, { tolerance: 40, timeout: 3000 }));
                     return true;
                 }
                 await stopSwinging(ctx);

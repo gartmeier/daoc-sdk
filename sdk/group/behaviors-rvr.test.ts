@@ -1069,6 +1069,23 @@ describe('assist after the server\'s "too far" twice', () => {
     });
 });
 
+describe('assist holding ground: the skip says whether the distance or an enemy by the step held it', () => {
+    // Hibernia's Enchanter idled on "focus out of reach, holding ground" against Albion and the report couldn't say which (STEP_CLEAR).
+    const run = async (contacts: Contact[]) => {
+        const s = stub({ name: 'Ciaran', role: 'nuker', at: { x: 10_000, y: 10_000 }, contacts, orders: { focus: 51 }, settings: { ...LEASHED, standGround: true, standStep: 900 } as TacticsSettings });
+        Object.assign(s.ctx.spells, { nuke: () => ({ spell: { name: 'Deceiving Rapture' }, type: 'DirectDamage', range: 1500, castTime: 2.8 }), capabilities: () => ({ nuke: true }) });
+        await assist().run(s.ctx);
+        return s;
+    };
+    test('a free enemy within 500 of the step\'s end, the focus beyond range + standStep, or a step', async () => {
+        expect((await run([foe(51, 11_800, 10_000), foe(52, 10_500, 10_200)])).skips.at(-1)).toBe('assist: focus out of reach, enemies by the step');
+        expect((await run([foe(51, 12_600, 10_000)])).skips.at(-1)).toBe('assist: focus out of reach, holding ground');
+        // A mezzed one is no reason to stay: the step goes.
+        const stepped = await run([foe(51, 11_800, 10_000), foe(52, 10_500, 10_200, { cc: { by: 'Oisin', kind: 'mezz', until: Date.now() + 10_000 } })]);
+        expect(stepped.skips).toEqual([]);
+    });
+});
+
 describe('a target beyond the bank (dry move guard, reason \'water\'): left 8 s, not retried every turn', () => {
     const water = async () => ({ success: false, reason: 'water', message: '(11000, 10000) is in deep water: holding at the bank' });
     test('assist leaves the swimming focus', async () => {
