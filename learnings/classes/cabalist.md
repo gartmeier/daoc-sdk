@@ -121,3 +121,6 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 **Arena round 99** (Hibernia wiped Camelot 0/5, the first round with engage-only nearsight): Hibernia's focus was still "Briton#481 (100% caster)" 1 s after the engage, and Morgana died first at +28 s. Keeping nearsight off the approach didn't change their pick. She's flagged within a second of the engage anyway, and nearness to their centre decides the rest. Her formation slot is the group's lever.
 
 **After round 99:** `nearsight` takes the group's focus right after the marked mezzer when that focus is a caster or healer, which is Camelot's Lurikeen focus against Hibernia.
+
+**Arena round 101** (Camelot wiped Hibernia 5/2 in 130 s; the first round with the group's Lurikeen focus and the kits' focus-first nearsight and stun): Morgana survived, with 1689 damage, 17 nukes and 4 nearsights. Merlin cured 7 and cast 10 debuffs. Only Galahad and Merlin died. This was after five straight losses to Hibernia (rounds 91-99).
+
