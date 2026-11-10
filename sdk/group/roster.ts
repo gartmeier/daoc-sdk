@@ -132,6 +132,15 @@ export async function formGroup(members: Member[], leaderBot?: string): Promise<
     const leader = members.find(m => m.bot === leaderBot) ?? members[0]!;
     const name = (m: Member) => m.sdk.getPlayer()?.name ?? m.bot;
     const out: string[] = [];
+    // In a group someone else leads (the line-up's leader changed, or the old one left and the server passed it on):
+    // every invite is refused with "You are not the leader of your group". Leave it; the members follow below.
+    // The server lists the leader first in the group window (Group.MakeLeader keeps it at index 0).
+    const own = leader.sdk.getGroup();
+    if (own.length > 1 && own[0]!.name !== name(leader)) {
+        await leader.sdk.sendCommand('/disband');
+        await leader.sdk.waitForCondition(s => s.group.length === 0, 3000).catch(() => null);
+        out.push(`${name(leader)}: left ${own[0]!.name}'s group to lead`);
+    }
     for (const m of members) {
         if (m === leader) continue;
         if (leader.sdk.getGroup().some(g => g.name === name(m))) continue;
