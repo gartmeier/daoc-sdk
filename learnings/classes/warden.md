@@ -55,6 +55,8 @@ Thidranki Warden Blade and a medium shield, 621 health in scale. Blades 10: Glow
 
 **Before the kit** (generic healer list): round 121 (2026-11-10) 2 heals, 3 interrupted, died; round 123 6 heals, 9 buffs, idle 26 %, moving 61 %.
 
+**With the kit** (2026-11-10 night): rounds 126 (solo, not grouped), 128 (only healer: 7 heals, idle 37 %, two deaths), 131, 135, 136 (beside the Druid: idle 46-55 %, 4-11 heals, no deaths; won all three). The damage add started and stopped once a fight in 126-135.
+
 ## Open
 
 - Not yet played with the kit: the damage add, the bubble in fights, Group Revigoration at four.
@@ -62,3 +64,4 @@ Thidranki Warden Blade and a medium shield, 621 health in scale. Blades 10: Glow
 - Major Regeneration over Regrowth for a member missing more than ~110 (`pickHeal` ties them).
 - Live check that `buff()` keeps Nature's Shield up out of a fight: her effects on 2026-11-10 showed only her base buffs.
 - Glowing Blade on a diver beside her while a Druid carries the heals.
+- Round 136 shows no damage-add result at all (rounds 126-135: 1-3 a round). `song()` sends an instant song raw while she swings and records no result then, so a report can't tell "never cast" from "cast while swinging". A note on that path would settle it.
