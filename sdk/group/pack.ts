@@ -600,9 +600,31 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // Past the stand-off, or a pack that arrives a little short stays out of it for good.
     const f = (d - (k.openAt - 100)) / d;
     const goal = { x: centre.x + (lead.x - centre.x) * f, y: centre.y + (lead.y - centre.y) * f };
+    // A leg counts as reached with every member within 1200 of it (rvr.ts LEG_REACHED), so a stalk can stop short of the
+    // stand-off for good: two packs stalking each other stood ~1700 apart for 6 minutes (rounds 125 and 132, 0/0 at the cap).
+    // Not closer by STALK_GAIN for STALK_STALL_MS near it: the anchor goes straight to the goal, as at the stand-off, unless
+    // that is in water. It holds until the stand-off takes over, the lead changes, or the stalk is left.
+    if (d <= k.standoff + STALK_STALL_BAND) {
+        if (now - (mem.stalkSeen ?? -Infinity) > 5000 || mem.stalkLead !== lead.objectId) {
+            mem.stalkLead = lead.objectId; mem.stalkBest = d; mem.stalkBestAt = now; mem.stalkClosing = false;
+        }
+        mem.stalkSeen = now;
+        if (d < mem.stalkBest - STALK_GAIN) { mem.stalkBest = d; mem.stalkBestAt = now; }
+        if ((mem.stalkClosing || now - mem.stalkBestAt >= STALK_STALL_MS) && !isWet(regionId, goal)) {
+            mem.stalkClosing = true;
+            const to = { x: Math.round(goal.x), y: Math.round(goal.y) };
+            return say({ ...none, phase: 'travel', anchor: { ...to, z: zAt(to) }, ...(facing ? { facing } : {}), objective: 'stand off', reason: `closing in on ${tag(lead)}, ${Math.round(d)} away: the stalk stalled` });
+        }
+    }
     stepLeg(trip, 'stalk', goal, { from: centre, movers: main, replan: 800 });
     return say({ ...none, phase: 'travel', anchor: legAnchor(mem), ...(facing ? { facing } : {}), objective: `stalk ${seen.length} round (${Math.round(lead.x)}, ${Math.round(lead.y)})`, reason: `stalk ${tag(lead)}, ${Math.round(d)} away, ${crowd} together` });
 }
+
+/** A stalk this near the stand-off (rvr.ts LEG_REACHED) ... */
+const STALK_STALL_BAND = 1200;
+/** ... that got no closer by STALK_GAIN for STALK_STALL_MS closes in on a direct anchor. */
+const STALK_STALL_MS = 10_000;
+const STALK_GAIN = 150;
 
 /** A fan-out step is this long at most (one turn, then it looks again). */
 const FAN_LEG = 500;

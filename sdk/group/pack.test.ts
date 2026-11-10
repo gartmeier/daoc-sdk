@@ -276,6 +276,24 @@ describe('decidePack: stalking', () => {
         expect(distTo(u.anchor!, { x: 11_750, y: 10_000 })).toBeLessThanOrEqual(1500);
     });
 
+    test('a stalk stalled just short of the stand-off closes in on a direct anchor, and the raid opens once in reach', () => {
+        // Rounds 125 and 132: "stalk Celt#440, 1684 away", then nothing for 6 minutes; the legs counted as reached 1200 short.
+        const m: any = {};
+        const first = decidePack(ctx(picture(team(), fiveAt(11_700)), { memory: m, now: 1000 }));
+        expect(first.reason).toContain('stalk');
+        for (const now of [4000, 7000, 10_000]) expect(decidePack(ctx(picture(team(), fiveAt(11_700)), { memory: m, now })).reason).not.toContain('stalled');
+        const stalled = decidePack(ctx(picture(team(), fiveAt(11_700)), { memory: m, now: 12_000 }));
+        expect(stalled.reason).toContain('the stalk stalled');
+        expect(stalled.phase).toBe('travel');
+        expect(distTo(stalled.anchor!, { x: 11_700, y: 10_000 })).toBeLessThanOrEqual(1400);
+        // A stalk that gains ground is left to its legs.
+        const g: any = {};
+        decidePack(ctx(picture(team(), fiveAt(11_700)), { memory: g, now: 1000 }));
+        decidePack(ctx(picture(team({}, { x: 10_100, y: 10_000 }), fiveAt(11_700)), { memory: g, now: 5000 }));
+        decidePack(ctx(picture(team({}, { x: 10_300, y: 10_000 }), fiveAt(11_700)), { memory: g, now: 9000 }));
+        expect(decidePack(ctx(picture(team({}, { x: 10_300, y: 10_000 }), fiveAt(11_700)), { memory: g, now: 12_000 })).reason).not.toContain('stalled');
+    });
+
     test('an enemy within reach opens the raid: anchor on the focus, the nearest, Bard mezzes', () => {
         const m: any = {};
         const u = decidePack(ctx(picture(team(), fiveAt(11_000)), { memory: m }));
