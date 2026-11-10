@@ -273,7 +273,7 @@ export async function runScript(script: ScriptFunction, options: RunOptions = {}
             rawScript = script(ctx);
             return abortable(rawScript);
         });
-        if (timeout) timeoutId = setTimeout(() => executionController.abort(new Error(`Script timeout after ${timeout}ms`)), timeout);
+        if (timeout && Number.isFinite(timeout)) timeoutId = setTimeout(() => executionController.abort(new Error(`Script timeout after ${timeout}ms`)), timeout);
 
         if (onDisconnect !== 'ignore') {
             unsubscribeConnection = sdk.onConnectionStateChange(async state => {

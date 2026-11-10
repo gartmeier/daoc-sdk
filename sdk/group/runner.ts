@@ -5,8 +5,12 @@
 //
 // The run publishes itself to the gateway for the viewer's group page
 // (publish.ts), which can also ask it to wind down early: the timed end, sooner.
+//
+// Field mode: `seconds: Infinity` runs with no end time, until it is wound down or aborted. Such a run keeps
+// its log and its observer bounded (RunBounds, FIELD_BOUNDS), so it can go for hours.
 
-import { basename } from 'path';
+import { appendFileSync, mkdirSync } from 'fs';
+import { basename, join } from 'path';
 import { abortable, executionContext } from '../execution-context';
 import type { BotActions } from '../actions';
 import { gatewayHttpBase, type BotSDK } from '../index';
@@ -18,7 +22,7 @@ import { MemberAgent, type Behavior, type Member, type MemberAgentOptions } from
 import { describeVision, resolveVision, type VisionMode, type VisionOptions } from '../vision';
 import { withCharacter } from './character';
 import { leftPassive, memberPetKit, petAfterRun, petHoldOf, petLeftAlone, petsAllowed, withPets } from './pets';
-import { formatReport, GroupObserver, saveReport, stampOf, type Finding, type RunReport } from './observer';
+import { formatReport, GroupObserver, saveReport, stampOf, type Finding, type ObserverBounds, type RunReport } from './observer';
 import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type PublisherDeps } from './publish';
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
 import { Coordinator, mergeSettings, type GroupStrategy } from './strategy';
@@ -29,8 +33,10 @@ export interface GroupRunOptions<S> {
     /** The group folder: groups/<name>/ with group.json (runs/ is written there). */
     dir: string;
     strategy: GroupStrategy<S>;
-    /** Keep pulling this long; then finish the current fight (up to graceMs) and stop. */
+    /** Keep pulling this long; then finish the current fight (up to graceMs) and stop. Infinity: no end time (field mode), until wound down or aborted. */
     seconds: number;
+    /** What the run keeps in memory (default: everything for a timed run, FIELD_BOUNDS with no end time). */
+    bounds?: RunBounds;
     graceMs?: number;
     /** A member connection the caller already holds (runScript or MCP execute_code). */
     have?: { bot: BotActions; sdk: BotSDK };
@@ -62,16 +68,37 @@ export interface GroupRunResult {
     stoppedBy: 'time' | 'viewer';
 }
 
+/** What a run keeps in memory: the observer's (ObserverBounds), and the log lines held for runs/<stamp>.log. */
+export interface RunBounds extends ObserverBounds {
+    /** Hold at most twice this many log lines: beyond, the oldest this many go to runs/<stamp>.log at once (or nowhere, with save false). */
+    logLines?: number;
+}
+
+/** A run with no end time keeps the last 200 fights, 500 values per median and 2000-4000 log lines. */
+export const FIELD_BOUNDS: Required<RunBounds> = { fights: 200, samples: 500, logLines: 2000 };
+
+/** The bounds a run keeps: the caller's, else FIELD_BOUNDS when it has no end time, else none. */
+export function runBounds(seconds: number, bounds?: RunBounds): RunBounds | undefined {
+    return bounds ?? (Number.isFinite(seconds) ? undefined : FIELD_BOUNDS);
+}
+
 const stamp = () => new Date().toISOString().slice(11, 19);
 const errorText = (e: unknown) => e instanceof Error ? e.message : String(e);
 
-/** Print lines with a time stamp, folding repeats into one "(×N)" line; keep them all for runs/<stamp>.log. */
-function lineLog(print: (line: string) => void) {
+/**
+ * Print lines with a time stamp, folding repeats into one "(×N)" line; keep them for runs/<stamp>.log. With `keep`,
+ * at most 2 × keep.lines stay in `lines`: the oldest keep.lines go to keep.spill, which writes them out ahead of the rest.
+ */
+export function lineLog(print: (line: string) => void, keep?: { lines: number; spill: (lines: string[]) => void }) {
     const lines: string[] = [];
     let last = '', repeats = 0;
     const flush = () => { if (repeats) print(`${stamp()} (×${repeats} more) ${last}`); repeats = 0; };
     const log = (line: string) => {
         lines.push(`${stamp()} ${line}`);
+        if (keep && lines.length >= 2 * keep.lines) {
+            const out = lines.splice(0, keep.lines);
+            try { keep.spill(out); } catch { /* a log that can't be written mustn't end the run */ }
+        }
         if (line === last) { repeats++; return; }
         flush();
         last = line;
@@ -81,7 +108,17 @@ function lineLog(print: (line: string) => void) {
 }
 
 export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunResult> {
-    const out = lineLog(opts.log ?? (line => console.log(line)));
+    const bounds = runBounds(opts.seconds, opts.bounds);
+    // Set below, before the first line can spill: lines held back go to the run's own log file, ahead of what the report adds.
+    let spilled = false;
+    let logFile: string | null = null;
+    const spill = (lines: string[]) => {
+        if (!logFile) return;
+        mkdirSync(join(opts.dir, 'runs'), { recursive: true });
+        appendFileSync(logFile, lines.map(l => `${l}\n`).join(''));
+        spilled = true;
+    };
+    const out = lineLog(opts.log ?? (line => console.log(line)), bounds?.logLines ? { lines: bounds.logLines, spill } : undefined);
     const log = out.log;
     const def = loadGroup(opts.dir);
     const strategy = opts.strategy;
@@ -94,6 +131,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     const board = new Blackboard(strategy.board);
     const agents: MemberAgent<S>[] = [];
     const startedAt = Date.now();
+    if (opts.save !== false) logFile = join(opts.dir, 'runs', `${stampOf(startedAt)}.log`);
     // The strategy's own rules join the observer's, in the live score and the saved report.
     const strategyFindings = strategy.findings && ((r: RunReport) => strategy.findings!(r, settings));
     const petsOn = petsAllowed(settings);
@@ -110,7 +148,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     }]));
     // The enemies' real classes, for scoring the board's class reads in the report only: the other bots on this gateway.
     const truth = classTruthFromGateway(gatewayHttpBase(members[0]!.sdk.config.gatewayUrl), new Set(def.members.map(m => m.bot)));
-    const observer = new GroupObserver(board, { group: def.name, strategy: vision ? `${strategy.name} [human vision]` : strategy.name, startedAt, findings: strategyFindings, routines, petHoldMs: petHoldOf(settings), classTruth: truth.truth });
+    const observer = new GroupObserver(board, { group: def.name, strategy: vision ? `${strategy.name} [human vision]` : strategy.name, startedAt, findings: strategyFindings, routines, petHoldMs: petHoldOf(settings), classTruth: truth.truth, ...(bounds ? { bounds } : {}) });
     const graceMs = opts.graceMs ?? 60_000;
     // Planned until the main loop starts; a wind-down from the viewer only moves them earlier.
     let deadline = startedAt + opts.seconds * 1000;
@@ -228,7 +266,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     try {
         const report = observer.stop();
         out.flush();
-        made = { report, path: opts.save === false ? null : saveReport(opts.dir, report, out.lines, { botHistory: true }) };
+        made = { report, path: opts.save === false ? null : saveReport(opts.dir, report, out.lines, { botHistory: true, appendLog: spilled }) };
     } catch (e) {
         // No report (runs/ not writable, a full disk): the viewer must not show a clean end.
         await publisher?.finish({ error: failure ?? e });

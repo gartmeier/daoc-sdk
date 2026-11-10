@@ -29,6 +29,13 @@ describe('runScript abort', () => {
         expect(run.success).toBe(false);
         expect(Date.now() - t0).toBeLessThan(4000);
     });
+
+    test('timeout Infinity is no timeout (a group run with no end time), not setTimeout\'s 1 ms', async () => {
+        const run = await runScript(async () => { await Bun.sleep(100); return 'done'; }, {
+            connection: { bot: {} as any, sdk: stubSdk() }, timeout: Infinity, printState: false, onDisconnect: 'ignore',
+        });
+        expect(run.success).toBe(true);
+    });
 });
 
 describe('runScript disconnects', () => {

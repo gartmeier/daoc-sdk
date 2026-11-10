@@ -243,6 +243,34 @@ export interface RunReport {
     previous?: Record<string, string>;
     /** RvR: how the board read the enemy players' classes, against the truth when the runner had one (class-score.ts). */
     classReads?: ClassReads;
+    /** With ObserverBounds.fights: the earliest closed fights left out of `fights`. The totals count them all. */
+    foldedFights?: number;
+}
+
+/**
+ * Limits for a run with no end time (field mode), so its observer stays the same size for hours. Unset: nothing is
+ * bounded, as for a timed run.
+ */
+export interface ObserverBounds {
+    /** Keep the last this many closed fights in the report; earlier ones are folded into the totals (RunReport.foldedFights). */
+    fights?: number;
+    /** Keep the last this many values behind a median (first-sight ranges, each member's first nukes). */
+    samples?: number;
+}
+
+/** Closed fights folded out of the list (ObserverBounds.fights): what the totals need of them. */
+interface FoldedFights {
+    n: number;
+    durationMs: number;
+    held: number;
+    holdSum: number;
+    engagements: number;
+    threeWay: number;
+    /** Per member: its first-nuke times in them (the last ObserverBounds.samples), and the fights it never nuked in. */
+    openers: Record<string, number[]>;
+    withoutNuke: Record<string, number>;
+    /** contactTimes over them, carried on into the rest. */
+    contact: ContactCarry;
 }
 
 /** What the samples say about a member's pet. */
@@ -311,15 +339,23 @@ const WET_WHERE: Record<string, string> = { travel: 'on the way', away: 'away fr
 const clock = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
 
 /** contactS, firstFightS and quietMaxS (RunReport totals) from the fights with enemy players, in seconds from the start of a run `runS` long. */
-export function contactTimes(fights: readonly Pick<FightSummary, 'start' | 'durationMs' | 'enemyPlayers'>[], contactS: number | null, runS: number): { contactS: number | null; firstFightS: number | null; quietMaxS: number } {
-    const pvp = fights.filter(f => f.enemyPlayers).sort((a, b) => a.start - b.start);
-    let quiet = 0, from = 0;
-    for (const f of pvp) {
+export function contactTimes(fights: readonly Pick<FightSummary, 'start' | 'durationMs' | 'enemyPlayers'>[], contactS: number | null, runS: number, carry: ContactCarry = { quiet: 0, from: 0, first: null }): { contactS: number | null; firstFightS: number | null; quietMaxS: number } {
+    const c = carryContact(fights, carry);
+    return { contactS, firstFightS: c.first, quietMaxS: Math.max(c.quiet, runS - c.from) };
+}
+
+/** contactTimes so far: the longest quiet stretch before `from` (the end of the last fight with enemy players), and the first one's start. */
+export interface ContactCarry { quiet: number; from: number; first: number | null }
+
+/** `carry` on over these fights (those with enemy players, by start). */
+export function carryContact(fights: readonly Pick<FightSummary, 'start' | 'durationMs' | 'enemyPlayers'>[], carry: ContactCarry): ContactCarry {
+    let { quiet, from, first } = carry;
+    for (const f of fights.filter(f => f.enemyPlayers).sort((a, b) => a.start - b.start)) {
         quiet = Math.max(quiet, f.start - from);
         from = Math.max(from, f.start + Math.round(f.durationMs / 1000));
+        first ??= f.start;
     }
-    quiet = Math.max(quiet, runS - from);
-    return { contactS, firstFightS: pvp[0]?.start ?? null, quietMaxS: quiet };
+    return { quiet, from, first };
 }
 
 /** steepSpots squares. */
@@ -331,6 +367,8 @@ const median = (xs: number[]): number | null => {
     return s.length % 2 ? s[h]! : Math.round((s[h - 1]! + s[h]!) / 2);
 };
 const secs = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+/** Drop all but the last `n` (none: keep everything). */
+const keepLast = (xs: unknown[], n: number | undefined) => { if (n !== undefined && xs.length > n) xs.splice(0, xs.length - n); };
 /** Realms of players: an NPC of one (a pet, a keep guard) that kills a member is an RvR death. Monsters are 'none'. */
 const PLAYER_REALMS = new Set(['albion', 'midgard', 'hibernia']);
 /** A retreat ordered again this soon after the last one ended goes on with it. */
@@ -481,8 +519,11 @@ export class GroupObserver {
     private readonly enemies = new Set<string>();
     /** Every enemy player's class read over the run (Contact.classGuess). */
     private readonly classReads = new ClassReadLog();
-    /** Distance to the nearest living member when each of those first came onto the board. */
+    /** Distance to the nearest living member when each of those first came onto the board (the last bounds.samples), and how many of all were within 1000. */
     private readonly firstSightRanges: number[] = [];
+    private firstSightClose = 0;
+    /** Closed fights folded out of `fights` (bounds.fights). */
+    private readonly folded: FoldedFights = { n: 0, durationMs: 0, held: 0, holdSum: 0, engagements: 0, threeWay: 0, openers: {}, withoutNuke: {}, contact: { quiet: 0, from: 0, first: null } };
     /** The samples behind every fight's tank hold. */
     private holdSamples = 0;
     /** Events for a member with no track yet: one starts with its first sample, up to a second into the run, and an instant summon or a death can be quicker (credit). */
@@ -493,7 +534,7 @@ export class GroupObserver {
     /**
      * `findings`: the strategy's own rules (GroupStrategy.findings), added to every report's. `petHoldMs`: what a pet waits out on a focus before it is ordered in (petHoldOf), which onFocus doesn't hold against it; none: from the engage.
      */
-    constructor(private readonly board: Blackboard | null, private readonly meta: { group: string; strategy: string; sampleMs?: number; startedAt?: number; routines?: Record<string, { from: 'character' | 'role' | 'strategy'; behaviors: string[] }>; findings?: (r: RunReport) => Finding[]; petHoldMs?: number; classTruth?: ClassTruth }) {
+    constructor(private readonly board: Blackboard | null, private readonly meta: { group: string; strategy: string; sampleMs?: number; startedAt?: number; routines?: Record<string, { from: 'character' | 'role' | 'strategy'; behaviors: string[] }>; findings?: (r: RunReport) => Finding[]; petHoldMs?: number; classTruth?: ClassTruth; bounds?: ObserverBounds }) {
         this.started = meta.startedAt ?? Date.now();
         this.last = this.started;
     }
@@ -611,7 +652,11 @@ export class GroupObserver {
             if (this.enemies.has(key)) continue;
             this.enemies.add(key);
             const near = Math.min(...p.members.filter(m => !m.isDead && m.regionId === c.regionId).map(m => Math.hypot(m.x - c.x, m.y - c.y)));
-            if (Number.isFinite(near)) this.firstSightRanges.push(Math.round(near));
+            if (Number.isFinite(near)) {
+                this.firstSightRanges.push(Math.round(near));
+                if (Math.round(near) < 1000) this.firstSightClose++;
+                keepLast(this.firstSightRanges, this.meta.bounds?.samples);
+            }
         }
         this.classReads.sample(p);
         for (const w of p.orders.waiting ?? []) {
@@ -631,7 +676,7 @@ export class GroupObserver {
             };
         }
         if (this.early.length) this.settleEarly();
-        if (this.calm >= 3 && this.fight) this.closeFight(p.at, p);
+        if (this.calm >= 3 && this.fight) { this.closeFight(p.at, p); this.foldFights(); }
         if (!this.fight || !fighting) return;
         const f = this.fight;
         // Openers count from the coordinator's engage order; a passive watch has no orders.
@@ -696,6 +741,27 @@ export class GroupObserver {
                 if (m.pet.targetId === focus.objectId) t.pet.onFocus++;
             }
         }
+    }
+
+    /** With bounds.fights: the earliest closed fights out of the list and into `folded`, so the totals still count them. Never from report(), which snapshot() undoes. */
+    private foldFights(): void {
+        const max = this.meta.bounds?.fights;
+        if (max === undefined || this.fights.length <= max) return;
+        const out = this.fights.splice(0, this.fights.length - Math.max(0, max));
+        const g = this.folded;
+        for (const f of out) {
+            g.n++;
+            g.durationMs += f.durationMs;
+            if (f.tankHold !== null) { g.held++; g.holdSum += f.tankHold; }
+            if (f.enemyPlayers) g.engagements++;
+            if ((f.enemyRealms?.length ?? 0) >= 2) g.threeWay++;
+            for (const [name, ms] of Object.entries(f.openerMs ?? {})) {
+                if (ms === null) { inc(g.withoutNuke, name); continue; }
+                (g.openers[name] ??= []).push(ms);
+                keepLast(g.openers[name]!, this.meta.bounds?.samples);
+            }
+        }
+        g.contact = carryContact(out, g.contact);
     }
 
     private closeFight(at: number, p: GroupPicture | null): void {
@@ -833,7 +899,7 @@ export class GroupObserver {
             const xp = Math.max(0, t.xp1 - t.xp0);
             xpTotal += xp;
             deaths += t.deaths;
-            const openers = this.fights.map(f => f.openerMs[name]).filter(v => v !== undefined);
+            const openers = [...(this.folded.openers[name] ?? []), ...this.fights.map(f => f.openerMs[name]).filter(v => v !== undefined)];
             const pet = petStats(t, this.holdSamples);
             const stats: MemberStats = {
                 role: t.role, className: t.className, level: t.level0 === t.level1 ? `${t.level1}` : `${t.level0}→${t.level1}`,
@@ -844,7 +910,7 @@ export class GroupObserver {
                 idleInFights: pct(t.idle, t.engageSamples), idleReasons: t.idleReasons,
                 targeted: pct(t.targeted, t.fightSamples), inMelee: pct(t.inMelee, t.fightSamples),
                 movingInFights: t.role === 'tank' ? null : pct(t.moving, t.engageSamples),
-                openerMs: median(openers.filter((v): v is number => v !== null)), fightsWithoutNuke: openers.filter(v => v === null).length,
+                openerMs: median(openers.filter((v): v is number => v !== null)), fightsWithoutNuke: openers.filter(v => v === null).length + (this.folded.withoutNuke[name] ?? 0),
                 minHp: t.minHp,
                 waitedFor: Object.fromEntries(Object.entries(t.waitMs).map(([k, v]) => [k, pct(v, durationMs)]).filter(([, v]) => (v as number) > 0)),
             };
@@ -866,30 +932,34 @@ export class GroupObserver {
         for (const [k, v] of Object.entries(this.phaseMs)) phases[k as Phase] = pct(v!, durationMs);
         const busy = (this.phaseMs.engage ?? 0) + (this.phaseMs.pull ?? 0) + (this.phaseMs.retreat ?? 0);
         const held = this.fights.filter(f => f.tankHold !== null);
+        const g = this.folded;
+        const fightCount = g.n + this.fights.length;
+        const heldCount = g.held + held.length;
         const report: RunReport = {
             group: this.meta.group, strategy: this.meta.strategy, startedAt: new Date(this.started).toISOString(), durationMs,
             totals: {
-                kills: this.kills, deaths, wipes: this.wipes, retreats: this.retreats, fights: this.fights.length,
+                kills: this.kills, deaths, wipes: this.wipes, retreats: this.retreats, fights: fightCount,
                 killsPerHour: Math.round(this.kills / hours), xpPerHour: Math.round(xpTotal / hours),
-                avgFightMs: this.fights.length ? Math.round(this.fights.reduce((a, f) => a + f.durationMs, 0) / this.fights.length) : 0,
+                avgFightMs: fightCount ? Math.round((g.durationMs + this.fights.reduce((a, f) => a + f.durationMs, 0)) / fightCount) : 0,
                 downtime: pct(durationMs - busy, durationMs),
-                tankHold: held.length ? Math.round(held.reduce((a, f) => a + f.tankHold!, 0) / held.length) : null,
+                tankHold: heldCount ? Math.round((g.holdSum + held.reduce((a, f) => a + f.tankHold!, 0)) / heldCount) : null,
             },
             phases, members, fights: this.fights, findings: [], timeline: this.timelineEvents.slice(-60),
         };
+        if (g.n) report.foldedFights = g.n;
         if (rvr) {
             Object.assign(report.totals, {
                 playerKills: this.playerKills, deathsToPlayers: this.deathsToPlayers, realmPoints: rpTotal, rpPerHour: Math.round(rpTotal / hours),
-                enemiesSeen: this.enemies.size, engagements: this.fights.filter(f => f.enemyPlayers).length,
-                firstSightRange: median(this.firstSightRanges), firstSightClose: this.firstSightRanges.filter(d => d < 1000).length,
+                enemiesSeen: this.enemies.size, engagements: g.engagements + this.fights.filter(f => f.enemyPlayers).length,
+                firstSightRange: median(this.firstSightRanges), firstSightClose: this.firstSightClose,
                 spreadAvg: this.spreadSamples ? Math.round(this.spreadSum / this.spreadSamples) : 0, strayedPct: pct(this.strayedSamples, this.spreadSamples),
                 alivePct: pct(this.aliveSamples, this.memberSamples), deathsAlone: this.deathsAlone,
                 wetPct: pct(this.wetSamples, this.aliveSamples), wetInFights: pct(this.fightWet, this.fightMemberSamples), enemiesWetInFights: pct(this.fightEnemyWet, this.fightEnemySamples),
                 wetWhere: shares(this.wetWhere),
                 steepPct: pct(this.steepSamples, this.aliveSamples), steepInFights: pct(this.fightSteep, this.fightSteepSamples), steepInTravel: pct(this.travelSteep, this.travelMemberSamples),
                 steepSpots: [...this.steepAt].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([k, n]) => `(${k.replace(',', ', ')}) ${pct(n, this.steepSamples)}%`),
-                ...contactTimes(this.fights, this.firstSeenAt === null ? null : Math.round((this.firstSeenAt - this.started) / 1000), Math.round(durationMs / 1000)),
-                threeWay: this.fights.filter(f => (f.enemyRealms?.length ?? 0) >= 2).length,
+                ...contactTimes(this.fights, this.firstSeenAt === null ? null : Math.round((this.firstSeenAt - this.started) / 1000), Math.round(durationMs / 1000), g.contact),
+                threeWay: g.threeWay + this.fights.filter(f => (f.enemyRealms?.length ?? 0) >= 2).length,
                 columnPct: pct(this.columnMs, this.travelMs), travelSpreadAvg: this.travelSamples ? Math.round(this.travelSpreadSum / this.travelSamples) : 0, ccFrontPct: pct(this.ccFrontSamples, this.travelSamples),
                 ...(this.columnPlaceSamples ? { columnOffAvg: Math.round(this.columnOffSum / this.columnPlaceSamples), columnTrailAvg: Math.round(this.columnTrailSum / this.columnPlaceSamples) } : {}),
             });
@@ -1096,6 +1166,7 @@ export function formatReport(r: RunReport): string {
     }
     if (r.classReads) lines.push(...formatClassReads(r.classReads));
     lines.push('', '## Fights', '');
+    if (r.foldedFights) lines.push(`${r.foldedFights} earlier fights are counted in the totals, not listed.`, '');
     for (const f of r.fights) {
         const openers = Object.entries(f.openerMs ?? {}).map(([n, ms]) => `${n} ${ms === null ? 'none' : secs(ms)}`).join(', ');
         lines.push(`- ${String(Math.floor(f.start / 60)).padStart(2, '0')}:${String(f.start % 60).padStart(2, '0')} ${f.focus.join(' / ') || '?'}: ${f.outcome} in ${Math.round(f.durationMs / 1000)} s, kills ${f.kills.length}, adds ${f.adds}, tank hold ${f.tankHold ?? '-'}%${f.enemyPlayers ? `, ${f.enemyPlayers} enemy players (${(f.enemyRealms ?? []).join(', ')})` : ''}${f.where ? ` at (${f.where.x}, ${f.where.y})` : ''}${f.wetPct || f.enemyWetPct ? `, in water: us ${f.wetPct ?? 0}%, them ${f.enemyWetPct ?? 0}%` : ''}${openers ? `, first nuke: ${openers}` : ''}${f.deaths.length ? `, died: ${f.deaths.join(', ')}` : ''}`);
@@ -1126,7 +1197,7 @@ function saveBotHistory(r: RunReport): void {
 }
 
 /** Write runs/<stamp>.json, .md (and .log with `log`), compare with and append to runs/history.jsonl. Returns the .md path. */
-export function saveReport(groupDir: string, r: RunReport, log?: string[], opts: { botHistory?: boolean } = {}): string {
+export function saveReport(groupDir: string, r: RunReport, log?: string[], opts: { botHistory?: boolean; appendLog?: boolean } = {}): string {
     const dir = join(groupDir, 'runs');
     mkdirSync(dir, { recursive: true });
     const history = join(dir, 'history.jsonl');
@@ -1152,7 +1223,8 @@ export function saveReport(groupDir: string, r: RunReport, log?: string[], opts:
     writeFileSync(join(dir, `${stamp}.json`), JSON.stringify(r, null, 2));
     const md = join(dir, `${stamp}.md`);
     writeFileSync(md, formatReport(r));
-    if (log) writeFileSync(join(dir, `${stamp}.log`), log.map(l => `${l}\n`).join(''));
+    // appendLog: the run wrote its earlier lines there already (RunBounds.logLines).
+    if (log) (opts.appendLog ? appendFileSync : writeFileSync)(join(dir, `${stamp}.log`), log.map(l => `${l}\n`).join(''));
     // Last and on its own, so it can't cost the run its report.
     if (opts.botHistory) {
         try { saveBotHistory(r); } catch (e) { console.warn(`bot history not saved: ${(e as Error).message}`); }
