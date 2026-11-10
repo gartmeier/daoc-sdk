@@ -20,6 +20,9 @@ describe('druid kit', () => {
         expect(names.indexOf('groupHeal')).toBeGreaterThan(names.indexOf('emergencyHeal'));
         expect(names.indexOf('groupHeal')).toBeLessThan(names.indexOf('heal'));
         expect(names.indexOf('rootDiver')).toBe(names.indexOf('groupHeal') - 1);
+        // The Nearsight cure in her idle turns, below heal and crowd control.
+        expect(names.indexOf('cureNearsight')).toBeGreaterThan(names.indexOf('heal'));
+        expect(names.indexOf('cureNearsight')).toBeLessThan(names.indexOf('shedLoad'));
     });
 
     test('Heal druid reaches Renewing Conflux at 24: a group heal, no radius, which heal() never picks over Major Restoration', () => {

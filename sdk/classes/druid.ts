@@ -9,6 +9,7 @@ import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import type { Contact, MemberReport, Role } from '../group/types';
 import type { SpellPick } from '../group/spells';
+import { cureNearsight, unlessHammered } from './healer';
 import { noteTooFar, tooFarOf, viewDistance } from './mentalist';
 import { thrifty } from './thrifty';
 
@@ -114,6 +115,10 @@ export function druid({ dotsAbove, groupHealMin = 3, groupHealAbove = 25 }: Drui
     return {
         role: 'healer',
         urgent: [rootDiver(), groupHeal(groupHealMin, groupHealAbove)],
+        // Cure Nearsight I (Regrowth, 6 s, 30 power): Albion's Obscuring Dust cut our spell ranges by 35 % in round 35
+        // (orchestrator, 13f8de7). The Midgard Healer kit's cure, in her idle turns (react: at shedLoad in the pack's
+        // healer list), never under a melee, and in a fight only above half her 197 power.
+        react: [thrifty(unlessHammered(cureNearsight()), 50)],
         ...(dotsAbove === undefined ? {} : { fight: [thrifty(assist(), dotsAbove)] }),
     };
 }
