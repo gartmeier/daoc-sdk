@@ -124,7 +124,7 @@ describe.skipIf(!terrain)('dryMoveGuard in Thidranki', () => {
 });
 
 describe('MemberAgent sets the dry guard', () => {
-    const agentWith = (settings: Record<string, unknown>) => {
+    const agentWith = (settings: Record<string, unknown>, board = new Blackboard()) => {
         const state = makeState({ gameMessages: [] });
         const guards: unknown[] = [];
         let removed = 0;
@@ -132,7 +132,7 @@ describe('MemberAgent sets the dry guard', () => {
             getState: () => state, getPlayer: () => state.player, getSkills: () => ({}), getGameMessages: () => [], onStateUpdate: () => () => {}, isConnected: () => true,
             setMoveGuard: (g: unknown) => { guards.push(g); return () => { removed++; }; },
         } as unknown as BotSDK;
-        const agent = new MemberAgent({ bot: 'testbot', role: 'healer', sdk, actions: { getSpellInfo: () => null } as unknown as BotActions }, new Blackboard(), [], settings as any);
+        const agent = new MemberAgent({ bot: 'testbot', role: 'healer', sdk, actions: { getSpellInfo: () => null } as unknown as BotActions }, board, [], settings as any);
         return { agent, guards, removed: () => removed };
     };
 
@@ -146,6 +146,23 @@ describe('MemberAgent sets the dry guard', () => {
     test('not for a strategy without stayDry (PvE: mobs in water are fair game)', () => {
         const a = agentWith({});
         expect(a.guards.length).toBe(0);
+        a.agent.dispose();
+    });
+
+    test.skipIf(!terrain)('only while pulling or engaged: a travel step ending mid-river on the way to a dry spot goes through', () => {
+        // Arena round 72: walkTowardSlot's 2500 steps and the column's moves ended mid-river on a crossing to a dry leg, and
+        // the guard held Albion and Midgard at the bank all round.
+        const board = new Blackboard();
+        const a = agentWith({ stayDry: true }, board);
+        const guard = a.guards[0] as ReturnType<typeof dryMoveGuard>;
+        for (const phase of ['travel', 'gather', 'recover', 'retreat', 'idle'] as const) {
+            board.setOrders({ phase, reason: 'test' });
+            expect(guard(bank, inRiver, [])).toBeNull();
+        }
+        for (const phase of ['engage', 'pull'] as const) {
+            board.setOrders({ phase, reason: 'test' });
+            expect(guard(bank, inRiver, [])).not.toBeNull();
+        }
         a.agent.dispose();
     });
 });
