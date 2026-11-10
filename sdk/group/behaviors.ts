@@ -1565,9 +1565,16 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
                     reportLeg(ctx, await ctx.bot.walkToObject(seen, { range: Math.max(100, sp.range * 0.85), timeout: CAST_STEP_MS }));
                     return true;
                 }
+                // The server's second "too far" on this focus within 15 s, though our view says in reach: leave it 8 s and let the
+                // turn go on (a kit's nukeInReach). Hrafna got 15 in 17 s in arena round 32 and 37 (2026-11-10, Midgard class session).
+                const strikes: Map<number, number[]> = ctx.memory.get('assistFar') ?? new Map();
+                ctx.memory.set('assistFar', strikes);
+                const recent = (strikes.get(mob.objectId) ?? []).filter(t => now - t < 15_000);
+                if (recent.length >= 2 && now - recent.at(-1)! < 8000) return skipping('assist: server says out of reach', mob.objectId);
                 ctx.doing('nuke', mob.objectId, sp.spell.name);
                 const c = await ctx.bot.castSpell(sp.spell, mob.objectId, stand ? { approach: false } : {});
                 ctx.result('nuke', c, mob.objectId);
+                if (c.reason === 'out_of_range') strikes.set(mob.objectId, [...recent, Date.now()]);
                 noteNukeEnd(ctx.memory, sp, c, Date.now());
                 if (sp.type === 'DamageOverTime' && (c.success || /already has that effect/i.test(c.message ?? ''))) { dotted.add(dotFamily(sp)); ctx.memory.set(key, dotted); }
                 if (await waitOutSelfCc(c)) return true;

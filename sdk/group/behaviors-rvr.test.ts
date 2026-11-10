@@ -1036,3 +1036,17 @@ describe('interrupt after the server\'s "too far"', () => {
         expect(s.calls.castSpell).toEqual([51]);
     });
 });
+
+describe('assist after the server\'s "too far" twice', () => {
+    test('the focus waits 8 s and the turn goes on (arena rounds 32 and 37: 15 in 17 s)', async () => {
+        const s = stub({ name: 'Hrafna', role: 'nuker', at: { x: 10_000, y: 10_000 }, contacts: [foe(51, 11_000, 10_000)], orders: { focus: 51 }, settings: { ...LEASHED, standGround: true, standStep: 0 } as TacticsSettings,
+            castSpell: async () => ({ success: false, reason: 'out_of_range', message: 'That target is too far away!' }) });
+        Object.assign(s.ctx.spells, { nuke: () => ({ spell: { name: 'Minor Spirit Blast' }, type: 'DirectDamage', range: 1500, castTime: 2.5 }), capabilities: () => ({ nuke: true }) });
+        expect(await assist().run(s.ctx)).toBe(true);
+        expect(await assist().run(s.ctx)).toBe(true);
+        expect(s.calls.castSpell).toEqual([51, 51]);
+        await assist().run(s.ctx);
+        expect(s.calls.castSpell).toEqual([51, 51]);
+        expect(s.skips.at(-1)).toMatch(/server says out of reach/);
+    });
+});
