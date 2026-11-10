@@ -1,0 +1,36 @@
+From e88631910f73294bb1e1d8606763740d1cfe8d18 Mon Sep 17 00:00:00 2001
+From: Joshua Gartmeier <joshua@gartmeier.dev>
+Date: Tue, 10 Nov 2026 14:54:32 +0100
+Subject: [PATCH] `GamePlayerUtils.UpdateUsableSkills`: Replace entries whose
+ instance changed `Skill` overloads `==` and `!=` to compare IDs, so
+ `UpdateAt` kept the cached entry when the player's skill had been replaced by
+ a new instance with the same ID. After `/player class`, `RemoveAllSpecs` and
+ `SetCharacterClass` give the player new `Specialization` instances, but the
+ cached list kept the old ones for the rest of the session: every skill list
+ packet sent the specialization levels from before the class change and never
+ showed a later raise, while the trainer window showed the right levels. A
+ relog fixed it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ GameServer/gameutils/GamePlayerUtils.cs | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/GameServer/gameutils/GamePlayerUtils.cs b/GameServer/gameutils/GamePlayerUtils.cs
+index fd85b02f3..cbb9a1ff5 100644
+--- a/GameServer/gameutils/GamePlayerUtils.cs
++++ b/GameServer/gameutils/GamePlayerUtils.cs
+@@ -647,7 +647,9 @@ namespace DOL.GS
+                 visited[index] = true;
+                 var existing = list[index];
+ 
+-                if (existing.Item1 != primary || existing.Item2 != secondary)
++                // `Skill` overloads `==` to compare IDs, which would keep a stale instance with the same ID.
++                // This happens when the class changes, since the player gets new `Specialization` instances.
++                if (!ReferenceEquals(existing.Item1, primary) || !ReferenceEquals(existing.Item2, secondary))
+                     list[index] = new(primary, secondary);
+             }
+         }
+-- 
+2.45.1.windows.1
+

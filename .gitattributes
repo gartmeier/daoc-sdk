@@ -2,3 +2,5 @@
 sdk/API.md text eol=lf
 # Shell scripts run under bash, which reads a CRLF as part of the command.
 *.sh text eol=lf
+# Patches for the submodules, byte for byte: a .cs file upstream is stored with CRLF.
+docs/upstream/*.patch -text
