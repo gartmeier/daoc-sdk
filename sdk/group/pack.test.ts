@@ -499,6 +499,21 @@ describe('decidePack: every enemy crowd-controlled, picked off one at a time', (
         }
     });
 
+    test('focusSoft: a mezzed healer does not pull the focus off the free fighter, no flip between pick off and raid', () => {
+        // Arena round 128, 2026-11-10: "raid: Briton#432" and "pick off: Briton#433 (healer)" every tick for ~10 s, #433 mezzed.
+        const m: any = { pack: 'raid', raidAt: 1000, packAnchor: { x: 10_000, y: 10_000, z: 0 } };
+        const foes = [foe(101, 11_000), mezzed(102, 11_200, { healer: true })];
+        let focus = 101;
+        for (let tick = 0; tick < 4; tick++) {
+            const u = decidePack(ctx(picture(team(), foes, engaged(focus)), { memory: m, now: 2000 + tick * 500, settings: { pack: { focusSoft: true } } }));
+            expect(u).toMatchObject({ phase: 'engage', focus: 101 });
+            focus = u.focus!;
+        }
+        // A free healer still takes the focus off the fighter.
+        const awake = [foe(101, 11_000), foe(102, 11_200, 10_000, { healer: true })];
+        expect(decidePack(ctx(picture(team(), awake, engaged(101)), { memory: { pack: 'raid', raidAt: 1000, packAnchor: { x: 10_000, y: 10_000, z: 0 } }, now: 2000, settings: { pack: { focusSoft: true } } })).focus).toBe(102);
+    });
+
     test('pack.fightOn: the Bard low with an enemy on us, the pack fights on instead of leaving to rest', () => {
         // Arena round 4, 2026-11-09: the raid fell back to the stalk, the Bard under raidReady made it rest, and resting left.
         const low = team({ Bard: { mana: 10 } });

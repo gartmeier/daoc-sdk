@@ -330,10 +330,12 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         if (held && focusHealed(mem.lowHp, held, k.healedBy)) mem.dropped[held.objectId] = now + k.droppedMs;
         const fresh = pool.filter(c => !mem.dropped[c.objectId]);
         const kept = fresh.find(c => c.objectId === o.focus);
-        // focusSoft: a fighter we opened on gives way to a caster or healer as soon as one shows itself (casting).
+        // focusSoft: a fighter we opened on gives way to a caster or healer as soon as one shows itself (casting), if that
+        // one is free: a mezzed one pulled the focus off the free fighter, the raid took it back next tick (round 128).
         const backLine = (c: Contact) => !!c.caster || !!c.healer;
-        if (kept && !(k.focusSoft && !backLine(kept) && fresh.some(backLine))) return kept;
-        return pickPackFocus(fresh.length ? fresh : pool, centre, k.reach, k.focusSoft);
+        const free = fresh.filter(c => !c.cc);
+        if (kept && !(k.focusSoft && !backLine(kept) && free.some(backLine))) return kept;
+        return pickPackFocus(free.length ? free : fresh.length ? fresh : pool, centre, k.reach, k.focusSoft);
     };
     const startPull = (why: string, legs = 0): OrdersUpdate => {
         mem.pack = 'pull';
