@@ -87,3 +87,5 @@ That's a fix in `sdk/group/spells.ts`, not a kit: power and health regen as sepa
 **Not the kit's:** Clear Mind (`cureMezz`) is the group's `--cure` flag, and was within the noise on 2026-11-04 (groups/camelot/lab_log.md).
 
 **Arena round 21** (Camelot wiped Hibernia 5/0 in one 90 s fight, `groups/camelot/runs/20261109-231607.md`): the first Hibernia round with Shield Mind, the group's `--cure` against Hibernia, and its mezz-the-mezzer plan. Merlin cured 4 times (1 interrupted), cast 3 cc and dealt 421 damage, with no deaths. He was targeted 56 % and in melee 38 % of fight time. Against rounds 12 and 15 (1 kill, 12 deaths together), the opener no longer decided it.
+
+**Arena round 40** (Camelot wiped Hibernia 5/0, no deaths): Merlin cured 8 times (`--cure` against Hibernia), cast 2 cc, 5 debuffs and 1 quickcast, and dealt 260 damage.

@@ -112,3 +112,4 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **Arena round 35** (Hibernia wiped Camelot 6/0, 123 s): with the backoff, `nearsight` landed 4 of 4. Hibernia's melee then sat on our casters instead: Morgana and Merlin were each in melee 72 % of fight time, Morgana cast 10 debuffs and 2 quickcasts, and her damage was 290.
 
+**Arena round 40** (Camelot wiped Hibernia 5/0 in 80 s, no deaths): `nearsight` landed 4 of 4 with no failure, 1106 damage, and she was in melee 49 % of fight time. Taliesin had 2 quickcasts and 1285 damage. The second win over Hibernia (after round 21) in 11 rounds against it.
