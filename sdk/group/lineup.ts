@@ -70,6 +70,11 @@ export async function lineupPool(def: GroupDefinition, level = 24): Promise<Line
     return out;
 }
 
+/** The key of two bots in pickLineup's `together`: both names, sorted, joined by a comma. */
+export function pairKey(a: string, b: string): string {
+    return a < b ? `${a},${b}` : `${b},${a}`;
+}
+
 export interface LineupChoice {
     /** The bots that play, in the order of the pool. */
     lineup: string[];
@@ -83,7 +88,8 @@ export interface LineupChoice {
  * The next line-up of `size` from the pool. First one of each class in `classes` (group.json `requires.classes`), then
  * what a group needs, each by the candidate that has played fewest: a healer, a front-liner, a crowd controller (a need
  * nobody available meets is skipped). Then whoever has played fewest
- * rounds; on a tie a current member stays, then the pool's order. `available` (default: all) leaves out bots that can't
+ * rounds; on a tie the one who played fewest rounds with those already picked (`together`), then a current member, then
+ * the pool's order. `available` (default: all) leaves out bots that can't
  * play now, such as one not in game.
  */
 export function pickLineup(o: {
@@ -95,6 +101,9 @@ export function pickLineup(o: {
     available?: ReadonlySet<string>;
     /** Classes every line-up holds one of, filled first (group.json `requires.classes`); a list is any one of those. */
     classes?: readonly (string | readonly string[])[];
+    /** Rounds two bots played together, by pairKey. Without it the tie-break keeps current members, and with two required
+     * classes in five Hibernia's other six alternated as the same two trios for 28 rounds (129-156, Hibernia session). */
+    together?: Readonly<Record<string, number>>;
 }): LineupChoice {
     const size = o.size ?? 5;
     const played = (bot: string) => o.played?.[bot] ?? 0;
@@ -105,25 +114,33 @@ export function pickLineup(o: {
         || o.pool.indexOf(a) - o.pool.indexOf(b));
     const picked: LineupCandidate[] = [];
     const notes: string[] = [];
+    const shared = (x: LineupCandidate) => picked.reduce((n, p) => n + (o.together?.[pairKey(x.bot, p.bot)] ?? 0), 0);
+    // The open candidate that fits and has played fewest; among those, the one who played least with the picked so far.
+    const next = (fits: (c: LineupCandidate) => boolean): LineupCandidate | undefined => {
+        const open = order.filter(x => fits(x) && !picked.includes(x));
+        const tied = open.filter(x => played(x.bot) === played(open[0]?.bot ?? ''));
+        return tied.reduce<LineupCandidate | undefined>((best, x) => !best || shared(x) < shared(best) ? x : best, undefined);
+    };
     const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
     for (const need of o.classes ?? []) {
         const any = typeof need === 'string' ? [need] : need;
         const fits = (c: LineupCandidate) => any.some(cls => same(c.className, cls));
         const label = any.join('/');
         if (picked.length >= size || picked.some(fits)) continue;
-        const c = order.find(x => fits(x) && !picked.includes(x));
+        const c = next(fits);
         if (c) { picked.push(c); notes.push(`${label} ${c.bot}`); }
         else notes.push(`no ${label} available`);
     }
     for (const need of ['healer', 'front', 'cc'] as const) {
         if (picked.length >= size || picked.some(c => c[need])) continue;
-        const c = order.find(x => x[need] && !picked.includes(x));
+        const c = next(x => x[need]);
         if (c) { picked.push(c); notes.push(`${need} ${c.bot}`); }
         else notes.push(`no ${need} available`);
     }
-    for (const c of order) {
-        if (picked.length >= size) break;
-        if (!picked.includes(c)) picked.push(c);
+    while (picked.length < size) {
+        const c = next(() => true);
+        if (!c) break;
+        picked.push(c);
     }
     const lineup = o.pool.filter(c => picked.includes(c)).map(c => c.bot);
     const leader = o.leader && lineup.includes(o.leader) ? o.leader : (picked.find(c => c.front)?.bot ?? lineup[0]!);

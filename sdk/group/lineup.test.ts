@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { candidate, hasMezz, lineupPool, pickLineup, writeLineup, type LineupCandidate } from './lineup';
+import { candidate, hasMezz, lineupPool, pairKey, pickLineup, writeLineup, type LineupCandidate } from './lineup';
 import { applyLineup, lineupArg, loadGroup } from './roster';
 
 describe('hasMezz', () => {
@@ -70,6 +70,20 @@ describe('pickLineup with required classes', () => {
         expect(choice.lineup).not.toContain('oisin');
         expect(choice.why).toContain('no Bard available');
         expect(choice.lineup).toHaveLength(5);
+    });
+
+    test('on a tie in played rounds the bench mixes: whoever played least with those picked comes in', () => {
+        // Rounds 129-156: the other six alternated as {lugh, niamh, fionn} and {aine, ciaran, cuchulainn}, 14 rounds each.
+        const together: Record<string, number> = {};
+        const trios = [['lugh', 'niamh', 'fionn'], ['aine', 'ciaran', 'cuchulainn']];
+        for (const trio of trios) for (const a of [...trio, 'brigid', 'oisin']) for (const b of [...trio, 'brigid', 'oisin']) if (a < b) together[pairKey(a, b)] = 14;
+        const played = Object.fromEntries(pool.map(p => [p.bot, 14]));
+        const choice = pickLineup({ pool, current: ['brigid', 'oisin', 'lugh', 'niamh', 'fionn'], size: 5, played, together, classes: ['Druid', 'Bard'] });
+        // fionn stays the front-liner (current); then the other trio's first by the pool (none shared with fionn), then niamh, who stays on the tie.
+        expect([...choice.lineup].sort()).toEqual(['brigid', 'cuchulainn', 'fionn', 'niamh', 'oisin']);
+        // Without the counts the current trio stays, as it did.
+        const old = pickLineup({ pool, current: ['brigid', 'oisin', 'lugh', 'niamh', 'fionn'], size: 5, played, classes: ['Druid', 'Bard'] });
+        expect(old.lineup.sort()).toEqual(['brigid', 'fionn', 'lugh', 'niamh', 'oisin']);
     });
 });
 
