@@ -132,3 +132,14 @@ Niamh has the Quickcast ability (`bun sdk/cli.ts niamh`): the next spell can't b
 **Reverted after arena rounds 64 and 66** (both lost to Camelot): `steppingAssist` caps the step at 250, and at 750 only after 4 s, while Hibernia's `standStep` is 900. So it stepped the casters in less than plain `assist` did: Ciaran 3 and 2 nukes, 13-14 turns of "focus out of reach, holding ground". `casterFight` is plain `assist` plus `offFocus` again (the Cabalist kit's `nukerFight`). Check a borrowed helper's numbers against our own group settings first.
 
 **Arena rounds 101-105** (three Camelot wins in a row): Albion's pets (Theurgist simulacrum and ice beings, Cabalist pet) dive our casters; `hammeredBy` counts players only, so casts went off under pet swings and were cut (`stun:interrupted` in rounds 101, 103, 105). From the next round `stunCaster` also waits while an enemy pet swings at her (`petOnMe`); asked the orchestrator to count pets in `hammeredBy` for every cast.
+
+## Where the kit stands (arena end, 2026-11-10, round 119)
+
+Hibernia won 51 of the 85 arena rounds it played (Midgard 20, Camelot 14); round 119 a 5-0 wipe of Midgard.
+
+**Proven:** Prismatic Flash at casters and melee on our Bard and Druid (`stunCaster`, urgent, above emergency heals), Quickcast Flash on a melee or pet hitting her (`quickFlash`), `offFocus`, and the 10 s back-off after a server "too far"; 2-7 Flashes a round, best rounds 3,000-4,000 damage.
+
+**Open:**
+- Dived first in many Albion losses; Quickcast is once per 30 s and she has no other instant.
+- Emergency heals still take her turns in long fights (role list).
+- `steppingAssist` was tried and reverted (rounds 64-66): a borrowed step shorter than the group's standStep.

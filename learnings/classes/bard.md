@@ -97,3 +97,14 @@ What the class has that no behaviour uses:
 **Arena round 73** (beat Midgard 4-0): 5 of 8 mezz cures interrupted with only the melee guard; spells interrupt too. From the next round the cure also waits while any enemy aims at him (the Druid kit's `unlessAimedAt`). Watch the cure count: he is aimed at about half of each fight, so this trades attempts for ones that finish.
 
 **Verified, arena round 78** (beat Camelot 5-1): with `unlessAimedAt` on the cure, 8 mezz cures and none interrupted (round 73: 5 of 8 interrupted). Fewer attempts were not the cost feared: 8 is his usual count.
+
+## Where the kit stands (arena end, 2026-11-10, round 119)
+
+Hibernia won 51 of the 85 arena rounds it played (Midgard 20, Camelot 14); round 119 a 5-0 wipe of Midgard.
+
+**Proven:** the mezz cure (`cureMezz` in urgent, held under a melee or while anyone aims at him) cures 5-14 a round with almost none interrupted (round 78 on); `interruptOnTheRun` keeps his instant Lullaby going while chased (21-26 interrupts in good rounds); he survives most wins.
+
+**Open:**
+- He is still the first death in most losses (dived, 50-90 % in melee reach). Guard on him (group, round 51 on) helped less than hoped; no class tool beyond kiting and instants.
+- His mezzes are resisted ~14 % and often interrupted under melee; Captivate Audience (area) and Lullaby (area amnesia) are unused.
+- Confuse (shared `confuse()`) wastes turns on must_wait and interrupts.

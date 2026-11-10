@@ -87,3 +87,14 @@ From the next round his `instant` slot, above `flee`: `quickFlash` (the Mentalis
 **Arena round 68** (wiped Camelot 5-0, plain assist again): 13 nukes and 13 `dazzle` debuffs (12-13 power each), then 15 turns of "assist: no power". From the next round `dazzle` waits below 40 % power (`DAZZLE_FLOOR`): the nukes kill, the debuffs only soften.
 
 **Verified, arena round 100** (wiped Midgard 5-0): Ciaran's idling against Midgard (rounds 60, 69, 94, 96, 98: 20-128 turns of "focus out of reach, holding ground", up to 67 %) was the group's formation, not the kit. The group session's samples put him almost beside the Hero on one flank at ±1.3 rad; with both nukers 350 behind at ±0.7 rad he cast 12 nukes (Niamh 12), idle 13 %.
+
+## Where the kit stands (arena end, 2026-11-10, round 119)
+
+Hibernia won 51 of the 85 arena rounds it played (Midgard 20, Camelot 14); round 119 a 5-0 wipe of Midgard.
+
+**Proven:** `offFocus`, `dazzle` (single-target only, above 40 % power), `quickFlash` and `quickcastUnderFire` in the instant slot; the group's round-100 formation ended his idling against Midgard (12 nukes = Niamh's, 13 % idle). Often the group's top damage (2,000-4,800).
+
+**Open:**
+- Still idle out of reach in some Albion fights (round 101: 19 turns) and dived (rounds 103, 105); placement is the group's, and the step's 500 enemy clearance (`STEP_CLEAR`) is the orchestrator's next suspect.
+- The pet's value isn't measured per round beyond `petAttack` counts.
+- Power runs out in long fights (rounds 47, 117).

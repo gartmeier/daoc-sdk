@@ -120,3 +120,14 @@ What the class has that no behaviour uses:
 **Arena round 83** (wiped 0-5 by Midgard, 105 s): with the 60 % / 20 s limits, still 3 Nearsight cures (18 s of casting) against 3 heals. From the next round, in a fight the cure goes only while every member is at 85 % or more (`whileCalm`); out of fights it is free.
 
 **Verified, arena round 85** (lost 2-5 to Midgard, 171 s): with `whileCalm`, no Nearsight cure in the fight and 14 heals (3 in round 83).
+
+## Where the kit stands (arena end, 2026-11-10, round 119)
+
+Hibernia won 51 of the 85 arena rounds it played (Midgard 20, Camelot 14); round 119 a 5-0 wipe of Midgard.
+
+**Proven:** `groupHeal`, `rootDiver`, `reachHurt` and the Nearsight cure run as meant; the cure is now held in a fight unless everyone is at 85 % or more, above 60 % power, once per 20 s, and never while aimed at (rounds 81-85: heals 3 → 14).
+
+**Open:**
+- Power: a 197-point pool runs dry in long fights (rounds 20-24, 81, 108); the group's heal thresholds and the Bard's power song are the levers.
+- Focused by Midgard (round 87: 9 heals interrupted) she has no instant or uninterruptible heal at 24.
+- `groupHeal` firing count is not visible in the reports (it reports as `heal`); `reachHurt` was added on a wrong theory (round 76) and kept for the Bard's runs.

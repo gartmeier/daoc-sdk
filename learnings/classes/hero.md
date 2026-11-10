@@ -115,3 +115,15 @@ Slam, the 9 s anytime stun, is Shields 42, past level 40 in this build, so it do
 **Verified, arena round 49** (wiped 0-5 by Midgard): the first parry chain landed, Return Blade then Lunging Blade (the reacting tank's pick between stuns), beside Numb, Disable and Fire Blade one each; 535 damage.
 
 **Verified, arena round 89** (2-2 against Midgard, cap): the block reactions landed for the first time: Horizon Blade 2 and Incapacitate 1 (with Fire Blade and Numb one each). Against Midgard's melee the foe's last swing at him was a block often enough for `stunQueue`'s block branch to fire.
+
+## Where the kit stands (arena end, 2026-11-10, round 119)
+
+Hibernia won 51 of the 85 arena rounds it played (Midgard 20, Camelot 14); round 119 a 5-0 wipe of Midgard.
+
+**Proven:** `heroStyle` lands its stuns every round: Numb most, Disable from the side from round 15, and the block reactions (Horizon Blade, Incapacitate) from round 89 against Midgard's melee. One stun per target per 60 s immunity; the reacting tank's pick between them, the parry chain (Return Blade, Lunging Blade) included.
+
+**Open:**
+- Fire Blade fell to 1-3 a round: the stuns take the swing and its endurance. Not measured whether that costs kills.
+- Taunting Blade goes on enemy pets (monsters) in Albion and Midgard fights; harmless, but a swing.
+- Engage (Shields 7) is unused; no survival tool when he is the one focused (rounds 25, 36: dead in 17-24 s).
+- His damage swings 150-2,800 a round with the group's focus changes and peels: that is the group plan's.
