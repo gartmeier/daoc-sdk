@@ -4,9 +4,10 @@
 // Bard or Druid, then at one casting at any of us, then at a casting healer. Spec points aren't here: they are the character's
 // bots/<bot>/build.ts, copied from data/builds/mentalist.ts. learnings/classes/mentalist.md says why.
 
-import { foeInView, hammeredBy } from '../group/behaviors';
+import { foeInView, hammeredBy, type TacticsSettings } from '../group/behaviors';
 import type { Character } from '../group/character';
-import { nukerFight, QUICKCAST_REUSE_MS, quickcastUnderFire } from './cabalist';
+import { offFocus as offFocusNuke, QUICKCAST_REUSE_MS, quickcastUnderFire } from './cabalist';
+import { steppingAssist } from './spiritmaster';
 import type { Behavior } from '../group/member';
 import type { Contact, MemberReport, Role } from '../group/types';
 
@@ -149,6 +150,16 @@ export const quickFlash = (): Behavior => ({
     },
 });
 
+/**
+ * Assist that steps in (the Spiritmaster kit's steppingAssist: after 4 s with the focus beyond the nuke's range and nothing cast,
+ * one leg toward it), then offFocus. Round 62: Niamh walked 1,200 → 3,500 from the focus in 16 s as the pack's fanOut stepped
+ * her back, and "focus out of reach, holding ground" took 17-61 turns a round; the Midgard Spiritmaster went from 80 % idle
+ * on the same reason with it (round 52).
+ */
+export function casterFight(withOffFocus = true): Behavior<TacticsSettings>[] {
+    return [steppingAssist(), ...(withOffFocus ? [offFocusNuke()] : [])];
+}
+
 export function mentalist({ offFocus = true }: { offFocus?: boolean } = {}): MentalistKit {
-    return { character: { role: 'nuker', instant: [quickFlash(), quickcastUnderFire()], urgent: [stunCaster()], fight: nukerFight(0, offFocus) } };
+    return { character: { role: 'nuker', instant: [quickFlash(), quickcastUnderFire()], urgent: [stunCaster()], fight: casterFight(offFocus) } };
 }

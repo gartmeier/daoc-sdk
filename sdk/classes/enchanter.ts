@@ -8,9 +8,9 @@ import type { Character } from '../group/character';
 import { resistDebuff } from '../group/debuff';
 import type { Behavior } from '../group/member';
 import type { SpellPick } from '../group/spells';
-import { nukerFight, quickcastUnderFire } from './cabalist';
+import { quickcastUnderFire } from './cabalist';
 import { slowTarget } from './healer';
-import { noteTooFar, quickFlash, tooFarOf, viewDistance } from './mentalist';
+import { casterFight, noteTooFar, quickFlash, tooFarOf, viewDistance } from './mentalist';
 
 /** As the Flash's (mentalist.ts): the server checks range in 3D, ours is our view's. */
 const RANGE_MARGIN = 150;
@@ -68,5 +68,5 @@ export interface EnchanterOptions {
 
 /** Arena round 10 (2026-11-09): wiped by Albion in 79 s, Ciaran 2 nukes, moving 73 % with the focus on their back line out of reach. */
 export function enchanter({ heatAllies = 0, offFocus = true }: EnchanterOptions = {}): Character {
-    return { role: 'nuker', instant: [quickFlash(), dazzle(), quickcastUnderFire()], react: [resistDebuff({ allies: heatAllies })], fight: nukerFight(0, offFocus) };
+    return { role: 'nuker', instant: [quickFlash(), dazzle(), quickcastUnderFire()], react: [resistDebuff({ allies: heatAllies })], fight: casterFight(offFocus) };
 }
