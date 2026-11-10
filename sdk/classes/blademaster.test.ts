@@ -88,12 +88,12 @@ describe('blademaster kit', () => {
         expect(tripleWieldNow({ ...base, readyAt: 1000 + TRIPLE_WIELD_REUSE_MS })).toBe(false);
     });
 
-    test('a refusal's wait, as the server words it', () => {
+    test("a refusal's wait, as the server words it", () => {
         expect(waitOf('You must wait 14 seconds to use this ability.')).toBe(14_000);
         expect(waitOf('You must wait 1 second to use this ability.')).toBe(1000);
         expect(waitOf('You must wait 6 minutes 12 seconds to use this ability.')).toBe(372_000);
         expect(waitOf('You must wait 7 minutes to use this ability.')).toBe(420_000);
-        expect(waitOf('You can't do that now.')).toBeNull();
+        expect(waitOf("You can't do that now.")).toBeNull();
     });
 
     test('in the pack lists: his fight stands where the tank\'s or the melee\'s did, Triple Wield above it; no role of its own', () => {
