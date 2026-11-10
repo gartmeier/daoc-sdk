@@ -106,6 +106,8 @@ A Cleric's heals live in the skills list, the hybrid path: `castSpell` handles i
 
 Her `buff:no_response` failures (5-8 a round, 39 in round 26) are the server's cap on concentration effects: "You can only cast up to 20 simultaneous concentration spells!" (SpellHandler.cs:31 `MAX_CONC_SPELLS = 20`, :836-839). It applies however much pool is left; she had Conc 57/210 at the time. Her plan has about 32 concentration buffs, so past 20 every one is refused. The SDK reads the refusal as "No cast observed" and retries each minute. Reported to the orchestrator: the fix is in `castSpell` (parse the line) and `planBuffs` (cap at 20), both shared code.
 
+**Fixed in d682805** (2026-11-10 01:11): `castSpell` reads the line as a refusal (`CONCENTRATION_CAP`, then 300 s before that buff again), `nextBuff` casts no concentration buff while she holds 20 (`MAX_CONC_EFFECTS`, counted from the concentration list the server sends, built from the same list its cap checks: PacketLib191.SendConcentrationList), and `surplusConcentration` drops buffs outside her plan first. Her `buff: no_response` was 4-12 a report up to 20261109-234645 and in none of Camelot's 51 reports after. Rechecked after the arena: closed, the wrap-up's "Shared" line in groups/camelot/lab_log.md predates it.
+
 ## Gift of the Heavens as a save (kit, from Camelot's round after round 48, 2026-11-10)
 
 **Verified, arena round 48** (Midgard wiped Camelot 5/3): 2 heals in a fight where she was in melee 34 % of fight time. Since f4135fd the heal list skips every heal with a cast time while a melee is on her, and her instant heal is picked only when nothing else covers.

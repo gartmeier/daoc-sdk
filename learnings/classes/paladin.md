@@ -156,7 +156,7 @@ All of these are his and no behaviour casts them:
 **Proven:**
 - `selfBuff` keeps Aura of Indestructability up between fights (seen in his buff actions from round 6).
 - The chant twist runs inside `tank`.
-- Since 91d6e4c the shared `song()` no longer drains his power with Persistence out of fights.
+- Since 91d6e4c (2026-11-10 01:11) the shared `song()` no longer drains his power with Persistence out of fights: out of a fight nothing wants an endurance chant at 90 % or more (`ENDURANCE_REST_FULL`), and `song()` casts the running chant once to stop it, a twist's too (`pulse_cancelled` in his lines, 10 times from 02:00 on). Camelot's reports read "waiting for Galahad's power" up to 20261109-234645 and in none of the 51 after the fix. Rechecked after the arena: closed, the wrap-up's "Shared" line in groups/camelot/lab_log.md predates it.
 
 **Open:**
 - Galahad was the focus 50-80 % of fight time in most rounds. Nothing in the kit protects him beyond chants.
