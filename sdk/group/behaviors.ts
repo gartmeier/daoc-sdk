@@ -188,10 +188,15 @@ export function onMember(t: Contact, m: Point & { name: string }): boolean {
  * A free enemy in melee on us, if any: a swing, hit or miss, starts a timer of about 3 s that ends any cast reaching half way
  * meanwhile (CLAUDE.md "Casters get interrupted"), so a spell with a cast time is wasted. Arena rounds 1-4, 2026-11-09: the
  * Bard's 2.5 s mezz, cast at the tank with the melee still on him, was interrupted every time (cc interrupted 3/15/0/6).
+ * An enemy pet's swing interrupts the same: rounds 101-105, Albion's Theurgist and Cabalist pets dove Hibernia's casters and
+ * Niamh's casts kept ending `interrupted` (Hibernia class session). A pet counts swinging in melee reach of us, not by spell.
  */
 export function hammeredBy(ctx: Pick<MemberContext<any>, 'me' | 'threats'>): Contact | undefined {
     const me = ctx.me();
-    return me ? ctx.threats().find(t => t.kind === 'player' && onMember(t, me)) : undefined;
+    if (!me) return undefined;
+    const threats = ctx.threats();
+    return threats.find(t => t.kind === 'player' && onMember(t, me))
+        ?? threats.find(t => !!t.isPet && t.kind !== 'player' && !t.stale && !t.cc && t.swinging && !t.targetBySpell && t.target === me.name && dist(t, me) <= MELEE_REACH);
 }
 
 /** Skipped, with the reason, when a spell with a cast time would only be interrupted (hammeredBy); null to cast. */

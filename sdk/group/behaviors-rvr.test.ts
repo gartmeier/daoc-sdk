@@ -7,7 +7,7 @@ import type { CastResult, KillPlayerOptions, KillPlayerResult } from '../actions
 import { executionContext } from '../execution-context';
 import type { CombatEvent, NearbyNpc, NearbyPlayer } from '../types';
 import { shaman } from '../classes/shaman';
-import { assist, ckey, crowdControl, interrupt, fightRejoin, flee, guard, heal, holdFormation, isDown, leashFallback, onMember, peelTarget, pull, rejoinFight, rest, retreat, spareNuke, tank, type TacticsSettings } from './behaviors';
+import { assist, ckey, crowdControl, hammeredBy, interrupt, fightRejoin, flee, guard, heal, holdFormation, isDown, leashFallback, onMember, peelTarget, pull, rejoinFight, rest, retreat, spareNuke, tank, type TacticsSettings } from './behaviors';
 import { withCharacter } from './character';
 import { rvrBehaviors } from './rvr';
 import { contact, enemy, picture, report } from './fixtures';
@@ -128,6 +128,24 @@ function stoppable(ms = 5000) {
 const healer = (x: number, y: number) => report('Healer', { role: 'healer', regionId: R, x, y, objectId: 2 });
 const foe = (id: number, x: number, y: number, over: Partial<Contact> = {}) =>
     enemy(id, 'midgard', { regionId: R, x, y, threat: true, hostileSince: Date.now() - 1000, ...over });
+
+describe('hammeredBy: who in melee on us would interrupt a cast', () => {
+    const me = { name: 'Niamh', x: 10_000, y: 10_000 };
+    const on = (...threats: Contact[]) => hammeredBy({ me: () => me as any, threats: () => threats });
+    const pet = (id: number, over: Partial<Contact> = {}) => contact(id, { kind: 'npc', name: 'ice being', isPet: true, regionId: R, x: 10_100, y: 10_000, threat: true, swinging: true, target: 'Niamh', ...over });
+    test('an enemy pet swinging at us in reach counts, like a player (rounds 101-105: Theurgist pets on Niamh)', () => {
+        expect(on(pet(70))?.objectId).toBe(70);
+        expect(on(foe(51, 10_100, 10_000, { target: 'Niamh' }), pet(70))?.objectId).toBe(51);
+    });
+    test('not a pet out of reach, on us by spell only, crowd-controlled, stale or not swinging', () => {
+        expect(on(pet(70, { x: 11_000 }))).toBeUndefined();
+        expect(on(pet(70, { targetBySpell: true }))).toBeUndefined();
+        expect(on(pet(70, { cc: { kind: 'mezz', by: 'Oisin', until: Date.now() + 10_000 } as any }))).toBeUndefined();
+        expect(on(pet(70, { stale: true }))).toBeUndefined();
+        expect(on(pet(70, { swinging: false }))).toBeUndefined();
+        expect(on(pet(70, { target: 'Brigid' }))).toBeUndefined();
+    });
+});
 
 describe('onMember: what counts as an add on a member', () => {
     const nuker = { name: 'Nuker', x: 10_000, y: 10_000 };
