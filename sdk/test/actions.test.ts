@@ -2719,9 +2719,11 @@ describe('trainBuild', () => {
     });
 
     test('done: every line at its target, or as high as the level goes', async () => {
-        const { w, bot } = atTrainer(enchanter(40, 10), { 'Light Magic': 7, 'Mana Magic': 10, Enchantments: 5 });
-        const r = await bot.trainBuild('Nobody', NUKER);
-        expect(r).toMatchObject({ success: true, done: true, waiting: null, trained: [], specPointsLeft: 40, message: 'On target for level 10' });
+        // Levels the server could hold: Mana 10 is all 54 points an Enchanter has at 10 (else specsAddUp asks for a window).
+        const build: Build = { className: 'Enchanter', name: 'Mana first', targets: [{ level: 24, specs: { Mana: 16, Light: 1, Enchantments: 1 } }] };
+        const { w, bot } = atTrainer(enchanter(0, 10), { 'Light Magic': 1, 'Mana Magic': 10, Enchantments: 1 });
+        const r = await bot.trainBuild('Nobody', build);
+        expect(r).toMatchObject({ success: true, done: true, waiting: null, trained: [], specPointsLeft: 0, message: 'On target for level 10' });
         expect(w.sent).toEqual([]);
     });
 
@@ -2772,6 +2774,85 @@ describe('trainBuild', () => {
             const { w, bot } = atTrainer(enchanter(45), ENCHANTER_LINES);
             expect(await bot.trainBuild('Graent', NUKER)).toMatchObject({ waiting: { spec: 'Mana', cost: 16, points: 3 }, trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 15 }] });
             expect(w.sentOf('interact')).toEqual([]);
+        });
+    });
+
+    // After a GM's /player class the server's skill list keeps the old spec objects for the session: its cache swaps an
+    // entry only when `!=` says so, and Skill's `!=` compares IDs (GamePlayerUtils.cs:650, Skill.cs:97-118). So 0x16
+    // carries the old levels and never a raise of those lines, while the trainer window (PacketLib1105.cs:36-52) reads
+    // the live ones. Seen live: a Viking made a Warrior trained Parry 1 → 16 and its skill list still read Parry 1.
+    describe('a skill list the server leaves stale, and a window that is right', () => {
+        /** The server's real levels apart from the skill list, which never changes. */
+        const staleServer = (player: Partial<PlayerState>, shown: Record<string, number>, real: Record<string, number>) => {
+            const { w, bot } = world({ player: makePlayer(player), nearbyNpcs: [graent()], skills: { ...makeState().skills, specializations: specLines(shown) } });
+            const names = Object.keys(shown);
+            const window = (world: FakeWorld) => {
+                world.state.trainer = { isOpen: true, specPoints: world.player.specPoints, receivedAt: ++windowStamp, specs: names.map((name, index) => ({ index, name, level: real[name]!, nextLevelCost: real[name]! + 1 })) };
+            };
+            w.handlers.openTrainer = (_a, world) => window(world);
+            w.handlers.trainSpec = (a, world) => {
+                if (a.type !== 'trainSpec') return;
+                setTimeout(() => {
+                    const name = names[a.specIndex]!;
+                    const to = real[name]! + (a.levels ?? 1);
+                    let cost = 0;
+                    for (let l = real[name]! + 1; l <= to; l++) cost += l;
+                    if (cost > world.player.specPoints) return world.message(`That specialization costs ${real[name]! + 1} specialization points! You don't have that many specialization points left for this level.`);
+                    world.player.specPoints -= cost;
+                    real[name] = to;
+                    // TrainCommandHandler.SendUpdates (train.cs:169-170): the skill list, here unchanged, then the window.
+                    window(world);
+                    world.message('Training complete!');
+                }, 10);
+            };
+            return { w, bot };
+        };
+
+        test('a raise the window shows counts, though the skill list never moves', async () => {
+            const real = { 'Light Magic': 1, 'Mana Magic': 12, Enchantments: 1 };
+            const { bot } = staleServer(enchanter(100), ENCHANTER_LINES, real);
+            const r = await bot.trainBuild(null, NUKER);
+            expect(r).toMatchObject({
+                success: true, done: true, specPointsLeft: 1,
+                trained: [{ spec: 'Mana', fromLevel: 12, toLevel: 16 }, { spec: 'Light', fromLevel: 1, toLevel: 7 }, { spec: 'Enchantments', fromLevel: 1, toLevel: 5 }],
+            });
+            expect(real).toEqual({ 'Light Magic': 7, 'Mana Magic': 16, Enchantments: 5 });
+        });
+
+        test('a line the skill list shows on target and the window shows at 1 is trained from 1', async () => {
+            const real = { 'Light Magic': 1, 'Mana Magic': 1, Enchantments: 1 };
+            const { w, bot } = staleServer(enchanter(200), { 'Light Magic': 1, 'Mana Magic': 16, Enchantments: 1 }, real);
+            const r = await bot.trainBuild(null, NUKER);
+            expect(r).toMatchObject({ success: true, done: true, specPointsLeft: 24 });
+            expect(r.trained).toContainEqual({ spec: 'Mana', fromLevel: 1, toLevel: 16 });
+            expect(w.sentOf('trainSpec')).toContainEqual(expect.objectContaining({ specIndex: 1, levels: 15 }));
+            expect(real).toEqual({ 'Light Magic': 7, 'Mana Magic': 16, Enchantments: 5 });
+        });
+
+        // Live: a Naturalist made a Druid at 24 read Nurture 20, Regrowth 13 with all 299 points unspent, and was "on target".
+        test('every line on target by the list, with the points of none spent: it asks for the window and trains', async () => {
+            const real = { 'Light Magic': 1, 'Mana Magic': 1, Enchantments: 1 };
+            // An Enchanter's 209 points at level 20 (VerifySpecPoints), and lines that would have cost 176 of them.
+            const { w, bot } = staleServer(enchanter(209), { 'Light Magic': 7, 'Mana Magic': 16, Enchantments: 5 }, real);
+            const r = await bot.trainBuild(null, NUKER);
+            expect(w.sentOf('openTrainer').length).toBeGreaterThan(0);
+            expect(r).toMatchObject({ success: true, done: true, specPointsLeft: 33 });
+            expect(real).toEqual({ 'Light Magic': 7, 'Mana Magic': 16, Enchantments: 5 });
+        });
+
+        test('a line the list shows lower than it is: the steps count from the window, not past the target', async () => {
+            const real = { 'Light Magic': 1, 'Mana Magic': 14, Enchantments: 1 };
+            const { w, bot } = staleServer(enchanter(100), ENCHANTER_LINES, real);
+            const r = await bot.trainBuild(null, NUKER);
+            expect(w.sentOf('trainSpec')[0]).toEqual(expect.objectContaining({ specIndex: 1, levels: 2 }));
+            expect(r.trained[0]).toEqual({ spec: 'Mana', fromLevel: 14, toLevel: 16 });
+            expect(real).toEqual({ 'Light Magic': 7, 'Mana Magic': 16, Enchantments: 5 });
+        });
+
+        test('levels the points can pay for are believed: done sends nothing', async () => {
+            const { w, bot } = staleServer(enchanter(33), { 'Light Magic': 7, 'Mana Magic': 16, Enchantments: 5 }, { 'Light Magic': 7, 'Mana Magic': 16, Enchantments: 5 });
+            expect(await bot.trainBuild(null, NUKER)).toMatchObject({ success: true, done: true, trained: [] });
+            expect(w.sent).toEqual([]);
         });
     });
 

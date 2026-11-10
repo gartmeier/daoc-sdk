@@ -99,7 +99,7 @@ import { groundTargetSnap } from './ground';
 import { isDelveOf, parseDelve } from './delve';
 import { botFolder, loadBuild } from './build';
 import { findNpcSpawns, getClass, getSpecialization, getSpell, getSpellLine, getSpells, getZonePoint, realmId, specKey, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
-import { buildProblems, freeLevels, linesOverTarget, nextBuildStep, type BuildState } from '../data/builds/rule';
+import { buildProblems, earnedSpecPoints, freeLevels, linesOverTarget, nextBuildStep, specCost, type BuildState } from '../data/builds/rule';
 import type { Build } from '../data/builds/types';
 import type {
     Effect,
@@ -4348,7 +4348,6 @@ export class BotActions {
         if (trainer !== null && !n) return fail(`Trainer not found: ${describeTarget(trainer)}`, 'not_found', empty);
         const spec0 = this.sdk.findSpecialization(specName);
         if (!spec0) return fail(`No specialization matching ${describeTarget(specName)} (known: ${this.sdk.getSkills().specializations.map(s => s.name).join(', ') || 'none'})`, 'spec_not_found', empty);
-        const target = spec0.level + Math.max(1, Math.floor(levels));
         const walk = n && await this.targetTrainer(n);
         if (walk) return fail(walk.message, walk.reason ?? 'out_of_reach', { ...empty, spec: spec0.name, fromLevel: spec0.level, toLevel: spec0.level });
         const watch = this.helpers.watch();
@@ -4360,20 +4359,31 @@ export class BotActions {
                 if (watch.find([TRAINER_WANTED])) return 'refused' as const;
                 return s.trainer.isOpen && s.trainer.specs.length && s.trainer.receivedAt !== window0 ? s.trainer : null;
             }, 3000);
+            const ts = win && win !== 'refused' ? bestNameMatch(win.specs, spec0.name) : null;
+            // The new window's level, where it has one: the skill list can be stale (see trainBuild).
+            const from = ts?.level ?? spec0.level;
+            const target = from + Math.max(1, Math.floor(levels));
+            const sentWindow = this.helpers.state()?.trainer.receivedAt;
             if (win !== 'refused') {
-                const ts = win ? bestNameMatch(win.specs, spec0.name) : null;
                 if (ts) await this.sdk.sendTrainSpec(ts.index, target - ts.level);
                 // /train takes a key prefix (train.cs:57-66): 'Light Magic' isn't one, 'Light' is.
                 else await this.sdk.sendCommand(`/train ${specKey(spec0.name)} ${target}`);
             }
+            // The raise shows in the window the server sends after it (train.cs:169-170), and in the skill list unless that
+            // list already disagreed with the window: then the list is stale for this line and only windows count.
+            const listStale = !!ts && ts.level !== spec0.level;
+            const level = (s: BotWorldState) => {
+                const shown = s.trainer.receivedAt !== sentWindow ? bestNameMatch(s.trainer.specs, spec0.name)?.level : undefined;
+                const listed = listStale ? undefined : s.skills.specializations.find(x => x.name === spec0.name)?.level;
+                return Math.max(shown ?? 0, listed ?? 0);
+            };
             const got = await this.helpers.waitFor(s => {
                 if (watch.find(TRAIN_REFUSALS)) return 'refused';
-                const now = s.skills.specializations.find(x => x.name === spec0.name);
-                return now && now.level >= target ? 'trained' : null;
+                return level(s) >= target ? 'trained' : null;
             }, 4000);
-            const now = this.sdk.getSkills().specializations.find(x => x.name === spec0.name);
-            const extra = { spec: spec0.name, fromLevel: spec0.level, toLevel: now?.level ?? spec0.level, specPointsLeft: this.helpers.player()?.specPoints ?? 0 };
-            if (got === 'trained') return { success: true, message: `Trained ${spec0.name} ${spec0.level} → ${extra.toLevel}`, ...extra };
+            const s1 = this.helpers.state();
+            const extra = { spec: spec0.name, fromLevel: from, toLevel: s1 ? Math.max(from, level(s1)) : from, specPointsLeft: this.helpers.player()?.specPoints ?? 0 };
+            if (got === 'trained') return { success: true, message: `Trained ${spec0.name} ${from} → ${extra.toLevel}`, ...extra };
             if (got !== 'refused') return fail(`No training observed for ${spec0.name}`, 'timeout', extra);
             const refusal = watch.findText(TRAIN_REFUSALS)!;
             return fail(refusal, !n && refusal.toLowerCase().includes(TRAINER_WANTED) ? 'needs_trainer' : 'refused', extra);
@@ -4408,10 +4418,45 @@ export class BotActions {
         if (r.success) await this.helpers.waitFor(s => s.player?.specPoints !== points0, 1000);
     }
 
-    /** What the build rule reads. Autotrain is the current class's: a base class has none. */
-    private buildState(): BuildState | null {
+    /**
+     * Whether the lines' levels and the points left fit in what the class has earned by its level (VerifySpecPoints,
+     * GamePlayer.cs:9949-9968), half level counted. A stale skill list after a GM's /player class shows levels the
+     * server took back with the points still there, so it doesn't.
+     */
+    private specsAddUp(state: BuildState): boolean {
         const p = this.helpers.player();
-        return p && { level: p.level, specs: this.sdk.getSkills().specializations, points: p.specPoints, autotrain: getClass(p.className, p.realm)?.autotrainSpecs };
+        const cls = p && getClass(p.className, p.realm);
+        if (!cls) return true;
+        const free = freeLevels(state.level);
+        const spent = state.specs.reduce((sum, s) => sum + specCost(1, s.level, state.autotrain?.includes(specKey(s.name)) ? free : 0), 0);
+        return spent + state.points <= earnedSpecPoints(cls.specializationMultiplier, state.level, { halfLevel: true });
+    }
+
+    /** Ask for the trainer window where the character stands and give it 3 s to come; a server that wants a trainer sends none. */
+    private async askTrainerWindow(since: number): Promise<void> {
+        const watch = this.helpers.watch();
+        try {
+            await this.sdk.sendOpenTrainer();
+            await this.helpers.waitFor(s => watch.find([TRAINER_WANTED]) || (s.trainer.receivedAt ?? 0) !== since, 3000);
+        } finally {
+            watch.dispose();
+        }
+    }
+
+    /**
+     * What the build rule reads. Autotrain is the current class's: a base class has none. A trainer window that came
+     * after `windowSince` gives the levels: the skill list can be stale, and the window never is (see trainBuild).
+     */
+    private buildState(windowSince?: number): BuildState | null {
+        const s = this.helpers.state();
+        const p = s?.player;
+        if (!p) return null;
+        const fresh = windowSince !== undefined && (s.trainer.receivedAt ?? 0) !== windowSince ? s.trainer.specs : [];
+        const specs = this.sdk.getSkills().specializations.map(x => {
+            const shown = fresh.find(t => t.name === x.name);
+            return shown && shown.level !== x.level ? { ...x, level: shown.level } : x;
+        });
+        return { level: p.level, specs, points: p.specPoints, autotrain: getClass(p.className, p.realm)?.autotrainSpecs };
     }
 
     /**
@@ -4422,7 +4467,12 @@ export class BotActions {
      * the points stay banked for it). `done` sends nothing. Before `waiting` with nothing raised it talks once to a trainer
      * in reach, because a promotion sends no points and player.specPoints can still be the base class's number. A trainer
      * out of reach or not found gets nothing, and the number stands. A base class trains the lines it has of its advanced
-     * class's build. Reasons: `no_build`, `invalid_build` (buildProblems of a build passed in), `wrong_class`,
+     * class's build. After a GM's `/player class` the server's skill list keeps each line's old level for the session
+     * (its cache swaps an entry only when Skill's ID-comparing `!=` says so, GamePlayerUtils.cs:650), while the trainer
+     * window is right: so a window that came during this call gives the levels, and trainSpec counts a raise by it. It
+     * asks for one before its first raise, and before stopping when the levels and points cost more than the class has
+     * earned (specsAddUp); otherwise `done` and `waiting` send nothing. A relog clears the old levels. Reasons:
+     * `no_build`, `invalid_build` (buildProblems of a build passed in), `wrong_class`,
      * `not_in_game`, `too_many_steps`, and those of trainSpec.
      */
     async trainBuild(trainer: NpcTarget | null, build?: Build): Promise<TrainBuildResult> {
@@ -4449,10 +4499,20 @@ export class BotActions {
             ...named, trained, over: state ? linesOverTarget(chosen, state) : [], specPointsLeft: state?.points ?? 0,
         });
         let refreshed = false;
+        let asked = false;
+        const windowSince = this.helpers.state()?.trainer.receivedAt ?? 0;
         for (let i = 0; i < TRAIN_BUILD_MAX_STEPS; i++) {
-            const state = this.buildState();
+            const state = this.buildState(windowSince);
             if (!state) return failed('Not in game', 'not_in_game', null);
             const step = nextBuildStep(chosen, state);
+            // Before the first raise, the window's levels, so that the step and trainSpec count from the same ones. Before
+            // stopping, too, when the levels and points cost more than the class has earned: they can't be the server's.
+            if (!asked && (this.helpers.state()?.trainer.receivedAt ?? 0) === windowSince && (step.kind === 'train' || !this.specsAddUp(state))) {
+                asked = true;
+                await this.askTrainerWindow(windowSince);
+                i--; // Once only, and no step.
+                continue;
+            }
             if (step.kind === 'wait' && !trained.length && !refreshed) {
                 refreshed = true;
                 await this.refreshSpecPoints(trainer);
@@ -4472,9 +4532,9 @@ export class BotActions {
             }
             const r = await this.trainSpec(trainer, step.spec, step.to - step.from);
             if (r.toLevel > r.fromLevel) trained.push({ spec: step.spec, fromLevel: r.fromLevel, toLevel: r.toLevel });
-            if (!r.success) return failed(r.message, r.reason ?? 'refused', this.buildState());
+            if (!r.success) return failed(r.message, r.reason ?? 'refused', this.buildState(windowSince));
         }
-        return failed(`Still training after ${TRAIN_BUILD_MAX_STEPS} steps`, 'too_many_steps', this.buildState());
+        return failed(`Still training after ${TRAIN_BUILD_MAX_STEPS} steps`, 'too_many_steps', this.buildState(windowSince));
     }
 
     /**
