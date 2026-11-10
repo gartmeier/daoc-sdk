@@ -86,3 +86,13 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **Arena round 28** (Hibernia beat Camelot 9-0): debuffs Merlin 9, Morgana 7 and Taliesin 3. The damage loss came from Hibernia's mezz and amnesia (Merlin entranced, then amnesia'd, then dead; Morgana dead 3 s after one debuff), but Merlin and Taliesin each held the group 12 % of the run for power. Now a debuff on a melee hitting another member needs 60 % power (`DEBUFF_FOR_OTHERS_MIN_MANA`). One on a melee hitting the caster still needs 35 %, since then nothing else can be cast.
 
+## Quickcast under fire (kit, from Camelot's round after round 28, 2026-11-10)
+
+**Verified, arena round 28:** Hibernia's interrupts ("Oisin" 21 of them, and a Hero's Numb and Disable) cut every cast with a cast time. Merlin and Morgana dealt 0 damage, and only the instant debuffs went off. `bun sdk/cli.ts` shows that Merlin, Morgana and Taliesin all have the Quickcast ability, and no behaviour used it.
+
+**Server code** (QuickCastAbilityHandler.cs, QuickCastECSEffect.cs, SpellHandler.cs:389, :1226, :1388): the next spell can't be interrupted by melee or spells and costs twice the power. The effect lasts 3 s, so the spell must start within that. It's refused while swinging, and using it again while it's on cancels it. After a quickcast cast it is locked for 30 s.
+
+**The change** (`quickcastUnderFire` in `sdk/classes/cabalist.ts`, first in all three nukers' instant slot, above `meleeDebuff` and `flee`): under fire, meaning a melee on the caster or a cast interrupted in the last 5 s, it uses Quickcast and then casts. The spell is the caster's cc assignment's mezz or root if any, else the nuke on the focus, from where the caster stands, within 50 of the spell's range. It needs twice the spell's power, and runs at most once per 31 s.
+
+**To look for:** `quickcast` results and `(quickcast)` casts in the report, and damage against round 28.
+

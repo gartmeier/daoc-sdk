@@ -6,7 +6,7 @@ import type { Contact } from '../group/types';
 import { getBuild } from '../../data/builds';
 import { Spellbook } from '../group/spells';
 import { getSpell } from '../../data/index';
-import { cabalist, meleeDebuffTarget, nextMeleeDebuff, offFocusTarget } from './cabalist';
+import { cabalist, meleeDebuffTarget, nextMeleeDebuff, offFocusTarget, underFire } from './cabalist';
 import { reachOfBuild } from './reach';
 import { sorcerer } from './sorcerer';
 import { theurgist } from './theurgist';
@@ -97,7 +97,15 @@ describe('meleeDebuff', () => {
         for (const kit of [cabalist(), sorcerer({ saveBelow: 0 }), theurgist({ saveBelow: 0 })]) {
             const list = withCharacter(rvrBehaviors().nuker, kit).map(b => b.name);
             expect(list.indexOf('meleeDebuff')).toBe(list.indexOf('flee') - 1);
+            expect(list.indexOf('quickcast')).toBe(list.indexOf('flee') - 2);
         }
-        expect(cabalist({ meleeDebuff: false }).instant).toBeUndefined();
+        expect(cabalist({ meleeDebuff: false }).instant!.map(b => b.name)).toEqual(['quickcast']);
+    });
+
+    test('quickcast only under fire: a melee on us, or a cast cut in the last 5 s', () => {
+        expect(underFire(true, undefined, 10_000)).toBe(true);
+        expect(underFire(false, 7000, 10_000)).toBe(true);
+        expect(underFire(false, 4000, 10_000)).toBe(false);
+        expect(underFire(false, undefined, 10_000)).toBe(false);
     });
 });

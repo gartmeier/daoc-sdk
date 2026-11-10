@@ -3,8 +3,9 @@
 // the class's own is spreading them: with the focus out of her reach she puts them on a free enemy in reach (offFocus),
 // which Albion's Sorcerer and Theurgist kits use for their nukes too. learnings/classes/cabalist.md says what has been measured.
 
-import { assist, ccHolds, ckey, claimedBy, foeInView, hammeredBy, isDown, noteNukeEnd, onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
+import { assist, ccHolds, ccSpellFor, ckey, claimedBy, foeInView, hammeredBy, isDown, noteNukeEnd, onMember, stopSwinging, type TacticsSettings } from '../group/behaviors';
 import { isAlive, untouchable } from '../group/blackboard';
+import { CC_IMMUNE_MS } from '../group/cc';
 import { dist } from '../group/battleground';
 import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
@@ -140,6 +141,65 @@ export const offFocus = (): Behavior<TacticsSettings> => ({
     },
 });
 
+/** The server's Quickcast: one spell that can't be interrupted, at twice the power, then 30 s before the next (QuickCastAbilityHandler.cs). */
+export const QUICKCAST_REUSE_MS = 31_000;
+/** An interrupt this recent says the next cast would be cut too: a swing or a hit starts a 3 s timer. */
+const UNDER_FIRE_MS = 5000;
+
+/** Whether a Quickcast is worth its 30 s now: a melee on us, or our last cast cut short this recently. */
+export function underFire(hammered: boolean, lastInterruptAt: number | undefined, now: number): boolean {
+    return hammered || (lastInterruptAt !== undefined && now - lastInterruptAt < UNDER_FIRE_MS);
+}
+
+/**
+ * In the instant slot: under fire (underFire), Quickcast and then one spell that lands whatever hits us: our crowd-control
+ * assignment's mezz or root, else our nuke on the focus, from where we stand. Once per 30 s, with twice its power in hand.
+ * Arena round 28: Hibernia's interrupts cut every cast with a cast time and Merlin and Morgana dealt 0; all three have Quickcast,
+ * which nothing used.
+ */
+export const quickcastUnderFire = (): Behavior<TacticsSettings> => ({
+    name: 'quickcast',
+    interruptible: false,
+    async run(ctx) {
+        const o = ctx.orders();
+        if (o.phase !== 'engage') return false;
+        const now = Date.now();
+        if (now < (ctx.memory.get('quickcastReadyAt') ?? 0) || !ctx.sdk.findAbility('Quickcast')) return false;
+        const broken: { at: number } | undefined = ctx.memory.get('nukeBroken');
+        if (!underFire(!!hammeredBy(ctx), broken?.at, now)) return false;
+        const me = ctx.me();
+        // What to cast: our cc assignment first, else the nuke on the focus.
+        const assigned = o.cc.filter(a => a.by === ctx.name).map(a => ctx.contact(a.targetId)).find(c => c && !c.stale && !c.cc);
+        const ccSp = assigned ? ccSpellFor(ctx, assigned) : null;
+        const focus = ctx.focus();
+        const key = focus ? `dotted:${ckey(focus)}` : '';
+        const dotted: Set<string> = (key && ctx.memory.get(key)) || new Set();
+        const nukeSp = focus && !ccHolds(ctx, focus) ? ctx.spells.nuke({ dotted, targetHp: focus.hp, aoe: false }) : null;
+        const pick = ccSp && assigned ? { sp: ccSp, target: assigned, cc: ccSp.kind } : nukeSp && focus ? { sp: nukeSp, target: focus, cc: null } : null;
+        if (!pick || pick.sp.castTime <= 0 || me.mana < 2 * ctx.spells.powerOf(pick.sp)) return false;
+        const seen = foeInView(ctx, pick.target.objectId);
+        if (!seen || isDown(ctx, seen) || seen.distance > pick.sp.range - RANGE_MARGIN) return false;
+        await stopSwinging(ctx);
+        ctx.memory.set('quickcastReadyAt', now + QUICKCAST_REUSE_MS);
+        const q = await ctx.bot.useAbility('Quickcast');
+        ctx.result('quickcast', q);
+        if (!q.success) return true;
+        ctx.doing(pick.cc ? 'cc' : 'nuke', pick.target.objectId, `${pick.sp.spell.name} (quickcast)`);
+        const c = await ctx.bot.castSpell(pick.sp.spell, pick.target.objectId, { approach: false });
+        if (pick.cc) {
+            const refused = !c.success ? null : c.effectImmune ? 'immune' : c.resisted ? 'resisted' : null;
+            ctx.result('cc', refused ? { ...c, success: false, reason: refused } : c, pick.target.objectId);
+            if (refused === 'immune') ctx.markCcImmune(pick.target.objectId, pick.cc, CC_IMMUNE_MS);
+            else if (c.success && !refused) ctx.markCc(pick.target.objectId, pick.cc, Math.max(3000, pick.sp.duration * 1000), c.landedOn);
+        } else {
+            ctx.result('nuke', c, pick.target.objectId);
+            noteNukeEnd(ctx.memory, pick.sp, c, Date.now());
+            if (pick.sp.type === 'DamageOverTime' && c.success) { dotted.add(dotFamily(pick.sp)); ctx.memory.set(key, dotted); }
+        }
+        return true;
+    },
+});
+
 /** The list's assist, then offFocus; both under the floor if there is one. */
 export function nukerFight(saveBelow: number, withOffFocus: boolean): Behavior<TacticsSettings>[] {
     const floor = (b: Behavior<TacticsSettings>) => (saveBelow > 0 ? thrifty(b, saveBelow) : b);
@@ -147,5 +207,5 @@ export function nukerFight(saveBelow: number, withOffFocus: boolean): Behavior<T
 }
 
 export function cabalist({ saveBelow = 0, offFocus: off = true, meleeDebuff: debuff = true }: CabalistOptions = {}): Character {
-    return { role: 'nuker', ...(debuff ? { instant: [meleeDebuff()] } : {}), fight: nukerFight(saveBelow, off) };
+    return { role: 'nuker', instant: [quickcastUnderFire(), ...(debuff ? [meleeDebuff()] : [])], fight: nukerFight(saveBelow, off) };
 }

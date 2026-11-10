@@ -5,7 +5,7 @@
 import { type TacticsSettings } from '../group/behaviors';
 import type { Behavior } from '../group/member';
 import type { Character } from '../group/character';
-import { meleeDebuff, nukerFight } from './cabalist';
+import { meleeDebuff, nukerFight, quickcastUnderFire } from './cabalist';
 import { selfBuff } from './paladin';
 
 /** Shield Mind (Mind 16): mezzes on him last 10 % less (MesmerizeDurationBuff, CCSpellHandler.cs:212). buff() doesn't slot it. */
@@ -23,5 +23,5 @@ export interface SorcererOptions {
 }
 
 export function sorcerer({ saveBelow = 40, chores = [], offFocus: off = true, meleeDebuff: debuff = true }: SorcererOptions = {}): Character {
-    return { role: 'nuker', ...(debuff ? { instant: [meleeDebuff()] } : {}), fight: nukerFight(saveBelow, off), chores: [...chores, selfBuff(SORCERER_SELF_BUFFS)] };
+    return { role: 'nuker', instant: [quickcastUnderFire(), ...(debuff ? [meleeDebuff()] : [])], fight: nukerFight(saveBelow, off), chores: [...chores, selfBuff(SORCERER_SELF_BUFFS)] };
 }

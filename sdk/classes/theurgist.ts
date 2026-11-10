@@ -8,7 +8,7 @@ import { dist } from '../group/battleground';
 import type { Behavior } from '../group/member';
 import type { Character } from '../group/character';
 import type { Contact, MemberReport, Point } from '../group/types';
-import { meleeDebuff, nukerFight } from './cabalist';
+import { meleeDebuff, nukerFight, quickcastUnderFire } from './cabalist';
 
 export interface TheurgistOptions {
     /** No nukes below this % power, nor his pets, which count as nukes (fnfPet). 40 is what was measured. */
@@ -71,7 +71,7 @@ export const giveGround = (): Behavior<TacticsSettings> => ({
 export function theurgist({ saveBelow = 40, chores = [], giveGround: give = true, offFocus: off = true, meleeDebuff: debuff = true }: TheurgistOptions = {}): Character {
     return {
         role: 'nuker',
-        ...(debuff ? { instant: [meleeDebuff()] } : {}),
+        instant: [quickcastUnderFire(), ...(debuff ? [meleeDebuff()] : [])],
         ...(give ? { react: [giveGround()] } : {}),
         fight: nukerFight(saveBelow, off),
         pet: { fnfFloor: saveBelow },
