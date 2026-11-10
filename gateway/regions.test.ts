@@ -10,6 +10,7 @@ import type { ViewerBotSession } from './viewer/routes';
 import { makeNpc, makePlayer, makePlayerObj, makeState } from '../sdk/test/fixtures';
 import { enemy, picture, report } from '../sdk/group/fixtures';
 import { BATTLEGROUND_LAYOUTS, THIDRANKI } from '../sdk/group/rvr';
+import { KEEP_CLEARANCE } from '../sdk/group/keeps';
 import type { BotWorldState, PetState, PlayerState } from './types';
 import type { LiveReport } from '../sdk/group/wire';
 
@@ -238,7 +239,8 @@ describe('regionLayout', () => {
         const bg = await regionLayout(BG);
         expect(bg?.layout.name).toBe('Thidranki');
         expect(bg?.layout.keeps).toHaveLength(4);
-        expect(bg?.keepClearance).toEqual({ portal: 4500, keep: 3000 });
+        // The Faste's circle went 3000 -> 4500 in 228c5de (keeps.ts KEEP_CLEARANCE).
+        expect(bg?.keepClearance).toEqual(KEEP_CLEARANCE);
         expect(await regionLayout(1)).toBeNull();
     });
 });

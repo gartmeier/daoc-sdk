@@ -5,11 +5,11 @@
 //   [FF create → 0x2A → FC → verify slot filled]
 //   10 → 0x2A + 0x28 (session id, optional)
 //   D4(charIndex) → 0x20 | BF(0) → 0x2D, then immediately the first 0xA9 | E8 → 0x2B ⇒ playing
-// In world: 0xA9 stream (Mover), 0xA3 ping every 30 s, answer every 0xD0 with "clear",
+// In world: 0xA9 stream (Mover), 0xA3 ping every 30 s, answer every 0xD0 from the terrain (opts.lineOfSight),
 // 0xD5 for unknown sessions, 0xBE for unknown objects, snap on 0x04/0x20, region change on 0xB7 (D4 → 0x20 → BF → E8),
 // clean quit via '&quit' → 0xA4.
 
-import type { ClientPhase } from '../sdk/types';
+import type { ClientPhase, Vec3 } from '../sdk/types';
 import { Connection } from './net/connection';
 import type { ServerPacket } from './net/framing';
 import { ClientOp, loginErrorName, ServerOp, serverOpName } from './protocol/opcodes';
@@ -69,6 +69,11 @@ export interface SessionOptions {
     trace?: boolean;
     /** Ground height for the mover (MoverDeps.ground). */
     ground?: MoverDeps['ground'];
+    /**
+     * The answer to a server LoS check (0xD0) between two positions in our region: true for clear. Without it, or with
+     * either object unknown, every check is answered clear (sdk/vision.ts clientLineOfSight).
+     */
+    lineOfSight?: (regionId: number, from: Vec3, to: Vec3) => boolean;
 }
 
 interface Waiter {
@@ -118,6 +123,8 @@ export class DaocSession {
     steedId: number | null = null;
     private ended = false;
     losReplies = 0;
+    /** Of losReplies, those answered "blocked". */
+    losBlocked = 0;
     private readonly log: (msg: string) => void;
 
     constructor(readonly opts: SessionOptions) {
@@ -411,13 +418,29 @@ export class DaocSession {
         }
     }
 
+    /**
+     * A server LoS check from `sourceId` to `targetId` (either may be us): opts.lineOfSight between where we have them, clear
+     * without it or with either unknown. The server asks the caster's own client for a player's cast, and its pet's owner's
+     * or the would-be victim's for an NPC (PlayerCastingComponent.GetLosChecker, ABrain.GetLosChecker).
+     */
+    private losClear(sourceId: number, targetId: number): boolean {
+        const check = this.opts.lineOfSight;
+        if (!check) return true;
+        const at = (id: number): Vec3 | null => (id === this.mover.objectId ? this.mover.position : this.model.positionOf(id));
+        const from = at(sourceId), to = at(targetId);
+        if (!from || !to) return true;
+        return check(this.regionId, from, to);
+    }
+
     private handleSessionPacket(p: ServerPacket): void {
         switch (p.code) {
             case ServerOp.CheckLOSRequest: {
-                // Always answer "clear"; NPC aggro and our own casts wait on this (LosCheckHandler.cs, 1500 ms timeout).
+                // NPC aggro on us, our pets' attacks and our own casts wait on this (LosCheckHandler.cs, 1500 ms timeout).
                 const d = decodeLosRequest(p.payload);
-                this.send(ClientOp.CheckLosRequest, out.encodeLosResponse(d.sourceId, d.targetId, true));
+                const clear = this.losClear(d.sourceId, d.targetId);
+                this.send(ClientOp.CheckLosRequest, out.encodeLosResponse(d.sourceId, d.targetId, clear));
                 this.losReplies++;
+                if (!clear) this.losBlocked++;
                 break;
             }
             case ServerOp.CharacterJump: {

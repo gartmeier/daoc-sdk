@@ -109,7 +109,7 @@ The 5v5 bot group is strong. Almost everything around it is missing. Gaps found 
 - **The coordinator sees only bot members.** Bots never heal, buff, rez or guard a human, nothing reads chat commands, and `/assist` is unused.
 - **No solo or stealth play.** About 30 classes have no kit.
 - **The Faste.** The strategy only avoids keeps, and nothing tracks who owns one.
-- **Fairness.** The client answers every line-of-sight check "clear" (`client/session.ts`, `CheckLOSRequest`), so bots cast through hills. Bots have no reaction or skill setting.
+- **Fairness.** The client answers line-of-sight checks from the terrain heightmap (`client/session.ts` `losClear`), so hills block casts and aggro. Human vision (`--vision=human`, learnings/rvr.md) gives a view cone, terrain occlusion and an 800 ms notice delay. There is no wider skill setting yet.
 - **Scale is unmeasured.** At most 15 bots have run at once.
 
 Still unverified: Thidranki's historical peak headcount, whether a battleground keep can be claimed, whether rams work without the keep's hook points, and whether the Faste has walls in a real client (the client probably draws them from its own map data).

@@ -46,6 +46,48 @@ describe('DaocSession packet housekeeping', () => {
     });
 });
 
+describe('DaocSession LoS checks (0xD0)', () => {
+    /** A session with `lineOfSight`, us at (0, 0, 0) as oid 1 and a mob as oid 7 at (1000, 0, 0); `replies` holds [src, tgt, clear] of every 0xD0 sent. */
+    function checking(lineOfSight?: (regionId: number, a: { x: number }, b: { x: number }) => boolean) {
+        const s = new DaocSession({ host: '127.0.0.1', port: 1, username: 'x', password: 'x', charName: 'Xxx', realm: 'albion', lineOfSight: lineOfSight as never });
+        const feed = (code: number, payload: Uint8Array) => (s as unknown as { handlePacket(p: { code: number; payload: Uint8Array }): void }).handlePacket({ code, payload });
+        const replies: [number, number, boolean][] = [];
+        (s as unknown as { connection: unknown }).connection = {
+            isOpen: true,
+            send: (code: number, p: Uint8Array) => { if (code === ClientOp.CheckLosRequest) replies.push([(p[0]! << 8) | p[1]!, (p[2]! << 8) | p[3]!, (p[4]! & 0x01) !== 0]); return true; },
+            close: () => {},
+        };
+        s.phase = 'playing';
+        s.regionId = 252;
+        s.mover.objectId = 1;
+        s.mover.snap(252, 0, 0, 0, 0, null);
+        s.model.positionOf = (id: number) => (id === 7 ? { x: 1000, y: 0, z: 0 } : null);
+        const ask = (src: number, tgt: number) => feed(ServerOp.CheckLOSRequest, W().u16(src).u16(tgt).u16(0).u16(0).toBytes());
+        return { s, replies, ask };
+    }
+
+    test('answered from lineOfSight between the two objects, us included, in our region', () => {
+        const seen: unknown[] = [];
+        const { s, replies, ask } = checking((regionId, a, b) => { seen.push([regionId, a.x, b.x]); return false; });
+        ask(1, 7);
+        ask(7, 1);
+        expect(replies).toEqual([[1, 7, false], [7, 1, false]]);
+        expect(seen).toEqual([[252, 0, 1000], [252, 1000, 0]]);
+        expect(s.losReplies).toBe(2);
+        expect(s.losBlocked).toBe(2);
+    });
+
+    test('clear without lineOfSight, or with an object we do not know', () => {
+        const none = checking();
+        none.ask(1, 7);
+        expect(none.replies).toEqual([[1, 7, true]]);
+        const blocked = checking(() => false);
+        blocked.ask(1, 99);
+        expect(blocked.replies).toEqual([[1, 99, true]]);
+        expect(blocked.s.losBlocked).toBe(0);
+    });
+});
+
 describe('DaocSession dead state in 0xA9', () => {
     /** A session streaming on a fake socket; `states` holds the state byte (offset 26) of every 0xA9 sent. */
     function streaming() {

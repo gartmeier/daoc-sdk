@@ -67,7 +67,10 @@ export class Swarm {
     statusLine(): string {
         return this.bots.map(b => {
             const state = b.exit ? `exit ${b.exit.code}` : b.client.inGame ? 'in game' : b.client.phase;
-            return `${b.config.botName}: ${state}, logins ${b.bridge.logins}`;
+            // Server LoS checks this session answered, and how many of them the terrain blocked (session.losClear).
+            const s = b.client.session;
+            const los = s && s.losReplies > 0 ? `, LoS ${s.losBlocked}/${s.losReplies} blocked` : '';
+            return `${b.config.botName}: ${state}, logins ${b.bridge.logins}${los}`;
         }).join(' | ');
     }
 

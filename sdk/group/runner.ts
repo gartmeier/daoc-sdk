@@ -14,7 +14,8 @@ import { BotDisconnectedError, BotPreemptedError, runScript, type ScriptContext 
 import { awaitingRez, type TacticsSettings } from './behaviors';
 import { Blackboard } from './blackboard';
 import { classTruthFromGateway } from './class-score';
-import { MemberAgent, type Behavior, type Member } from './member';
+import { MemberAgent, type Behavior, type Member, type MemberAgentOptions } from './member';
+import { describeVision, resolveVision, type VisionMode, type VisionOptions } from '../vision';
 import { withCharacter } from './character';
 import { leftPassive, memberPetKit, petAfterRun, petHoldOf, petLeftAlone, petsAllowed, withPets } from './pets';
 import { formatReport, GroupObserver, saveReport, stampOf, type Finding, type RunReport } from './observer';
@@ -84,7 +85,11 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     const log = out.log;
     const def = loadGroup(opts.dir);
     const strategy = opts.strategy;
-    const settings = mergeSettings(strategy.settings, unflatten(opts.settings ?? {}) as any) as S;
+    // `vision` is no strategy setting: a flag for the members' sight (MemberAgentOptions.vision).
+    const { vision: visionFlag, ...flagSettings } = unflatten(opts.settings ?? {});
+    const settings = mergeSettings(strategy.settings, flagSettings as any) as S;
+    const agentOptions: MemberAgentOptions = { ...strategy.agent, vision: withVisionFlag(strategy.agent?.vision, visionFlag) };
+    const vision = resolveVision(agentOptions.vision);
     const { members, opened } = await connectGroup(def, opts.have, strategy.roleOf, bot => !strategy.memberBehaviors?.[bot]);
     const board = new Blackboard(strategy.board);
     const agents: MemberAgent<S>[] = [];
@@ -105,7 +110,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     }]));
     // The enemies' real classes, for scoring the board's class reads in the report only: the other bots on this gateway.
     const truth = classTruthFromGateway(gatewayHttpBase(members[0]!.sdk.config.gatewayUrl), new Set(def.members.map(m => m.bot)));
-    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name, startedAt, findings: strategyFindings, routines, petHoldMs: petHoldOf(settings), classTruth: truth.truth });
+    const observer = new GroupObserver(board, { group: def.name, strategy: vision ? `${strategy.name} [human vision]` : strategy.name, startedAt, findings: strategyFindings, routines, petHoldMs: petHoldOf(settings), classTruth: truth.truth });
     const graceMs = opts.graceMs ?? 60_000;
     // Planned until the main loop starts; a wind-down from the viewer only moves them earlier.
     let deadline = startedAt + opts.seconds * 1000;
@@ -145,6 +150,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         if (regions.size > 1) throw new Error(`members are in different regions: ${players.map(p => `${p.name} ${p.regionId}`).join(', ')}; bring them together first (teleporters)`);
         log(`${def.name}: ${members.map(m => `${m.sdk.getPlayer()!.name} (${m.sdk.getPlayer()!.className} L${m.sdk.getPlayer()!.level}, ${m.role})`).join(', ')}; strategy ${strategy.name}`);
         log(`routines: ${members.map(m => `${m.bot} from its ${routines[m.bot]!.from}`).join(', ')}`);
+        log(`vision: ${describeVision(vision)}`);
         if (opts.form !== false) for (const line of await formGroup(members, def.leader)) log(`group: ${line}`);
 
         board.onEvent(e => {
@@ -153,7 +159,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         // The observer first: what an agent's first reports set off counts ("15:46:02 Pettan: Pettan died", and the report said deaths 0).
         observer.start();
         started = true;
-        for (const m of members) agents.push(new MemberAgent(m, board, behaviorsOf(m), settings, strategy.agent));
+        for (const m of members) agents.push(new MemberAgent(m, board, behaviorsOf(m), settings, agentOptions));
         const coordinator = new Coordinator(board, strategy, settings);
         // A wind-down from the viewer is the timed end, sooner.
         const applyWindDown = (now: number) => {
@@ -277,6 +283,18 @@ function groupPublisher<S>(opts: GroupRunOptions<S>, def: GroupDefinition, membe
         deps.log(`group publish off: ${errorText(e)}`);
         return null;
     }
+}
+
+/**
+ * The strategy's vision with a run's flag over it: `--vision=human` sets the mode, `--vision.fovDegrees=120`
+ * a number (a partial set means human sight). No flag leaves the strategy's.
+ */
+export function withVisionFlag(base: MemberAgentOptions['vision'], flag: unknown): MemberAgentOptions['vision'] {
+    if (flag === undefined) return base;
+    const from = typeof base === 'string' ? { mode: base } : base ?? {};
+    if (typeof flag === 'string') return { ...from, mode: flag as VisionMode };
+    if (flag && typeof flag === 'object') return { ...from, mode: 'human', ...(flag as Partial<VisionOptions>) };
+    throw new Error(`--vision: expected human, omniscient or --vision.<option>=<value>, got ${String(flag)}`);
 }
 
 /** { 'ready.hp': 70 } → { ready: { hp: 70 } }, so flags can reach nested settings. */

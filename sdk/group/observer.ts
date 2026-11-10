@@ -183,6 +183,12 @@ export interface RunReport {
         /** RvR: distinct enemy players the group saw, and fights with at least one enemy player. */
         enemiesSeen?: number;
         engagements?: number;
+        /**
+         * RvR: median distance (units) from the nearest living member at which an enemy player first came onto the board,
+         * and how many of those first sightings were within 1000 (a surprise). Human vision (sdk/vision.ts) brings both down.
+         */
+        firstSightRange?: number | null;
+        firstSightClose?: number;
         /** RvR: average distance (units) of the living from the centre of the largest cluster of them, and how many stood beyond 2500 of it (% of samples). */
         spreadAvg?: number;
         strayedPct?: number;
@@ -475,6 +481,8 @@ export class GroupObserver {
     private readonly enemies = new Set<string>();
     /** Every enemy player's class read over the run (Contact.classGuess). */
     private readonly classReads = new ClassReadLog();
+    /** Distance to the nearest living member when each of those first came onto the board. */
+    private readonly firstSightRanges: number[] = [];
     /** The samples behind every fight's tank hold. */
     private holdSamples = 0;
     /** Events for a member with no track yet: one starts with its first sample, up to a second into the run, and an instant summon or a death can be quicker (credit). */
@@ -596,7 +604,15 @@ export class GroupObserver {
             }
             samplePet(t.pet, m, p.at, p.orders.phase === 'pull' && p.orders.puller === m.name);
         }
-        for (const c of p.contacts) if (c.kind === 'player') { this.enemies.add(`${c.regionId}:${c.objectId}`); this.firstSeenAt ??= p.at; }
+        for (const c of p.contacts) {
+            if (c.kind !== 'player') continue;
+            this.firstSeenAt ??= p.at;
+            const key = `${c.regionId}:${c.objectId}`;
+            if (this.enemies.has(key)) continue;
+            this.enemies.add(key);
+            const near = Math.min(...p.members.filter(m => !m.isDead && m.regionId === c.regionId).map(m => Math.hypot(m.x - c.x, m.y - c.y)));
+            if (Number.isFinite(near)) this.firstSightRanges.push(Math.round(near));
+        }
         this.classReads.sample(p);
         for (const w of p.orders.waiting ?? []) {
             const t = this.members.get(w.name);
@@ -865,6 +881,7 @@ export class GroupObserver {
             Object.assign(report.totals, {
                 playerKills: this.playerKills, deathsToPlayers: this.deathsToPlayers, realmPoints: rpTotal, rpPerHour: Math.round(rpTotal / hours),
                 enemiesSeen: this.enemies.size, engagements: this.fights.filter(f => f.enemyPlayers).length,
+                firstSightRange: median(this.firstSightRanges), firstSightClose: this.firstSightRanges.filter(d => d < 1000).length,
                 spreadAvg: this.spreadSamples ? Math.round(this.spreadSum / this.spreadSamples) : 0, strayedPct: pct(this.strayedSamples, this.spreadSamples),
                 alivePct: pct(this.aliveSamples, this.memberSamples), deathsAlone: this.deathsAlone,
                 wetPct: pct(this.wetSamples, this.aliveSamples), wetInFights: pct(this.fightWet, this.fightMemberSamples), enemiesWetInFights: pct(this.fightEnemyWet, this.fightEnemySamples),
@@ -1041,6 +1058,7 @@ export function formatReport(r: RunReport): string {
     }
     if (rvr && t.contactS !== undefined) lines.push(`Contact: first enemy player seen ${t.contactS === null ? 'never' : `at ${clock(t.contactS)}`}, first fight with them ${t.firstFightS == null ? 'never' : `at ${clock(t.firstFightS)}`}; ${t.engagements ?? 0} such fights, the longest stretch without one ${clock(t.quietMaxS ?? 0)}.`);
     if (rvr && t.steepPct !== undefined) lines.push(`Slope: on ground steeper than 35° ${t.steepPct}% of the time alive, ${t.steepInFights}% of fight time, ${t.steepInTravel}% of travel${t.steepSpots?.length ? `; most at ${t.steepSpots.join(', ')}` : ''}.`);
+    if (rvr && t.firstSightRange != null) lines.push(`First sight of an enemy player: median ${t.firstSightRange} units from the nearest member, ${t.firstSightClose ?? 0} within 1000.`);
     if (rvr && t.alivePct !== undefined) lines.push(`Together: ${t.spreadAvg} units from the group's centre on average, ${t.strayedPct}% of the time beyond 2500; alive ${t.alivePct}% of the time; ${t.deathsAlone} deaths with fewer than two near.`);
     if (rvr && t.travelSpreadAvg !== undefined) lines.push(`Travelling: ${t.columnPct}% of it in a column, ${t.travelSpreadAvg} units from the centre on average, a crowd controller in front ${t.ccFrontPct}% of the time${t.columnOffAvg !== undefined ? `; in it a follower stood ${t.columnOffAvg} off its place on average (${Math.abs(t.columnTrailAvg ?? 0)} ${(t.columnTrailAvg ?? 0) >= 0 ? 'too far back' : 'too close'} overall)` : ''}.`);
     if (r.previous) lines.push(`Against the previous run: ${Object.entries(r.previous).map(([k, v]) => `${k} ${v}`).join(', ')}.`);

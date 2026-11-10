@@ -67,7 +67,7 @@ When the library and at least one `.nav` exist, `walkTo`/`followPath`/`travelTo`
 - A zone's mesh loads on its first query (~0.1 s, 20–50 MB of memory each).
 - `navmeshGroundZ(regionId, x, y, zHint?)` gives the navmesh height (what the server snaps ground targets and mob paths to); `groundAt(regionId, x, y, zHint)` gives the real ground (next section); `getNavmeshStore().at(region, x, y)` gives the raw `NavMesh` (`closestPoint`, `surfaceZ`, `findPath`, `randomPoint`, `raycast`).
 - `DAOC_NAVMESH=off` forces straight lines. `DAOC_NAVMESH_DIR` and `DETOUR_LIB` override the paths.
-- `raycast` checks whether you can walk straight across the mesh. It is not visual line of sight, and the client still answers every server LoS check with "clear".
+- `raycast` checks whether you can walk straight across the mesh. It is not visual line of sight: that is `sdk/vision.ts` `lineOfSight` over the terrain heightmap, which also answers the server's LoS checks.
 
 ## Ground height (navmesh zones)
 

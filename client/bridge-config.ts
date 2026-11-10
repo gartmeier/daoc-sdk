@@ -8,6 +8,7 @@ import { GatewayBridge, type BridgeOptions } from './bridge';
 import { defaultClass, defaultRace } from './session';
 import { realmName, realmNumber } from './model/classes';
 import { moverGround } from '../sdk/ground';
+import { clientLineOfSight } from '../sdk/vision';
 
 export interface BotConfig {
     botName: string;
@@ -99,6 +100,8 @@ export interface BotBridge {
 /** One logged-out DaocClient plus its gateway bridge; call bridge.run() to start. */
 export function createBotBridge(config: BotConfig, opts: Partial<BridgeOptions> & { trace?: boolean } = {}): BotBridge {
     const log = opts.log ?? ((msg: string) => console.log(`[${config.botName}] ${msg}`));
+    const lineOfSight = clientLineOfSight();
+    if (!lineOfSight) log('line of sight: every server check is answered clear (DAOC_LOS=clear, or no server/navmesh terrain)');
     const client = new DaocClient({
         host: config.host,
         port: config.port,
@@ -113,6 +116,7 @@ export function createBotBridge(config: BotConfig, opts: Partial<BridgeOptions> 
         log: msg => log(`[client] ${msg}`),
         trace: opts.trace,
         ground: moverGround(),
+        lineOfSight,
     });
     const bridge = new GatewayBridge(client, {
         gatewayUrl: config.gatewayUrl,

@@ -17,6 +17,7 @@ import type { GroupMemberView, MemberPlayer, PassiveEvent, RunView, WorldContact
 import type { RunMeta, WireEvent } from '../../sdk/group/wire';
 import type { PetReport } from '../../sdk/group/types';
 import type { PetState } from '../../sdk/types';
+import { KEEP_CLEARANCE } from '../../sdk/group/keeps';
 
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -174,7 +175,7 @@ describe('viewer routes', () => {
         const bg = await (await http('/regions/252/live')).json() as any;
         expect(bg.layout).toEqual({ name: 'Thidranki', levels: [20, 24] });
         expect(bg.keeps.map((k: any) => k.name)).toEqual(['Thidranki Faste', 'Hibernia Portal Keep', 'Midgard Portal Keep', 'Albion Portal Keep']);
-        expect(bg.keeps[0].clearance).toBe(3000);
+        expect(bg.keeps[0].clearance).toBe(KEEP_CLEARANCE.keep);
         expect(bg.bots).toEqual([]);
     });
 

@@ -6,7 +6,7 @@
 
 import type { ActionResult, BotAction, BotWorldState, ClientPhase, PetCommand, PlayerState, Vec3 } from '../sdk/types';
 import { getZone } from '../data/zones';
-import { DaocSession, SessionError, type SessionEndReason } from './session';
+import { DaocSession, SessionError, type SessionEndReason, type SessionOptions } from './session';
 import { ClientOp } from './protocol/opcodes';
 import * as out from './protocol/outgoing';
 import { headingTo, rampedMoveMs, type MoverDeps } from './movement';
@@ -32,6 +32,8 @@ export interface DaocClientOptions {
     publishIntervalMs?: number;
     /** Ground height for the mover (sdk/ground.ts moverGround); default none: z follows the waypoints. */
     ground?: MoverDeps['ground'];
+    /** The answer to server LoS checks (sdk/vision.ts clientLineOfSight); default none: every check is clear. */
+    lineOfSight?: SessionOptions['lineOfSight'];
 }
 
 type StateListener = (state: BotWorldState) => void;
@@ -121,6 +123,7 @@ export class DaocClient {
             log: this.log,
             trace: this.opts.trace,
             ground: this.opts.ground,
+            lineOfSight: this.opts.lineOfSight,
         });
         this.session = s;
         s.model.hooks.onSignificant = (reason: string) => this.significant(reason);

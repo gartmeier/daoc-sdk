@@ -4,7 +4,8 @@
 
 export * from './types';
 export { Blackboard, observeState, emptyOrders, isMaterialChange, isAlive, diedLately, type BlackboardOptions, type Observation } from './blackboard';
-export { MemberAgent, MemberContext, countCombatMessage, type Behavior, type Member, type OwnNames } from './member';
+export { MemberAgent, MemberContext, countCombatMessage, type Behavior, type Member, type MemberAgentOptions, type OwnNames } from './member';
+export { HUMAN_VISION, canSee, describeVision, resolveVision, sightOf, type VisionMode, type VisionOptions } from '../vision';
 export { loadCharacter, withCharacter, type Character } from './character';
 export * from './behaviors';
 export * from './pets';
