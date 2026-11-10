@@ -9,6 +9,7 @@ import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import type { Contact, MemberReport, Role } from '../group/types';
 import type { SpellPick } from '../group/spells';
+import { noteTooFar, tooFarOf, viewDistance } from './mentalist';
 import { thrifty } from './thrifty';
 
 export interface DruidOptions {
@@ -91,7 +92,9 @@ export const rootDiver = (above = 15): Behavior => ({
         const sp = ctx.spells.root();
         if (!sp || hammeredBy(ctx)) return false;
         const self = ctx.members().find(m => m.name === me.name);
-        const seen = (c: Contact) => { const v = foeInView(ctx, c.objectId); return !v || ('isDead' in v && v.isDead) ? Infinity : v.distance; };
+        const far = tooFarOf(ctx.memory);
+        const raw = (c: Contact) => { const v = foeInView(ctx, c.objectId); return !v || ('isDead' in v && v.isDead) ? Infinity : v.distance; };
+        const seen = (c: Contact) => viewDistance(far, c.objectId, raw(c), Date.now());
         const foe = diverTarget(ctx.picture().contacts, ctx.members(), self?.regionId ?? me.regionId, seen, sp.range, o, Date.now());
         if (!foe) return false;
         await stopSwinging(ctx);
@@ -99,6 +102,7 @@ export const rootDiver = (above = 15): Behavior => ({
         const c = await ctx.bot.castSpell(sp.spell, foe.objectId, { approach: false });
         const refused = !c.success ? null : c.effectImmune ? 'immune' : c.alreadyOn ? 'already_on' : c.resisted ? 'resisted' : c.effectLanded === false ? 'no_effect' : null;
         ctx.result('cc', refused ? { ...c, success: false, reason: refused } : c, foe.objectId);
+        noteTooFar(far, foe.objectId, c.reason, raw(foe), Date.now());
         if (refused === 'immune') ctx.markCcImmune(foe.objectId, 'root', ROOT_IMMUNE_MS);
         else if (refused === 'already_on') ctx.markCcImmune(foe.objectId, 'root', sp.duration * 1000 + ROOT_IMMUNE_MS);
         else if (c.success && !refused) ctx.markCc(foe.objectId, 'root', sp.duration * 1000, c.landedOn);

@@ -10,7 +10,10 @@ import type { Behavior } from '../group/member';
 import type { SpellPick } from '../group/spells';
 import { nukerFight, quickcastUnderFire } from './cabalist';
 import { slowTarget } from './healer';
-import { quickFlash } from './mentalist';
+import { noteTooFar, quickFlash, tooFarOf, viewDistance } from './mentalist';
+
+/** As the Flash's (mentalist.ts): the server checks range in 3D, ours is our view's. */
+const RANGE_MARGIN = 150;
 
 /** His instant single-target debuffs on a melee, best first: attack speed (Blinding Scintillation), then melee damage (Dazzling Torch). */
 const DAZZLES = ['CombatSpeedDebuff', 'MeleeDamageDebuff'] as const;
@@ -35,7 +38,10 @@ export const dazzle = (): Behavior<TacticsSettings> => ({
         const self = ctx.members().find(m => m.name === ctx.name);
         if (!self) return false;
         const threats = ctx.threats().filter(t => !t.cc);
-        const distanceTo = (id: number) => foeInView(ctx, id)?.distance ?? Infinity;
+        const far = tooFarOf(ctx.memory);
+        const raw = (id: number) => foeInView(ctx, id)?.distance ?? Infinity;
+        // The server measures in 3D at the cast's end: the margin as the Flash's, and no retry at a "too far" (viewDistance).
+        const distanceTo = (id: number) => viewDistance(far, id, raw(id), Date.now()) + RANGE_MARGIN;
         for (const sp of dazzleSpells(ctx.spells.all(), me.mana)) {
             const key = `dazzleUntil:${sp.type}`;
             const until: Map<number, number> = ctx.memory.get(key) ?? new Map();
@@ -45,6 +51,7 @@ export const dazzle = (): Behavior<TacticsSettings> => ({
             ctx.doing('debuff', target.objectId, sp.spell.name);
             const c = await ctx.bot.castSpell(sp.spell, target.objectId, { approach: false });
             ctx.result('debuff', c.success && c.resisted ? { ...c, success: false, reason: 'resisted' } : c, target.objectId);
+            noteTooFar(far, target.objectId, c.reason, raw(target.objectId), Date.now());
             until.set(target.objectId, Date.now() + (c.success && !c.resisted ? sp.duration * 1000 : 3000));
             return true;
         }

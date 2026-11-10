@@ -6,7 +6,7 @@ import { getClassSkills } from '../../data/index';
 import { withCharacter } from '../group/character';
 import { packBehaviors } from '../group/pack';
 import type { Contact } from '../group/types';
-import { mentalist, stunTarget } from './mentalist';
+import { mentalist, noteTooFar, stunTarget, viewDistance, type TooFar } from './mentalist';
 import { reachOfBuild } from './reach';
 
 const BUDGET_AT_50 = earnedSpecPoints(10, 50);
@@ -97,5 +97,19 @@ describe('mentalist builds, as the guide tells them', () => {
         const levelling = pathOf('Mana levelling');
         expect(levelling[39]!.specs.Mentalism).toBe(1);
         expect(levelling[40]!.specs.Mentalism).toBeGreaterThanOrEqual(5);
+    });
+});
+
+describe('the server's "too far"', () => {
+    test('holds 10 s, unless our view puts the target 200 nearer than when it was said', () => {
+        const log: TooFar = new Map();
+        noteTooFar(log, 7, 'resisted', 1300, 0);
+        expect(viewDistance(log, 7, 1300, 0)).toBe(1300);
+        noteTooFar(log, 7, 'out_of_range', 1300, 0);
+        expect(viewDistance(log, 7, 1250, 5000)).toBe(Infinity);
+        expect(viewDistance(log, 8, 1250, 5000)).toBe(1250);
+        expect(viewDistance(log, 7, 1050, 5000)).toBe(1050);
+        noteTooFar(log, 7, 'out_of_range', 1300, 0);
+        expect(viewDistance(log, 7, 1300, 10_001)).toBe(1300);
     });
 });
