@@ -44,6 +44,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 52 (vs Camelot, won by wipe 5 / 1; the group's calmFan):** moving 7 % (62 % in round 50), 15 heals, 4 cures, but idle 31 % with "heal: not enough power" 34 times. Since then her stun and Nearsight cure stop below 40 % power (`EXTRAS_FLOOR`); the mezz cure (6 % of her power) and the slow (2) stay.
 
+**Rounds 54-55 (floor in):** r54 3 heals, power waited 10 %; r55 (won 8 / 2) 13 heals, 14 cures, 3 stuns, no death, and no "not enough power" in her failures.
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
