@@ -12,6 +12,9 @@ import { quickcastUnderFire } from './cabalist';
 import { slowTarget } from './healer';
 import { casterFight, noteTooFar, quickFlash, tooFarOf, viewDistance } from './mentalist';
 
+/** Below this % power the debuffs wait: his power is for nukes. */
+export const DAZZLE_FLOOR = 40;
+
 /** As the Flash's (mentalist.ts): the server checks range in 3D, ours is our view's. */
 const RANGE_MARGIN = 150;
 
@@ -35,6 +38,8 @@ export const dazzle = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         if (ctx.orders().phase !== 'engage') return false;
         const me = ctx.me();
+        // Round 68: 13 debuffs at 12-13 power took as much as his 13 nukes, then 15 turns of "assist: no power". The nukes kill.
+        if (me.maxMana > 0 && me.manaPercent < DAZZLE_FLOOR) return false;
         const self = ctx.members().find(m => m.name === ctx.name);
         if (!self) return false;
         const threats = ctx.threats().filter(t => !t.cc);
