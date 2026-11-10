@@ -14,6 +14,7 @@ describe('spiritmaster kit', () => {
             const list = withCharacter(lists.nuker as Behavior<any>[], spiritmaster()).map(b => b.name);
             expect(list.filter(n => n === 'assist')).toHaveLength(1);
             expect(list.indexOf('nukeInReach')).toBe(list.indexOf('assist') + 1);
+            expect(list.indexOf('quickcast')).toBe(list.indexOf('flee') - 1);
         }
     });
 

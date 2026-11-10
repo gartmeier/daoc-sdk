@@ -14,6 +14,8 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 
 **Round 27 (vs Camelot, wiped 2 / 5, one fight of 229 s):** moving 73 %, targeted 73 %, 4 nukes, 1 out of range. Against round 22 (moving 52 %, targeted 19 %) the group's longer step may walk her into their casters; told the group session.
 
+**Quickcast (2026-11-10, after round 27):** she has the ability (`bun sdk/cli.ts Hrafna`) and nothing used it. The kit's `instant` is the Cabalist kit's `quickcastUnderFire` ([cabalist.md](cabalist.md)): with a melee on her, or a cast of hers interrupted in the last 5 s, Quickcast, then her cc order or her nuke on the focus, uninterruptible, at twice the power, once per 31 s. In round 27 she was targeted 73 % of the fight.
+
 Before that the kit held only the role. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.
 
 In PvE, Midgard's `memberBehaviors.hrafna` (the nuker's list plus `restOnPull`) overrides any character. In RvR nothing does.

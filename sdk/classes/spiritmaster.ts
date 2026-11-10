@@ -1,13 +1,15 @@
 // The standard Spiritmaster: a starting point a bot imports into bots/<bot>/character.ts and tunes. The nuker's list
 // casts at the focus and her pet fights it; what is the class's own is not standing idle: with the focus out of her
-// reach and the pack holding ground, she nukes a free enemy player that is in reach (nukeInReach). learnings/classes/
-// spiritmaster.md has the runs.
+// reach and the pack holding ground, she nukes a free enemy player that is in reach (nukeInReach). Under fire (a melee on
+// her, or a cast interrupted in the last 5 s) Quickcast makes her next cast uninterruptible: the Cabalist kit's
+// quickcastUnderFire, in the instant slot. learnings/classes/spiritmaster.md has the runs.
 
 import { assist, foeInView, hammeredBy, type TacticsSettings } from '../group/behaviors';
 import { isAlive, untouchable } from '../group/blackboard';
 import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import type { Contact } from '../group/types';
+import { quickcastUnderFire } from './cabalist';
 
 /** Kept inside a spell's range: positions are a moment old, and the server measures in 3D. */
 const RANGE_MARGIN = 50;
@@ -42,5 +44,5 @@ export const nukeInReach = (): Behavior<TacticsSettings> => ({
 });
 
 export function spiritmaster(): Character {
-    return { role: 'nuker', fight: [assist(), nukeInReach()] };
+    return { role: 'nuker', instant: [quickcastUnderFire()], fight: [assist(), nukeInReach()] };
 }
