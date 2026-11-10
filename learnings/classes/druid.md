@@ -130,4 +130,5 @@ Hibernia won 51 of the 85 arena rounds it played (Midgard 20, Camelot 14); round
 **Open:**
 - Power: a 197-point pool runs dry in long fights (rounds 20-24, 81, 108); the group's heal thresholds and the Bard's power song are the levers.
 - Focused by Midgard (round 87: 9 heals interrupted) she has no instant or uninterruptible heal at 24.
-- `groupHeal` firing count is not visible in the reports (it reports as `heal`); `reachHurt` was added on a wrong theory (round 76) and kept for the Bard's runs.
+- `reachHurt` was added on a wrong theory (round 76) and kept for the Bard's runs.
+- Since 2026-11-10 (night) `groupHeal` reports its own result kind, so the Actions column shows `groupHeal (n)` apart from `heal`. How often it fires is still to be read from the next rounds (the Warden and Friar kits use it too).

@@ -50,7 +50,9 @@ export const groupHeal = (min = 3, above = 25): Behavior => ({
         if (hurt.length < min) return false;
         await stopSwinging(ctx);
         ctx.doing('heal', me.objectId, `${sp.spell.name} for ${hurt.map(m => m.name).join(', ')}`);
-        ctx.result('heal', await ctx.bot.castSpell(sp.spell), me.objectId);
+        // Its own result kind, so a report's Actions column counts group heals apart from single ones (druid.md had them as
+        // 'heal', where nobody could tell how often it fired). The activity stays 'heal'.
+        ctx.result('groupHeal', await ctx.bot.castSpell(sp.spell), me.objectId);
         return true;
     },
 });
