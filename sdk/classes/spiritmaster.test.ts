@@ -5,7 +5,7 @@ import { enemy } from '../group/fixtures';
 import type { Behavior } from '../group/member';
 import { packBehaviors } from '../group/pack';
 import { rvrBehaviors } from '../group/rvr';
-import { inReachTarget, spiritmaster } from './spiritmaster';
+import { HOLD_GROUND, inReachTarget, LONG_AFTER_MS, LONG_STEP, spiritmaster, stepFor } from './spiritmaster';
 
 describe('spiritmaster kit', () => {
     test('a nuker whose fight is assist, then nukeInReach, in every list', () => {
@@ -33,5 +33,12 @@ describe('spiritmaster kit', () => {
         expect(inReachTarget([focus, mezzed, pet, edge], 3, distanceTo, 1500, now)).toBeNull();
         expect(inReachTarget([plain, healer], 3, distanceTo, 1500, now, new Map([[2, now + 5000]]))?.objectId).toBe(1);
         expect(inReachTarget([plain, healer], 3, distanceTo, 1500, now, new Map([[2, now - 1]]))?.objectId).toBe(2);
+    });
+
+    test('a short step, and a long one once the focus has been out of reach a while with nothing cast', () => {
+        const now = 1_000_000;
+        expect(stepFor(null, now)).toBe(HOLD_GROUND);
+        expect(stepFor(now - LONG_AFTER_MS + 1, now)).toBe(HOLD_GROUND);
+        expect(stepFor(now - LONG_AFTER_MS, now)).toBe(LONG_STEP);
     });
 });

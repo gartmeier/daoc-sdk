@@ -16,6 +16,35 @@ import { quickcastUnderFire } from './cabalist';
  * 73 % of rounds 27, 32 and 34, with nukeInReach there for a focus she can't reach.
  */
 export const HOLD_GROUND = 250;
+/** ... unless the focus has been out of reach this long with nothing cast meanwhile: then a step of LONG_STEP. Round 44 she stood 69 % of a 246 s fight at 250. */
+export const LONG_AFTER_MS = 4000;
+export const LONG_STEP = 750;
+
+/** Which step assist gets: the short one, or the long one once `outSince` (focus out of reach, nothing cast since) is LONG_AFTER_MS old. */
+export function stepFor(outSince: number | null, now = Date.now()): number {
+    return outSince !== null && now - outSince >= LONG_AFTER_MS ? LONG_STEP : HOLD_GROUND;
+}
+
+/** assist with stepFor's step. Named assist, as the role's fight is. */
+export const steppingAssist = (): Behavior<TacticsSettings> => {
+    const short = assist({ holdGround: HOLD_GROUND }), long = assist({ holdGround: LONG_STEP });
+    return {
+        ...short,
+        async run(ctx) {
+            const o = ctx.orders();
+            const sp = ctx.spells.nuke();
+            const d = o.focus ? foeInView(ctx, o.focus)?.distance : undefined;
+            const out = o.phase === 'engage' && !!sp && d !== undefined && d > sp.range;
+            const was: number | null = ctx.memory.get('outSince') ?? null;
+            const since = out ? was ?? Date.now() : null;
+            ctx.memory.set('outSince', since);
+            const inner = stepFor(since) === LONG_STEP ? long : short;
+            const acted = await inner.run(ctx);
+            if (acted) ctx.memory.set('outSince', null);
+            return acted;
+        },
+    };
+};
 
 /** A target the server called out of range is left this long: round 37 had 15 such answers in 17 s on one target. */
 export const FAR_MS = 8000;
@@ -50,6 +79,7 @@ export const nukeInReach = (): Behavior<TacticsSettings> => ({
         ctx.doing('nuke', target.objectId, `${sp.spell.name} (focus out of reach)`);
         const c = await ctx.bot.castSpell(sp.spell, target.objectId, { approach: false });
         ctx.result('nuke', c, target.objectId);
+        if (c.success) ctx.memory.set('outSince', null);
         // The server says it is farther than we see it: not again for a while, the next in reach gets the turn.
         if (c.reason === 'out_of_range') far.set(target.objectId, Date.now() + FAR_MS);
         return true;
@@ -57,5 +87,5 @@ export const nukeInReach = (): Behavior<TacticsSettings> => ({
 });
 
 export function spiritmaster(): Character {
-    return { role: 'nuker', instant: [quickcastUnderFire()], fight: [assist({ holdGround: HOLD_GROUND }), nukeInReach()] };
+    return { role: 'nuker', instant: [quickcastUnderFire()], fight: [steppingAssist(), nukeInReach()] };
 }
