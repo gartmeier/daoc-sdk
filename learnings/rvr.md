@@ -57,13 +57,43 @@ A battleground has no merchants, and the recall stone doesn't work there. The wa
 
 - **Players of different realms may attack each other anywhere in Thidranki:** nothing checks region, zone or area (`NormalServerRules.IsAllowedToAttack`). The safe-area check is commented out.
 - **PvP immunity, 10 s:** after logging in, a region change (the port in) and a release (`AbstractServerRules.cs:235-261`). Two refusals: "You can't attack players until your PvP invulnerability timer wears off!" (ours) and "{name} is temporarily immune to PvP attacks!" (theirs). `attack`, `killPlayer`, `castSpell` and `petAttack` report both as reason `immune` with `retryAfterMs`: it covers a pet's order, whoever is immune. "Your temporary PvP invulnerability timer has expired." is the end of it, not a refusal.
-- **Enemy players are named by race** ("Briton", "Celt", "Troll"), with no guild (`NormalServerRules.cs:292-338`): tell them apart by `objectId`. The board labels them `Celt#410`.
+- **Enemy players are named by race** ("Briton", "Celt", "Troll"), with no guild (`NormalServerRules.cs:292-338`): tell them apart by `objectId`. The board labels them `Celt#410`. What class one is, the board reads from its race, gear, spells and styles ([below](#reading-an-enemys-class-sdkgroupclass-readts)).
 - **How long crowd control holds a level 24 player:** Suppress Movement about 19 s (31 in the DB), the board's mark about 17 s; Sedate 43 s and Mesmerizing Hymn 42 s, their DB time.
 - **Their health is known** (every 0xA9 position relay carries it), **their target is not:** the server sends a target only to its own client. The blackboard infers it from the player's last melee swing, or a spell effect on someone of another realm, within 6 s (`observeState`, `PLAYER_AIM_MS`: two-handed weapons at these levels swing every 4.4-5.4 s). A spell effect on another player of its own realm marks it as a healer, a cast start as a caster; both stick for the contact.
 - **Deaths:** an RvR death costs no experience and no constitution (`GamePlayer.cs:5920-5944`). After a revive: "RvR Resurrection Illness", 60 s.
 - **Kills give experience, hardly any realm points:** a level-20 victim is worth `max(1, (level-20)²) + realm level` = 1 RP, split among everyone who damaged it, so 0 RP each (`PlayerKillRewardProcessor.cs`). In round 2 members made up to 6M XP/h and 0 RP. Watch the levels: Thidranki takes 20–24, and a member above 24 is moved out at its next logout (`rvrFindings` warns at 24).
 - **Keep guards attack enemy players** within 2000 at a portal keep (level 255, speed 575) and 1000 at Thidranki Faste (`GameKeepGuard.cs:803-806`). The LoS check goes to the target's own client, which always answers clear, and the keeps load without walls (`keepcomponent` is empty), so nothing gives cover. The strategy stays 4500 from enemy portal keeps and 3000 from a keep that isn't ours (`keepDangers`, `sdk/group/keeps.ts`): patrols and routes go round those circles, the fight's anchor never moves into one, and tank and melee never follow a player into one (`beyondLeash`); an attacker standing under the guards is answered by the casters, from range.
 - **Thidranki's PvE mobs** (282 aggressive spawns, L20–28, aggro 500) sit away from the straight lines between the portal keeps and the middle; routes go round them (`safePath`).
+
+## Reading an enemy's class (`sdk/group/class-read.ts`)
+
+Every enemy player contact carries `classGuess: { classes, p, role?, basis }`: its likely classes, most likely first, each one's share, and the role once 60 % of the weight agrees. Roles: `healer`, `caster` (archers too), `cc` (Bard, Minstrel, Sorcerer), `tank` (Armsman, Paladin, Hero, Warrior), `melee`, `support` (Warden, Skald). It is read only from what a real client sees, as a human player reads it; never a name, a roster or the server's truth:
+
+- **Race**, the name an enemy player shows: the one hard rule (`classes.json` eligible races). A Lurikeen of Hibernia is a Champion, Eldritch, Enchanter, Hero, Mentalist or Nightshade, never a Druid.
+- **Gear**, from 0x15 EquipmentUpdate (`NearbyPlayer.gear`): the heaviest armour it surely wears and every weapon it holds or swings (0xBC's weapon model), against what each class can use at its level (armour, shield and weapon abilities of its career and lines). Shield size only leans, as a shield model serves several sizes in the DB. Plate with a sword and shield reads Armsman or Paladin at first sight, cloth and a staff a caster, an instrument a Bard.
+- **Spells**: the client effect of every cast it starts (0x72) and lands (0x1B), against each class's spells at its level, style procs too. A spell no class of the realm has (an item's) counts for nothing.
+- **Styles**: the 0xBC animation of each style it lands (`CombatEvent.style`: the style's icon, or its two-hand animation), against each class's styles at its level. A dual wield's plain swing needs a dual line.
+- **Never a cast**: swinging 10 s with no cast start counts against classes with cast-time spells, harder after 25 s (0.3 and 0.1 for 8 or more, a Thane's 17; 0.7 and 0.5 for a light hybrid, a Champion's 4). A Troll in chain behind a big shield that never casts reads Warrior, a Celt in scale Hero.
+
+Apart from race, each miss is a factor (0.02 for gear a class can't use, 0.05 for a spell or style it can't have), so one odd piece can't empty the list. The board unions every member's evidence per enemy and keeps it 30 minutes, past the contact's forgetting and its death, and starts over when another race shows under the id.
+
+**Live, arena rounds 101-105** (2026-11-10, the three level-24 rosters): rounds 101-103 had race and spells only, as the clients predated the 0x15 decoding: 27 of 31 right at the round's end; the misses were the Hero and the Warrior, which only gear and styles tell apart, and a Mentalist that showed one spell every Lurikeen caster has. Rounds 104-105, with gear and styles: 19 of 21 right, 19 of 20 within 10 s of their fight (a Spiritmaster only seen at range was never fought); a Warrior and a Cabalist right at first sight, a Bard at 1 s. A healer or a caster reads as gear's best guess until its first spells, 7-16 s after first sight, usually before it fights us. The Hero tied with a Champion (0.5 each) in round 105, which the light-hybrid factor now leans to Hero, tank (not yet seen live).
+
+What to write in a strategy instead of a roster rule (Camelot's `focusRaces: ['Dwarf']` "the one Dwarf is their healer", the opponent-specific settings in `groups/*/rvr.ts`):
+
+```typescript
+const read = (c: Contact) => c.classGuess;
+const healer = contacts.find(c => c.kind === 'player' && read(c)?.role === 'healer');
+const mezzer = contacts.find(c => read(c)?.role === 'cc');                               // their Bard, Minstrel or Sorcerer
+const fighter = (c: Contact) => ['tank', 'melee'].includes(read(c)?.role ?? '');           // mezz these, nuke the rest
+const sure = (c: Contact, cls: string) => read(c)?.classes[0] === cls && read(c)!.p[0]! >= 0.6;
+```
+
+- No `role` means the weight is split (first sight, a Hero against a Champion): fall back on `classes`, or on the sticky flags.
+- The `healer` and `caster` flags stay: they say what it did (a heal on its realm, a cast start), the guess what it is. Use the guess before it has acted, the flags where a deed counts more.
+- An enemy seen only from afar has gear alone: right realm, armour class and role, not yet the class.
+
+**Scoring.** Each RvR report has a `## Class reads` table, and its JSON a `classReads`: per enemy the truth, the last read, when it turned right and stayed so (from first sight, and from its first moment as a threat), the path of top classes and what the read went by. The truth is the other bots' own `className`, polled through the gateway by the runner for the observer only (`classTruthFromGateway` in `class-score.ts`; `DAOC_CLASS_TRUTH=0` turns it off). Against real players there is no truth: the table shows `?`.
 
 ## Deaths: release to the portal keep
 
