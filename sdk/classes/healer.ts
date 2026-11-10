@@ -112,8 +112,9 @@ export const cureNearsight = (): Behavior<TacticsSettings> => ({
         const key = `nearsight:${m.objectId}`;
         if (Date.now() - (ctx.memory.get(key) ?? 0) < NEARSIGHT_SPACING_MS) return false;
         ctx.memory.set(key, Date.now());
-        ctx.doing('cure', m.objectId, sp.spell.name);
-        ctx.result('cure', await ctx.bot.castSpell(sp.spell, m.objectId, { approach: false }), m.objectId);
+        // Its own kind in the reports, apart from the mezz cure's `cure`.
+        ctx.doing('nearsight', m.objectId, sp.spell.name);
+        ctx.result('nearsight', await ctx.bot.castSpell(sp.spell, m.objectId, { approach: false }), m.objectId);
         return true;
     },
 });
