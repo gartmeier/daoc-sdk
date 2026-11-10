@@ -96,3 +96,13 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **To look for:** `quickcast` results and `(quickcast)` casts in the report, and damage against round 28.
 
+## Nearsight on enemy casters (kit, from Camelot's round after round 30, 2026-11-10)
+
+**Verified:** against Hibernia, Camelot lost rounds 12, 15, 24, 28 and 30, winning only 21. Each time Hibernia's casters mezzed, amnesia'd or interrupted ours from range (round 28: 21 interrupts from one caster; round 30: Quickcast went once each for Morgana and Taliesin, and Morgana's 4 debuffs were refused while she was crowd-controlled).
+
+**Server code:** Nearsight adds its value to the target's SpellRange and ArcheryRange debuffs (NearsightECSEffect.cs), and SpellRangePercentCalculator gives `100 - debuff` %. Obscuring Dust (Matter 19, value 35, range 2300, 2 s, 9 power, 120 s) takes a 1500-range caster to 975, and she casts it from beyond that caster's reach. The target is then immune for a while (ImmunityEffectSpellHandler). Nearsight wakes a mezz (GameLiving.cs, the non-damage spells that break one).
+
+**The change** (`nearsight` in `sdk/classes/cabalist.ts`, in Morgana's react, so above her assist and below flee and crowdControl): in engage, and in travel with enemy players in reach, it casts Obscuring Dust on an enemy caster or healer within 2250. The order is the group's marked mezzer (`camMezzer`), then whoever was seen casting last, then a healer, then the nearest. It skips anyone mezzed, on a cc assignment or claimed for one, a pet, nearsighted by her in the last 3 minutes, or out of reach. Nothing is cast while a melee is on her. `cabalist({ nearsight: false })` turns it off.
+
+**To look for:** `nearsight` results in her report line, and whether Hibernia's opening mezz still lands from 1500.
+

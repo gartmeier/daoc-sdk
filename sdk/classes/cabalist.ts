@@ -11,6 +11,7 @@ import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import { dotFamily, type SpellPick } from '../group/spells';
 import type { Contact, MemberReport, Orders, Point } from '../group/types';
+import { camelotMezzer } from './cleric';
 import { thrifty } from './thrifty';
 
 export interface CabalistOptions {
@@ -20,6 +21,8 @@ export interface CabalistOptions {
     offFocus?: boolean;
     /** Instant debuffs on a melee hitting her or a caster (meleeDebuff, the instant slot). On by default. */
     meleeDebuff?: boolean;
+    /** Obscuring Dust on enemy casters and healers from 2300 (nearsight). On by default. */
+    nearsight?: boolean;
 }
 
 /** No debuffs below this % power: the mezz and the nukes come first. Arena round 27: Merlin's 9 debuffs, then 2 mezzes and 4 nukes refused for power. */
@@ -203,12 +206,61 @@ export const quickcastUnderFire = (): Behavior<TacticsSettings> => ({
     },
 });
 
+/** A nearsighted target, then the immunity after it: 120 s of Obscuring Dust and 60 s of NearsightImmunity. */
+const NEARSIGHT_HOLD_MS = 180_000;
+
+/**
+ * Whom to nearsight: an enemy caster or healer in `range` that nobody controls or is about to (a mezz would wake: GameLiving.cs
+ * lists Nearsight among the spells that break one), not nearsighted by us lately (`until`). The group's marked mezzer first
+ * (`marked`), then whoever was seen casting last, then a healer, then the nearest.
+ */
+export function nearsightTarget(me: Point & { regionId: number }, contacts: readonly Contact[], orders: Pick<Orders, 'cc'>, until: ReadonlyMap<number, number>, range: number, now: number, marked: number | null = null, claimed: (id: number) => boolean = () => false): Contact | null {
+    const open = contacts.filter(c => c.kind === 'player' && !c.isPet && !c.stale && !c.cc && (c.caster || c.healer) && c.regionId === me.regionId
+        && dist(me, c) <= range && (until.get(c.objectId) ?? 0) <= now && !orders.cc.some(a => a.targetId === c.objectId) && !claimed(c.objectId) && !untouchable(c, now));
+    return open.find(c => c.objectId === marked)
+        ?? [...open].sort((a, b) => (b.castingAt ?? 0) - (a.castingAt ?? 0) || Number(!!b.healer) - Number(!!a.healer) || dist(me, a) - dist(me, b))[0] ?? null;
+}
+
+/**
+ * Obscuring Dust (Nearsight 35 %, range 2300, 2 s, 9 power, 120 s): an enemy caster's or healer's spell range goes to 65 %
+ * (NearsightECSEffect.cs, SpellRangePercentCalculator.cs), 1500 to 975, from beyond its own reach. In a fight and on the approach
+ * (travel with enemy players in reach), before her nukes. Arena rounds 12, 15, 24, 28, 30: Hibernia's casters mezzed,
+ * amnesia'd and interrupted ours from range and won every time but one.
+ */
+export const nearsight = (opts: { marked?: (orders: unknown) => number | null } = {}): Behavior<TacticsSettings> => ({
+    name: 'nearsight',
+    interruptible: false,
+    async run(ctx) {
+        const o = ctx.orders();
+        if (o.phase !== 'engage' && o.phase !== 'travel') return false;
+        const me = ctx.me();
+        const sp = ctx.spells.all().filter(s => s.type === 'Nearsight' && s.target === 'Enemy' && s.power <= me.mana && s.spell.cooldownRemaining <= 0)
+            .sort((a, b) => b.spell.level - a.spell.level)[0];
+        if (!sp) return false;
+        if (sp.castTime > 0 && hammeredBy(ctx)) return false;
+        const until: Map<number, number> = ctx.memory.get('nearsightUntil') ?? new Map();
+        ctx.memory.set('nearsightUntil', until);
+        const now = Date.now();
+        const t = nearsightTarget(me, ctx.picture().contacts, o, until, sp.range - RANGE_MARGIN, now, opts.marked?.(o) ?? null, id => claimedBy(ctx, 'cc', id, CC_CLAIM_MS).length > 0);
+        if (!t) return false;
+        const seen = foeInView(ctx, t.objectId);
+        if (!seen || isDown(ctx, seen) || seen.distance > sp.range - RANGE_MARGIN) return false;
+        await stopSwinging(ctx);
+        ctx.doing('debuff', t.objectId, sp.spell.name);
+        const c = await ctx.bot.castSpell(sp.spell, t.objectId, { approach: false });
+        const refused = !c.success ? null : c.effectImmune || c.alreadyOn ? 'immune' : c.resisted ? 'resisted' : null;
+        ctx.result('nearsight', refused ? { ...c, success: false, reason: refused } : c, t.objectId);
+        until.set(t.objectId, Date.now() + (c.success && !refused ? NEARSIGHT_HOLD_MS : refused === 'immune' ? 60_000 : 4000));
+        return true;
+    },
+});
+
 /** The list's assist, then offFocus; both under the floor if there is one. */
 export function nukerFight(saveBelow: number, withOffFocus: boolean): Behavior<TacticsSettings>[] {
     const floor = (b: Behavior<TacticsSettings>) => (saveBelow > 0 ? thrifty(b, saveBelow) : b);
     return [floor(assist()), ...(withOffFocus ? [floor(offFocus())] : [])];
 }
 
-export function cabalist({ saveBelow = 0, offFocus: off = true, meleeDebuff: debuff = true }: CabalistOptions = {}): Character {
-    return { role: 'nuker', instant: [quickcastUnderFire(), ...(debuff ? [meleeDebuff()] : [])], fight: nukerFight(saveBelow, off) };
+export function cabalist({ saveBelow = 0, offFocus: off = true, meleeDebuff: debuff = true, nearsight: ns = true }: CabalistOptions = {}): Character {
+    return { role: 'nuker', instant: [quickcastUnderFire(), ...(debuff ? [meleeDebuff()] : [])], ...(ns ? { react: [nearsight({ marked: camelotMezzer })] } : {}), fight: nukerFight(saveBelow, off) };
 }

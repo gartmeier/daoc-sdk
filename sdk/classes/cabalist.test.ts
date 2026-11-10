@@ -6,7 +6,7 @@ import type { Contact } from '../group/types';
 import { getBuild } from '../../data/builds';
 import { Spellbook } from '../group/spells';
 import { getSpell } from '../../data/index';
-import { cabalist, meleeDebuffTarget, nextMeleeDebuff, offFocusTarget, underFire } from './cabalist';
+import { cabalist, meleeDebuffTarget, nearsightTarget, nextMeleeDebuff, offFocusTarget, underFire } from './cabalist';
 import { reachOfBuild } from './reach';
 import { sorcerer } from './sorcerer';
 import { theurgist } from './theurgist';
@@ -109,3 +109,40 @@ describe('meleeDebuff', () => {
         expect(underFire(false, undefined, 10_000)).toBe(false);
     });
 });
+
+describe('nearsight', () => {
+    const NOW = 1_000_000;
+    const none = new Map<number, number>();
+    test('Morgana reaches Obscuring Dust: Nearsight 35, range 2300', () => {
+        const dust = picksOf('Cabalist', 'Matter').filter(p => p.type === 'Nearsight').sort((a, b) => b.spell.level - a.spell.level)[0]!;
+        expect([dust.spell.name, dust.value, dust.range]).toEqual(['Obscuring Dust', 35, 2300]);
+    });
+
+    test('the marked mezzer first, then the one seen casting last, then a healer, then the nearest', () => {
+        const bard = foe(5, 2100, { caster: true, castingAt: NOW - 9000 });
+        const ench = foe(6, 2000, { caster: true, castingAt: NOW - 1000 });
+        const druid = foe(7, 1200, { healer: true });
+        const hero = foe(8, 500);
+        expect(nearsightTarget(me, [bard, ench, druid, hero], { cc: [] }, none, 2250, NOW, 5)?.objectId).toBe(5);
+        expect(nearsightTarget(me, [bard, ench, druid, hero], { cc: [] }, none, 2250, NOW)?.objectId).toBe(6);
+        expect(nearsightTarget(me, [druid, foe(9, 900, { caster: true })], { cc: [] }, none, 2250, NOW)?.objectId).toBe(7);
+        expect(nearsightTarget(me, [hero], { cc: [] }, none, 2250, NOW)).toBeNull();
+    });
+
+    test('never one mezzed, assigned, claimed, done lately or out of reach', () => {
+        const ench = foe(6, 2000, { caster: true });
+        expect(nearsightTarget(me, [{ ...ench, cc: { by: 'Merlin', kind: 'mezz', until: NOW + 9000 } }], { cc: [] }, none, 2250, NOW)).toBeNull();
+        expect(nearsightTarget(me, [ench], { cc: [{ targetId: 6, by: 'Merlin' }] }, none, 2250, NOW)).toBeNull();
+        expect(nearsightTarget(me, [ench], { cc: [] }, none, 2250, NOW, null, id => id === 6)).toBeNull();
+        expect(nearsightTarget(me, [ench], { cc: [] }, new Map([[6, NOW + 1000]]), 2250, NOW)).toBeNull();
+        expect(nearsightTarget(me, [foe(6, 2300, { caster: true })], { cc: [] }, none, 2250, NOW)).toBeNull();
+    });
+
+    test('Morgana casts it before her fight, after flee', () => {
+        const list = withCharacter(rvrBehaviors().nuker, cabalist()).map(b => b.name);
+        expect(list.indexOf('nearsight')).toBeGreaterThan(list.indexOf('flee'));
+        expect(list.indexOf('nearsight')).toBeLessThan(list.indexOf('assist'));
+        expect(withCharacter(rvrBehaviors().nuker, cabalist({ nearsight: false })).map(b => b.name)).not.toContain('nearsight');
+    });
+});
+
