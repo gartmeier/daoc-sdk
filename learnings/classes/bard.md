@@ -89,3 +89,5 @@ What the class has that no behaviour uses:
 **Verified, arena round 23** (wiped Midgard 5-1, no Bard death): 11 mezz cures, 13 interrupts, 4 mezzes. The first round with the cure high in his list (urgent), the earlier interrupt (before the engage) and Midgard's Sigrid as the group's focus.
 
 **Verified, arena round 28** (beat Camelot 9-0, no deaths): 21 interrupts, his most yet, and 7 mezzes; the first round with `interruptOnTheRun` in the instant slot (the report counts both kinds as `interrupt`).
+
+**Arena rounds 43-51** (lost 43, 47, 49, 51): Oisin died first and early in every loss (11-24 s), and with him the group's only mezz cure. Round 51: Brigid was mezzed 9 s after his death and cast 3 heals in a 126 s fight. His `flee` brings him to the tank, inside Guard's 256, and the Hero's Guard sits on Brigid at range: suggested to the group session to guard Oisin in RvR.
