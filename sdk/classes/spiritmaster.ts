@@ -4,6 +4,11 @@
 // her, or a cast interrupted in the last 5 s) Quickcast makes her next cast uninterruptible: the Cabalist kit's
 // quickcastUnderFire, in the instant slot. learnings/classes/spiritmaster.md has the runs.
 
+//
+// Other kits import from here, so keep these names and signatures, or tell their class sessions first: steppingAssist()
+// (named 'assist'; Hibernia's Mentalist and Enchanter). It keeps its wait in ctx.memory 'outSince', which nukeInReach
+// resets on a cast; a kit without nukeInReach gets the long step and the leg 4 s after its last cast.
+
 import { assist, foeInView, hammeredBy, type TacticsSettings } from '../group/behaviors';
 import { isAlive, untouchable } from '../group/blackboard';
 import type { Character } from '../group/character';
