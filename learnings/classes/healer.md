@@ -48,6 +48,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 63 (vs Hibernia, wiped 0 / 5), effects sampled every 15 s with `bun sdk/cli.ts`:** Hrafna under Mesmerizing Hymn (their Bard's mezz) in 4 samples, about a minute; Sigrid stunned and mezzed herself (Illusory Convulsions, Mesmerizing Hymn), targeted 81 %, in melee 56 %. With Midgard's only mezz cure controlled, nobody frees the others. No Nearsight in a Hibernia round, as expected.
 
+**Round 67 (vs Camelot, lost on the cap 3 / 9; Nearsight cure in urgent):** 3 `nearsight` cures, her first; 2 heals, 3 slows. Hrafna still idle 32 % ("focus out of reach" 74) with 7 nukes: Camelot's casters stand back even at her full range.
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
