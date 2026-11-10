@@ -97,6 +97,6 @@ From runs with no pets: `--pet.enabled=false` is the run to compare with.
 - The shared `flee` now circles the tank with `giveGroundStep`. His own `giveGround` acts only with no tank alive.
 
 **Open:**
-- His ice spirits (`fnfPet`) rarely show any damage in reports; whether they land is unverified.
+- ~~His ice spirits rarely show any damage~~ **Closed (2026-11-10 night, Albion session):** they land. Over all 177 Camelot reports with a Pets table (the Pets section, `fnf` row), 111 had summons: 467 ice spirits dealt 49,494 damage, **106 a summon**, and broke a crowd control 8 times. Rounds with summons and 0 damage (16) are those where they died or the fight ended first. Still open: whether 106 for a summon's power beats the nuke it replaces.
 - Field of Snow (area snare) and Ice Blast (snare nuke) are unused.
 - Confusing Gust needs Wind 4, which costs his 5 spare points. Declined for now because it would lock out Merlin's mezz.
