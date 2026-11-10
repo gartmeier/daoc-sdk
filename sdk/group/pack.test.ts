@@ -74,6 +74,7 @@ describe('a shade in the pickers that go straight to the contacts (AbstractServe
             spells: { confuse: () => ({ spell: { name: 'Befuddling Cadence' }, range: 1350 }), interrupts: () => [{ spell: { name: 'Minor Lullaby' }, range: 2300 }] },
             picture: () => b.picture(),
             members: () => b.picture().members,
+            memory: new Map(),
             sdk: { getNearbyNpc: () => null, getNearbyPlayer: (id: number) => ({ objectId: id, distance: 500 }) },
             doing() {},
             result(_k: string, r: { message?: string }, id: number) { if (r.message?.includes(SHADE_REFUSED)) b.markUnattackable(id, 1, UNATTACKABLE_MS); },
