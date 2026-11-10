@@ -111,3 +111,5 @@ Slam, the 9 s anytime stun, is Shields 42, past level 40 in this build, so it do
 **Arena round 25** (won 8-6 against Midgard, cap): 443 damage, 1 style each of Disable, Numb and Fire Blade. He died 17 s into the first fight, sent at Midgard's healer behind their line (the group's healerFirst), beyond Brigid's 2000 heal range, and spent most of the round walking back. No self-heal or escape at 24 in this build, so how far he dives is the group plan's to limit.
 
 **Arena round 36** (wiped 1-5 by Midgard, 205 s): 177 damage, no style landed; dead 24 s in, fighting their caster #495, the group's focus. Engage (Shields 7, blocks a single attacker) is the build's one survival tool no behaviour uses, but it holds only while he doesn't swing; not tried.
+
+**Verified, arena round 49** (wiped 0-5 by Midgard): the first parry chain landed, Return Blade then Lunging Blade (the reacting tank's pick between stuns), beside Numb, Disable and Fire Blade one each; 535 damage.
