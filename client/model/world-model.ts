@@ -4,7 +4,7 @@
 
 import type {
     Ability, CombatEvent, DialogBox, Effect, GameMessage, GroupMember, InventoryItem, MerchantItem,
-    MerchantState, Money, NearbyNpc, NearbyObject, NearbyPlayer, NpcDialog, PetAggression, PetLoss, PetLossCause,
+    MerchantState, Money, NearbyNpc, NearbyObject, NearbyPlayer, NpcDialog, PetAggression, PetLoss, PetLossCause, PlayerGear,
     PetState, PetWalk, Realm, SkillsState,
     Specialization, Spell, SpellDetails, Stats, Style, StyleDetails, TextWindow, TradeWindow, TrainerState, Vec3,
 } from '../../sdk/types';
@@ -19,7 +19,7 @@ import {
 } from '../protocol/incoming/combat';
 import {
     decodeModelChange, decodeNpcCreate, decodeObjectCreate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate,
-    decodePlayerHeading, decodePlayerPosition, decodeRemoveObject, decodeObjectDataUpdate,
+    decodePlayerHeading, decodePlayerPosition, decodeRemoveObject, decodeObjectDataUpdate, decodeEquipmentUpdate,
 } from '../protocol/incoming/objects';
 import {
     decodeDelveInfo, decodeInventoryUpdate, decodeMoney, decodePointsUpdate, decodeStatsUpdate, decodeStatusUpdate, decodeVariousUpdate,
@@ -357,6 +357,8 @@ export class WorldModel {
     self = newSelf();
     npcs = new Map<number, NpcEntry>();
     players = new Map<number, PlayerEntry>();
+    /** What each living in view shows it wears and holds (0x15), by object id; a player's reaches NearbyPlayer.gear. Kept apart, as a 0x15 can come before the create. */
+    gear = new Map<number, PlayerGear>();
     sessionToOid = new Map<number, number>();
     objects = new Map<number, ObjectEntry>();
     /** All inventory slots (equipment, backpack, vault, ...). */
@@ -435,6 +437,7 @@ export class WorldModel {
         this.petOrder = null;
         this.npcs.clear();
         this.players.clear();
+        this.gear.clear();
         this.sessionToOid.clear();
         this.objects.clear();
         this.trade = null;
@@ -676,6 +679,8 @@ export class WorldModel {
                 const d = decodeNpcCreate(p);
                 this.objects.delete(d.objectId);
                 this.players.delete(d.objectId);
+                // Its own 0x15 follows the create (GameNPC.cs AddToWorld): what an earlier holder of the id wore is not its.
+                this.gear.delete(d.objectId);
                 const prev = this.npcs.get(d.objectId);
                 if (d.objectId === this.pet?.objectId && this.pet.name !== d.name) this.pet = { ...this.pet, name: d.name };
                 // Ids get reused at once (Region.cs:955, :779): no pet, or another name, is somebody else.
@@ -796,6 +801,7 @@ export class WorldModel {
                 const d = decodeObjectCreate(p);
                 this.npcs.delete(d.objectId);
                 this.players.delete(d.objectId);
+                this.gear.delete(d.objectId);
                 // Static items are re-sent as 0xD9 every world_object_update_interval (30 s, ClientService.cs:832-865),
                 // so the "spawned next to a fresh corpse" guess only applies the first time we see an object,
                 // and an object already judged to be loot stays loot.
@@ -822,6 +828,12 @@ export class WorldModel {
                     level: d.level, model: d.model, realm: d.realm, x: d.x, y: d.y, z: d.z, heading: d.heading, speed: 0,
                     healthPercent: d.isDead ? 0 : 100, isDead: d.isDead, diedAt: 0, isSitting: false, inCombat: false, lastUpdate: now,
                 });
+                return true;
+            }
+            case ServerOp.EquipmentUpdate: {
+                // Every living in view, ours too (SendLivingEquipmentUpdate to GetPlayersInRadius): what a real client draws on it.
+                const d = decodeEquipmentUpdate(p);
+                if (d.objectId !== this.self.objectId) this.gear.set(d.objectId, { activeWeapons: d.activeWeapons, items: d.items, at: now });
                 return true;
             }
             case ServerOp.ModelChange: {
@@ -1066,6 +1078,8 @@ export class WorldModel {
                     this.pushCombat({
                         kind: 'melee', attackerObjectId: d.attackerId || null, targetObjectId: d.defenderId,
                         result: d.result, targetHealthPercent: d.targetHealthPercent,
+                        // What the swing looked like: the style's animation (Style.Icon, or TwoHandAnimation with a two-hander; StyleProcessor.cs:448-452) and the weapon's model.
+                        ...(d.style ? { style: d.style } : {}), ...(d.weaponModel ? { weaponModel: d.weaponModel } : {}),
                     });
                 }
                 // The defender's HealthPercent at the swing (WeaponAction.cs:369), sent to everyone in view
@@ -1237,7 +1251,6 @@ export class WorldModel {
             case ServerOp.CheckLOSRequest:
             case ServerOp.Quit:
             case ServerOp.UDPInitReply:
-            case ServerOp.EquipmentUpdate:
             case ServerOp.ObjectGuildID:
             case ServerOp.QuestEntry:
             case ServerOp.DebugMode:
@@ -1405,6 +1418,7 @@ export class WorldModel {
     }
 
     removeObject(oid: number): void {
+        this.gear.delete(oid);
         this.npcs.delete(oid);
         this.objects.delete(oid);
         const pl = this.players.get(oid);
@@ -1513,6 +1527,7 @@ export class WorldModel {
                 lastSeenAgo: now - pl.lastUpdate, sessionId: pl.sessionId, guildName: pl.guildName, lastName: pl.lastName,
                 level: pl.level, realm: realmName(pl.realm), healthPercent: pl.healthPercent, isDead: pl.isDead,
                 isSitting: pl.isSitting, inCombat: pl.inCombat, model: pl.model, isShade: pl.model === SHADE_MODEL,
+                ...(this.gear.has(pl.objectId) ? { gear: this.gear.get(pl.objectId) } : {}),
             });
         }
         return out.sort((a, b) => a.distance - b.distance);

@@ -327,3 +327,42 @@ export function decodeObjectDataUpdate(p: Uint8Array): { objectId: number; level
     r.u8();
     return { objectId, level: r.u8() };
 }
+
+/** One item a living shows (0x15): its slot (eInventorySlot 10-37) and model. */
+export interface VisibleItem {
+    slot: number;
+    model: number;
+}
+
+/** 0x15 EquipmentUpdate (PacketLib1124.cs:52-105): what every client in view sees a living wear. */
+export interface EquipmentUpdate {
+    objectId: number;
+    /** VisibleActiveWeaponSlots: low nibble the right hand's slot, high nibble the left's, 0xF none (10 right, 11 left, 12 two-hand, 13 ranged, minus 10). */
+    activeWeapons: number;
+    items: VisibleItem[];
+}
+
+/**
+ * Per item: u8 slot (0x80 a new-style emblem, left hand and cloak only), u16 model (low 13 bits; 0x8000 a u16
+ * texture follows, 0x4000 a u8 one, 0x2000 a u16 effect), u8 extension unless a weapon slot (10-13), then the
+ * texture and the effect. A short packet keeps what it read.
+ */
+export function decodeEquipmentUpdate(p: Uint8Array): EquipmentUpdate {
+    const r = new PacketReader(p);
+    const objectId = r.u16();
+    const activeWeapons = r.u8();
+    r.u8(); // speed
+    r.u8(); // cloak/helm invisible
+    r.u8(); // hood up, quiver
+    const count = r.remaining > 0 ? r.u8() : 0;
+    const items: VisibleItem[] = [];
+    for (let i = 0; i < count && r.remaining >= 3; i++) {
+        const slot = r.u8() & 0x7F;
+        const raw = r.u16();
+        let need = (slot < 10 || slot > 13 ? 1 : 0) + (raw & 0x8000 ? 2 : raw & 0x4000 ? 1 : 0) + (raw & 0x2000 ? 2 : 0);
+        if (r.remaining < need) break;
+        for (; need > 0; need--) r.u8();
+        items.push({ slot, model: raw & 0x1FFF });
+    }
+    return { objectId, activeWeapons, items };
+}

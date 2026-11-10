@@ -18,6 +18,7 @@ import { findBotEnv } from '../index';
 import { isAlive, type Blackboard } from './blackboard';
 import { COLUMN_FAR } from './behaviors';
 import { CC_WALK, MEZZED } from './cc';
+import { ClassReadLog, formatClassReads, type ClassReads, type ClassTruth } from './class-score';
 import type { GroupEvent, GroupPicture, MemberCombat, MemberReport, Phase } from './types';
 import type { LiveReport } from './wire';
 import { isSteep } from './slope';
@@ -234,6 +235,8 @@ export interface RunReport {
     timeline: string[];
     /** Change against the previous run in the same history file. */
     previous?: Record<string, string>;
+    /** RvR: how the board read the enemy players' classes, against the truth when the runner had one (class-score.ts). */
+    classReads?: ClassReads;
 }
 
 /** What the samples say about a member's pet. */
@@ -470,6 +473,8 @@ export class GroupObserver {
     private readonly steepAt = new Map<string, number>();
     /** Enemy player contacts ever seen, by region:objectId. */
     private readonly enemies = new Set<string>();
+    /** Every enemy player's class read over the run (Contact.classGuess). */
+    private readonly classReads = new ClassReadLog();
     /** The samples behind every fight's tank hold. */
     private holdSamples = 0;
     /** Events for a member with no track yet: one starts with its first sample, up to a second into the run, and an instant summon or a death can be quicker (credit). */
@@ -480,7 +485,7 @@ export class GroupObserver {
     /**
      * `findings`: the strategy's own rules (GroupStrategy.findings), added to every report's. `petHoldMs`: what a pet waits out on a focus before it is ordered in (petHoldOf), which onFocus doesn't hold against it; none: from the engage.
      */
-    constructor(private readonly board: Blackboard | null, private readonly meta: { group: string; strategy: string; sampleMs?: number; startedAt?: number; routines?: Record<string, { from: 'character' | 'role' | 'strategy'; behaviors: string[] }>; findings?: (r: RunReport) => Finding[]; petHoldMs?: number }) {
+    constructor(private readonly board: Blackboard | null, private readonly meta: { group: string; strategy: string; sampleMs?: number; startedAt?: number; routines?: Record<string, { from: 'character' | 'role' | 'strategy'; behaviors: string[] }>; findings?: (r: RunReport) => Finding[]; petHoldMs?: number; classTruth?: ClassTruth }) {
         this.started = meta.startedAt ?? Date.now();
         this.last = this.started;
     }
@@ -592,6 +597,7 @@ export class GroupObserver {
             samplePet(t.pet, m, p.at, p.orders.phase === 'pull' && p.orders.puller === m.name);
         }
         for (const c of p.contacts) if (c.kind === 'player') { this.enemies.add(`${c.regionId}:${c.objectId}`); this.firstSeenAt ??= p.at; }
+        this.classReads.sample(p);
         for (const w of p.orders.waiting ?? []) {
             const t = this.members.get(w.name);
             if (t) inc(t.waitMs, w.why, dt);
@@ -871,6 +877,10 @@ export class GroupObserver {
                 ...(this.columnPlaceSamples ? { columnOffAvg: Math.round(this.columnOffSum / this.columnPlaceSamples), columnTrailAvg: Math.round(this.columnTrailSum / this.columnPlaceSamples) } : {}),
             });
         }
+        if (rvr) {
+            const reads = this.classReads.result(this.meta.classTruth?.() ?? null);
+            if (reads) report.classReads = reads;
+        }
         report.findings = findingsFor(report);
         if (this.meta.findings) {
             try {
@@ -1066,6 +1076,7 @@ export function formatReport(r: RunReport): string {
             lines.push(`| ${n} | ${p.name || p.kind || '-'} | ${share(p.up)} | ${share(p.onFocus)} | ${share(p.drewFocus)}${p.intercepted ? ` (${p.intercepted}% more by intercepting)` : ''} | ${m.petDealt ?? 0} | ${p.deaths} | ${p.summons} | ${p.brokeCc} |`);
         }
     }
+    if (r.classReads) lines.push(...formatClassReads(r.classReads));
     lines.push('', '## Fights', '');
     for (const f of r.fights) {
         const openers = Object.entries(f.openerMs ?? {}).map(([n, ms]) => `${n} ${ms === null ? 'none' : secs(ms)}`).join(', ');

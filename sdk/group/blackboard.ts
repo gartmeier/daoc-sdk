@@ -42,6 +42,7 @@ import type { BotWorldState, CombatEvent, PetLoss, PlayerState, Realm } from '..
 import { isKillable, PLAYER_AIM_MS } from '../actions-helpers';
 import { isAttackable } from '../index';
 import { mobRunInMs } from '../mob-speed';
+import { addLook, newEvidence, readClass, type FoeEvidence, type FoeLook } from './class-read';
 import { CC_IMMUNE_MS, npcCcLanded, readCcEnds, serverNameKey, type CcEnd, type CcImmunity, type CcKind, type NpcCcRun } from './cc';
 import type { Activity, Capabilities, MemberCombat, Contact, GroupEvent, GroupPicture, MemberReport, Orders, OrdersUpdate, PetReport, Point, Role, Sighting } from './types';
 
@@ -135,6 +136,10 @@ const DEAD_ENTRY_MS = 3000;
 const CASTING_MS = 3000;
 /** It landed a spell on another player of its own realm (a heal or buff) this recent. */
 const HELPED_MS = 5000;
+/** How far back a snapshot's combat events go into an enemy player's look (FoeLook): well inside the client's last 200 events, and the board unions every snapshot. */
+const LOOK_MS = 4000;
+/** An enemy player's evidence untouched this long is dropped; a contact forgotten sooner keeps it, so it comes back with its read. */
+const FOE_MEMORY_MS = 30 * 60_000;
 /** The killer is looked for among combat events this recent. */
 const KILLER_MS = 15_000;
 
@@ -198,6 +203,19 @@ function interceptsOf(state: BotWorldState): NonNullable<Observation['intercepts
  * Turn one member's snapshot into its report and sightings (pure). Sightings are
  * monsters it could fight, players of other realms and those realms' pets, within `sightRadius`.
  */
+/** An enemy player's look in one snapshot: its visible gear and what its combat events showed. Nothing when there is nothing. */
+interface Seen { effects: Set<number>; styles: Set<number>; weapons: Set<number>; cast: boolean; swung: boolean }
+function lookFor(gear: { slot: number; model: number }[] | undefined, seen: Seen | undefined): { look?: FoeLook } {
+    const look: FoeLook = {};
+    if (seen?.cast) look.cast = true;
+    if (seen?.swung) look.swung = true;
+    if (gear?.length) look.gear = gear.map(i => [i.slot, i.model]);
+    if (seen?.effects.size) look.effects = [...seen.effects];
+    if (seen?.styles.size) look.styles = [...seen.styles];
+    if (seen?.weapons.size) look.weapons = [...seen.weapons];
+    return Object.keys(look).length ? { look } : {};
+}
+
 export function observeState(state: BotWorldState, self: MemberSelf, sightRadius = 3000): Observation | null {
     const p = state.player;
     if (!state.inGame || !p) return null;
@@ -218,6 +236,8 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     const spellAim = new Map<number, { targetId: number; at: number }>();
     const casting = new Set<number>();
     const helped = new Set<number>();
+    const looks = new Map<number, Seen>();
+    const lookOf = (id: number) => looks.get(id) ?? looks.set(id, { effects: new Set(), styles: new Set(), weapons: new Set(), cast: false, swung: false }).get(id)!;
     const deaths: number[] = [];
     const foeKills: number[] = [];
     const hits = new Set<number>();
@@ -248,6 +268,15 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         if (hostile && on !== null && ownPets.has(by) && age < SWING_WINDOW_MS) petSwings.push({ targetId: on, at: e.receivedAt, landed });
         if (e.kind === 'melee' && landed && by === p.objectId && on !== null && age < SWING_WINDOW_MS) ownSwings.push({ targetId: on, at: e.receivedAt });
         if (effect && !hostile && on !== by && isPlayer.has(on!) && age < HELPED_MS) helped.add(by);
+        // What a player shows of its class: the spells it casts, the styles it swings, the weapons it swings them with.
+        if (isPlayer.has(by) && age < LOOK_MS) {
+            if ((e.kind === 'spellCast' || e.kind === 'spellEffect') && e.effectId) lookOf(by).effects.add(e.effectId);
+            if (e.kind === 'melee' && e.style) lookOf(by).styles.add(e.style);
+            if (e.kind === 'melee' && e.weaponModel) lookOf(by).weapons.add(e.weaponModel);
+            if (e.kind === 'spellCast') lookOf(by).cast = true;
+            // A swing, not a spell's damage (SPELL_DAMAGE_RESULT reads 'other') nor a bow being drawn: a fighter that never casts shows it so.
+            if (e.kind === 'melee' && age < SWING_WINDOW_MS && e.result !== undefined && e.result !== 'other') lookOf(by).swung = true;
+        }
         if (e.kind === 'spellCast') {
             if (age < Math.max(e.castTimeMs ?? 0, CASTING_MS)) casting.add(by);
             if (age < SWING_WINDOW_MS) lastSpell.add(by);
@@ -301,6 +330,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
             swinging: lastSwing.has(o.objectId) || lastSpell.has(o.objectId),
             casting: casting.has(o.objectId), helped: helped.has(o.objectId),
             ...(o.isShade ? { isShade: true } : {}),
+            ...lookFor(o.gear?.items, looks.get(o.objectId)),
         });
     }
     const report: MemberReport = {
@@ -447,6 +477,8 @@ export class Blackboard {
     private readonly intercepted = new Map<string, { owner: string; until: number }>();
     /** What we knew about crowd control on a contact gone from view: it outlasts forgetAfterMs, so it comes back with it. Not after a death. */
     private readonly ccMemory = new Map<string, Pick<InternalContact, 'ccImmune' | 'serverName' | 'ccRuns'>>();
+    /** What every member has seen of each enemy player (class-read.ts), by key: it outlasts the contact, and a death too. A new race under the key starts over. */
+    private readonly foes = new Map<string, FoeEvidence & { touched: number }>();
     private orders: Orders = emptyOrders();
     private readonly eventLog: GroupEvent[] = [];
     private readonly eventListeners = new Set<(e: GroupEvent) => void>();
@@ -575,6 +607,7 @@ export class Blackboard {
                 }
             }
             if (!c.seenBy.includes(r.name)) c.seenBy.push(r.name);
+            if (s.kind === 'player') this.readFoe(key, c, s, now);
             // Sticky, from any member's sighting, fresh or late: one heal on its own realm makes a healer.
             if (s.helped) c.healer = true;
             if (s.casting) { c.caster = true; c.castingAt = now; }
@@ -755,6 +788,23 @@ export class Blackboard {
         if (named.length === 1) this.ccEnded(named[0]!, e.kind, e.at);
     }
 
+    /** Adds a sighting's look to the enemy player's evidence, and reads its class again when something new came. */
+    private readFoe(key: string, c: InternalContact, s: Sighting, now: number): void {
+        delete c.look;
+        let ev = this.foes.get(key);
+        if (ev && (ev.race !== s.name || ev.realm !== s.realm)) ev = undefined;
+        const fresh = !ev;
+        if (!ev) {
+            for (const [k, f] of this.foes) if (now - f.touched > FOE_MEMORY_MS) this.foes.delete(k);
+            this.foes.set(key, ev = { ...newEvidence(s.name, s.realm, s.level), touched: now });
+        }
+        ev.touched = now;
+        if (addLook(ev, s.look, s.level, now) || fresh || !c.classGuess) {
+            const guess = readClass(ev);
+            if (guess) c.classGuess = guess; else delete c.classGuess;
+        }
+    }
+
     private forget(key: string, c: InternalContact): void {
         this.contacts.delete(key);
         if (c.ccImmune || c.serverName || c.ccRuns) this.ccMemory.set(key, { ccImmune: c.ccImmune, serverName: c.serverName, ccRuns: c.ccRuns });
@@ -774,7 +824,7 @@ export class Blackboard {
             if (c.cc && c.cc.until <= now) c.cc = null;
             for (const k of Object.keys(c.ccImmune ?? {}) as CcKind[]) if (c.ccImmune![k]! <= now) delete c.ccImmune![k];
             if (c.unattackableUntil !== undefined && c.unattackableUntil <= now) delete c.unattackableUntil;
-            const { engaged: _e, hit: _h, petHitAt: _p, ccSince: _s, ccAt: _a, ccRuns: _r, deathEchoUntil: _d, petKillerUntil: _k, petKillerOf: _o, fixedAt: _f, lastHostile: _l, ...pub } = c;
+            const { engaged: _e, hit: _h, petHitAt: _p, ccSince: _s, ccAt: _a, ccRuns: _r, deathEchoUntil: _d, petKillerUntil: _k, petKillerOf: _o, fixedAt: _f, lastHostile: _l, look: _lk, ...pub } = c;
             const stale = now - c.lastSeen > this.staleAfterMs;
             const threat = this.isThreat(c, now);
             contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null, ...(c.ccImmune ? { ccImmune: { ...c.ccImmune } } : {}) });

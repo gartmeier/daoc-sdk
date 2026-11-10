@@ -13,6 +13,7 @@ import { gatewayHttpBase, type BotSDK } from '../index';
 import { BotDisconnectedError, BotPreemptedError, runScript, type ScriptContext } from '../runner';
 import { awaitingRez, type TacticsSettings } from './behaviors';
 import { Blackboard } from './blackboard';
+import { classTruthFromGateway } from './class-score';
 import { MemberAgent, type Behavior, type Member } from './member';
 import { withCharacter } from './character';
 import { leftPassive, memberPetKit, petAfterRun, petHoldOf, petLeftAlone, petsAllowed, withPets } from './pets';
@@ -102,7 +103,9 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         from: strategy.memberBehaviors?.[m.bot] ? 'strategy' as const : m.character ? 'character' as const : 'role' as const,
         behaviors: behaviorsOf(m).map(b => b.name),
     }]));
-    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name, startedAt, findings: strategyFindings, routines, petHoldMs: petHoldOf(settings) });
+    // The enemies' real classes, for scoring the board's class reads in the report only: the other bots on this gateway.
+    const truth = classTruthFromGateway(gatewayHttpBase(members[0]!.sdk.config.gatewayUrl), new Set(def.members.map(m => m.bot)));
+    const observer = new GroupObserver(board, { group: def.name, strategy: strategy.name, startedAt, findings: strategyFindings, routines, petHoldMs: petHoldOf(settings), classTruth: truth.truth });
     const graceMs = opts.graceMs ?? 60_000;
     // Planned until the main loop starts; a wind-down from the viewer only moves them earlier.
     let deadline = startedAt + opts.seconds * 1000;
@@ -190,6 +193,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         // First: under MCP the cleanup below can stall on an aborted call's SDK, and the viewer should still hear the run is ending.
         // An error only for a failure; a normal end says how in result.stoppedBy.
         publisher?.ending(failure ? errorText(failure) : null);
+        truth.stop();
         parent?.removeEventListener('abort', onParent);
         for (const off of offConn) off();
         for (const a of agents) a.dispose();

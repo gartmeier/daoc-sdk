@@ -5,6 +5,7 @@
 // processes (a gateway channel) instead of living in one process's blackboard.
 
 import type { CcImmunity, CcKind } from './cc';
+import type { ClassGuess, FoeLook } from './class-read';
 import type { PetAggression, PetWalk, Realm } from '../types';
 
 /** What a member is for. Roles pick a behaviour list; capabilities come from its spells. */
@@ -185,6 +186,8 @@ export interface Sighting {
     isPet?: boolean;
     /** Players: a Necromancer in shade (NearbyPlayer.isShade). No attack and no pet order lands on it (AbstractServerRules.cs:449-455): what can be fought is its servant. */
     isShade?: boolean;
+    /** Players: what this member saw of it in this snapshot that tells a class: gear (0x15), spell effects, style animations, weapons swung (class-read.ts). The board keeps it as evidence, not on the contact. */
+    look?: FoeLook;
 }
 
 /** The group's merged knowledge of one enemy. May be outdated: check lastSeen / stale. */
@@ -240,6 +243,11 @@ export interface Contact extends Sighting {
     caster?: boolean;
     /** Players: when it was last seen starting a cast. What an interrupt goes on (behaviors.ts interrupt). */
     castingAt?: number;
+    /**
+     * Players: its likely class, read as a human would from its race, gear, spells and styles, by every member, all the
+     * contact's life and beyond (class-read.ts). `classes` most likely first, `role` once 60 % of the weight agrees.
+     */
+    classGuess?: ClassGuess;
 }
 
 export type Phase = 'idle' | 'gather' | 'travel' | 'recover' | 'pull' | 'engage' | 'retreat';

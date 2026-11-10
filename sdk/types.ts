@@ -187,6 +187,18 @@ export interface NearbyPlayer extends WorldObjectBase {
     model?: number;
     /** A Necromancer in shade, model 822 (GamePlayer.cs:12345-12346): nobody can attack it, and no pet can be ordered at it: `You can't attack a shadowed necromancer!` (AbstractServerRules.cs:449-455). Its servant can be. Absent from an older client. */
     isShade?: boolean;
+    /** What it shows it wears and holds (0x15 EquipmentUpdate), as any client in view draws it. Absent before its first 0x15 and from an older client. */
+    gear?: PlayerGear;
+}
+
+/** A living's visible equipment (0x15, PacketLib1124.cs:52-105). */
+export interface PlayerGear {
+    /** VisibleActiveWeaponSlots: low nibble the right hand's slot - 10, high nibble the left's; 0xF none, 0xFF nothing drawn (GameLiving.cs:2037). */
+    activeWeapons: number;
+    /** Slot (eInventorySlot: 10 right hand, 11 left, 12 two-hand, 13 ranged, 21-28 armour, 26 cloak) and item model. */
+    items: { slot: number; model: number }[];
+    /** When it came (ms epoch). */
+    at: number;
 }
 
 export interface NearbyObject extends WorldObjectBase {
@@ -657,6 +669,10 @@ export interface CombatEvent {
     castTimeMs?: number;
     /** For kinds 'spellCast' and 'spellEffect': the spell's client effect id (Spell.ClientEffect, SpellHandler.cs:1273/:1290), not its spell id. */
     effectId?: number;
+    /** Kind 'melee': the 0xBC animation, when not a plain swing: a style's (Style.Icon, or its TwoHandAnimation with a two-hander; StyleProcessor.cs:448-452), or a dual wield's or a bow's. */
+    style?: number;
+    /** Kind 'melee': the model of the weapon it swung or shot. */
+    weaponModel?: number;
     receivedAt: number;
 }
 
