@@ -111,14 +111,23 @@ export const rootDiver = (above = 15): Behavior => ({
     },
 });
 
+/**
+ * `inner` only above `floor` % power with enemies about, and without a word below it: thrifty's skip reason would stand as
+ * her idle reason all fight whether anyone needs the cure or not (round 42: 33 turns of "cureNearsight: saving power").
+ */
+export const quietlyAbove = <S>(inner: Behavior<S>, floor: number): Behavior<S> => ({
+    ...inner,
+    run: ctx => (ctx.threats().length && ctx.me().maxMana > 0 && ctx.me().manaPercent < floor ? false : inner.run(ctx)),
+});
+
 export function druid({ dotsAbove, groupHealMin = 3, groupHealAbove = 25 }: DruidOptions = {}): Character {
     return {
         role: 'healer',
         urgent: [rootDiver(), groupHeal(groupHealMin, groupHealAbove)],
         // Cure Nearsight I (Regrowth, 6 s, 30 power): Albion's Obscuring Dust cut our spell ranges by 35 % in round 35
         // (orchestrator, 13f8de7). The Midgard Healer kit's cure, in her idle turns (react: at shedLoad in the pack's
-        // healer list), never under a melee, and in a fight only above half her 197 power.
-        react: [thrifty(unlessHammered(cureNearsight()), 50)],
+        // healer list), never under a melee, and in a fight only above 40 % of her 197 power.
+        react: [quietlyAbove(unlessHammered(cureNearsight()), 40)],
         ...(dotsAbove === undefined ? {} : { fight: [thrifty(assist(), dotsAbove)] }),
     };
 }
