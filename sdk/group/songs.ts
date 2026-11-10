@@ -57,14 +57,21 @@ const usesPower = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuk
 
 /** Song kinds for this phase and the group's state, best first. */
 export function wantedSongs(phase: string, members: MemberReport[], s: SongSettings = SONG_SETTINGS, endurance = 100): SongKind[] {
-    if (phase === 'travel' || phase === 'retreat') return ['speed', 'endurance'];
+    // Out of a fight, an endurance song at full endurance only costs power: a Paladin's Chant of Persistence pulsed through
+    // rest and travel at ~7 power a pulse, more than his regen (arena round 26, 2026-11-10: 69 waits for Galahad's power).
+    const tired: SongKind[] = endurance < ENDURANCE_REST_FULL ? ['endurance'] : [];
+    if (phase === 'retreat') return ['speed', 'endurance'];
+    if (phase === 'travel') return ['speed', ...tired];
     if (phase === 'engage' || phase === 'pull') return endurance < s.enduranceBelow ? ['endurance', 'armor', 'combatHeal', 'damage'] : ['armor', 'endurance', 'combatHeal', 'damage'];
     const alive = members.filter(m => !m.isDead);
     const out: SongKind[] = [];
     if (alive.some(m => usesPower(m) && m.mana < s.powerBelow)) out.push('power');
     if (alive.some(m => m.hp < s.healthBelow)) out.push('health');
-    return [...out, 'endurance'];
+    return [...out, ...tired];
 }
+
+/** Out of a fight (not a retreat), no endurance song for a singer at least this full. */
+export const ENDURANCE_REST_FULL = 90;
 
 /** The song to play: the first wanted kind we have, or null when we have none of them. */
 export function chooseSong(have: SongKind[], phase: string, members: MemberReport[], s: SongSettings = SONG_SETTINGS, endurance = 100): SongKind | null {

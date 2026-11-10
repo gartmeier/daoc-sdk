@@ -44,11 +44,11 @@ describe('song choice', () => {
     test('between fights: power for low casters, else health for the hurt, else endurance', () => {
         expect(chooseSong(WITH_POWER, 'recover', group({ Niamh: { mana: 40 }, Cuchulainn: { hp: 50 } }))).toBe('power');
         expect(chooseSong(WITH_POWER, 'recover', group({ Cuchulainn: { hp: 50 } }))).toBe('health');
-        expect(chooseSong(WITH_POWER, 'idle', group())).toBe('endurance');
+        expect(chooseSong(WITH_POWER, 'idle', group(), SONG_SETTINGS, 50)).toBe('endurance');
         // The tank's 0 power doesn't count; a dead caster's doesn't either.
-        expect(chooseSong(WITH_POWER, 'idle', group({ Ciaran: { mana: 0, isDead: true } }))).toBe('endurance');
+        expect(chooseSong(WITH_POWER, 'idle', group({ Ciaran: { mana: 0, isDead: true } }), SONG_SETTINGS, 50)).toBe('endurance');
         // No power song yet (Oisin at 9): low casters fall through to health or endurance.
-        expect(chooseSong(OISIN, 'recover', group({ Niamh: { mana: 20 } }))).toBe('endurance');
+        expect(chooseSong(OISIN, 'recover', group({ Niamh: { mana: 20 } }), SONG_SETTINGS, 50)).toBe('endurance');
     });
 
     test('a Paladin: armor in a fight, endurance when he runs low, his heal chant in a fight only', () => {
@@ -60,8 +60,13 @@ describe('song choice', () => {
         expect(chooseSong(galahad, 'engage', group(), SONG_SETTINGS, 29)).toBe('endurance');
         expect(chooseSong(galahad, 'engage', group(), SONG_SETTINGS, 30)).toBe('armor');
         // Out of a fight the heal chant heals nobody and armor is the buffs' slot.
-        expect(chooseSong(galahad, 'recover', group({ Niamh: { hp: 20 } }))).toBe('endurance');
-        expect(chooseSong(galahad, 'travel', group())).toBe('endurance');
+        expect(chooseSong(galahad, 'recover', group({ Niamh: { hp: 20 } }), SONG_SETTINGS, 50)).toBe('endurance');
+        expect(chooseSong(galahad, 'travel', group(), SONG_SETTINGS, 50)).toBe('endurance');
+        // At 90 % endurance or more, out of a fight: no chant at all, it only costs power (arena round 26: 69 waits for his power).
+        expect(chooseSong(galahad, 'recover', group({ Niamh: { hp: 20 } }))).toBeNull();
+        expect(chooseSong(galahad, 'travel', group())).toBeNull();
+        expect(chooseSong(galahad, 'retreat', group())).toBe('endurance');
+        expect(chooseSong(OISIN, 'idle', group())).toBeNull();
         // Below Chants 4 he has only these: the heal chant still beats nothing, and goes before added damage.
         expect(chooseSong(['combatHeal', 'damage'], 'engage', group())).toBe('combatHeal');
     });
@@ -112,6 +117,25 @@ describe('song(): a running pulse is never sent again', () => {
         expect(s.sent).toEqual([]);
         await s.run(6000);
         expect(s.sent).toEqual(['2:7']);
+    });
+
+    test('nothing wanted and our own chant still pulsing out of a fight: one cast stops it, once; in a fight it runs on', async () => {
+        const persistence = pick('Chant of Persistence', 'endurance');
+        const s = setup([persistence], 'engage', false);
+        (s.me as any).endurancePercent = 20;
+        await s.run(0);
+        await s.run(6000);
+        expect(s.cast).toEqual(['Chant of Persistence']);
+        s.state.effects = [{ name: 'Chant of Persistence' }];
+        (s.me as any).endurancePercent = 100;
+        s.orders.phase = 'engage';
+        await s.run(20_000);
+        expect(s.cast).toEqual(['Chant of Persistence']);
+        s.orders.phase = 'recover';
+        expect(await s.run(30_000)).toBe(true);
+        expect(s.cast).toEqual(['Chant of Persistence', 'Chant of Persistence']);
+        expect(await s.run(31_000)).toBe(false);
+        expect(s.cast).toHaveLength(2);
     });
 
     test('songs.ccFirst: no song change in a fight while our mezz is still to cast; then it goes', async () => {

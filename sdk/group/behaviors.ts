@@ -1914,6 +1914,9 @@ export const rest = (): Behavior<TacticsSettings> => ({
  * added damage while pulling and fighting, power or health between fights when casters are low
  * or someone is hurt. Never re-casts the song that is playing: that stops it.
  */
+/** Where a song nothing wants is stopped: between fights and on the road, never in a fight, a pull or a retreat. */
+const QUIET_OR_TRAVEL: ReadonlySet<string> = new Set([...QUIET_PHASES, 'travel']);
+
 export const song = (): Behavior<TacticsSettings> => ({
     name: 'song',
     interruptible: false,
@@ -1924,9 +1927,19 @@ export const song = (): Behavior<TacticsSettings> => ({
         if (Date.now() < (ctx.memory.get('songRetryAt') ?? 0)) return false;
         const kind = chooseSong(songs.map(s => s.kind), ctx.orders().phase, ctx.members(), ctx.settings.songs ?? SONG_SETTINGS, ctx.me().endurancePercent);
         const want = songs.find(s => s.kind === kind);
-        if (!want) return false;
         const playing = (ctx.sdk.getState()?.effects ?? []).map(e => e.name);
         const now = Date.now();
+        if (!want) {
+            // Nothing wanted, and a song of ours still pulsing at a cost (a Paladin's endurance chant at full endurance): one
+            // cast of it stops it (pulse_cancelled). Only the one we cast ourselves, once, and never into a fight.
+            const mine: { name: string; at: number } | undefined = ctx.memory.get('songCast');
+            const running = mine && songs.find(s => s.spell.name === mine.name && playing.includes(s.spell.name));
+            if (!running || QUIET_OR_TRAVEL.has(ctx.orders().phase) === false || ctx.me().attacking) return false;
+            ctx.memory.delete('songCast');
+            ctx.doing('song', null, `stop ${running.spell.name}`);
+            ctx.result('song', await ctx.bot.castSpell(running.spell));
+            return true;
+        }
         // A pulse's effect can drop out between two pulses, so it counts as playing until a pulse is overdue;
         // and a run can begin in such a gap, so nothing is cast before one such wait has gone by.
         const seen: Map<string, number> = ctx.memory.get('songSeen') ?? new Map();
@@ -1997,7 +2010,7 @@ export const buff = (): Behavior<TacticsSettings> => ({
         const me = ctx.me();
         const tasks = planBuffs(me.name, ctx.members(), { needs: ctx.settings.buffNeeds, selfOnly: ctx.settings.buffSelfOnly });
         if (!tasks.length) return false;
-        const conc = { current: me.concentration ?? 0, max: me.maxConcentration ?? 0 };
+        const conc = { current: me.concentration ?? 0, max: me.maxConcentration ?? 0, effects: ctx.sdk.getState()?.concentrationEffects?.length ?? 0 };
         const retry: Map<string, number> = ctx.memory.get('buffRetry') ?? new Map();
         ctx.memory.set('buffRetry', retry);
         // Free concentration held by buffs another member should provide (or nobody needs).
