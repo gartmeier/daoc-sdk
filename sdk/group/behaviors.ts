@@ -940,8 +940,18 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         // castSpell knows without a send that this can't land (a peace flag, our realm, ourselves): the next add gets the turn.
         else if (c.reason === 'invalid_target' || c.reason === 'not_attackable' || c.reason === 'no_target') cantLand.set(ckey(target), Date.now() + CC_IMMUNE_MS);
         else if (await waitOutSelfCc(c)) return true;
-        // Our client said in range and the server didn't: not again on the next tick. A live round tried 17 times in 5 s.
-        else if (stand && c.reason === 'out_of_range') await Bun.sleep(1000);
+        // Our client said in range and the server didn't: not again on the next tick. A live round tried 17 times in 5 s. The
+        // second within CC_FAR_WINDOW_MS leaves that target alone a while (CC_FAR_REST_MS): Hrafna logged 9 of them on one target
+        // in arena round 32 (2026-11-10) and landed no nuke (Midgard class session); the turn goes on to assist.
+        else if (c.reason === 'out_of_range') {
+            const far: Map<string, number[]> = ctx.memory.get('ccFar') ?? new Map();
+            ctx.memory.set('ccFar', far);
+            const k = ckey(target), now = Date.now();
+            const recent = [...(far.get(k) ?? []).filter(t => now - t < CC_FAR_WINDOW_MS), now];
+            far.set(k, recent);
+            if (recent.length >= 2) { cantLand.set(k, now + CC_FAR_REST_MS); far.delete(k); }
+            else if (stand) await Bun.sleep(1000);
+        }
         // PvP immunity (reason 'immune': up to 10 s after a port, login or release) and "You must wait": try again shortly.
         else if (c.retryAfterMs) await Bun.sleep(Math.min(c.retryAfterMs, 3000));
         // The spell list's power cost can trail the server's ("You don't have enough power"): don't retry every turn.
@@ -949,6 +959,11 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         return true;
     },
 });
+
+/** Two server out_of_range answers to crowd control on one target within this ... */
+const CC_FAR_WINDOW_MS = 15_000;
+/** ... leave that target to others for this long. */
+const CC_FAR_REST_MS = 8000;
 
 /** Where a caster steps to bring `focus` in range, or null when it is too far off or the step ends next to a free enemy. */
 export function standStepTo(me: Point, focus: Point & { distance: number }, range: number, step: number, contacts: readonly Contact[]): Point | null {

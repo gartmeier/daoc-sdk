@@ -537,6 +537,16 @@ describe('crowdControl: immunity and refusals', () => {
         orders: { focus: 51, cc: [{ targetId: 52, by: 'Healer' }] }, castSpell, ...over,
     });
 
+    test('the server says out of range twice on one target: it is left a while and the turn goes on (arena round 32: 9 in a row)', async () => {
+        const far = async () => ({ success: false, reason: 'out_of_range', message: 'That target is too far away!' });
+        const s = cc(far);
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        expect(s.calls.castSpell).toEqual([52, 52]);
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(false);
+        expect(s.calls.castSpell).toEqual([52, 52]);
+    });
+
     test('an enemy player swinging at us: no mezz with a cast time, it would be interrupted (hammeredBy)', async () => {
         const s = cc(async () => ({ success: true, message: 'Cast' }), { contacts: [foe(51, 10_300, 10_000), foe(52, 11_000, 10_500), foe(53, 10_000, 10_650, { target: 'Healer' })] });
         Object.assign(s.ctx.spells, { cc: () => ({ spell: { name: 'Mesmerize' }, kind: 'mezz', duration: 30, range: 1500, castTime: 2.5 }) });
