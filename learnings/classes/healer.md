@@ -40,6 +40,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 39 (vs Hibernia, wiped 1 / 5):** targeted 55 %, in melee 37 %; 1 heal, 2 cures, 3 Hinder Spirits (2 resisted). Hrafna was in melee 38 % too: Hibernia's melee went through to our casters, which is the group's positioning.
 
+**Round 41 (vs Camelot, wiped 0 / 5):** 5 cures (3 interrupted), 3 Hinder Spirits, 3 heals; in melee 26 %. The group dealt about 2200 in all (Thorgrim 987, Hrafna 632, Bragi 331, Ulfgar 231), against about 6000 in the round 36 win. Midgard has lost rounds 34, 37, 39 and 41 by wipe, as Hibernia and Camelot improved; no kit behaviour failed outright.
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
