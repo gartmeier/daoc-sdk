@@ -21,6 +21,11 @@ export interface CabalistOptions {
     meleeDebuff?: boolean;
 }
 
+/** No debuffs below this % power: the mezz and the nukes come first. Arena round 27: Merlin's 9 debuffs, then 2 mezzes and 4 nukes refused for power. */
+export const DEBUFF_MIN_MANA = 35;
+/** The server measures in 3D and from where it last had us: keep this far inside a spell's range. */
+const RANGE_MARGIN = 50;
+
 /** Instant debuffs that blunt a melee player, best first: fewer swings, then weaker ones, then worse aim. */
 export const MELEE_DEBUFFS: readonly string[] = ['CombatSpeedDebuff', 'StrengthDebuff', 'DexterityQuicknessDebuff', 'DexterityDebuff'];
 
@@ -57,6 +62,7 @@ export const meleeDebuff = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         if (ctx.orders().phase !== 'engage') return false;
         const me = ctx.me();
+        if (me.maxMana > 0 && me.manaPercent < DEBUFF_MIN_MANA) return false;
         const self = ctx.members().find(m => m.name === ctx.name);
         if (!self) return false;
         const distanceTo = (id: number) => foeInView(ctx, id)?.distance ?? Infinity;
@@ -110,14 +116,14 @@ export const offFocus = (): Behavior<TacticsSettings> => ({
         const best = ctx.spells.nuke({ aoe: false });
         if (!best) return false;
         const held = !!focus && ccHolds(ctx, focus);
-        const t = offFocusTarget(me, focus, ctx.threats(), o, best.range, held, id => claimedBy(ctx, 'cc', id, CC_CLAIM_MS).length > 0);
+        const t = offFocusTarget(me, focus, ctx.threats(), o, best.range - RANGE_MARGIN, held, id => claimedBy(ctx, 'cc', id, CC_CLAIM_MS).length > 0);
         if (!t) return false;
         const seen = foeInView(ctx, t.objectId);
         if (!seen || isDown(ctx, seen)) return false;
         const key = `dotted:${ckey(t)}`;
         const dotted: Set<string> = ctx.memory.get(key) ?? new Set();
         const sp = ctx.spells.nuke({ dotted, targetHp: t.hp, aoe: false, byDamage: ctx.settings.strongestNuke });
-        if (!sp || seen.distance > sp.range) return false;
+        if (!sp || seen.distance > sp.range - RANGE_MARGIN) return false;
         if (sp.castTime > 0 && hammeredBy(ctx)) return ctx.skip(`offFocus: ${sp.spell.name} would be interrupted`);
         await stopSwinging(ctx);
         ctx.doing('nuke', t.objectId, `${sp.spell.name} (off the focus)`);

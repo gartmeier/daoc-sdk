@@ -82,3 +82,5 @@ Morgana plays Matter. **Community, unverified:** the sources agree it's the effi
 
 **To look for:** `debuff` results in the three casters' report lines, and whether their time in melee or their deaths change.
 
+**Arena round 27** (Camelot wiped Midgard 5/2 in one 220 s fight, the first round with `meleeDebuff`): Merlin cast 9 debuffs, Morgana 4 and Taliesin 3, and 4 were resisted. Merlin then had 4 nukes and 2 mezzes refused for power, so debuffs now stop below 35 % power (`DEBUFF_MIN_MANA`). Taliesin had 10 nukes `out_of_range`, so `offFocus` now picks and casts 50 inside the spell's range, as Nimue's stun does.
+
