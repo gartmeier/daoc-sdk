@@ -114,3 +114,28 @@ export function drySpot<P extends Point>(regionId: number, p: P, o: DryOptions =
     }
     return pDry ? p : pick(dryRing);
 }
+
+/** How far short of the water's edge bankStop stops, and how finely it samples the line. */
+export const BANK_BACK = 40;
+const BANK_STEP = 32;
+
+/**
+ * Where a move from `from` to `to` should end so a member on dry ground doesn't walk into the river at its end: null when
+ * the move needs no cut (we already swim, `to` is dry, no terrain), else the spot BANK_BACK short of where the wet stretch
+ * that ends at `to` begins (on our side of it, `from` itself when that stretch starts at our feet). A move that only crosses
+ * a river to dry ground is left alone: travel legs and their crossings stay as safePath planned them. Albion, rounds 18-67:
+ * its healer and casters walked into range of a target in the river and spent 13-49 % of fight time swimming.
+ */
+export function bankStop<P extends Point>(regionId: number, from: Point, to: P): P | null {
+    if (isWet(regionId, from) || !isWet(regionId, to)) return null;
+    const d = Math.hypot(to.x - from.x, to.y - from.y);
+    if (d < 1) return null;
+    const ux = (to.x - from.x) / d, uy = (to.y - from.y) / d;
+    // From `to` back towards us: the first dry sample is the far edge of the wet stretch ending at `to`.
+    let edge = 0;
+    for (let t = d - BANK_STEP; t > 0; t -= BANK_STEP) {
+        if (!isWet(regionId, { x: from.x + ux * t, y: from.y + uy * t })) { edge = t + BANK_STEP; break; }
+    }
+    const t = Math.max(0, edge - BANK_STEP - BANK_BACK);
+    return { ...to, x: Math.round(from.x + ux * t), y: Math.round(from.y + uy * t) };
+}
