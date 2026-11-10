@@ -1050,3 +1050,30 @@ describe('assist after the server\'s "too far" twice', () => {
         expect(s.skips.at(-1)).toMatch(/server says out of reach/);
     });
 });
+
+describe('a target beyond the bank (dry move guard, reason \'water\'): left 8 s, not retried every turn', () => {
+    const water = async () => ({ success: false, reason: 'water', message: '(11000, 10000) is in deep water: holding at the bank' });
+    test('assist leaves the swimming focus', async () => {
+        const s = stub({ name: 'Nimue', role: 'nuker', at: { x: 10_000, y: 10_000 }, contacts: [foe(51, 11_000, 10_000)], orders: { focus: 51 }, castSpell: water });
+        Object.assign(s.ctx.spells, { nuke: () => ({ spell: { name: 'Minor Spirit Blast' }, type: 'DirectDamage', range: 1500, castTime: 2.5 }), capabilities: () => ({ nuke: true }) });
+        expect(await assist().run(s.ctx)).toBe(true);
+        await assist().run(s.ctx);
+        expect(s.calls.castSpell).toEqual([51]);
+        expect(s.skips.at(-1)).toMatch(/river/);
+    });
+    test('heal leaves the swimming friend', async () => {
+        const hurt = report('Galahad', { role: 'tank', regionId: R, x: 11_000, y: 10_000, objectId: 2, hp: 20, maxHp: 400 });
+        const s = stub({ name: 'Morgana', role: 'healer', at: { x: 10_000, y: 10_000 }, members: [hurt], castSpell: water, healSpell: { spell: { name: 'Minor Heal' } } });
+        expect(await heal().run(s.ctx)).toBe(true);
+        expect(await heal().run(s.ctx)).toBe(false);
+        expect(s.calls.castSpell).toEqual([2]);
+    });
+    test('crowd control goes on to the next add', async () => {
+        const orders = { focus: 51, cc: [{ targetId: 52, by: 'Bard' }, { targetId: 54, by: 'Bard' }] };
+        const s = stub({ name: 'Bard', role: 'support', at: { x: 10_000, y: 10_500 }, contacts: [foe(51, 10_300, 10_000), foe(52, 10_400, 10_000), foe(54, 10_500, 10_000)], orders, castSpell: async id => (id === 52 ? { success: false, reason: 'water', message: 'bank' } : {}) });
+        expect(await crowdControl({ assignedOnly: true }).run(s.ctx)).toBe(true);
+        await crowdControl({ assignedOnly: true }).run(s.ctx);
+        expect(s.calls.castSpell[0]).toBe(52);
+        expect(s.calls.castSpell.slice(1)).not.toContain(52);
+    });
+});

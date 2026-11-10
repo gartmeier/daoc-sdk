@@ -256,6 +256,23 @@ export function loneFocus(ctx: MemberContext, c: Contact): boolean {
     return c.objectId === ctx.orders().focus && !ctx.threats().some(t => t.objectId !== c.objectId && !t.cc && !t.stale && alive(t));
 }
 
+/** A walk or cast at an object that the dry move guard stopped at the bank (reason 'water'): leave that object alone this long. */
+export const WET_SKIP_MS = 8000;
+
+/** Note a result: reason 'water' means `objectId` is in the river beyond the bank, so heal, cc and assist leave it WET_SKIP_MS. */
+export function noteWet(ctx: MemberContext, objectId: number, r: { reason?: string }): void {
+    if (r.reason !== 'water') return;
+    const wet: Map<number, number> = ctx.memory.get('wetSkip') ?? new Map();
+    ctx.memory.set('wetSkip', wet);
+    wet.set(objectId, Date.now() + WET_SKIP_MS);
+}
+
+/** Stopped at the bank on the way to `objectId` within WET_SKIP_MS (noteWet). */
+export function wetSkipped(ctx: MemberContext, objectId: number): boolean {
+    const until = (ctx.memory.get('wetSkip') as Map<number, number> | undefined)?.get(objectId);
+    return until !== undefined && Date.now() < until;
+}
+
 /** A leg of a longer walk: its own timeout is how it hands the next turn the decision, so only a real failure (stuck, no way there) is one. */
 function reportLeg(ctx: MemberContext, w: { success: boolean; reason?: string; message?: string }): void {
     if (!w.success && w.reason !== 'timeout') ctx.result('walk', w);
@@ -734,6 +751,7 @@ export const heal = (opts: { emergencyOnly?: boolean; limits?: Partial<TacticsSe
         const hurt = ctx.members()
             .filter(m => !m.isDead && m.regionId === me.regionId && dist(me, m) < 2000 && m.hp < limit(m.role))
             .filter(m => m.hp < s.emergency || !claimedBy(ctx, 'heal', m.objectId, 3500).length)
+            .filter(m => !wetSkipped(ctx, m.objectId))
             .sort((a, b) => a.hp - b.hp)[0];
         if (!hurt) return false;
         const sp = ctx.spells.heal(hurt.maxHp ? hurt.maxHp * (100 - hurt.hp) / 100 : undefined);
@@ -745,6 +763,7 @@ export const heal = (opts: { emergencyOnly?: boolean; limits?: Partial<TacticsSe
         ctx.doing('heal', hurt.objectId, sp.spell.name);
         const c = await ctx.bot.castSpell(sp.spell, hurt.objectId);
         ctx.result('heal', c, hurt.objectId);
+        noteWet(ctx, hurt.objectId, c);
         if (!(await waitOutSelfCc(c)) && !c.success && c.retryAfterMs) await Bun.sleep(Math.min(c.retryAfterMs, 3000));
         return true;
     },
@@ -848,7 +867,7 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         const cantLand: Map<string, number> = ctx.memory.get('ccCantLand') ?? new Map();
         ctx.memory.set('ccCantLand', cantLand);
         for (const [k, until] of cantLand) if (until <= Date.now()) cantLand.delete(k);
-        const open = (c: Contact) => !c.cc && !cantLand.has(ckey(c)) && canControl(c, kinds) && !claimedBy(ctx, 'cc', c.objectId, CC_CLAIM_MS).length;
+        const open = (c: Contact) => !c.cc && !cantLand.has(ckey(c)) && !wetSkipped(ctx, c.objectId) && canControl(c, kinds) && !claimedBy(ctx, 'cc', c.objectId, CC_CLAIM_MS).length;
         const live = (id: number) => { const c = ctx.contact(id); return c && !c.stale && alive(c) && open(c) ? c : undefined; };
         const assigned = o.cc.filter(a => a.by === ctx.name).map(a => live(a.targetId)).filter(c => !!c);
         // Not an enemy pet: a mezz is worth more on its owner, and a Theurgist's are immune (MezzImmunity in npctemplate.sql).
@@ -885,7 +904,7 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
                 : standStepTo(ctx.me(), view, sp.range, ctx.settings.standStep ?? 0, ctx.picture().contacts);
             if (!step) return ctx.skip('cc: out of reach, holding ground');
             ctx.doing('move', target.objectId, flank ? 'round the fight into range' : 'step in range');
-            await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 });
+            noteWet(ctx, target.objectId, await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 }));
             return true;
         }
         // A root that lands on a mezzed enemy wakes it (GameLiving.cs:1716-1727): not while a mezz is on its way there.
@@ -899,7 +918,9 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
                 const stuck = ccWalkStuck(ctx, target.objectId);
                 if (stuck) ctx.result('cc', { success: false, reason: 'stuck', message: `Cannot reach ${target.name}: ${stuck}` }, target.objectId);
                 ctx.doing('move', target.objectId, `${CC_WALK}${sp.spell.name}`);
-                reportLeg(ctx, await ctx.bot.walkToObject(view, { range: Math.max(100, sp.range * 0.85), timeout: CAST_STEP_MS }));
+                const w = await ctx.bot.walkToObject(view, { range: Math.max(100, sp.range * 0.85), timeout: CAST_STEP_MS });
+                reportLeg(ctx, w);
+                noteWet(ctx, target.objectId, w);
             }
             return true;
         }
@@ -939,6 +960,8 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         }
         // castSpell knows without a send that this can't land (a peace flag, our realm, ourselves): the next add gets the turn.
         else if (c.reason === 'invalid_target' || c.reason === 'not_attackable' || c.reason === 'no_target') cantLand.set(ckey(target), Date.now() + CC_IMMUNE_MS);
+        // Its approach stopped at the bank (dry move guard): the next add gets the turn.
+        else if (c.reason === 'water') noteWet(ctx, target.objectId, c);
         else if (await waitOutSelfCc(c)) return true;
         // Our client said in range and the server didn't: not again on the next tick. A live round tried 17 times in 5 s. The
         // second within CC_FAR_WINDOW_MS leaves that target alone a while (CC_FAR_REST_MS): Hrafna logged 9 of them on one target
@@ -1537,6 +1560,7 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
         // An enemy player is never "held" by a tank (players have no aggro table): hit it at once.
         const { held } = mob.kind === 'player' || opts.holdMs === 0 ? { held: true } : holdState(mob, tankM?.name ?? null, opts.holdMs ?? ctx.settings.holdMs, ctx.settings.assistAfterMs, now);
         if (!held) return skipping('assist: waiting for the tank to hold it', mob.objectId);
+        if (wetSkipped(ctx, mob.objectId)) return skipping('assist: focus in the river, holding the bank', mob.objectId);
         const me = ctx.me();
         if (!opts.melee) {
             // DoT families already on this mob, kept per mob (object ids are reused at once).
@@ -1555,14 +1579,16 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
                     const step = standStepTo(ctx.me(), seen, sp.range, opts.holdGround ?? ctx.settings.standStep ?? 0, ctx.picture().contacts);
                     if (!step) return skipping('assist: focus out of reach, holding ground', mob.objectId);
                     ctx.doing('move', mob.objectId, 'step in range');
-                    await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 });
+                    noteWet(ctx, mob.objectId, await ctx.bot.walkTo(step.x, step.y, { tolerance: 40, timeout: 3000 }));
                     return true;
                 }
                 await stopSwinging(ctx);
                 // castSpell would walk this and cast in one turn, up to 15 s live with a pet going from 49 % to 9 % behind it. A step instead, back to the list; a cast itself is never cut.
                 if (seen.distance > sp.range) {
                     ctx.doing('move', mob.objectId, `into range for ${sp.spell.name}`);
-                    reportLeg(ctx, await ctx.bot.walkToObject(seen, { range: Math.max(100, sp.range * 0.85), timeout: CAST_STEP_MS }));
+                    const w = await ctx.bot.walkToObject(seen, { range: Math.max(100, sp.range * 0.85), timeout: CAST_STEP_MS });
+                    reportLeg(ctx, w);
+                    noteWet(ctx, mob.objectId, w);
                     return true;
                 }
                 // The server's second "too far" on this focus within 15 s, though our view says in reach: leave it 8 s and let the
@@ -1575,6 +1601,7 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
                 const c = await ctx.bot.castSpell(sp.spell, mob.objectId, stand ? { approach: false } : {});
                 ctx.result('nuke', c, mob.objectId);
                 if (c.reason === 'out_of_range') strikes.set(mob.objectId, [...recent, Date.now()]);
+                noteWet(ctx, mob.objectId, c);
                 noteNukeEnd(ctx.memory, sp, c, Date.now());
                 if (sp.type === 'DamageOverTime' && (c.success || /already has that effect/i.test(c.message ?? ''))) { dotted.add(dotFamily(sp)); ctx.memory.set(key, dotted); }
                 if (await waitOutSelfCc(c)) return true;
@@ -2020,7 +2047,7 @@ export function buffRetryMs(c: { success: boolean; reason?: string; message?: st
     if (c.followUpMs !== undefined) return (c.retryAfterMs ?? 0) + c.followUpMs + FOLLOW_UP_SHOWS_MS;
     if (/concentration/i.test(c.message ?? '')) return 300_000;
     // A mezz or a stun that broke it is an interrupt too, and reads as this since it names itself. While it lasts the next try is refused for free, and a mezz holds the turns anyway (MemberAgent.noteHeld).
-    if (c.reason === 'out_of_range' || c.reason === 'interrupted' || c.reason === 'must_wait' || c.reason === 'crowd_controlled') return 8_000;
+    if (c.reason === 'out_of_range' || c.reason === 'water' || c.reason === 'interrupted' || c.reason === 'must_wait' || c.reason === 'crowd_controlled') return 8_000;
     return 60_000;
 }
 
