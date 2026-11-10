@@ -118,3 +118,4 @@ Her `buff:no_response` failures (5-8 a round, 39 in round 26) are the server's c
 
 **Arena round 84** (Midgard wiped Camelot 5/0 in 75 s): she cast 3 stuns and 2 Smites, 0 heals, and Morgana, Taliesin and Merlin died within about 20 s. Those 13 s of casts can't be cut short, and each delays any heal behind it. Now, while a member is under 2+ enemy players (`burstOn`) or below 70 % within 2000, `stunPeel` only peels: a stun on a hitter on one of ours. The mezzer, healer and focus stuns wait for a calm moment. The Midgard Healer kit's `stunPeel()` gets the same rule.
 
+**After round 99:** Camelot now focuses Hibernia's Lurikeen casters (Ciaran the Enchanter, Niamh the Mentalist), which dealt 3 of 4 killing blows on Morgana in rounds 80-99. `stunPeel` takes a caster focus at any health, after a peel and the marked mezzer, outside pressure: 5 s without its casts while the nukes land. A non-caster focus still waits for 60 %.

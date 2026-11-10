@@ -135,6 +135,14 @@ describe('nearsight', () => {
         expect(nearsightTarget(me, [hero], { cc: [] }, none, 2250, NOW)).toBeNull();
     });
 
+    test('the group focus right after the marked mezzer, if it is a caster or healer', () => {
+        const niamh = foe(11, 1900, { caster: true });
+        const ench = foe(6, 2000, { caster: true, castingAt: NOW - 1000 });
+        expect(nearsightTarget(me, [niamh, ench], { cc: [], focus: 11 }, none, 2250, NOW)?.objectId).toBe(11);
+        expect(nearsightTarget(me, [niamh, ench], { cc: [], focus: 11 }, none, 2250, NOW, 6)?.objectId).toBe(6);
+        expect(nearsightTarget(me, [foe(12, 900), ench], { cc: [], focus: 12 }, none, 2250, NOW)?.objectId).toBe(6);
+    });
+
     test('never one mezzed, assigned, claimed, done lately or out of reach', () => {
         const ench = foe(6, 2000, { caster: true });
         expect(nearsightTarget(me, [{ ...ench, cc: { by: 'Merlin', kind: 'mezz', until: NOW + 9000 } }], { cc: [] }, none, 2250, NOW)).toBeNull();

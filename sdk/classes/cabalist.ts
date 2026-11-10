@@ -227,12 +227,13 @@ const NEARSIGHT_HOLD_MS = 180_000;
 /**
  * Whom to nearsight: an enemy caster or healer in `range` that nobody controls or is about to (a mezz would wake: GameLiving.cs
  * lists Nearsight among the spells that break one), not nearsighted by us lately (`until`). The group's marked mezzer first
- * (`marked`), then whoever was seen casting last, then a healer, then the nearest.
+ * (`marked`), then the group's focus if it is a caster or healer (Camelot focuses Hibernia's Lurikeen casters), then whoever was seen casting last, then a healer, then the nearest.
  */
-export function nearsightTarget(me: Point & { regionId: number }, contacts: readonly Contact[], orders: Pick<Orders, 'cc'>, until: ReadonlyMap<number, number>, range: number, now: number, marked: number | null = null, claimed: (id: number) => boolean = () => false): Contact | null {
+export function nearsightTarget(me: Point & { regionId: number }, contacts: readonly Contact[], orders: Pick<Orders, 'cc'> & { focus?: number | null }, until: ReadonlyMap<number, number>, range: number, now: number, marked: number | null = null, claimed: (id: number) => boolean = () => false): Contact | null {
     const open = contacts.filter(c => c.kind === 'player' && !c.isPet && !c.stale && !c.cc && (c.caster || c.healer) && c.regionId === me.regionId
         && dist(me, c) <= range && (until.get(c.objectId) ?? 0) <= now && !orders.cc.some(a => a.targetId === c.objectId) && !claimed(c.objectId) && !untouchable(c, now));
     return open.find(c => c.objectId === marked)
+        ?? open.find(c => c.objectId === orders.focus)
         ?? [...open].sort((a, b) => (b.castingAt ?? 0) - (a.castingAt ?? 0) || Number(!!b.healer) - Number(!!a.healer) || dist(me, a) - dist(me, b))[0] ?? null;
 }
 

@@ -45,6 +45,14 @@ describe('the cleric kit', () => {
         expect(stunTarget({ ...me, x: -2000 }, members, [foe(1, { x: 650, y: 0, target: 'Merlin' })], undefined, 1500, 60, NOW)).toBeNull();
     });
 
+    test('a caster focus at any health, after the mezzer', () => {
+        const ench = foe(9, { hp: 100, caster: true, y: 1300 });
+        expect(stunTarget(me, members, [ench], ench, 1500, 60, NOW)).toEqual({ target: ench, why: 'focus' });
+        const bard = foe(5, { y: 1200 });
+        expect(stunTarget(me, members, [ench, bard], ench, 1500, 60, NOW, 5)?.why).toBe('mezzer');
+        expect(stunTarget(me, members, [{ ...ench, caster: false }], { ...ench, caster: false }, 1500, 60, NOW)).toBeNull();
+    });
+
     test('under pressure only the peel: no mezzer, healer or focus stun', () => {
         const focus = foe(1, { hp: 40 });
         const bard = foe(5, { y: 1300 });

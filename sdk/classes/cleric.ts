@@ -54,6 +54,9 @@ export function stunTarget(me: Who, members: readonly Who[], threats: readonly C
     // The group's marked enemy mezzer, at any health: a stun ends its cast and holds the next for 5 s.
     const mezzer = marked === null ? undefined : open.find(c => c.objectId === marked);
     if (mezzer) return { target: mezzer, why: 'mezzer' };
+    // A caster as the focus, at any health: 5 s without its casts while the nukes land (Camelot focuses Hibernia's Lurikeen casters).
+    const casterFocus = focus && focus.caster && !focus.healer ? open.find(c => c.objectId === focus.objectId) : undefined;
+    if (casterFocus) return { target: casterFocus, why: 'focus' };
     if (!focus || focus.kind !== 'player' || focus.hp > healerBelow) return null;
     const healer = open.filter(c => c.healer && c.objectId !== focus.objectId).sort((a, b) => dist(me, a) - dist(me, b))[0];
     if (healer) return { target: healer, why: 'healer' };
