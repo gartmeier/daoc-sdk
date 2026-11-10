@@ -1,0 +1,27 @@
+From 15c5fab69950e5ebd8b8526d7171f2fc1b6b8d55 Mon Sep 17 00:00:00 2001
+From: Joshua Gartmeier <joshua@gartmeier.dev>
+Date: Tue, 10 Nov 2026 14:55:04 +0100
+Subject: [PATCH] `README`: Say this is a modified version GPLv3 section 5(a)
+ asks a modified version to carry a notice saying it was changed, with a date.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ README.md | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/README.md b/README.md
+index a0948ac2a..755913fa6 100644
+--- a/README.md
++++ b/README.md
+@@ -1,6 +1,8 @@
+ # OpenDAoC
+ [![Build and Release](https://github.com/OpenDAoC/OpenDAoC-Core/actions/workflows/build-and-release.yml/badge.svg)](https://github.com/OpenDAoC/OpenDAoC-Core/actions/workflows/build-and-release.yml)
+ 
++> **Modified version.** This branch is a fork of [OpenDAoC/OpenDAoC-Core](https://github.com/OpenDAoC/OpenDAoC-Core) at commit f0aaa1ea2 (tag 2026.09.36), used by [daoc-sdk](https://github.com/gartmeier/daoc-sdk). Joshua Gartmeier changed `GameServer/gameutils/GamePlayerUtils.cs` on 2026-11-10: `UpdateUsableSkills` replaces a cached skill whenever the player holds a different instance of it, so after `/player class` the skill list shows the current specialization levels, where before it kept the old ones until a relog. Everything else, including the rest of this README, is upstream's. Report problems with this change at daoc-sdk, and anything else upstream.
++
+ ## About
+ 
+ OpenDAoC is an emulator for Dark Age of Camelot (DAoC) servers, originally a fork of the [DOLSharp](https://github.com/Dawn-of-Light/DOLSharp) project.
+-- 
+2.45.1.windows.1
+
