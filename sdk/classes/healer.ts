@@ -83,8 +83,8 @@ export function isNearsightEffect(name: string): boolean {
 /** Her extras (the stun, the Nearsight cure) stop below this much power: heals first. Round 52: 34 heals refused for power. */
 export const EXTRAS_FLOOR = 40;
 
-/** Kept inside the cure's range: the server measures in 3D, and positions are a moment old. */
-const CURE_RANGE_MARGIN = 50;
+/** Kept inside the cure's range: the server measures in 3D, positions are a moment old, and the cast is 6 s. Round 87: 4 `nearsight:out_of_range` at 50. */
+const CURE_RANGE_MARGIN = 150;
 
 /** Whom to cure of Nearsight: a living member in 3D reach with one on it, our nuker first, then a healer, a support, the rest. Ourselves too. */
 export function nearsightedMember(me: Pick<MemberReport, 'x' | 'y' | 'z' | 'regionId'>, members: readonly MemberReport[], range: number): MemberReport | null {
