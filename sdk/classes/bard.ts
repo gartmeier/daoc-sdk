@@ -12,6 +12,7 @@ import { untouchable } from '../group/blackboard';
 import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import type { Contact, Role } from '../group/types';
+import { unlessAimedAt } from './druid';
 import { unlessHammered } from './healer';
 
 /** An enemy started a cast this long ago at most, so an instant can still catch it (behaviors.ts INTERRUPT_WINDOW_MS). */
@@ -51,6 +52,7 @@ export const interruptOnTheRun = (): Behavior<TacticsSettings> => ({
 });
 
 export function bard(): Character {
-    // The cure (3 s) never under a melee swing: round 53 had 4 cure:interrupted; flee and interruptOnTheRun take those turns.
-    return { role: 'support', instant: [interruptOnTheRun()], urgent: [unlessHammered(cureMezz())] };
+    // The cure (3 s) never under a melee swing (round 53: 4 cure:interrupted), nor while any enemy aims at him by spell
+    // (round 73: 5 of 8 interrupted with the melee guard alone); flee and interruptOnTheRun take those turns.
+    return { role: 'support', instant: [interruptOnTheRun()], urgent: [unlessAimedAt(unlessHammered(cureMezz()))] };
 }

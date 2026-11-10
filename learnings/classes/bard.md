@@ -93,3 +93,5 @@ What the class has that no behaviour uses:
 **Arena rounds 43-51** (lost 43, 47, 49, 51): Oisin died first and early in every loss (11-24 s), and with him the group's only mezz cure. Round 51: Brigid was mezzed 9 s after his death and cast 3 heals in a 126 s fight. His `flee` brings him to the tank, inside Guard's 256, and the Hero's Guard sits on Brigid at range: suggested to the group session to guard Oisin in RvR.
 
 **Arena round 53** (wiped 1-5 by Midgard, Oisin dead first again, with the Hero now guarding him): 4 `cure:interrupted`. From the next round his `cureMezz` is wrapped in the Midgard Healer kit's `unlessHammered`: no 3 s cure under a melee swing, so `flee` and `interruptOnTheRun` take those turns.
+
+**Arena round 73** (beat Midgard 4-0): 5 of 8 mezz cures interrupted with only the melee guard; spells interrupt too. From the next round the cure also waits while any enemy aims at him (the Druid kit's `unlessAimedAt`). Watch the cure count: he is aimed at about half of each fight, so this trades attempts for ones that finish.
