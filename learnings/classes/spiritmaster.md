@@ -22,6 +22,8 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 
 **Round 34 (vs Hibernia, wiped 0 / 5; the group's own list for her, without crowdControl):** 2 nukes, 218 damage, first at 13.3 s, moving 73 %. Moving by round: r22 52 % (won), r27 73 %, r29 33 %, r31 65 % (won), r32 73 %, r34 73 %. Suspected: `assist`'s step toward the focus (standStep 750) against `fanOut` stepping her back; proposed `assist({ holdGround: 250 })` to the group session, who agreed: since then her fight is `assist({ holdGround: HOLD_GROUND })` (250), whatever the group's standStep, with `nukeInReach` behind it. The group's `holdFocus` came into the pack in the same round, so read the two together.
 
+**Round 36 (vs Hibernia, won by wipe 5 / 1; holdGround 250 and the group's focus hold):** moving 20 % (73 % in round 34), 13 nukes, 1601 damage, first at 7.3 s, no death; but idle 32 % ("focus out of reach, holding ground" 54 times) with no free enemy in her reach either. If that holds over more rounds, try holdGround 400-500.
+
 **Quickcast (2026-11-10, after round 27):** she has the ability (`bun sdk/cli.ts Hrafna`) and nothing used it. The kit's `instant` is the Cabalist kit's `quickcastUnderFire` ([cabalist.md](cabalist.md)): with a melee on her, or a cast of hers interrupted in the last 5 s, Quickcast, then her cc order or her nuke on the focus, uninterruptible, at twice the power, once per 31 s. In round 27 she was targeted 73 % of the fight.
 
 Before that the kit held only the role. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.
