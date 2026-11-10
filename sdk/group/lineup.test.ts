@@ -24,8 +24,32 @@ describe('hasMezz', () => {
     });
 });
 
-const c = (bot: string, role: LineupCandidate['role'], cc = false): LineupCandidate =>
-    ({ bot, className: '', role, healer: role === 'healer', front: role === 'tank' || role === 'melee', cc });
+const c = (bot: string, role: LineupCandidate['role'], cc = false, className = ''): LineupCandidate =>
+    ({ bot, className, role, healer: role === 'healer', front: role === 'tank' || role === 'melee', cc });
+
+describe('pickLineup with required classes', () => {
+    // Hibernia: Hero, Druid, Bard, Mentalist, Enchanter; Blademaster, Warden, Eldritch on the bench.
+    const pool = [c('cuchulainn', 'tank', false, 'Hero'), c('brigid', 'healer', false, 'Druid'), c('oisin', 'support', true, 'Bard'),
+        c('niamh', 'nuker', true, 'Mentalist'), c('ciaran', 'nuker', false, 'Enchanter'), c('fionn', 'melee', false, 'Blademaster'),
+        c('aine', 'healer', false, 'Warden'), c('lugh', 'nuker', false, 'Eldritch')];
+
+    test('one of each listed class plays, even when both have played most', () => {
+        const played = { cuchulainn: 1, brigid: 9, oisin: 9, niamh: 1, ciaran: 1, fionn: 0, aine: 0, lugh: 0 };
+        const choice = pickLineup({ pool, current: [], size: 5, played, classes: ['Druid', 'Bard'] });
+        expect(choice.lineup).toContain('brigid');
+        expect(choice.lineup).toContain('oisin');
+        // The Warden, who played least, is no healer the line-up needs any more: the Druid is one.
+        expect(choice.why).toContain('Druid brigid, Bard oisin');
+    });
+
+    test('a listed class nobody available plays is noted and skipped; the class name matches in any case', () => {
+        const choice = pickLineup({ pool, current: [], size: 5, available: new Set(pool.map(p => p.bot).filter(b => b !== 'oisin')), classes: ['druid', 'Bard'] });
+        expect(choice.lineup).toContain('brigid');
+        expect(choice.lineup).not.toContain('oisin');
+        expect(choice.why).toContain('no Bard available');
+        expect(choice.lineup).toHaveLength(5);
+    });
+});
 
 describe('pickLineup', () => {
     // Albion with its bench: Paladin, Cleric, Sorcerer, Cabalist, Theurgist; Armsman, Friar, Wizard.

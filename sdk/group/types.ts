@@ -342,6 +342,11 @@ export interface GroupDefinition {
     members: GroupEntry[];
     /** Bots of the group that sit out: the same shape as members. A line-up moves bots between the two (sdk/group/lineup.ts). */
     bench?: GroupEntry[];
+    /**
+     * What every line-up must hold (sdk/group/lineup.ts pickLineup). `classes`: one of each, by class name (bot.env
+     * CLASS), filled before the healer, front-liner and crowd controller, e.g. ["Druid", "Bard"] for their buffs and speed.
+     */
+    requires?: { classes?: string[] };
 }
 
 /** One entry of group.json's members or bench. */

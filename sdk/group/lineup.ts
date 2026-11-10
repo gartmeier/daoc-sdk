@@ -80,8 +80,9 @@ export interface LineupChoice {
 }
 
 /**
- * The next line-up of `size` from the pool. First what a group needs, each by the candidate that has played fewest:
- * a healer, a front-liner, a crowd controller (a need nobody available meets is skipped). Then whoever has played fewest
+ * The next line-up of `size` from the pool. First one of each class in `classes` (group.json `requires.classes`), then
+ * what a group needs, each by the candidate that has played fewest: a healer, a front-liner, a crowd controller (a need
+ * nobody available meets is skipped). Then whoever has played fewest
  * rounds; on a tie a current member stays, then the pool's order. `available` (default: all) leaves out bots that can't
  * play now, such as one not in game.
  */
@@ -92,6 +93,8 @@ export function pickLineup(o: {
     size?: number;
     played?: Readonly<Record<string, number>>;
     available?: ReadonlySet<string>;
+    /** Classes every line-up holds one of, filled first (group.json `requires.classes`). */
+    classes?: readonly string[];
 }): LineupChoice {
     const size = o.size ?? 5;
     const played = (bot: string) => o.played?.[bot] ?? 0;
@@ -102,6 +105,13 @@ export function pickLineup(o: {
         || o.pool.indexOf(a) - o.pool.indexOf(b));
     const picked: LineupCandidate[] = [];
     const notes: string[] = [];
+    const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+    for (const cls of o.classes ?? []) {
+        if (picked.length >= size || picked.some(c => same(c.className, cls))) continue;
+        const c = order.find(x => same(x.className, cls) && !picked.includes(x));
+        if (c) { picked.push(c); notes.push(`${cls} ${c.bot}`); }
+        else notes.push(`no ${cls} available`);
+    }
     for (const need of ['healer', 'front', 'cc'] as const) {
         if (picked.length >= size || picked.some(c => c[need])) continue;
         const c = order.find(x => x[need] && !picked.includes(x));
