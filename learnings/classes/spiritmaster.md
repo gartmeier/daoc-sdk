@@ -18,6 +18,8 @@ Midgard's list caster: lifetaps and debuffs from Darkness, area damage and mezz 
 
 **Round 31 (vs Hibernia, won by wipe 5 / 1, Quickcast in):** 9 nukes, 1232 damage, never targeted, so no Quickcast; idle 4 %.
 
+**Round 32 (vs Camelot, wiped 0 / 5 in 89 s):** her cc order failed `cc:out_of_range` 9 times and no nuke landed; first nuke at 20.6 s, moving 73 %. The distance is 3D, so the target moving off or her own walk is the likelier cause; `crowdControl` holding ground answers it with a 1 s wait and the same target again. Asked of the orchestrator (shared).
+
 **Quickcast (2026-11-10, after round 27):** she has the ability (`bun sdk/cli.ts Hrafna`) and nothing used it. The kit's `instant` is the Cabalist kit's `quickcastUnderFire` ([cabalist.md](cabalist.md)): with a melee on her, or a cast of hers interrupted in the last 5 s, Quickcast, then her cc order or her nuke on the focus, uninterruptible, at twice the power, once per 31 s. In round 27 she was targeted 73 % of the fight.
 
 Before that the kit held only the role. Everything measured below is a setting or a piece of gear: `holdMs` and `ready.mana` are Midgard's, and a focus staff took her `no_power` from 5.0 to 0.3 a run, so she has no floor of power to carry.
