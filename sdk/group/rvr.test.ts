@@ -140,6 +140,20 @@ describe('decideRvr: fights', () => {
         expect(d.reason).toBe('fight Norseman#51 (midgard L21, 60%): 1 enemy vs 5');
     });
 
+    test('a focus whose health stands still 20 s is a phantom: left alone for 2 minutes (arena round 33: 70 s on a Norseman nobody saw)', () => {
+        const memory: Record<string, any> = {};
+        const ghost = foe(51, { x: 11_500, hp: 100 });
+        const at = (t: number, orders: Partial<Orders> = { phase: 'engage', focus: 51 }) => decideRvr(ctx(picture(team(), [ghost]), { memory, orders, now: t }));
+        expect(at(1000).focus).toBe(51);
+        expect(at(15_000).focus).toBe(51);
+        expect(at(21_500).phase).not.toBe('engage');
+        expect(at(60_000, { phase: 'travel', focus: null }).phase).not.toBe('engage');
+        // A real one loses health: it stays the focus.
+        const m2: Record<string, any> = {};
+        expect(decideRvr(ctx(picture(team(), [ghost]), { memory: m2, orders: { phase: 'engage', focus: 51 }, now: 1000 })).focus).toBe(51);
+        expect(decideRvr(ctx(picture(team(), [{ ...ghost, hp: 80 }]), { memory: m2, orders: { phase: 'engage', focus: 51 }, now: 22_000 })).focus).toBe(51);
+    });
+
     test('focus: a healer before a caster before a hurt fighter', () => {
         const healer = foe(51, { healer: true }), caster = foe(52, { caster: true }), hurt = foe(53, { hp: 40 });
         expect(decideRvr(ctx(picture(team(), [hurt, caster, healer]))).focus).toBe(51);
@@ -480,10 +494,12 @@ describe('decideRvr: retreat among three realms', () => {
 describe('decideRvr: crowd control assignments', () => {
     const now = Date.now();
     const foes = [foe(51, { healer: true }), foe(52)];
+    // The focus takes damage as a real one does: a focus whose health stands still 20 s is a phantom (rvrPhantom).
+    const hurt = (contacts: Contact[], ms: number) => contacts.map(c => (c.objectId === 51 ? { ...c, hp: 100 - ms / 1000 } : c));
 
     test('a mezz not landed in 8 s goes to another mezzer (ours may be mezzed itself), who keeps it; the first gets none for a while', () => {
         const memory: Record<string, any> = {};
-        const step = (ms: number, cc: Orders['cc'], contacts = foes) => decideRvr(ctx(picture(team(), contacts, { phase: 'engage', focus: 51, cc }, now + ms), { memory, now: now + ms }));
+        const step = (ms: number, cc: Orders['cc'], contacts = foes) => decideRvr(ctx(picture(team(), hurt(contacts, ms), { phase: 'engage', focus: 51, cc }, now + ms), { memory, now: now + ms }));
         expect(step(0, []).cc).toEqual([{ targetId: 52, by: 'Bard' }]);
         expect(step(5000, [{ targetId: 52, by: 'Bard' }]).cc).toEqual([{ targetId: 52, by: 'Bard' }]);
         expect(step(9000, [{ targetId: 52, by: 'Bard' }]).cc).toEqual([{ targetId: 52, by: 'Menta' }]);
@@ -498,7 +514,7 @@ describe('decideRvr: crowd control assignments', () => {
         const walk = { kind: 'move', targetId: 52, detail: 'cc: into range for Hold Spirit', since: 0 };
         const given = (memory: Record<string, any>, over: Parameters<typeof team>[0] = {}) => decideRvr(ctx(picture(team(over), foes, { phase: 'engage', focus: 51, cc: [] }, now), { memory, now })).cc;
         const tick = (memory: Record<string, any>, ms: number, bard: Partial<MemberReport>, cc: Orders['cc'] = [{ targetId: 52, by: 'Bard' }]) =>
-            decideRvr(ctx(picture(team({ Bard: bard }), foes, { phase: 'engage', focus: 51, cc }, now + ms), { memory, now: now + ms })).cc;
+            decideRvr(ctx(picture(team({ Bard: bard }), hurt(foes, ms), { phase: 'engage', focus: 51, cc }, now + ms), { memory, now: now + ms })).cc;
 
         test('getting somewhere it keeps the assignment past the 8 s, on a walk of any length a sighting gives', () => {
             const memory: Record<string, any> = {};

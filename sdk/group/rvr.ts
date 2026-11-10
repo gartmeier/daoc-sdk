@@ -474,11 +474,33 @@ export function groupRegion(alive: readonly MemberReport[]): number {
     return [...n].sort((a, b) => b[1] - a[1] || Number(b[0] === tankRegion) - Number(a[0] === tankRegion))[0]![0];
 }
 
+/** A focus with its health frozen this long is taken for a phantom ... */
+export const RVR_FROZEN_MS = 20_000;
+/** ... and left out of the fight for this long. */
+export const RVR_PHANTOM_MS = 120_000;
+
+/**
+ * Notes a phantom focus in `mem.rvrPhantoms` (id → until): one whose health hasn't moved for RVR_FROZEN_MS while we were on it.
+ * Arena round 33 (2026-11-10): Camelot engaged Norseman#496, left over from the round before, for 70 s with nobody seeing
+ * him ("focus not in view, holding ground" 69 times, "disappeared at 100% health"; Albion group session). The pack has its own.
+ */
+export function rvrPhantom(mem: Record<string, any>, contacts: readonly Contact[], focusId: number | null, now: number): void {
+    mem.rvrPhantoms ??= {};
+    for (const [id, until] of Object.entries(mem.rvrPhantoms) as [string, number][]) if (until <= now) delete mem.rvrPhantoms[id];
+    const focus = focusId === null ? undefined : contacts.find(c => c.objectId === focusId);
+    if (!focus) { mem.rvrFrozen = undefined; return; }
+    const f = mem.rvrFrozen;
+    if (f?.id !== focus.objectId || f.hp !== focus.hp) mem.rvrFrozen = { id: focus.objectId, hp: focus.hp, since: now };
+    else if (now - f.since >= RVR_FROZEN_MS) { mem.rvrPhantoms[focus.objectId] = now + RVR_PHANTOM_MS; mem.rvrFrozen = undefined; }
+}
+
 export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const { picture: p, orders: o, memory: mem, settings: s, now } = ctx;
     if (!p.members.length) return { phase: 'idle', reason: 'no member reports yet' };
     // A shade is nobody here: no focus, no cc, no enemy to count or hunt (AbstractServerRules.cs:449-455). Its servant is a candidate like any enemy pet, and a focus that turns out to be one moves at once.
-    const contacts = p.contacts.filter(c => !untouchable(c, now));
+    // A focus whose health stands still that long is a phantom, left alone a while (rvrPhantom), as the pack does.
+    rvrPhantom(mem, p.contacts, o.phase === 'engage' ? o.focus : null, now);
+    const contacts = p.contacts.filter(c => !untouchable(c, now) && !((mem.rvrPhantoms?.[c.objectId] ?? 0) > now));
     const alive = p.members.filter(m => !m.isDead);
     if (!alive.length) return { phase: 'recover', focus: null, cc: [], puller: null, retreatTo: null, reason: 'everyone is dead: releasing' };
     const regionId = groupRegion(alive);
