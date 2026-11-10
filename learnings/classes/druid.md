@@ -108,3 +108,5 @@ What the class has that no behaviour uses:
 ## Nearsight cure (from the round after 40)
 
 **Verified by the orchestrator (13f8de7):** round 35's run of `out_of_range` was Albion's Obscuring Dust (Cabalist, Nearsight, -35 % spell range for 120 s): our 1500-range spells reached 975. Spell ranges now follow our own effects (`effectiveSpellRange`). Brigid has Cure Nearsight I (Regrowth, `CureNearsightCustom`, 6 s, 30 power, range 1500). Her kit's `react` casts it with the Midgard Healer kit's `cureNearsight` (a nuker first, then a healer, a support, the rest; herself too), wrapped in `unlessHammered` and `thrifty(…, 50)`: in the pack's healer list `react` lands at `shedLoad`, so it takes her idle turns; never under a melee, and in a fight only above 40 % of her 197 power, without a skip reason (round 42: `thrifty`'s "saving power" stood as her idle reason 33 turns).
+
+**Verified, arena round 59** (beat Camelot 7-0, no deaths): Brigid's Nearsight cure cast 3 times (1 `cure:out_of_range`), the first round it found Albion's Obscuring Dust on someone.
