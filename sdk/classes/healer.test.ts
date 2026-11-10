@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { getBuild } from '../../data/builds';
 import { enemy, report } from '../group/fixtures';
 import { reachOfBuild } from './reach';
-import { isNearsightEffect, nearsightedMember, slowSpell, slowTarget } from './healer';
+import { isNearsightEffect, nearsightCalm, nearsightedMember, slowSpell, slowTarget } from './healer';
 
 const at = (x: number) => ({ x, y: 1000, z: 0 });
 const me = report('Sigrid', { role: 'healer', ...at(1000) });
@@ -49,5 +49,14 @@ describe('healer kit: Cure Nearsight', () => {
         expect(nearsightedMember(me, [me, shaman], 1500)?.name).toBe('Ulfgar');
         expect(nearsightedMember(me, [me, { ...nuker, z: 1400 }], 1500)).toBeNull();
         expect(nearsightedMember(me, [me, { ...nuker, effects: [] }], 1500)).toBeNull();
+    });
+
+    test('only when nobody is low and no enemy is on her', () => {
+        const ok = [me, report('Hrafna', { hp: 80 })];
+        expect(nearsightCalm('Sigrid', ok, [])).toBe(true);
+        expect(nearsightCalm('Sigrid', [me, report('Hrafna', { hp: 50 })], [])).toBe(false);
+        expect(nearsightCalm('Sigrid', [me, report('Hrafna', { hp: 50, isDead: true })], [])).toBe(true);
+        expect(nearsightCalm('Sigrid', ok, [enemy(1, 'albion', { target: 'Sigrid' })])).toBe(false);
+        expect(nearsightCalm('Sigrid', ok, [enemy(1, 'albion', { target: 'Hrafna' })])).toBe(true);
     });
 });

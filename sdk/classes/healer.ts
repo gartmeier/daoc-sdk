@@ -94,6 +94,17 @@ export function nearsightedMember(me: Pick<MemberReport, 'x' | 'y' | 'z' | 'regi
         .sort((a, b) => rank(a) - rank(b))[0] ?? null;
 }
 
+/** No 6 s cure while a member is below this health: heals first. */
+export const NEARSIGHT_HEALTH_FLOOR = 60;
+
+/**
+ * Whether a 6 s Nearsight cure fits now: nobody of ours below NEARSIGHT_HEALTH_FLOOR and no enemy on her, by swing or
+ * spell (anything on her ends a cast that long). Round 77: two cures interrupted and no heal at all while targeted 51 %.
+ */
+export function nearsightCalm(me: string, members: readonly Pick<MemberReport, 'name' | 'isDead' | 'hp'>[], threats: readonly Pick<Contact, 'target'>[]): boolean {
+    return !members.some(m => !m.isDead && m.hp < NEARSIGHT_HEALTH_FLOOR) && !threats.some(t => t.target === me);
+}
+
 /** A cure on one member at most this often: its effect list can lag the cure by a report. */
 const NEARSIGHT_SPACING_MS = 8000;
 
@@ -104,6 +115,7 @@ export const cureNearsight = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         const me = ctx.me();
         if (me.maxMana > 0 && me.manaPercent < EXTRAS_FLOOR) return false;
+        if (!nearsightCalm(ctx.name, ctx.members(), ctx.threats())) return false;
         const sp = ctx.spells.all().find(s => s.type === 'CureNearsightCustom' && s.spell.cooldownRemaining <= 0 && s.power <= me.mana);
         if (!sp) return false;
         const self = ctx.members().find(m => m.name === ctx.name);

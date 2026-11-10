@@ -50,6 +50,8 @@ Midgard's main healer: heals from Mending, base buffs from Augmentation, mezz, s
 
 **Round 67 (vs Camelot, lost on the cap 3 / 9; Nearsight cure in urgent):** 3 `nearsight` cures, her first; 2 heals, 3 slows. Hrafna still idle 32 % ("focus out of reach" 74) with 7 nukes: Camelot's casters stand back even at her full range.
 
+**Round 77 (vs Camelot, wiped 3 / 5):** no heal at all; 2 Nearsight cures interrupted while she was targeted 51 %, in melee 47 %. In `urgent` the 6 s cure took the turns from heals. Since then it waits until nobody of ours is under 60 % and no enemy is on her (`nearsightCalm`).
+
 ## Builds
 
 `bots/<bot>/build.ts` starts as a copy from `data/builds/healer.ts` ([builds.md](../builds.md)). Levels the rule gives each build, lines in buying order:
