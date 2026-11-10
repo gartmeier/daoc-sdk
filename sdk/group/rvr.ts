@@ -194,6 +194,12 @@ const PATROL_RADIUS = 5500, PATROL_POINTS = 6;
 const PAIR_RADIUS = 4000;
 /** Each waypoint stays this far outside aggro zones and keep circles: casters stand up to ~700 behind the anchor. */
 const PATROL_MARGIN = 900;
+/**
+ * ... and from monster camps on a pair's ring, where the fights are: members stand up to ~1000 from a waypoint in a fight
+ * and chase farther. Arena round 71 (2026-11-10): Hibernia and Midgard fought at Midgard's west waypoint (30007, 25197),
+ * 1450 outside the perturbed bwca camp's aggro circle, a bwca came in and killed Hibernia's Hero (Hibernia group session).
+ */
+const PAIR_CAMP_MARGIN = 1500;
 /** Where an unsafe waypoint is tried next: [radius change, angle change in radians]. */
 const NUDGES: [number, number][] = [[0, 0], [-500, 0], [500, 0], [-1000, 0], [1000, 0], [0, 0.15], [0, -0.15], [-1000, 0.15], [-1000, -0.15],
     // Wider, for a waypoint on a river where the three meet by the Faste (stayDry): last, so no earlier waypoint moves.
@@ -224,10 +230,11 @@ export function defaultPatrol(regionId: number, realm: Realm, level: number, set
     const home = homeOf(regionId, realm);
     const ring = patrolRing(regionId, realm, settings.opponent);
     if (!bg || !home || !ring) return [];
-    const blocked = [...aggroZones(regionId, level), ...keepDangers(regionId, realm, settings)];
+    const camps = aggroZones(regionId, level), keeps = keepDangers(regionId, realm, settings);
     const dry = staysDry(settings);
     const { opponent } = settings;
     const pair = ring.pair;
+    const campMargin = pair ? PAIR_CAMP_MARGIN : PATROL_MARGIN;
     const centre: Point = ring;
     const radius = ring.r;
     const turn = pair ? (realm < opponent! ? 1 : -1) : PATROL_TURN[realm as PlayerRealm];
@@ -237,7 +244,7 @@ export function defaultPatrol(regionId: number, realm: Realm, level: number, set
         const a = a0 + turn * k * 2 * Math.PI / PATROL_POINTS;
         const spot = NUDGES
             .map(([dr, da]) => ({ x: Math.round(centre.x + Math.cos(a + da) * (radius + dr)), y: Math.round(centre.y + Math.sin(a + da) * (radius + dr)) }))
-            .find(p => clearOf(p, blocked, PATROL_MARGIN) && (!dry || isDry(regionId, p)) && isLevel(regionId, p));
+            .find(p => clearOf(p, camps, campMargin) && clearOf(p, keeps, PATROL_MARGIN) && (!dry || isDry(regionId, p)) && isLevel(regionId, p));
         if (spot) out.push({ ...spot, z: estimateZ(regionId, spot.x, spot.y, bg.meet.z, { radius: 8000 }) });
     }
     // The first waypoint may have been dropped: start at the one nearest home.

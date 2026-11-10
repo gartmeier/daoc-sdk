@@ -81,7 +81,9 @@ describe.skipIf(!terrain)('slope in Thidranki', () => {
                 expect(loop.length).toBe(6);
                 for (const w of loop) {
                     expect(isLevel(T, w) && isDry(T, w)).toBe(true);
-                    expect(clearOf(w, [...zones, ...keepDangers(T, realm)], 900)).toBe(true);
+                    expect(clearOf(w, keepDangers(T, realm), 900)).toBe(true);
+                    // Fights spread round a pair waypoint: monster camps stay 1500 off (arena round 71, a bwca at Midgard's west waypoint).
+                    expect(clearOf(w, zones, 1500)).toBe(true);
                 }
             }
         }
