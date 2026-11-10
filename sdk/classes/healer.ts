@@ -9,7 +9,8 @@
 //   soft member, which an instant can do even under the swings. In the instant slot, above flee, which otherwise takes
 //   every turn while a melee is on her.
 // - Cure Nearsight I (Mending 20, 6 s, 30 power): an enemy Nearsight (Albion's Obscuring Dust, -35 % spell range for
-//   120 s) leaves a caster answered "too far away" from where it stands; she lifts it, our nuker first. Below heal. learnings/classes/healer.md says what, and what has
+//   120 s) leaves a caster answered "too far away" from where it stands; she lifts it, our nuker first. In urgent after
+//   the mezz cure: below the emergency heal, above heal (round 65: Dust on Ulfgar and Hrafna, no cure cast from react). learnings/classes/healer.md says what, and what has
 //   been measured.
 
 //
@@ -120,5 +121,5 @@ export const cureNearsight = (): Behavior<TacticsSettings> => ({
 });
 
 export function healer(): Character {
-    return { role: 'healer', instant: [hinder()], urgent: [unlessHammered(cureMezz())], react: [unlessHammered(cureNearsight())], fight: [unlessHammered(stunPeel({ minMana: EXTRAS_FLOOR }))] };
+    return { role: 'healer', instant: [hinder()], urgent: [unlessHammered(cureMezz()), unlessHammered(cureNearsight())], fight: [unlessHammered(stunPeel({ minMana: EXTRAS_FLOOR }))] };
 }

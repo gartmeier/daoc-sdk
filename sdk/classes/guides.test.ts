@@ -175,7 +175,7 @@ describe('healer guide', () => {
             expect(list.indexOf('emergencyHeal')).toBeLessThan(list.indexOf('cureMezz'));
         }
         const pack = withCharacter(packBehaviors().healer as Behavior<any>[], healer() as Character).map(b => b.name);
-        expect(pack.indexOf('cureMezz')).toBe(pack.indexOf('heal') - 1);
+        expect(pack.slice(pack.indexOf('cureMezz'), pack.indexOf('heal'))).toEqual(['cureMezz', 'cureNearsight']);
         expect(pack.indexOf('hinder')).toBe(pack.indexOf('flee') - 1);
     });
 
