@@ -89,8 +89,9 @@ export const stunCaster = (floor = 15): Behavior => ({
         if (me.maxMana > 0 && me.manaPercent < floor) return false;
         const sp = ctx.spells.all().find(s => s.type === 'Stun' && s.target === 'Enemy' && s.radius === 0 && s.power <= me.mana && s.spell.cooldownRemaining <= 0);
         if (!sp) return false;
-        // A melee on her would only interrupt the 2.5 s cast: flee's.
-        if (hammeredBy(ctx)) return false;
+        // A melee on her would only interrupt the 2.5 s cast: flee's (quickFlash's, with Quickcast). An enemy pet too
+        // (round 105: Albion's pets on her, stun:interrupted); hammeredBy counts players only.
+        if (hammeredBy(ctx) || petOnMe(ctx.threats(), me.name)) return false;
         const self = ctx.members().find(m => m.name === me.name);
         const far = tooFarOf(ctx.memory);
         const raw = (c: Contact) => { const v = foeInView(ctx, c.objectId); return !v || ('isDead' in v && v.isDead) ? Infinity : v.distance; };
