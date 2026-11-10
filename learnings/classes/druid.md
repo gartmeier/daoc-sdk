@@ -112,3 +112,5 @@ What the class has that no behaviour uses:
 **Verified, arena round 59** (beat Camelot 7-0, no deaths): Brigid's Nearsight cure cast 3 times (1 `cure:out_of_range`), the first round it found Albion's Obscuring Dust on someone.
 
 **Arena round 62** (wiped Camelot 5-1): both Nearsight cures interrupted (6 s each). `unlessHammered` covers only a melee on her; Albion's spells interrupt as well. From the next round the cure also waits while any enemy aims at her (`unlessAimedAt`: a free contact whose target is her, by swing or by spell).
+
+**Arena round 76** (lost 2-8 to Midgard): Brigid survived, idle 57 % of the fights on "nothing to do" (187 turns), while the others died 8 times. `heal` only looks within 2000, so a hurt member beyond that is no work. From the next round `reachHurt` (react, first): in a fight, with nobody in reach to heal, one 3 s leg toward the most hurt member below the heal threshold 2000-3500 away, to 1500 from them; never under a melee. Unverified that distance was the cause; the group session has a position sampler.

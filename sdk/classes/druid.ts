@@ -4,7 +4,7 @@
 // one. `groupHeal` does, when three or more of the group around her each miss most of what it restores.
 // A Nature build also has DoTs (dotsAbove). learnings/classes/druid.md says what was measured.
 
-import { assist, foeInView, hammeredBy, stopSwinging } from '../group/behaviors';
+import { assist, foeInView, hammeredBy, stopSwinging, type TacticsSettings } from '../group/behaviors';
 import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import type { Contact, MemberReport, Role } from '../group/types';
@@ -120,6 +120,47 @@ export const quietlyAbove = <S>(inner: Behavior<S>, floor: number): Behavior<S> 
     run: ctx => (ctx.threats().length && ctx.me().maxMana > 0 && ctx.me().manaPercent < floor ? false : inner.run(ctx)),
 });
 
+/** Her heals' range (Regrowth), and how far past it she walks to a hurt member: farther is someone else's fight. */
+const HEAL_RANGE = 2000;
+const REACH_HURT_MAX = 3500;
+/** She stops this far from the member, inside the range with room for its moves and the server's 3D. */
+const REACH_HURT_TO = 1500;
+
+/**
+ * The member to walk toward: alive, in our region, below `limit` % (the tank its own), between HEAL_RANGE and
+ * REACH_HURT_MAX away; the most hurt.
+ */
+export function hurtOutOfReach(me: { x: number; y: number; regionId: number; name: string }, members: readonly MemberReport[], limit: (m: MemberReport) => number): MemberReport | null {
+    return members
+        .filter(m => m.name !== me.name && !m.isDead && m.regionId === me.regionId && m.hp < limit(m))
+        .filter(m => { const d = Math.hypot(m.x - me.x, m.y - me.y); return d > HEAL_RANGE && d <= REACH_HURT_MAX; })
+        .sort((a, b) => a.hp - b.hp)[0] ?? null;
+}
+
+/**
+ * In a fight, with nobody in reach to heal (it sits below heal), one leg toward the most hurt member beyond her heals'
+ * range, never with a melee on her. Arena round 76: Brigid idle 57 % of the fights on "nothing to do" (187 turns) while
+ * the others died 8 times.
+ */
+export const reachHurt = (): Behavior<TacticsSettings> => ({
+    name: 'reachHurt',
+    async run(ctx) {
+        const o = ctx.orders();
+        if (o.phase !== 'engage' && o.phase !== 'retreat') return false;
+        if (hammeredBy(ctx)) return false;
+        const me = ctx.me();
+        const self = ctx.members().find(m => m.name === me.name);
+        const s = ctx.settings.heal;
+        const m = hurtOutOfReach({ x: me.x, y: me.y, regionId: self?.regionId ?? me.regionId, name: me.name }, ctx.members(), x => (x.role === 'tank' ? s.tank : s.other));
+        if (!m) return false;
+        const d = Math.hypot(m.x - me.x, m.y - me.y);
+        const to = { x: me.x + (m.x - me.x) * (d - REACH_HURT_TO) / d, y: me.y + (m.y - me.y) * (d - REACH_HURT_TO) / d };
+        ctx.doing('move', m.objectId, `into heal reach of ${m.name} (${m.hp} %)`);
+        await ctx.bot.walkTo(to.x, to.y, { tolerance: 100, timeout: 3000 });
+        return true;
+    },
+});
+
 /** `inner` only while no enemy aims at us, by swing or by spell (Contact.target): a long cast would only be interrupted. Quiet. */
 export const unlessAimedAt = <S>(inner: Behavior<S>): Behavior<S> => ({
     ...inner,
@@ -134,7 +175,8 @@ export function druid({ dotsAbove, groupHealMin = 3, groupHealAbove = 25 }: Drui
         // (orchestrator, 13f8de7). The Midgard Healer kit's cure, in her idle turns (react: at shedLoad in the pack's
         // healer list), never under a melee, and in a fight only above 40 % of her 197 power.
         // Not while any enemy aims at her either (round 62: 2 of 2 cures interrupted by spells, 12 s of her time).
-        react: [quietlyAbove(unlessAimedAt(unlessHammered(cureNearsight())), 40)],
+        // A hurt member beyond her heals' 2000 is "nothing to do" for heal(): walk into reach (round 76: idle 57 %, 8 deaths).
+        react: [reachHurt(), quietlyAbove(unlessAimedAt(unlessHammered(cureNearsight())), 40)],
         ...(dotsAbove === undefined ? {} : { fight: [thrifty(assist(), dotsAbove)] }),
     };
 }

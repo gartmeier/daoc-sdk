@@ -5,7 +5,7 @@ import { withCharacter } from '../group/character';
 import { packBehaviors } from '../group/pack';
 import type { MemberReport } from '../group/types';
 import type { Contact } from '../group/types';
-import { diverTarget, druid, groupHealTargets } from './druid';
+import { diverTarget, druid, groupHealTargets, hurtOutOfReach } from './druid';
 import { reachOfBuild } from './reach';
 
 const member = (name: string, hp: number, o: Partial<MemberReport> = {}) => ({ name, hp, maxHp: 700, x: 0, y: 0, regionId: 238, isDead: false, ...o }) as MemberReport;
@@ -62,5 +62,17 @@ describe('druid rootDiver', () => {
         none(melee(1, 'Oisin'), { focus: 9, cc: [{ targetId: 1 }] });
         none(melee(1, 'Oisin', { ccImmune: { root: 5000 } }));
         none(melee(1, 'Oisin', { x: 1460 }));
+    });
+});
+
+describe('druid reachHurt', () => {
+    const me = { x: 0, y: 0, regionId: 238, name: 'Brigid' };
+    const limit = (m: MemberReport) => (m.role === 'tank' ? 80 : 78);
+    test('the most hurt member between 2000 and 3500 away, below its threshold', () => {
+        const ms = [member('a', 50, { x: 2500 }), member('b', 30, { x: 3000 }), member('c', 20, { x: 1500 }), member('d', 10, { x: 4000 }), member('e', 90, { x: 2200 })];
+        expect(hurtOutOfReach(me, ms, limit)?.name).toBe('b');
+    });
+    test('none when the hurt are in reach, too far, dead, or herself', () => {
+        expect(hurtOutOfReach(me, [member('c', 20, { x: 1500 }), member('d', 10, { x: 4000 }), member('f', 10, { x: 2500, isDead: true }), member('Brigid', 10, { x: 2500 })], limit)).toBeNull();
     });
 });
