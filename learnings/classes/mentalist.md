@@ -116,3 +116,7 @@ From round 11 the kit's fight is `nukerFight(0, true)` from `sdk/classes/cabalis
 **Verified, arena round 20** (wiped Midgard 5-1, the first win against them since round 9): 5 Prismatic Flashes, 2 of them `stun:out_of_range`, 8 nukes, 1,022 damage. The server checks range at the cast's end, and a melee chasing Oisin walks on during the 2.5 s cast: the margin under the range is now 150 (10 % of it, as `castSpell`'s own walk stops), from 60.
 
 **Verified, arena round 25** (won 8-6 against Midgard): Niamh's best round, 28 nukes, 4 Prismatic Flashes, 3,739 damage, with the Flash above her emergency heals and `offFocus` in her fight.
+
+## Quickcast (from the round after 28)
+
+Niamh has the Quickcast ability (`bun sdk/cli.ts niamh`): the next spell can't be interrupted, at twice its power, then 30 s before the next (`QuickCastAbilityHandler.cs`; Albion class session, 1f05f78). Her kit's `instant` slot, above `flee`: `quickFlash` first, Quickcast and Prismatic Flash on the melee hitting her (`hammeredBy`), not on one stun-immune or crowd-controlled, within range less 150; then the Cabalist kit's `quickcastUnderFire` (her cc assignment, else her nuke on the focus) when the Flash can't go. They share one 31 s timer. Round 15 is why: dived 51 % of the fight with nothing to answer with.

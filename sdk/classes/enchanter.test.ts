@@ -8,6 +8,7 @@ describe('enchanter kit', () => {
         const names = withCharacter(packBehaviors().nuker, enchanter()).map(b => b.name);
         expect(names.indexOf('resistDebuff')).toBeLessThan(names.indexOf('assist'));
         expect(names.indexOf('offFocus')).toBe(names.indexOf('assist') + 1);
+        expect(names.indexOf('quickcast')).toBe(names.indexOf('flee') - 1);
     });
 
     test('offFocus can be left out', () => {

@@ -65,3 +65,7 @@ Verified in a real `runGroup`, 40 s on a dummy with two clones: the level 50 cas
 **Verified,** round 10 (2026-11-09, against Albion: Paladin, Cleric, Sorcerer, Cabalist, Theurgist): wiped in 79 s, 0 kills. Ciaran cast 2 nukes and moved 73 % of the fight; 2 more were `out_of_range`. The pack's soft focus was their back line, beyond reach; the casters walked toward it and died en route. Albion's casters fixed the same idling with `offFocus` (Cabalist kit, 6675df9: Morgana, Taliesin and Merlin had idled 39-67 turns on "focus out of reach").
 
 From round 11 the kit's fight is `nukerFight(0, true)` from `sdk/classes/cabalist.ts`: `assist`, then `offFocus`, which nukes the nearest free enemy player in reach (not crowd-controlled, not assigned or claimed for cc, so no mezz is woken) while the focus is out of reach, from where he stands, never into a melee swing. `enchanter({ offFocus: false })` leaves it out.
+
+## Quickcast (from the round after 28)
+
+Ciaran has Quickcast. His kit's `instant` slot holds the Cabalist kit's `quickcastUnderFire` (Albion class session, 1f05f78): with a melee on him, or a cast of his cut in the last 5 s, Quickcast and then his cc assignment or his nuke on the focus, uninterruptible, twice the power, once per 31 s. Rounds 21 and 23: in melee 51-57 % of the fight, `nuke:interrupted` 3-5 a round.

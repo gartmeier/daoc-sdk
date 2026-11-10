@@ -24,6 +24,8 @@ describe('mentalist kit', () => {
         // Round 18: 11 emergency heals and no Flash. As urgent it goes above them (and below her cc orders).
         expect(names.indexOf('stunCaster')).toBeLessThan(names.indexOf('emergencyHeal'));
         expect(names.indexOf('stunCaster')).toBeGreaterThan(names.indexOf('crowdControl'));
+        // Quickcast under a melee: her Flash on it first, else the nuke; both above flee.
+        expect(names.slice(names.indexOf('flee') - 2, names.indexOf('flee'))).toEqual(['quickFlash', 'quickcast']);
     });
 
     test('Light nuker reaches Prismatic Flash at 24: a single-target stun', () => {

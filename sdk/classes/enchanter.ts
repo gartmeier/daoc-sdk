@@ -5,7 +5,7 @@
 
 import type { Character } from '../group/character';
 import { resistDebuff } from '../group/debuff';
-import { nukerFight } from './cabalist';
+import { nukerFight, quickcastUnderFire } from './cabalist';
 
 export interface EnchanterOptions {
     /** Other casters nuking heat beside this one: a Hibernian group's Light Mentalist counts. */
@@ -16,5 +16,5 @@ export interface EnchanterOptions {
 
 /** Arena round 10 (2026-11-09): wiped by Albion in 79 s, Ciaran 2 nukes, moving 73 % with the focus on their back line out of reach. */
 export function enchanter({ heatAllies = 0, offFocus = true }: EnchanterOptions = {}): Character {
-    return { role: 'nuker', react: [resistDebuff({ allies: heatAllies })], fight: nukerFight(0, offFocus) };
+    return { role: 'nuker', instant: [quickcastUnderFire()], react: [resistDebuff({ allies: heatAllies })], fight: nukerFight(0, offFocus) };
 }

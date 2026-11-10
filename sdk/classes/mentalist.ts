@@ -6,7 +6,7 @@
 
 import { foeInView, hammeredBy } from '../group/behaviors';
 import type { Character } from '../group/character';
-import { nukerFight } from './cabalist';
+import { nukerFight, QUICKCAST_REUSE_MS, quickcastUnderFire } from './cabalist';
 import type { Behavior } from '../group/member';
 import type { Contact, MemberReport, Role } from '../group/types';
 
@@ -80,6 +80,39 @@ export const stunCaster = (floor = 15): Behavior => ({
 });
 
 /** offFocus (the Cabalist kit's): nukes on a free enemy in reach while the focus is out of it. Arena round 10: Niamh 1 nuke in a 79 s wipe. */
+/**
+ * In the instant slot: with a melee on her, Quickcast and Prismatic Flash on that melee, a 5 s stun that can't be
+ * interrupted, and flee walks her off it. Arena round 15: dived 51 % of the fight, 4 nukes, nothing to answer with
+ * (Flash 2.5 s, Cripple Mind 3 s). Shares quickcastUnderFire's 31 s timer (memory 'quickcastReadyAt'), which comes next
+ * for when the Flash can't go (stun-immune, out of reach): her nuke on the focus.
+ */
+export const quickFlash = (): Behavior => ({
+    name: 'quickFlash',
+    interruptible: false,
+    async run(ctx) {
+        if (ctx.orders().phase !== 'engage') return false;
+        const now = Date.now();
+        if (now < (ctx.memory.get('quickcastReadyAt') ?? 0) || !ctx.sdk.findAbility('Quickcast')) return false;
+        const foe = hammeredBy(ctx);
+        if (!foe || foe.kind !== 'player' || foe.cc || (foe.ccImmune?.stun ?? 0) > now) return false;
+        const me = ctx.me();
+        const sp = ctx.spells.all().find(s => s.type === 'Stun' && s.target === 'Enemy' && s.radius === 0 && s.spell.cooldownRemaining <= 0);
+        if (!sp || me.mana < 2 * ctx.spells.powerOf(sp)) return false;
+        const view = foeInView(ctx, foe.objectId);
+        if (!view || ('isDead' in view && view.isDead) || view.distance > sp.range - RANGE_MARGIN) return false;
+        ctx.memory.set('quickcastReadyAt', now + QUICKCAST_REUSE_MS);
+        const q = await ctx.bot.useAbility('Quickcast');
+        ctx.result('quickcast', q);
+        if (!q.success) return true;
+        ctx.doing('stun', foe.objectId, `${sp.spell.name} (quickcast, on the melee at her)`);
+        const c = await ctx.bot.castSpell(sp.spell, foe.objectId, { approach: false });
+        ctx.result('stun', c, foe.objectId);
+        if (c.success) ctx.markCcImmune(foe.objectId, 'stun', sp.duration * 1000 + STUN_IMMUNE_MS);
+        else if (c.reason === 'immune') ctx.markCcImmune(foe.objectId, 'stun', STUN_IMMUNE_MS);
+        return true;
+    },
+});
+
 export function mentalist({ offFocus = true }: { offFocus?: boolean } = {}): MentalistKit {
-    return { character: { role: 'nuker', urgent: [stunCaster()], fight: nukerFight(0, offFocus) } };
+    return { character: { role: 'nuker', instant: [quickFlash(), quickcastUnderFire()], urgent: [stunCaster()], fight: nukerFight(0, offFocus) } };
 }
