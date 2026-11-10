@@ -62,6 +62,6 @@ Thidranki Warden Blade and a medium shield, 621 health in scale. Blades 10: Glow
 - Not yet played with the kit: the damage add, the bubble in fights, Group Revigoration at four.
 - The heal thresholds as the only healer (tank 90, others 83, emergency 55) are unmeasured.
 - Major Regeneration over Regrowth for a member missing more than ~110 (`pickHeal` ties them).
-- Live check that `buff()` keeps Nature's Shield up out of a fight: her effects on 2026-11-10 showed only her base buffs.
+- **Verified 2026-11-10 night** (her effects between rounds 139 and 140, `bun sdk/cli.ts aine`): Nature's Shield is up out of a fight, and Nature's Retaliation still pulses. A round's script stops only a pulse it started itself (`song()`'s memory), and every round is a fresh process, so the damage add started in one round runs on into the next; it costs no power. That is why rounds 136 and 139 show no damage-add result: it was already on.
 - Glowing Blade on a diver beside her while a Druid carries the heals.
-- Round 136 shows no damage-add result at all (rounds 126-135: 1-3 a round). `song()` sends an instant song raw while she swings and records no result then, so a report can't tell "never cast" from "cast while swinging". A note on that path would settle it.
+
