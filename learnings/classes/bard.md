@@ -95,3 +95,5 @@ What the class has that no behaviour uses:
 **Arena round 53** (wiped 1-5 by Midgard, Oisin dead first again, with the Hero now guarding him): 4 `cure:interrupted`. From the next round his `cureMezz` is wrapped in the Midgard Healer kit's `unlessHammered`: no 3 s cure under a melee swing, so `flee` and `interruptOnTheRun` take those turns.
 
 **Arena round 73** (beat Midgard 4-0): 5 of 8 mezz cures interrupted with only the melee guard; spells interrupt too. From the next round the cure also waits while any enemy aims at him (the Druid kit's `unlessAimedAt`). Watch the cure count: he is aimed at about half of each fight, so this trades attempts for ones that finish.
+
+**Verified, arena round 78** (beat Camelot 5-1): with `unlessAimedAt` on the cure, 8 mezz cures and none interrupted (round 73: 5 of 8 interrupted). Fewer attempts were not the cost feared: 8 is his usual count.
