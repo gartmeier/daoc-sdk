@@ -235,8 +235,14 @@ export class MemberAgent<S = any> {
         this.lastMessageId = member.sdk.getGameMessages().at(-1)?.id ?? -1;
         this.unsubscribe.push(member.sdk.onStateUpdate(() => this.publish()));
         this.unsubscribe.push(board.onOrders((next, prev) => { if (this.affected(next, prev)) this.interrupt(`orders: ${next.phase}`); }));
-        // With stayDry (RvR and the pack have it, PvE has none), no move of ours ends in the river: casts from the bank (water.ts dryMoveGuard).
-        const unguard = (settings as { stayDry?: unknown }).stayDry === undefined ? null : member.sdk.setMoveGuard?.(dryMoveGuard(() => this.ctx.settings as { stayDry?: unknown }));
+        // With stayDry (RvR and the pack have it, PvE has none), no fight move of ours ends in the river: casts from the bank
+        // (water.ts dryMoveGuard). Only while pulling or engaged: travel, recovery and retreat legs cross rivers and must not
+        // be cut (round 72: Midgard and Camelot held at the bank all round on a leg's mid-river step).
+        const fightingDry = () => {
+            const phase = board.getOrders().phase;
+            return { stayDry: phase === 'engage' || phase === 'pull' ? (this.ctx.settings as { stayDry?: unknown }).stayDry : false };
+        };
+        const unguard = (settings as { stayDry?: unknown }).stayDry === undefined ? null : member.sdk.setMoveGuard?.(dryMoveGuard(fightingDry));
         if (unguard) this.unsubscribe.push(unguard);
         this.publish();
     }
