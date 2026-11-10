@@ -5,7 +5,7 @@ import { withCharacter } from '../group/character';
 import { packBehaviors } from '../group/pack';
 import { ANYTIME_STYLE } from '../group/styles';
 import { EquipmentSlot, ObjectType, type CombatEvent, type CombatResult, type Style } from '../types';
-import { BLADEMASTER_STUNS, blademaster, bladeStunQueue, bladeStyle, tripleWieldNow, TRIPLE_WIELD_REUSE_MS } from './blademaster';
+import { BLADEMASTER_STUNS, blademaster, bladeStunQueue, bladeStyle, tripleWieldNow, TRIPLE_WIELD_REUSE_MS, waitOf } from './blademaster';
 import { STUN_IMMUNE_MS, type StunLog } from './hero';
 import { reachOfBuild } from './reach';
 
@@ -86,6 +86,14 @@ describe('blademaster kit', () => {
         expect(tripleWieldNow({ ...base, attacking: false })).toBe(false);
         expect(tripleWieldNow({ ...base, nearestPlayer: 900 })).toBe(false);
         expect(tripleWieldNow({ ...base, readyAt: 1000 + TRIPLE_WIELD_REUSE_MS })).toBe(false);
+    });
+
+    test('a refusal's wait, as the server words it', () => {
+        expect(waitOf('You must wait 14 seconds to use this ability.')).toBe(14_000);
+        expect(waitOf('You must wait 1 second to use this ability.')).toBe(1000);
+        expect(waitOf('You must wait 6 minutes 12 seconds to use this ability.')).toBe(372_000);
+        expect(waitOf('You must wait 7 minutes to use this ability.')).toBe(420_000);
+        expect(waitOf('You can't do that now.')).toBeNull();
     });
 
     test('in the pack lists: his fight stands where the tank\'s or the melee\'s did, Triple Wield above it; no role of its own', () => {

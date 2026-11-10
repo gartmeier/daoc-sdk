@@ -58,6 +58,17 @@ export function tripleWieldNow(o: { phase: string; attacking: boolean; readyAt: 
     return o.phase === 'engage' && o.attacking && o.now >= o.readyAt && o.nearestPlayer <= IN_MELEE;
 }
 
+/**
+ * The wait in a refusal, "You must wait 6 minutes 12 seconds to use this ability." (CastingComponent.cs FormatCooldown,
+ * Util.FormatSeconds), in ms; null when the message says none. The reuse outlives a round: round 129 opened with "You must
+ * wait 14 seconds", the last round's use, which a fresh run's clock can't know.
+ */
+export function waitOf(message: string | undefined): number | null {
+    const m = /must wait (?:(\d+) minutes?)? ?(?:(\d+) seconds?)?/.exec(message ?? '');
+    if (!m || (!m[1] && !m[2])) return null;
+    return (Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)) * 1000;
+}
+
 export const tripleWield = (): Behavior<TacticsSettings> => ({
     name: 'tripleWield',
     interruptible: false,
@@ -71,7 +82,7 @@ export const tripleWield = (): Behavior<TacticsSettings> => ({
         }));
         if (!tripleWieldNow({ phase: ctx.orders().phase, attacking: !!me.attacking, readyAt: ctx.memory.get('tripleWieldReadyAt') ?? 0, now, nearestPlayer: near })) return false;
         const r = await ctx.bot.useAbility('Triple Wield');
-        ctx.memory.set('tripleWieldReadyAt', now + (r.success ? TRIPLE_WIELD_REUSE_MS : TRIPLE_WIELD_RETRY_MS));
+        ctx.memory.set('tripleWieldReadyAt', now + (r.success ? TRIPLE_WIELD_REUSE_MS : waitOf(r.message) ?? TRIPLE_WIELD_RETRY_MS));
         ctx.result('tripleWield', r);
         return true;
     },
