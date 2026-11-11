@@ -24,6 +24,7 @@ import type { Behavior, MemberContext } from './member';
 import { castRunning, instantSummonDue, petOffForCc, petsAllowed, type PetSettings } from './pets';
 import { keepOnMap, onMap, safePath } from './terrain';
 import { keepsTravelling, travelAim } from './travel';
+import { isWet } from './water';
 import type { BotWorldState, InventoryItem, NearbyNpc, NearbyPlayer, PlayerState, Style } from '../types';
 import type { BuffSlot, Contact, MemberReport, Point, Role } from './types';
 
@@ -1786,7 +1787,20 @@ async function walkTowardSlot(ctx: MemberContext<TacticsSettings>, slot: Point, 
     }
     ctx.doing('move', null, o.detail ?? ctx.orders().phase);
     const w = await ctx.bot.walkTo(to.x, to.y, { tolerance: 80, ...(o.speedFactor ? { speedFactor: o.speedFactor } : {}), ...(o.stopOnAbort ? { stopOnAbort: o.stopOnAbort } : {}) });
+    if (w.reason === 'water') ctx.memory.set(SLOT_WET, Date.now() + WET_SKIP_MS);
     if (!w.success) { ctx.result('walk', w); await Bun.sleep(500); }
+}
+
+/** Memory key: until when a slot in the river is left alone, after the dry move guard refused the walk there at the bank. */
+const SLOT_WET = 'slotWetUntil';
+
+/**
+ * The slot is in the river and the guard refused the walk there within WET_SKIP_MS: hold the bank and let the other
+ * behaviours have the turn. Round 167 (2026-11-11): Ulfgar, the healer 600 back, logged 38 refusals a second apart
+ * at one slot, moving 74 % of the fight for 4 heals (Midgard session).
+ */
+function slotWet(ctx: MemberContext, slot: Point): boolean {
+    return Date.now() < (ctx.memory.get(SLOT_WET) ?? 0) && isWet(ctx.me().regionId, slot);
 }
 
 /** A follower this close to its place in the column stays where it is ... */
@@ -1919,8 +1933,10 @@ export const rejoinFight = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         if (!farFromFight(ctx)) return false;
         const o = ctx.orders();
+        const slot = formationSlot(ctx, o.anchor!, o.facing);
+        if (slotWet(ctx, slot)) return ctx.skip('rejoin: slot in the river, holding the bank');
         await stopSwinging(ctx);
-        await walkTowardSlot(ctx, formationSlot(ctx, o.anchor!, o.facing), 2500);
+        await walkTowardSlot(ctx, slot, 2500);
         return true;
     },
 });
@@ -1955,6 +1971,7 @@ export const holdFormation = (): Behavior<TacticsSettings> => ({
         const d = dist(me, target);
         const safe = safeSpot(me.regionId, me.level, ctx.settings.aggroTolerance ?? -3);
         if (!needsSlot({ dSlot: d, dAnchor: fromAnchor, phase: o.phase, slack: ctx.settings.slotSlack, gatherRadius: (ctx.settings as { gatherRadius?: number }).gatherRadius, safe: safe(me) })) return false;
+        if (slotWet(ctx, target)) return ctx.skip('formation: slot in the river, holding the bank');
         await stopSwinging(ctx);
         await walkTowardSlot(ctx, target, o.phase === 'engage' && fromAnchor < FIGHT_REJOIN ? LEASH_REJOIN_LEG : 2500, aim ? { stopOnAbort: () => !keepsTravelling(ctx.orders()) } : {});
         return true;

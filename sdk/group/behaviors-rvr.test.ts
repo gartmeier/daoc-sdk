@@ -25,6 +25,8 @@ interface StubOptions {
     name: string;
     role: Role;
     at: Point;
+    /** Default R, a region without terrain; 252 (Thidranki) has its river. */
+    regionId?: number;
     /** The other members. */
     members?: MemberReport[];
     contacts?: Contact[];
@@ -54,9 +56,9 @@ function stub(o: StubOptions) {
     const results: { kind: string; success: boolean; reason?: string; targetId: number | null }[] = [];
     const marks: { targetId: number; kind: string; ms: number; serverName?: string }[] = [];
     const skips: string[] = [];
-    const meReport = report(o.name, { role: o.role, regionId: R, x: o.at.x, y: o.at.y, level: 20, objectId: 1 });
+    const meReport = report(o.name, { role: o.role, regionId: o.regionId ?? R, x: o.at.x, y: o.at.y, level: 20, objectId: 1 });
     const pic = picture([meReport, ...(o.members ?? [])], o.contacts ?? [], { phase: 'engage', anchor: ANCHOR, facing: { x: ANCHOR.x + 1000, y: ANCHOR.y }, ...o.orders });
-    const me = () => ({ name: o.name, objectId: 1, regionId: R, x: o.at.x, y: o.at.y, z: 0, level: 20, attacking: false, targetObjectId: null, maxMana: 100, mana: 100, manaPercent: o.manaPercent ?? 100, healthPercent: 100 });
+    const me = () => ({ name: o.name, objectId: 1, regionId: o.regionId ?? R, x: o.at.x, y: o.at.y, z: 0, level: 20, attacking: false, targetObjectId: null, maxMana: 100, mana: 100, manaPercent: o.manaPercent ?? 100, healthPercent: 100 });
     const visible = (id: number) => (o.inView ?? pic.contacts.map(c => c.objectId)).includes(id);
     const nearby = (c: Contact) => ({
         objectId: c.objectId, name: c.name, x: c.x, y: c.y, z: c.z, heading: 0, distance: dist(c, o.at), distance2d: dist(c, o.at), lastSeenAgo: 0,
@@ -766,6 +768,20 @@ describe('holdFormation in a fight', () => {
             }
         });
     }
+});
+
+describe('holdFormation with its slot in the river', () => {
+    test('after the guard refused the walk at the bank, it holds the bank WET_SKIP_MS and the turn goes on', async () => {
+        // Round 167 (2026-11-11): Ulfgar logged 38 refusals a second apart at (41608, 25500), Thidranki's river.
+        const bank = { x: 41_924, y: 25_500 };
+        const s = stub({ name: 'Ulfgar', role: 'healer', regionId: 252, at: bank, walk: { success: false, reason: 'water', message: 'holding at the bank' },
+            orders: { phase: 'recover', anchor: { x: 41_608, y: 25_500, z: 0 }, facing: { x: 42_608, y: 25_500 }, focus: null } });
+        expect(await holdFormation().run(s.ctx)).toBe(true);
+        expect(s.calls.walkTo.length).toBe(1);
+        expect(await holdFormation().run(s.ctx)).toBe(false);
+        expect(s.calls.walkTo.length).toBe(1);
+        expect(s.skips.some(k => k.includes('slot in the river'))).toBe(true);
+    });
 });
 
 describe('refusals that come back at once: reported, so the agent paces them (member.ts failedTurnMs)', () => {
