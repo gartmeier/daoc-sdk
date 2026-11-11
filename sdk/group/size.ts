@@ -33,6 +33,10 @@ export function describeCount(c: Count, size: number): string {
  * memory, and never below TUNED_SIZE. Dead members count (they are still the group); a report that drops out for a
  * moment, or a member still logging in at the start, doesn't shrink it. A group of five or fewer keeps the numbers it had
  * before the shares: nothing was tuned below five, so only a larger group scales.
+ *
+ * Below five the floor stays on purpose. A squad of 1 to 3 (squad.ts) doesn't go by these counts: its inner decide runs
+ * with retreat off, and it takes or leaves a fight by its own odds (squad.ts sizeUp). Shares there would round oddly
+ * anyway: 0.6 of 1, 2 and 3 is 1, 1 and 2, so a duo would run from three enemies, as a solo would from two.
  */
 export function groupSize(mem: Record<string, any>, members: readonly Pick<MemberReport, 'name'>[]): number {
     const n = new Set(members.map(m => m.name)).size;
