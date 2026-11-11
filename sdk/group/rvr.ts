@@ -322,6 +322,12 @@ const HUNT_REPLAN = 800;
 const LEG_REACHED = 1200;
 /** After this long, a leg counts as reached with one member still short of it (stuck or lagging). */
 const LEG_TIMEOUT_MS = 30_000;
+/**
+ * ... or with everyone within this of it: they came up and stand in their slots, and a spread formation's stand farther
+ * off than LEG_REACHED (Camelot's support 1100 straight back, its nukers 900 at ±0.4). Field mode, 2026-11-11: Albion's
+ * patrol stood 10 minutes 1000 short of a waypoint, with Merlin 1417 and Morgana 1307 off the leg and all of them idle.
+ */
+const LEG_SLOTS = 1800;
 
 export interface Trip {
     mem: Record<string, any>;
@@ -354,7 +360,7 @@ const LEG_DRY_MARGIN = 800;
 function reachedBy(leg: Point, movers: readonly Point[], ageMs: number, swimming = 0): boolean {
     if (swimming && ageMs < LEG_SWIM_MS) return false;
     const short = movers.filter(m => dist(m, leg) >= LEG_REACHED).length;
-    return short === 0 || (ageMs > LEG_TIMEOUT_MS && short <= 1);
+    return short === 0 || (ageMs > LEG_TIMEOUT_MS && (short <= 1 || movers.every(m => dist(m, leg) < LEG_SLOTS)));
 }
 
 /**

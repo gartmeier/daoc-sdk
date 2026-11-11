@@ -1070,6 +1070,31 @@ describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('decideRvr with stayDry: 
     });
 });
 
+describe('stepLeg: a spread formation reaches its leg', () => {
+    // Field mode, 2026-11-11: Albion's patrol stood 10 minutes 1000 short of waypoint 1 (35033, 37402): the leg was the
+    // waypoint, the tank stood 431 from it, and the support and a nuker idled in their slots 1417 and 1307 off it.
+    const leg = { x: 35_033, y: 37_402 };
+    const movers = [{ x: 35_376, y: 37_141 }, { x: 35_973, y: 37_126 }, { x: 36_177, y: 37_452 }, { x: 36_433, y: 37_180 }, { x: 36_199, y: 36_811 }];
+    const trip = (mem: Record<string, any>, now: number) => ({ mem, now, regionId: 252, level: 24, avoid: [], travelLeg: 1500, zAt: () => 0 });
+    const fresh = () => ({ legKind: 'patrol', leg: { ...leg, z: 0 }, legAt: 0, goal: { x: 30_000, y: 30_000 }, route: [{ x: 30_000, y: 30_000 }] } as Record<string, any>);
+
+    test('two in their slots beyond 1200: held for the leg timeout, then the next leg', () => {
+        const early = fresh();
+        stepLeg(trip(early, 10_000), 'patrol', { x: 30_000, y: 30_000 }, { from: leg, movers, replan: Infinity });
+        expect(early.leg).toMatchObject(leg);
+        const late = fresh();
+        stepLeg(trip(late, 31_000), 'patrol', { x: 30_000, y: 30_000 }, { from: leg, movers, replan: Infinity });
+        expect(late.leg).not.toMatchObject(leg);
+    });
+
+    test('two far behind (not in a slot): the leg holds', () => {
+        const mem = fresh();
+        const behind = [...movers.slice(0, 3), { x: 38_000, y: 37_400 }, { x: 38_200, y: 37_400 }];
+        stepLeg(trip(mem, 60_000), 'patrol', { x: 30_000, y: 30_000 }, { from: leg, movers: behind, replan: Infinity });
+        expect(mem.leg).toMatchObject(leg);
+    });
+});
+
 describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('stepLeg with stayDry: a crossing waits for those still swimming', () => {
     const T = 252;
     const river = { x: 41_069, y: 26_768 };
