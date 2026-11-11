@@ -247,6 +247,11 @@ Samples the picture every second and listens to events; works for coordinated ru
 - **Per member:** XP/h, actions, failures by reason, idle % while engaged and why, % targeted, % in melee range of an attacker (non-tanks), minimum health, and how long the group waited for it (health/power/dead/away).
 - **Findings**, each with evidence and a suggestion naming the setting to change: `aggro`, `deaths`, `interrupts` (with no tank the advice says so, there being nobody to wait for or run to), `idle` (nukers and melee only; idle healers are fine), `positioning`, `waiting`, `movement` (stuck walks, overload), `duplicates`, `downtime`, `adds`, `retreats`, `pace`, `no-kills`.
 - **Comparison:** each report lists the change against the previous run of the same strategy (`xpPerHour 136758→243428, ...`).
+- **Fight quality (RvR, roadmap phase 0, 2026-11-11):** beyond who won, over fights with enemy players.
+  - Per fight: `reactMs`, the time from the fight's start (first contact) to our first heal, crowd control or retreat order; null if none came. Also `behind`, the most each side was down in players dead, counted in the order they fell, and `comeback`: a side down 2 or more that came out ahead (more of the other side dead at the end, or the other side wiped).
+  - Totals: `fightLengthS` (median, longest), `comebacks` (ours and theirs), the median `reactMs`, and `wipedUnreacted` (wipes with no reaction at all). These count folded fights too, so a field run's report covers all of it. The report prints a "Fight quality:" line, and each fight's line shows its reaction and comeback.
+  - Their dead are our kills: a player of theirs who died to the third realm or out of our sight doesn't count.
+- **Releases:** every successful release, with seconds since the death, the orders phase then, whether a fight was open, and how many others stood alive. The report has a "Releases" section and a timeline line for each. The finding `early-release` flags a release under `engage` / `retreat` / `pull` with others alive. Compare `afterDeathS` with `rez.fightHoldMs`: at or past it, the hold ran out; well under it, `fightGoesOn` read the fight as over. The finding `no-reaction` names wipes that came before any heal, mezz or retreat.
 
 ## Writing a group strategy
 
@@ -297,6 +302,50 @@ export default defineStrategy(pveLeveling, {
 - **`aggroTolerance` also switches off the check for aggressive mobs on the way to a target.** With roaming, the walk to a passive mob now checks them regardless.
 - **`findCamp` searches 60,000 units from the leader,** so it can come up empty in a region with camps. Moving the leader closer (a channeler) moves the search with it.
 - Settings worth knowing (all in `PVE_SETTINGS`): `minCon`/`maxCon`, `camp` (hunt here), `campLevelBand`/`campAggressiveWeight`, `huntRadius`, `baseClearance`, `ready`, `holdMs`, `assistAfterMs`, `heal.*`, `rest`, `combatRange`, `formation`, `pullDistance`, `engageRadius`, `avoidAggressive`/`aggroPad`/`maxAggroNeighbors`/`pullAggressive`, `roamMs`/`newCampMs`, `retreat.*`, `shedLoadAt`/`keepItems`, `tauntOpenMs`/`peelAfterMs`/`guard`, `slotSlack`, `basePlan`/`aggroTolerance`, `pet.*`.
+
+## Group size (`sdk/group/size.ts`)
+
+Group play was tuned for five: a pack of 3, a retreat margin of 3, one tank. Those counts are now shares of the group's size (2026-11-11, 5436e3a):
+
+| Setting | Default | At 5 | At 6 | At 7 | At 8 |
+|---|---|---|---|---|---|
+| `pack.minPack` (together to start a raid) | `{ share: 0.6 }` | 3 | 4 | 4 | 5 |
+| `pack.minTogether` (fewer: broken, go home) | `{ share: 0.6 }` | 3 | 4 | 4 | 5 |
+| `pack.closeCount` (free enemies on a caster end a raid) | `{ share: 0.6 }` | 3 | 4 | 4 | 5 |
+| `retreat.margin` (enemies against us ≥ main body + this) | `{ share: 0.6 }` | 3 | 4 | 4 | 5 |
+
+- **Size:** the most members the board has reported in this run (dead ones count), never below five. A group of five or fewer keeps today's numbers, since nothing was tuned below five. A member still logging in, or a report that drops out, doesn't shrink it. `groupSize(mem, members)` keeps it in the coordinator's memory.
+- **A plain number stays that number:** `--retreat.margin=99`, `--pack.minPack=1` (the arena's FIGHT flags) and `closeCount: 99` in Hibernia's and Midgard's files mean what they did. Write `{ share: 0.5, min: 2 }` for a share with a floor. Findings print a share as `5 (0.6 of 8)`.
+- **The proof at five:** `size.test.ts` runs `decidePack` and `decideRvr` with the shares and with the fixed 3s over the same 120 seeded board runs (`compareDecides`) and gets identical orders. Before landing, the new decides were also run against main's unchanged ones: 0 of 400 runs differed (24,000 ticks, region 9999) and 0 of 80 in Thidranki. At eight they differ, as meant.
+- **Guard pairs:** the server puts a Guard's paired effect on the guarded member too ("Sigrid guarded by Thorgrim", GuardECSEffect.cs `PairedEffect`; Protect: "X protected by Y"). Members report their effects, so `guard()` passes over a member another of ours already guards without a refused try. Two tanks take two healers; a third guard goes down `BACK_LINE` (healer, nuker, support). With one guard in the group the pick is as before.
+- **Still fixed counts, left alone:** `shouldBolt`'s `alive + 3` (bolting is off: `boltRun: 0`), the pack's prey rule (`main ≥ inSight + 2`), `maxFoes: 8`, and PvE's `retreat.deaths` / `maxAdds`. Each is a candidate once an 8-man group has fought with them.
+
+### Eight against eight (2026-11-11)
+
+Three rounds of 10 minutes, all eight bots on each side, with fixed line-ups (`writeLineup`, put back afterwards) and the share defaults. Each group ran `rvr.ts 600 --opponent=<realm>` directly: `arena.ts` passes FIGHT flags (`--retreat.margin=99 --pack.minTogether=1 --pack.minPack=1`) that would hide the shares. `groups/go-home.ts` sent all three groups home before rounds 2 and 3. In round 1 Albion's idle bots stood in the river, and a third realm joined 1 of 3 Midgard fights. Reports are in `groups/<g>/runs/20261111-{154231,155721,161439}.md`.
+
+| Round | Kills / deaths | Fights between the two |
+|---|---|---|
+| 1 Midgard v Hibernia | Midgard 4 / 10, Hibernia 14 / 3 (some kills idle Albions) | Hibernia won all three |
+| 2 Camelot v Hibernia | Camelot 6 / 6, Hibernia 6 / 6 | each side won one, 6–0 |
+| 3 Camelot v Midgard | Camelot 5 / 10, Midgard 10 / 5 | 4–4 with Midgard running, then Midgard won 6–1 |
+
+- **Retreat at 8 comes late.** With margin 5 (0.6 of 8), the outnumbered retreat fired only with two or three left ("8 enemies vs 3", "7 enemies vs 2") and saved nobody: Galahad died on the way. The pack's broken-pack rule fires first, at 4 together, because `minTogether` 0.6 × 8 = 4.8 rounds to 5. So an 8-pack runs after losing half (4), while a 5-pack runs after losing 60 % (3). In round 3 that sent Midgard off from an even 4 v 4 (both sides down 4). It cost Midgard nothing there, since it won the next fight 6–1.
+  - Candidate, not changed: `minTogether: { share: 0.55 }` keeps 3 at five and gives 4 at eight.
+  - While it runs home, the orders flip every few seconds between "broken pack: running" (enemies near) and "regrouping: 4 together of 4" (none near). Both lead home, so it does no harm.
+- **Pull at 8:** `minPack` 5 never held a raid back. Stalks went in with all eight together, and the only gathers met released members after a fight.
+- **Guard pairs work** (member effects polled from the gateway every 1.5 s through round 3):
+  - Camelot: Galahad guarded Tuck and Gawain guarded Nimue.
+  - Midgard: Thorgrim guarded Sigrid and Sigurd guarded Ulfgar (the Thane guards too).
+  - Protect went to casters: Vivien and Taliesin for Camelot, Gudrun and Hrafna for Midgard.
+  - No member carried two guards, and both healers had theirs within 15 s of the start. The run log doesn't name guard targets; only the effects show them.
+- **Idle members are not a size effect.** Healers sat "nothing to do" 26-50 % of fight time at eight (Tuck 44/50, Nimue 32/42 "no smite at players below spareNuke's floor", Aine 26/40, Brigid 29/35, Sigrid 10/20), the same as in today's 5-man field runs (Tuck 42-46, Nimue 56, Brigid 32-42, Aine 39, Sigrid 14-19). The pet casters waited more: Hrafna 19/32 % and Ciaran 20 %, "focus out of reach, holding ground". Melee and nukers stayed at or below 11 %. In round 2 Camelot's tanks idled 16 % ("focus beyond the chase leash").
+- **Fight quality at 8:**
+  - Fights per run had a median of 18–135 s, against 67–177 s at five in today's field.
+  - The first heal, mezz or retreat came a median 2.9–8.9 s after contact. Midgard was the slowest, at 12.0 s in its lost opening fight of round 3.
+  - No group was wiped before reacting.
+  - **No comebacks:** every 8 v 8 fight went one way, and the loser was 5-6 down at its worst. At five a comeback shows up in about one run of three.
+- **Releases** all came after the fight, in batches as the orders turned to recover or travel, 12–140 s after the death. The `early-release` finding never fired. Midgard's longest waits (117–140 s, round 1) came with both its healers dead, so nobody could have rezzed them. That is a case for releasing sooner once no rezzer is alive.
 
 ## Group tactics (`sdk/group/tactics/`)
 
