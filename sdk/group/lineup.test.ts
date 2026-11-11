@@ -79,8 +79,13 @@ describe('pickLineup with required classes', () => {
         for (const trio of trios) for (const a of [...trio, 'brigid', 'oisin']) for (const b of [...trio, 'brigid', 'oisin']) if (a < b) together[pairKey(a, b)] = 14;
         const played = Object.fromEntries(pool.map(p => [p.bot, 14]));
         const choice = pickLineup({ pool, current: ['brigid', 'oisin', 'lugh', 'niamh', 'fionn'], size: 5, played, together, classes: ['Druid', 'Bard'] });
-        // fionn stays the front-liner (current); then the other trio's first by the pool (none shared with fionn), then niamh, who stays on the tie.
-        expect([...choice.lineup].sort()).toEqual(['brigid', 'cuchulainn', 'fionn', 'niamh', 'oisin']);
+        // fionn stays the front-liner (current); the nuker is ciaran, who shared no round with fionn; then niamh, who stays on the tie.
+        expect([...choice.lineup].sort()).toEqual(['brigid', 'ciaran', 'fionn', 'niamh', 'oisin']);
+        // Round 160: Hero, Warden and Blademaster had played least together with Druid and Bard, and nobody did damage. A nuker is a need.
+        const fewest = { ...played, niamh: 15, ciaran: 15, lugh: 15 };
+        const r160 = pickLineup({ pool, current: [], size: 5, played: fewest, together, classes: ['Druid', 'Bard'] });
+        expect(r160.lineup.some(b => ['niamh', 'ciaran', 'lugh'].includes(b))).toBe(true);
+        expect(r160.why).toMatch(/nuker (niamh|ciaran|lugh)/);
         // Without the counts the current trio stays, as it did.
         const old = pickLineup({ pool, current: ['brigid', 'oisin', 'lugh', 'niamh', 'fionn'], size: 5, played, classes: ['Druid', 'Bard'] });
         expect(old.lineup.sort()).toEqual(['brigid', 'fionn', 'lugh', 'niamh', 'oisin']);

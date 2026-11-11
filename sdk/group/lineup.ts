@@ -86,7 +86,7 @@ export interface LineupChoice {
 
 /**
  * The next line-up of `size` from the pool. First one of each class in `classes` (group.json `requires.classes`), then
- * what a group needs, each by the candidate that has played fewest: a healer, a front-liner, a crowd controller (a need
+ * what a group needs, each by the candidate that has played fewest: a healer, a front-liner, a crowd controller, a nuker (a need
  * nobody available meets is skipped). Then whoever has played fewest
  * rounds; on a tie the one who played fewest rounds with those already picked (`together`), then a current member, then
  * the pool's order. `available` (default: all) leaves out bots that can't
@@ -131,9 +131,12 @@ export function pickLineup(o: {
         if (c) { picked.push(c); notes.push(`${label} ${c.bot}`); }
         else notes.push(`no ${label} available`);
     }
-    for (const need of ['healer', 'front', 'cc'] as const) {
-        if (picked.length >= size || picked.some(c => c[need])) continue;
-        const c = next(x => x[need]);
+    // A nuker too: with Druid and Bard required, Hero, Warden and Blademaster filled Hibernia's other three in arena round
+    // 160 (2026-11-11) and did no damage, wiped 0 / 5 (Hibernia session).
+    const needs = { healer: (c: LineupCandidate) => c.healer, front: (c: LineupCandidate) => c.front, cc: (c: LineupCandidate) => c.cc, nuker: (c: LineupCandidate) => c.role === 'nuker' };
+    for (const [need, has] of Object.entries(needs)) {
+        if (picked.length >= size || picked.some(has)) continue;
+        const c = next(has);
         if (c) { picked.push(c); notes.push(`${need} ${c.bot}`); }
         else notes.push(`no ${need} available`);
     }
