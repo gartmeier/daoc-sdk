@@ -30,16 +30,18 @@ A group run controls every member, and a second controller on any member aborts 
 
 ## Trades can hang the whole server
 
-**Two adds that open a window in the same server tick (33 ms) can stop the game server for everyone.** Seen live with two bots swapping at the same instant.
+**Two adds that open a window in the same server tick (33 ms) can stop the game server for everyone.** Seen live with two bots swapping at the same instant, and reproduced on a throwaway stack with `bun client/dev/trade-race.ts --port=<port>` (2026-11-11: hung for good within 15-74 rounds).
+
+**Fixed in our server fork** from the `server/core` pin ac64bb207 (branch `fix/trade-open-race`, [docs/upstream/core-trade-open-race.md](../docs/upstream/core-trade-open-race.md)): a trade opens under both players' trade locks, so the second add of a simultaneous pair joins the first one's window. 480 simultaneous pairs ran clean on it. A gameserver image built before that pin still hangs, so the rest of this section holds there, and the SDK keeps its clock slots for such servers.
 
 **The cause.** The first add from each side takes different locks: `B._tradeLock` and `A`'s monitor against `A._tradeLock` and `B`'s monitor (`GamePlayer.cs:6259-6261`). So both can pass the null checks and both run `OpenTrade` (`:12072-12084`), and each side can end up with a different window and a different lock. In a correct pair the two windows share one lock, so adds only queue up. In a crossed pair the next two adds at once each hold their own lock and wait for the other's at the 0xEA (`PlayerTradeWindow.cs:321`, `:394`; `PacketLib1109.cs:32`).
 
 **Why everything stops.** The game loop waits for every client's packet handling before it moves on, with no timeout (`GameLoopThreadPoolMultiThreaded.cs:176-177`, `GameLoop.cs:119-138`), and it sends queued packets only after that. The watchdog can interrupt one stuck worker, and the log shows the 9 s stall that cured. But the exception is swallowed at `PacketProcessor.cs:194`, so the worker never exits and the watchdog stays in `worker.Join()` for good (`GameLoopThreadPoolWatchdog.cs:101`). **It saves the server once per process.** The next hang lasts until a restart.
 
 **What it looks like.**
-- In a script: `no_response` on both sides, or `partner_no_accept` on both if the windows crossed without hanging (read from source, not seen).
+- In a script: `no_response` on both sides, or `partner_no_accept` on both if the windows crossed without hanging (read from source, not seen). When the race doesn't cross the windows, one of the two adds is refused instead: its sender reads "X is still trading with Y." while the partner's add shows (seen in most simultaneous opening pairs on 2026-11-11).
 - In the game: chat and moves do nothing, a quit gets no answer, and the gameserver sits near 0 % CPU.
-- In the log: `Watchdog: Thread ... is taking too long` and `ThreadInterruptedException` under `TradeUpdate`.
+- In the log: `Watchdog: Thread ... is taking too long` and `ThreadInterruptedException` in `SendTradeWindow` under `ReceiveTradeMoney` or `ReceiveTradeItem`, after a stall of 9-12 s. After the hang for good, no more lines at all, not even the minutely `StatPrint`, and a new login gets no answer to its handshake.
 - The cure is `docker compose -f server/docker/docker-compose.yml restart gameserver`. Nothing was lost. Do it also after a single stall, because the watchdog is spent by then.
 
 **What the SDK does about it.**
@@ -51,7 +53,7 @@ A group run controls every member, and a second controller on any member aborts 
 - Raw `sendTradeOfferItem` and `sendTradeOfferMoney` skip the slots: never send them from both bots at once.
 - Don't retry a failed trade in a tight loop. During a stall, packets queue up and land together in one pass, whatever slot they left in.
 - A snapshot that still shows a window the server has just closed skips the slot, for one round trip.
-- The real fix would be in the server's `OpenTrade`. This repo leaves the server as it is.
+- The server fix covers two opening adds. A commit and an add at once is a separate lock order the fix leaves alone (the accept bullet above), so the `trade_accepted` refusal stays needed on every server.
 
 ## What the server does
 
