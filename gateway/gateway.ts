@@ -40,6 +40,7 @@ import { createGroupStore, type GroupLimits, type GroupStore } from './groups';
 import type { GroupBadge } from './group-types';
 import { botEnvAuth, checkRequestSource, corsHeadersFor, isJsonRequest, isLoopbackHostname, resolveAuthMode } from './security';
 import { join } from 'node:path';
+import { startLoopLag, type LoopLagWindow } from '../sdk/loop-lag';
 import type { Server, ServerWebSocket } from 'bun';
 
 /** No state for this long = 'stale' (clients publish several times a second). */
@@ -285,6 +286,12 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
     }
     const sweepTimer = setInterval(sweep, Math.max(10, Math.min(60_000, deadSessionRetentionMs)));
     sweepTimer.unref?.(); // the server keeps the process alive, not the sweep
+    // Event-loop lag in minute windows: /status shows the last full minute and the one running.
+    const loopLag = startLoopLag();
+    let lastMinute: LoopLagWindow | null = null;
+    const lagTimer = setInterval(() => { lastMinute = loopLag.take(); }, 60_000);
+    lagTimer.unref?.();
+    const gatewayLoad = () => ({ pid: process.pid, lastMinute, thisMinute: loopLag.peek() });
 
     // Reads the session maps only; it never sends on a socket (gateway/groups.ts).
     let groups: GroupStore | null = null;
@@ -789,7 +796,8 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
             for (const [id, session] of sdkSessions) {
                 sdks[id] = { clientId: session.sdkClientId, targetUsername: session.targetUsername, mode: session.mode };
             }
-            return json({ status: 'running', service: 'daoc-sdk gateway', bots, sdks, pendingTakeovers: [...pendingTakeovers.keys()] });
+            // How late the gateway's own event loop ran over the last minute or so (sdk/loop-lag.ts), and its memory.
+            return json({ status: 'running', service: 'daoc-sdk gateway', bots, sdks, pendingTakeovers: [...pendingTakeovers.keys()], process: gatewayLoad() });
         }
 
         return new Response([
@@ -862,6 +870,8 @@ export function createGateway(options: GatewayOptions = {}): Gateway {
         url: `ws://localhost:${port}`,
         async stop() {
             clearInterval(sweepTimer);
+            clearInterval(lagTimer);
+            loopLag.stop();
             groups?.stop();
             for (const t of timers) clearTimeout(t);
             timers.clear();

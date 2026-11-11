@@ -12,6 +12,7 @@
 import { BotConfigError, createBotBridge, loadBotConfig, type BotBridge } from './bridge-config';
 import type { BridgeExit } from './bridge';
 import { logStamp } from './log-stamp';
+import { loopLagLine, startLoopLag, type LoopLag } from '../sdk/loop-lag';
 
 export interface SwarmOptions {
     /** Delay between bot logins (ms). Default 1000. */
@@ -28,6 +29,7 @@ export interface SwarmBot extends BotBridge {
 export class Swarm {
     readonly bots: SwarmBot[] = [];
     private reportTimer: ReturnType<typeof setInterval> | null = null;
+    private lag: LoopLag | null = null;
     private stopped = false;
     private readonly log: (msg: string) => void;
 
@@ -44,7 +46,9 @@ export class Swarm {
     /** Start every bot (staggered); resolves when all have finished. */
     async run(): Promise<BridgeExit[]> {
         const reportMs = this.opts.reportMs ?? 30_000;
-        if (reportMs > 0) this.reportTimer = setInterval(() => this.log(`${stamp()} [swarm] ${this.statusLine()}`), reportMs);
+        // Each status line also says how late this process's event loop ran since the last one (sdk/loop-lag.ts).
+        this.lag = startLoopLag();
+        if (reportMs > 0) this.reportTimer = setInterval(() => this.log(`${stamp()} [swarm] ${loopLagLine(this.lag!.take())} | ${this.statusLine()}`), reportMs);
         const runs: Promise<BridgeExit>[] = [];
         for (const [i, b] of this.bots.entries()) {
             if (i > 0) await Bun.sleep(this.opts.staggerMs ?? 1000);
@@ -61,6 +65,7 @@ export class Swarm {
         }
         const exits = await Promise.all(runs);
         if (this.reportTimer) clearInterval(this.reportTimer);
+        this.lag?.stop();
         return exits;
     }
 
