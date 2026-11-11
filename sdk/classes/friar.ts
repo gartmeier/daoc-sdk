@@ -33,7 +33,13 @@ export const topUp = (below = 85, above = 50): Behavior<TacticsSettings> => ({
     name: 'topUp',
 });
 
-export function friar({ groupHealMin = 3, groupHealAbove = 30, chant = true, topUpBelow = 85, topUpAbove = 50 }: FriarOptions = {}): Character {
+/**
+ * His top-ups stop at 70 % power: arena rounds 156 and 177 (2026-11-11) he ran dry mid-fight (idle 40 % and 26 % on "heal: not
+ * enough power") with the floor at 50.
+ */
+export const FRIAR_TOP_UP_ABOVE = 70;
+
+export function friar({ groupHealMin = 3, groupHealAbove = 30, chant = true, topUpBelow = 85, topUpAbove = FRIAR_TOP_UP_ABOVE }: FriarOptions = {}): Character {
     return {
         role: 'healer',
         // Below heal: the group heal only tops up while nobody is under the heal lines, and a 33-point heal never takes a
