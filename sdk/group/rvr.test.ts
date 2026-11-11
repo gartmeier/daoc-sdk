@@ -1065,8 +1065,23 @@ describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('decideRvr with stayDry: 
         expect(decide(swim(40_900), { memory, now: 1000 }).reason).toMatch(/wait ashore/);
         expect(decide(swim(40_900), { memory, now: 40_000 }).reason).toMatch(/wait ashore/);
         expect(decide(swim(40_900), { memory, now: 47_000 }).reason).not.toMatch(/wait ashore/);
+        // Gone for a tick (a contact flickering at the edge of sight): no new wait.
         decide([], { memory, now: 50_000 });
-        expect(decide(swim(40_900), { memory, now: 51_000 }).reason).toMatch(/wait ashore/);
+        expect(decide(swim(40_900), { memory, now: 51_000 }).reason).not.toMatch(/wait ashore/);
+        // Gone for ASHORE_GONE_MS: the next ones start a new wait.
+        decide([], { memory, now: 62_000 });
+        expect(decide(swim(40_900), { memory, now: 63_000 }).reason).toMatch(/wait ashore/);
+    });
+
+    test('swimmers flickering out of sight every other tick: the wait still ends after ASHORE_WAIT_MS', () => {
+        // Field mode, 2026-11-11: Midgard switched between waiting and patrolling every second for 5 minutes.
+        const memory: Record<string, any> = { realm: 'hibernia' };
+        let waited = 0;
+        for (let t = 1000; t < 120_000; t += 1000) {
+            const d = decide(t % 2000 ? swim(40_900) : [], { memory, now: t });
+            if (/wait ashore/.test(d.reason)) waited = t;
+        }
+        expect(waited).toBeLessThan(1000 + 45_000 + 1000);
     });
 });
 

@@ -56,11 +56,24 @@ export function staysDry(s: { stayDry?: unknown }): boolean {
 export const ASHORE_WAIT_MS = 45_000;
 
 /**
- * Whether to (still) wait for `swimming` enemies: from the first sighting for ASHORE_WAIT_MS, again once none swam.
- * Memory: mem[key], its own per caller (the pack runs decideRvr with no players in it, which would end its wait).
+ * After this long with no swimmer in sight, the next one starts a new wait. A shorter gap is a contact flickering at the
+ * edge of sight: field mode, 2026-11-11, Midgard switched between waiting and patrolling every second for 5 minutes with
+ * two enemies swimming ~4800 off, as each tick without them started the 45 s over.
+ */
+export const ASHORE_GONE_MS = 10_000;
+
+/**
+ * Whether to (still) wait for `swimming` enemies: from the first sighting for ASHORE_WAIT_MS, again once none swam for
+ * ASHORE_GONE_MS. Memory: mem[key] and mem[key + 'Last'], its own per caller (the pack runs decideRvr with no players
+ * in it, which would end its wait).
  */
 export function waitAshore(mem: Record<string, any>, swimming: number, now: number, key = 'ashoreSince'): boolean {
-    if (!swimming) { mem[key] = undefined; return false; }
+    const last = `${key}Last`;
+    if (!swimming) {
+        if (mem[key] !== undefined && !(now - (mem[last] ?? -Infinity) < ASHORE_GONE_MS)) mem[key] = undefined;
+        return false;
+    }
+    mem[last] = now;
     mem[key] ??= now;
     return now - mem[key] < ASHORE_WAIT_MS;
 }

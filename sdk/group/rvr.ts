@@ -730,7 +730,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
             stepLeg(trip, 'hunt', them, { from: centre, movers: main, replan: HUNT_REPLAN });
             return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: them, objective: `hunt ${enemiesText(ashore.length)} round ${at(them)}${gone}`, reason: `hunt ${enemiesText(ashore.length)} ${d} away: ${ashore.slice(0, 3).map(label).join(', ')}` };
         }
-    } else mem.ashoreSince = undefined;
+    } else waitAshore(mem, 0, now);
 
     // ── Attacked by guards: in combat near an enemy keep with nothing on the board on us. Keep guards are realm NPCs, never on
     // the board (isKillable), so this is the only sign of them: walk off, away from that keep, instead of resting under them. ──
