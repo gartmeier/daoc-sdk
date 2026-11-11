@@ -40,6 +40,9 @@ export const SKILL_PROPERTY: Record<string, number> = {
     // The bench classes (2026-11-10): eProperty.cs Skill_*.
     Polearm: 41, 'Two Handed': 20, Staff: 48, Hammer: 53, 'Left Axe': 55, Stormcalling: 63, Runecarving: 62,
     'Celtic Dual': 81, Blunt: 73, 'Fire Magic': 32,
+    // The stealthers and archers (2026-11-11).
+    'Critical Strike': 23, Thrust: 50, Envenom: 31, Stealth: 49, 'Dual Wield': 28, Longbows: 36, Piercing: 74,
+    Pathfinding: 97, 'Recurve Bow': 83, 'Composite Bow': 68, Spear: 56, Beastcraft: 64,
 };
 /** A skill bonus is wasted on a line left at 1. */
 const TRAINED = 2;
@@ -75,8 +78,10 @@ interface ClassKit {
     offHand?: number;
     /** A staff is a focus, unless the class swings it (a Friar). */
     focus?: false;
+    /** A bow in the ranged slot. */
+    ranged?: number;
 }
-const { Chain, Plate, Scale, Reinforced, Studded, Leather, Cloth, Axe, Hammer, SlashingWeapon, CrushingWeapon, Blades, Blunt, Staff, PolearmWeapon, LeftAxe } = ObjectType;
+const { Chain, Plate, Scale, Reinforced, Studded, Leather, Cloth, Axe, Hammer, SlashingWeapon, CrushingWeapon, Blades, Blunt, Staff, PolearmWeapon, LeftAxe, ThrustWeapon, Piercing, Spear, Longbow, RecurvedBow, CompositeBow } = ObjectType;
 const MELEE = ['STR', 'DEX', 'CON', 'QUI'] as const;
 const SMALL = 1, MEDIUM = 2, LARGE = 3;
 export const CLASS_KITS: Record<string, ClassKit> = {
@@ -109,6 +114,15 @@ export const CLASS_KITS: Record<string, ClassKit> = {
     Berserker: { armor: Studded, stats: MELEE, mainHand: Hammer, offHand: LeftAxe },
     Thane: { armor: Chain, stats: [...MELEE, 'PIE'], mainHand: Hammer, shield: MEDIUM },
     Runemaster: { armor: Cloth, stats: ['PIE', 'DEX', 'CON'], twoHand: Staff },
+    // The stealthers and archers (2026-11-11). Armour from the career abilities: AlbArmor/HibArmor/MidArmor 3 (studded,
+    // reinforced) at 10 for Scout, Ranger and Hunter, leather for the three assassins. Each dual wields where its build
+    // trains the off hand (Dual Wield, Celtic Dual, Left Axe); the Scout keeps a small shield (Shield 1 at 5).
+    Infiltrator: { armor: Leather, stats: MELEE, mainHand: ThrustWeapon, offHand: ThrustWeapon },
+    Scout: { armor: Studded, stats: MELEE, mainHand: ThrustWeapon, shield: SMALL, ranged: Longbow },
+    Nightshade: { armor: Leather, stats: MELEE, mainHand: Piercing, offHand: Piercing },
+    Ranger: { armor: Reinforced, stats: MELEE, mainHand: Piercing, offHand: Piercing, ranged: RecurvedBow },
+    Shadowblade: { armor: Leather, stats: MELEE, mainHand: Axe, offHand: LeftAxe },
+    Hunter: { armor: Studded, stats: MELEE, twoHand: Spear, ranged: CompositeBow },
 };
 
 const ARMOR_SLOTS = [EquipmentSlot.Head, EquipmentSlot.Hands, EquipmentSlot.Feet, EquipmentSlot.Torso, EquipmentSlot.Legs, EquipmentSlot.Arms] as const;
@@ -132,6 +146,9 @@ const MODELS: Record<string, readonly number[]> = {
     // The most common model per slot in data/generated/items.json.
     [`${Leather}/albion`]: [62, 137, 138, 134, 37, 136],
     [`${Studded}/midgard`]: [831, 273, 274, 270, 271, 272],
+    [`${Studded}/albion`]: [824, 80, 54, 51, 52, 53],
+    [`${Leather}/hibernia`]: [440, 436, 437, 433, 434, 435],
+    [`${Leather}/midgard`]: [337, 283, 284, 280, 281, 282],
 };
 const MAIN_HANDS: Record<number, WeaponLook> = {
     [Axe]: { model: 319, speed: 38, weight: 30, damage: 2, name: 'Axe' },
@@ -140,16 +157,27 @@ const MAIN_HANDS: Record<number, WeaponLook> = {
     [CrushingWeapon]: { model: 451, speed: 38, weight: 30, damage: 1, name: 'Mace' },
     [Blades]: { model: 473, speed: 37, weight: 30, damage: 2, name: 'Blade' },
     [Blunt]: { model: 461, speed: 35, weight: 30, damage: 1, name: 'Club' },
+    [ThrustWeapon]: { model: 643, speed: 30, weight: 17, damage: 3, name: 'Dirk' },
+    [Piercing]: { model: 455, speed: 27, weight: 15, damage: 3, name: 'Dagger' },
 };
 const TWO_HANDS: Record<number, WeaponLook> = {
     [Axe]: { model: 9, speed: 52, weight: 45, damage: 2, name: 'Greataxe' },
     [Staff]: { model: 19, speed: 46, weight: 45, damage: 1, name: 'Staff' },
     [PolearmWeapon]: { model: 68, speed: 48, weight: 50, damage: 2, name: 'Halberd' },
+    [Spear]: { model: 328, speed: 51, weight: 40, damage: 3, name: 'Spear' },
+};
+/** Bows, Item_Type 13, from the DB's most common looks and speeds. */
+const RANGED: Record<number, WeaponLook> = {
+    [Longbow]: { model: 569, speed: 52, weight: 36, damage: 3, name: 'Longbow' },
+    [RecurvedBow]: { model: 471, speed: 47, weight: 31, damage: 3, name: 'Recurve Bow' },
+    [CompositeBow]: { model: 564, speed: 45, weight: 31, damage: 3, name: 'Composite Bow' },
 };
 /** Left-hand weapons, Hand 2, from the DB's most common looks. */
 const OFF_HANDS: Record<number, WeaponLook> = {
     [LeftAxe]: { model: 316, speed: 27, weight: 25, damage: 2, name: 'Left Axe' },
     [Blades]: { model: 444, speed: 27, weight: 18, damage: 2, name: 'Offhand Blade' },
+    [ThrustWeapon]: { model: 643, speed: 28, weight: 15, damage: 3, name: 'Offhand Dirk' },
+    [Piercing]: { model: 455, speed: 26, weight: 12, damage: 3, name: 'Offhand Dagger' },
 };
 interface WeaponLook { model: number; speed: number; weight: number; damage: number; name: string }
 const SHIELDS = {
@@ -233,6 +261,11 @@ export function templateFor(shownName: string, realm: Realm, level: number, spec
     if (classInfo.manaStat) { deal(MAX_MANA, caps.power); deal(POWER_POOL, caps.powerPool); }
 
     const weapons: TemplatePiece[] = [];
+    // The bow first, so that the melee weapon put on after it is the one in hand.
+    if (kit.ranged) {
+        const w = RANGED[kit.ranged]!;
+        weapons.push({ ...base, id: id(EquipmentSlot.Ranged), slot: EquipmentSlot.Ranged, itemType: EquipmentSlot.Ranged, objectType: kit.ranged, name: `${label} ${w.name}`, dpsAf: caps.dpsAf, spdAbs: w.speed, hand: 1, damageType: w.damage, weight: w.weight, model: w.model, bonuses: [] });
+    }
     if (kit.mainHand) {
         const w = MAIN_HANDS[kit.mainHand]!;
         weapons.push({ ...base, id: id(EquipmentSlot.RightHand), slot: EquipmentSlot.RightHand, itemType: EquipmentSlot.RightHand, objectType: kit.mainHand, name: `${label} ${w.name}`, dpsAf: caps.dpsAf, spdAbs: w.speed, damageType: w.damage, weight: w.weight, model: w.model, bonuses: [] });

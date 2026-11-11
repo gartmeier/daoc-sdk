@@ -16,7 +16,8 @@ describe('levelCaps', () => {
 
 describe('templateFor', () => {
     const realms: Record<string, 'albion' | 'midgard' | 'hibernia'> = { Warrior: 'midgard', Skald: 'midgard', Healer: 'midgard', Shaman: 'midgard', Spiritmaster: 'midgard', Paladin: 'albion', Cleric: 'albion', Sorcerer: 'albion', Cabalist: 'albion', Theurgist: 'albion', Hero: 'hibernia', Druid: 'hibernia', Bard: 'hibernia', Mentalist: 'hibernia', Enchanter: 'hibernia',
-        Armsman: 'albion', Friar: 'albion', Wizard: 'albion', Blademaster: 'hibernia', Warden: 'hibernia', Eldritch: 'hibernia', Berserker: 'midgard', Thane: 'midgard', Runemaster: 'midgard' };
+        Armsman: 'albion', Friar: 'albion', Wizard: 'albion', Blademaster: 'hibernia', Warden: 'hibernia', Eldritch: 'hibernia', Berserker: 'midgard', Thane: 'midgard', Runemaster: 'midgard',
+        Infiltrator: 'albion', Scout: 'albion', Nightshade: 'hibernia', Ranger: 'hibernia', Shadowblade: 'midgard', Hunter: 'midgard' };
 
     test('every class fills the 14 slots and every row fits', () => {
         for (const className of Object.keys(CLASS_KITS)) {
@@ -24,6 +25,27 @@ describe('templateFor', () => {
             for (const s of [21, 22, 23, 25, 27, 28, 24, 26, 29, 32, 33, 34, 35, 36]) expect(pieces.some(p => p.slot === s)).toBe(true);
             for (const p of pieces) expect(p.bonuses.length).toBeLessThanOrEqual(MAX_BONUSES);
             expect(new Set(pieces.map(p => p.id)).size).toBe(pieces.length);
+        }
+    });
+
+    test('the stealthers and archers: their build lines take a skill bonus, the archers a bow before the melee weapon', () => {
+        const builds: [string, Record<string, number>][] = [
+            ['Infiltrator', { 'Critical Strike': 21, Thrust: 18, Envenom: 15, Stealth: 19, 'Dual Wield': 7 }],
+            ['Scout', { Longbows: 24, Stealth: 16, Shields: 13, Thrust: 12 }],
+            ['Nightshade', { 'Critical Strike': 21, Piercing: 17, Envenom: 15, Stealth: 16, 'Celtic Dual': 4 }],
+            ['Ranger', { Pathfinding: 21, 'Recurve Bow': 21, Piercing: 12, Stealth: 9, 'Celtic Dual': 4 }],
+            ['Shadowblade', { 'Critical Strike': 21, Stealth: 19, Envenom: 17, Axe: 12, 'Left Axe': 3 }],
+            ['Hunter', { Beastcraft: 21, Spear: 18, 'Composite Bow': 15, Stealth: 11 }],
+        ];
+        for (const [className, specs] of builds) {
+            const pieces = templateFor(className, realms[className]!, 24, specs);
+            for (const p of pieces) expect(p.bonuses.length).toBeLessThanOrEqual(MAX_BONUSES);
+            expect(templateTotals(pieces).get(49)).toBe(5); // Stealth
+            const bow = pieces.findIndex(p => p.slot === EquipmentSlot.Ranged);
+            const melee = pieces.findIndex(p => p.slot === EquipmentSlot.RightHand || p.slot === EquipmentSlot.TwoHand);
+            if (['Scout', 'Ranger', 'Hunter'].includes(className)) expect(bow).toBeGreaterThanOrEqual(0);
+            else expect(bow).toBe(-1);
+            if (bow >= 0) expect(bow).toBeLessThan(melee);
         }
     });
 
