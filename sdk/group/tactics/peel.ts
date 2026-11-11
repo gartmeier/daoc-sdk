@@ -137,7 +137,7 @@ export const MEZZ_MELEE: MezzMeleeOptions = { by: 'support', within: 1400 };
  */
 export function mezzMelee(ctx: Ctx, u: OrdersUpdate, o: MezzMeleeOptions = MEZZ_MELEE): OrdersUpdate {
     if (u.phase !== 'engage') return u;
-    const mezzer = ctx.picture.members.find(m => m.role === o.by && !m.isDead);
+    const mezzer = ctx.picture.members.find(m => m.role === o.by && !m.isDead && !m.observed);
     if (!mezzer) return u;
     const names = new Set(ctx.picture.members.map(m => m.name));
     const on = (c: Contact) => Number(!!(c.target && names.has(c.target)));

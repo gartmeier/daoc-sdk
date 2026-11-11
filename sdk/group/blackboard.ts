@@ -45,6 +45,7 @@ import { mobRunInMs } from '../mob-speed';
 import { canSee, noticed, pruneNoticeClock, terrainGround, type GroundAt, type NoticeClock, type VisionOptions } from '../vision';
 import { addLook, newEvidence, readClass, type FoeEvidence, type FoeLook } from './class-read';
 import { CC_IMMUNE_MS, npcCcLanded, readCcEnds, serverNameKey, type CcEnd, type CcImmunity, type CcKind, type NpcCcRun } from './cc';
+import { groupmatesOf, ObservedMembers, type Groupmate, type ObservedEntry } from './observed';
 import type { Activity, Capabilities, MemberCombat, Contact, GroupEvent, GroupPicture, MemberReport, Orders, OrdersUpdate, PetReport, Point, Role, Sighting } from './types';
 
 export interface BlackboardOptions {
@@ -66,6 +67,8 @@ export interface BlackboardOptions {
      * (default 2500, the rvr strategy's engage radius); farther off it is someone else's fight.
      */
     hostileRadius?: number;
+    /** Group members with no member agent, such as a human (observed.ts, GroupDefinition.observed). None: the picture holds the bots only. */
+    observed?: readonly ObservedEntry[];
 }
 
 /** The part of a member's report its agent knows and the snapshot does not. */
@@ -79,6 +82,8 @@ export interface MemberSelf {
     petRecast?: boolean;
     /** PetReport.orderedOn. */
     petOrderedOn?: number | null;
+    /** Character names of the group's observed members (Blackboard.observedNames): what this client knows of them goes in Observation.groupmates. */
+    observed?: readonly string[];
 }
 
 /** Who killed a member, as its client saw them (the board's 'death' event data). Enemy players go by race name. */
@@ -122,6 +127,8 @@ export interface Observation {
      * tell a contact it should see from one behind it or behind a hill. Absent with omniscient sight.
      */
     sight?: { heading: number; vision: VisionOptions };
+    /** What this client knows of the group's observed members (MemberSelf.observed): window, position, aim, our concentration buffs on them. Absent with none asked for. */
+    groupmates?: Groupmate[];
 }
 
 const SWING_WINDOW_MS = 2000;
@@ -371,7 +378,8 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     if (report.pet && self.petOrderedOn != null) report.pet.orderedOn = self.petOrderedOn;
     const intercepts = interceptsOf(state);
     const ccEnds = readCcEnds(state.gameMessages ?? [], state.timestamp - CC_END_MS);
-    return { report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(petHits.size ? { petHits: [...petHits] } : {}), ...(intercepts.length ? { intercepts } : {}), ...(ccEnds.length ? { ccEnds } : {}), ...(vision ? { sight: { heading: p.heading, vision } } : {}) };
+    const groupmates = self.observed?.length ? groupmatesOf(state, self.observed, aim, (self.capabilities.buffSpells ?? []).map(b => b.name)) : null;
+    return { ...(groupmates ? { groupmates } : {}), report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(petHits.size ? { petHits: [...petHits] } : {}), ...(intercepts.length ? { intercepts } : {}), ...(ccEnds.length ? { ccEnds } : {}), ...(vision ? { sight: { heading: p.heading, vision } } : {}) };
 }
 
 const isBlow = (e: CombatEvent) => e.kind === 'melee' || e.kind === 'spellEffect';
@@ -514,6 +522,10 @@ export class Blackboard {
     private readonly maxEvents: number;
     private readonly hostileMs: number;
     private readonly hostileRadius: number;
+    /** Members with no agent (observed.ts): their reports come from the others' observations. */
+    private readonly observed: ObservedMembers;
+    /** Which of them read dead in the last picture of them, for their 'death' event. */
+    private readonly observedDead = new Map<string, boolean>();
 
     constructor(options: BlackboardOptions = {}) {
         this.staleAfterMs = options.staleAfterMs ?? 5000;
@@ -523,6 +535,26 @@ export class Blackboard {
         this.maxEvents = options.maxEvents ?? 5000;
         this.hostileMs = options.hostileMs ?? 4000;
         this.hostileRadius = options.hostileRadius ?? 2500;
+        this.observed = new ObservedMembers(options.observed ?? []);
+    }
+
+    /** The observed members' character names (MemberSelf.observed); empty without any. */
+    observedNames(): string[] {
+        return this.observed.names();
+    }
+
+    /** Every member's report: the bots', then the observed members' (observed.ts). Just the bots' without observed members. */
+    private everyone(now: number): MemberReport[] {
+        const bots = [...this.reports.values()];
+        return this.observed.size ? [...bots, ...this.observed.reports(now)] : bots;
+    }
+
+    /** An observed member's death, from its window: a 'death' event like a bot's, its killer unknown. */
+    private observedDeaths(now: number): void {
+        for (const m of this.observed.reports(now)) {
+            if (this.observedDead.get(m.name) === false && m.isDead) this.emit({ at: now, kind: 'death', member: m.name, text: `${m.name} died`, data: { killer: null } });
+            this.observedDead.set(m.name, m.isDead);
+        }
     }
 
     /** Merge one member's observation. */
@@ -533,22 +565,28 @@ export class Blackboard {
         if (prev && !prev.isDead && r.isDead) this.emit({ at: now, kind: 'death', member: r.name, text: `${r.name} died`, data: { killer: obs.killer ?? null } });
         if (prev && r.level > prev.level) this.emit({ at: now, kind: 'level', member: r.name, text: `${r.name} reached level ${r.level}` });
         if (prev?.pet && !r.pet && !r.isDead) this.petLost(r, prev.pet, obs.petLoss, now);
+        if (obs.groupmates && this.observed.size) {
+            this.observed.merge(r.name, obs.groupmates, r.at);
+            this.observedDeaths(now);
+        }
+        // Observed members too: a mob on one is on the group, and what one fights is the group's fight.
+        const all = this.everyone(now);
 
         const memberById = new Map<number, string>();
-        for (const m of this.reports.values()) if (m.regionId === r.regionId) memberById.set(m.objectId, m.name);
+        for (const m of all) if (m.regionId === r.regionId) memberById.set(m.objectId, m.name);
         // Who owns a pet, here. A window pet comes last: a buff of ours on a groupmate's fresh pet can land it in our summons (BotWorldState.summons).
         const petOwner = new Map<number, string>();
         const windowPets = new Set<number>();
         for (const m of this.reports.values()) if (m.regionId === r.regionId) for (const id of m.summons ?? []) petOwner.set(id, m.name);
         for (const m of this.reports.values()) if (m.regionId === r.regionId && m.pet) { petOwner.set(m.pet.objectId, m.name); windowPets.add(m.pet.objectId); }
-        const targetedByUs = new Set([...this.reports.values()].map(m => m.targetId).filter((t): t is number => t !== null));
+        const targetedByUs = new Set(all.map(m => m.targetId).filter((t): t is number => t !== null));
         // What members' pets fight (PetState.targetObjectId holds through a caster pet's 0 and a walking one's 65535).
         const petsOn = new Set([...this.reports.values()].filter(m => !m.isDead).map(m => m.pet?.targetId).filter((t): t is number => t !== null && t !== undefined));
-        const attackedByUs = new Set([...[...this.reports.values()].filter(m => m.attacking && !m.isDead).map(m => m.targetId), ...petsOn]);
+        const attackedByUs = new Set([...all.filter(m => m.attacking && !m.isDead).map(m => m.targetId), ...petsOn]);
         const hitByUs = new Set(obs.hits);
-        const living = [...this.reports.values()].filter(m => m.regionId === r.regionId && !m.isDead);
+        const living = all.filter(m => m.regionId === r.regionId && !m.isDead);
         const nearUs = (s: Sighting) => living.some(m => Math.hypot(m.x - s.x, m.y - s.y) < this.hostileRadius);
-        const deadIds = new Set([...this.reports.values()].filter(m => m.isDead).map(m => m.objectId));
+        const deadIds = new Set(all.filter(m => m.isDead).map(m => m.objectId));
 
         // Before the sightings: the mob's answer can come in the same tick (live), and would read as a mezz broken by nobody.
         for (const swing of obs.petSwings ?? []) this.petSwung(r, swing, now);
@@ -858,7 +896,7 @@ export class Blackboard {
             const threat = this.isThreat(c, now);
             contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null, ...(c.ccImmune ? { ccImmune: { ...c.ccImmune } } : {}) });
         }
-        return { at: now, members: [...this.reports.values()].map(m => ({ ...m })), contacts, orders: this.getOrders() };
+        return { at: now, members: this.everyone(now).map(m => ({ ...m })), contacts, orders: this.getOrders() };
     }
 
     getOrders(): Orders {

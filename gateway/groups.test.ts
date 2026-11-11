@@ -1416,3 +1416,40 @@ describe('sanitizePublish', () => {
         expect(bad({}).ok).toBe(true);
     });
 });
+
+describe('observed members (a human in the group, sdk/group/observed.ts)', () => {
+    const withVue = (observed: unknown) => write('groups/alpha/group.json', JSON.stringify({ name: 'Alpha Team', leader: 'tank1', members: [{ bot: 'tank1', role: 'tank' }, { bot: 'heal1' }, { bot: 'nuke1' }], observed }));
+
+    test('group.json may name them: the bots stay the roster, so a run publishes with no 409, and its report keeps the mark', async () => {
+        withVue([{ name: 'Vue' }, { name: 'Ana', role: 'healer' }]);
+        const alpha = discoverGroups([root]).find(g => g.id === 'alpha')!;
+        expect(alpha.error).toBeNull();
+        expect(alpha.observed).toEqual(['Vue', 'Ana']);
+        expect(alpha.members.map(m => m.bot)).toEqual(['tank1', 'heal1', 'nuke1']);
+        start();
+        const p = makePublish();
+        p.picture.members.push(report('Vue', { bot: '', role: 'melee', objectId: 1077, regionId: 1, observed: true }));
+        const r = await publish(p);
+        expect(r.body).toMatchObject({ ok: true });
+        const clean = sanitizePublish(JSON.parse(JSON.stringify(p)));
+        if (!clean.ok) throw new Error(clean.error);
+        expect(clean.value.picture.members.map(m => [m.name, m.observed ?? false])).toEqual([['Tanky', false], ['Healy', false], ['Nuky', false], ['Vue', true]]);
+    });
+
+    test('a bad entry breaks group.json: a name of letters, never the tank, once each', () => {
+        for (const [observed, says] of [[{ name: 'Vue' }, '"observed" must list'], [[{ name: 'V2' }], 'letters only'], [[{ name: 'Vue', role: 'tank' }], 'the tank is a bot'], [[{ name: 'Vue' }, { name: 'VUE' }], 'listed twice']] as const) {
+            withVue(observed);
+            expect(discoverGroups([root]).find(g => g.id === 'alpha')!.error).toContain(says);
+        }
+    });
+
+    test('in the in-game group it is one of ours, not a stranger', () => {
+        withVue([{ name: 'Vue' }]);
+        const sessions = new Map<string, any>();
+        sessions.set('tankuser', { ws: {}, clientId: 'a', lastStateReceivedAt: 1, lastState: tankState({ group: [{ name: 'Tanky' }, { name: 'Healy' }, { name: 'Vue' }, { name: 'Randomguy' }] as any }) });
+        sessions.set('healuser', { ws: {}, clientId: 'b', lastStateReceivedAt: 1, lastState: healState() });
+        const group = discoverGroups([root]).find(g => g.id === 'alpha')!;
+        const view = composePassive(group, { sessions, sdkSessions: new Map(), sessionStatus: () => 'active' }, 10);
+        expect(view.grouping.strangers).toEqual(['Randomguy']);
+    });
+});

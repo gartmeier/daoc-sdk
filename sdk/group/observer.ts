@@ -723,10 +723,11 @@ export class GroupObserver {
             this.fightSteepSamples++;
             if (!isWet(m.regionId, m) && isSteep(m.regionId, m)) { t.steepFight++; this.fightSteep++; }
             // Idle and moving count while engaged only: during a pull, waiting at the base is the job. A mezz on it is nothing its list could have done, and no idle finding's advice fits that.
-            if (phase === 'engage') t.engageSamples++;
-            if (phase === 'engage' && m.activity.kind === 'idle' && m.activity.detail !== MEZZED) { t.idle++; inc(t.idleReasons, m.activity.detail || 'nothing to do'); }
+            // An observed member (a human) has no list: idle and moving say nothing about it.
+            if (phase === 'engage' && !m.observed) t.engageSamples++;
+            if (phase === 'engage' && !m.observed && m.activity.kind === 'idle' && m.activity.detail !== MEZZED) { t.idle++; inc(t.idleReasons, m.activity.detail || 'nothing to do'); }
             // A walk to a crowd-control target is the way to a cast at something else: combatRange's limits, round the focus, have nothing to say about it.
-            if (phase === 'engage' && m.activity.kind === 'move' && !m.activity.detail?.startsWith(CC_WALK)) t.moving++;
+            if (phase === 'engage' && !m.observed && m.activity.kind === 'move' && !m.activity.detail?.startsWith(CC_WALK)) t.moving++;
             if (ordered) f.engaged.add(m.name);
             // The activity's start is exact; a nuke begun before this fight is a leftover.
             if (m.activity.kind === 'nuke') {

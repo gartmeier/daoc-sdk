@@ -297,7 +297,7 @@ export class MemberAgent<S = any> {
         }
         this.lastMessageId = state.gameMessages.at(-1)?.id ?? this.lastMessageId;
         const petRecast = state.pet === null && this.capabilities.pet === 'main' && (this.spells.summon()?.spell.cooldownRemaining ?? 0) > 0;
-        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat, petRecast, petOrderedOn: petOrderedOn(this.ctx) }, this.options.sightRadius, this.vision, undefined, this.noticeClock);
+        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat, petRecast, petOrderedOn: petOrderedOn(this.ctx), observed: this.board.observedNames?.() }, this.options.sightRadius, this.vision, undefined, this.noticeClock);
         if (obs) this.board.publish(obs);
     }
 

@@ -109,6 +109,8 @@ export interface DiskGroup {
     members: DiskMember[];
     /** Things the page should say ("galahad: no bots/galahad/bot.env, using the folder name"). */
     notes: string[];
+    /** Character names group.json lists under "observed": members with no bot behind them, such as a human (sdk/group/observed.ts). In no roster: nobody publishes for them. */
+    observed?: string[];
 }
 
 export interface GroupStoreOptions {
@@ -368,6 +370,17 @@ function definitionProblem(def: any): string | null {
             if (playing.has(m.bot)) return `${m.bot} is both a member and on the bench`;
         }
     }
+    // Observed members (a human, sdk/group/roster.ts observedEntriesProblem): a character name each, never the tank.
+    if (def.observed !== undefined) {
+        if (!Array.isArray(def.observed) || def.observed.length > MAX_MEMBERS) return `"observed" must list at most ${MAX_MEMBERS} { "name": "<character>" }`;
+        const seen = new Set<string>();
+        for (const [i, o] of def.observed.entries()) {
+            if (!isObj(o) || typeof o.name !== 'string' || !/^[A-Za-z]{3,24}$/.test(o.name)) return `observed entry ${i + 1} needs a "name": the character's name, letters only`;
+            if (o.role !== undefined && (!roleOf(o.role) || o.role === 'tank')) return `observed ${o.name} has role ${JSON.stringify(o.role).slice(0, 40)}; use one of ${ROLES.filter(r => r !== 'tank').join(', ')} (the tank is a bot)`;
+            if (seen.has(o.name.toLowerCase())) return `observed ${o.name} is listed twice`;
+            seen.add(o.name.toLowerCase());
+        }
+    }
     return null;
 }
 
@@ -401,6 +414,7 @@ function readGroup(id: string, dir: string, roots: string[]): DiskGroup {
     if (def.leader !== undefined && !named) group.notes.push(`leader ${String(def.leader).slice(0, 64)} is not a member: ${leader.bot} leads`);
     group.leader = leader.bot;
     group.leaderUsername = leader.username;
+    if (Array.isArray(def.observed) && def.observed.length) group.observed = def.observed.map((o: { name: string }) => o.name);
     return group;
 }
 
@@ -622,6 +636,8 @@ export function composePassive(group: DiskGroup, src: SessionSources, now: numbe
     if (!inGame.length) for (const v of members) if (v.inGameGroup.length > inGame.length) inGame = v.inGameGroup;
     const grouped = new Set(inGame.map(lower));
     const roster = new Set(names.map(lower));
+    // An observed member (a human) in the in-game group is one of ours, not a stranger.
+    for (const n of group.observed ?? []) roster.add(lower(n));
     return {
         members,
         world: [...world.values()].sort((a, b) => a.nearest - b.nearest).slice(0, maxWorld),
@@ -716,6 +732,7 @@ function memberReport(x: any): MemberReport | null {
         capabilities: { heal: bool(caps.heal), cc: bool(caps.cc), nuke: bool(caps.nuke), ...present(caps, ['rez'], 'boolean'), buffs: strings(caps.buffs, 32, 64), buffSpells: [], ...(caps.pet === 'main' || caps.pet === 'fnf' || caps.pet === null ? { pet: caps.pet } : {}) },
         activity: { kind: str(act.kind, 32, 'unknown'), targetId: numOrNull(act.targetId), detail: str(act.detail, 200), since: num(act.since) },
         at: num(x.at),
+        ...(x.observed === true ? { observed: true as const } : {}),
     };
 }
 

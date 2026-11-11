@@ -26,6 +26,7 @@ import { keepOnMap, onMap, safePath } from './terrain';
 import { keepsTravelling, travelAim } from './travel';
 import { isWet } from './water';
 import type { BotWorldState, InventoryItem, NearbyNpc, NearbyPlayer, PlayerState, Style } from '../types';
+import { finishedBy } from './observed';
 import type { BuffSlot, Contact, MemberReport, Point, Role } from './types';
 
 /** Settings the behaviours read; strategies extend this. */
@@ -108,6 +109,11 @@ export interface TacticsSettings {
     chaseLeash?: number;
     /** What the group does with pets: petControl and the rest of pets.ts (default PET_SETTINGS). */
     pet?: PetSettings;
+    /**
+     * Observed members (a human in the group, observed.ts). `leaveBelow`: a target one of them is hitting is left to it at or
+     * below this health % (default LEAVE_BELOW, 25): assist and tank don't take its kill.
+     */
+    observed?: { leaveBelow?: number };
 }
 
 /**
@@ -521,6 +527,12 @@ const REZ_PHASES = new Set(['recover', 'gather', 'idle']);
 const REZ_FOE_CLEARANCE = 1500;
 /** Who comes back first: another rezzer can help with the rest, then whoever the next fight needs most. */
 const REZ_ORDER: Role[] = ['healer', 'tank', 'support', 'nuker', 'melee'];
+/** An observed member (a human) gets this long to say yes: it reads the box, where a bot answers on its next turn. Its question stays 15 s (ResurrectSpellHandler.cs:47). */
+const REZ_ANSWER_OBSERVED_MS = 12_000;
+
+/** The corpse a rezzer takes first: an observed member (a human, observed.ts), then the rezzers, then by REZ_ORDER, then the nearest. */
+export const rezOrder = (me: Point) => (a: MemberReport, b: MemberReport): number =>
+    Number(!!b.observed) - Number(!!a.observed) || Number(!!b.capabilities.rez) - Number(!!a.capabilities.rez) || REZ_ORDER.indexOf(a.role) - REZ_ORDER.indexOf(b.role) || dist(me, a) - dist(me, b);
 
 /**
  * Bring back a dead member near us: sit for the power if we are short and `rez.sit` allows it (a rez costs half of
@@ -550,7 +562,7 @@ export const rez = (): Behavior<TacticsSettings> => ({
             .filter(m => now >= (ctx.memory.get(`rezRetry:${m.objectId}`) ?? 0))
             .filter(m => !claimedBy(ctx, 'rez', m.objectId, REZ_CLAIM_MS).length && !claimedBy(ctx, 'rez_prep', m.objectId, REZ_PREP_MS).length)
             .filter(m => willPayRez(me.manaPercent, me.level, m.level, s))
-            .sort((a, b) => Number(!!b.capabilities.rez) - Number(!!a.capabilities.rez) || REZ_ORDER.indexOf(a.role) - REZ_ORDER.indexOf(b.role) || dist(me, a) - dist(me, b))[0];
+            .sort(rezOrder(me))[0];
         if (!corpse) return false;
         const on = ctx.bot.getAttackers()[0] ?? ctx.bot.getPlayerAttackers()[0];
         if (on) return ctx.skip(`rez: ${on.name} is on us`);
@@ -591,7 +603,7 @@ export const rez = (): Behavior<TacticsSettings> => ({
         ctx.doing('rez', corpse.objectId, `${spell.spell.name} on ${corpse.name}`);
         ctx.finishTurn();
         await stopSwinging(ctx);
-        const r = await ctx.bot.resurrect(corpse.objectId, { spell: spell.spell, answerMs: REZ_ANSWER_MS, approach: false });
+        const r = await ctx.bot.resurrect(corpse.objectId, { spell: spell.spell, answerMs: corpse.observed ? REZ_ANSWER_OBSERVED_MS : REZ_ANSWER_MS, approach: false });
         ctx.result('rez', r, corpse.objectId);
         if (r.success) ctx.note(`${ctx.name} resurrected ${corpse.name}`);
         // No answer: its question stays open for 15 s, and a second cast would only be refused.
@@ -759,7 +771,7 @@ export const heal = (opts: { emergencyOnly?: boolean; limits?: Partial<TacticsSe
             .filter(m => !m.isDead && m.regionId === me.regionId && dist(me, m) < 2000 && m.hp < limit(m.role))
             .filter(m => m.hp < s.emergency || !claimedBy(ctx, 'heal', m.objectId, 3500).length)
             .filter(m => !wetSkipped(ctx, m.objectId))
-            .sort((a, b) => a.hp - b.hp)[0];
+            .sort(healOrder(s.emergency))[0];
         if (!hurt) return false;
         const sp = ctx.spells.heal(hurt.maxHp ? hurt.maxHp * (100 - hurt.hp) / 100 : undefined);
         // None at all is no shortage of power (spells.heal reads null for both).
@@ -775,6 +787,18 @@ export const heal = (opts: { emergencyOnly?: boolean; limits?: Partial<TacticsSe
         return true;
     },
 });
+
+/**
+ * Who a heal goes to first: anyone below `emergency` before those above it, then an observed member (a human, observed.ts)
+ * before the bots, then the most hurt. Among bots alone that is the most hurt first, as ever: below emergency is lower.
+ */
+export const healOrder = (emergency: number) => (a: Pick<MemberReport, 'hp' | 'observed'>, b: Pick<MemberReport, 'hp' | 'observed'>): number =>
+    Number(b.hp < emergency) - Number(a.hp < emergency) || Number(!!b.observed) - Number(!!a.observed) || a.hp - b.hp;
+
+/** The observed member (a human, observed.ts) finishing `c`, whose kill bots leave it (TacticsSettings.observed.leaveBelow); undefined with none. */
+export function leftTo(ctx: Pick<MemberContext<TacticsSettings>, 'members' | 'settings'>, c: Pick<Contact, 'objectId' | 'hp'>): MemberReport | undefined {
+    return finishedBy(ctx.members(), c, ctx.settings.observed?.leaveBelow);
+}
 
 /** A member casting crowd control at a target holds it this long (a cast is 2.5-3 s). */
 const CC_CLAIM_MS = 4000;
@@ -1382,6 +1406,12 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
         const mob = add ?? stand ?? focus;
         if (!mob) return ctx.skip('tank: focus unknown');
         if (mob === focus && away) return ctx.skip('tank: focus beyond the chase leash, no enemy inside it');
+        // Its kill is an observed member's (a human): we stop hitting it. An add on a soft member is still peeled.
+        const leaving = () => { const c = ctx.contact(mob.objectId); return mob !== add && !!c && !!leftTo(ctx, c); };
+        if (leaving()) {
+            await stopSwinging(ctx);
+            return ctx.skip(`tank: ${mob.name} left to ${leftTo(ctx, ctx.contact(mob.objectId)!)!.name}`);
+        }
         if (!foeInView(ctx, mob.objectId)) {
             // Already there and it isn't: a walk would "arrive" every turn until the board drops it.
             if (dist(ctx.me(), mob) <= 200) return ctx.skip('tank: target not at its last position');
@@ -1402,7 +1432,7 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
             // Let it go the moment it runs beyond the leash, measured from the anchor every 500 ms (the anchor can move,
             // CHASE_LIMIT only counts from where it stood): that ends the chase, and the limit stays a wide backstop.
             const gone = () => { const c = ctx.contact(mob.objectId); return !!c && beyondLeash(ctx, c); };
-            const k = await until(add ? () => held() || gone() : () => peelTarget(ctx) !== null || gone() || focusBack(),
+            const k = await until(add ? () => held() || gone() : () => peelTarget(ctx) !== null || gone() || focusBack() || leaving(),
                 () => ctx.bot.killPlayer(mob.objectId, { useStyle: seen => opts.style ? opts.style(seen) : damage, timeout: add || stand ? 20_000 : 90_000, maxChaseDistance: CHASE_LIMIT + (ctx.settings.chaseLeash ?? 0) }));
             // It died as we came: no failure, as for melee.
             if (k && k.reason !== 'already_dead') ctx.result('kill', k, mob.objectId);
@@ -1440,7 +1470,7 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
             return true;
         }
         ctx.doing('melee', mob.objectId, 'tank');
-        const k = await until(() => peelTarget(ctx) !== null || focusBack(), () => ctx.bot.killNpc(mob.objectId, { force: true, useStyle, timeout: 90_000, maxChaseDistance: CHASE_LIMIT, usePet: false }));
+        const k = await until(() => peelTarget(ctx) !== null || focusBack() || leaving(), () => ctx.bot.killNpc(mob.objectId, { force: true, useStyle, timeout: 90_000, maxChaseDistance: CHASE_LIMIT, usePet: false }));
         if (k && k.reason !== 'already_dead') ctx.result('kill', k, mob.objectId);
         await waitOutSelfCc(k);
         return true;
@@ -1476,7 +1506,9 @@ export const guard = (): Behavior<TacticsSettings> => ({
             ctx.memory.set(`${ability}Taken`, taken);
             for (const [name, until] of taken) if (until <= Date.now()) taken.delete(name);
             const free = ctx.members().filter(x => !x.isDead && x.name !== ctx.name && !taken.has(x.name));
-            const m = free.find(x => x.name === want || x.role === want || x.className === want)
+            // An observed member (a human, observed.ts) takes our Guard before the one the settings name; Protect stays theirs.
+            const m = (ability === 'Guard' ? free.find(x => x.observed && x.regionId === ctx.me().regionId) : undefined)
+                ?? free.find(x => x.name === want || x.role === want || x.className === want)
                 ?? (taken.size ? BACK_LINE.map(r => free.find(x => x.role === r)).find(x => !!x) : undefined);
             if (!m || effects.includes(`${m.name} ${verb} by ${ctx.name}`)) continue;
             // Out of view a select doesn't take, and the ability lands on what we hold: "You can't guard yourself!" (GuardAbilityHandler.cs).
@@ -1571,6 +1603,8 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
         // Not one under a keep's guards, inside the leash or not: its walk's check below lets that go every time, and the steps add up to a walk into the circle (moveTo 25, stop 24).
         const mob = opts.melee && beyondLeash(ctx, focus) ? leashFallback(ctx, t => !beyondLeash(ctx, t)) : focus;
         if (!mob) return skipping('assist: focus beyond the chase leash, no enemy inside it');
+        const human = leftTo(ctx, mob);
+        if (human) return skipping(`assist: ${mob.name} left to ${human.name}`);
         // The picture can trail a death by a snapshot; our own client knows first.
         const seen = foeInView(ctx, mob.objectId);
         if (seen && isDown(ctx, seen)) return skipping('assist: focus just died');
@@ -2114,6 +2148,9 @@ export const song = (): Behavior<TacticsSettings> => ({
     },
 });
 
+/** A timed buff on an observed member is cast again this long before it would run out. */
+const OBSERVED_BUFF_MARGIN_MS = 30_000;
+
 /** A buff's walk and cast together: over this and the walk ends, as it is a turn the group's heals wait behind: 66 s of one toward a member who kept moving, with none (run 20261104-050639). A cast that has begun finishes. */
 const BUFF_TURN_MS = 15_000;
 
@@ -2183,7 +2220,9 @@ export const buff = (): Behavior<TacticsSettings> => ({
         const began = Date.now();
         const c = await until(() => Date.now() - began > BUFF_TURN_MS && !castRunning(ctx), () => ctx.bot.castSpell(pick.spell, pick.target === 'Realm' ? (onOther ? target?.objectId : me.objectId) : undefined))
             ?? { success: false, reason: 'timeout', message: `No cast of ${pick.spell.name} on ${next.target} in ${BUFF_TURN_MS / 1000} s` };
-        retry.set(`${next.spell.name}:${next.target}`, Date.now() + buffRetryMs(c));
+        // On an observed member a timed buff never shows (the server sends nobody its effects by name): it stands for its duration, less a margin.
+        const lasts = target?.observed && c.success && pick.concentration <= 0 && pick.duration > 0 ? Math.max(20_000, pick.duration * 1000 - OBSERVED_BUFF_MARGIN_MS) : 0;
+        retry.set(`${next.spell.name}:${next.target}`, Date.now() + (lasts || buffRetryMs(c)));
         ctx.result('buff', c, target?.objectId ?? null);
         return true;
     },

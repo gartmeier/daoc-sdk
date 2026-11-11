@@ -128,7 +128,8 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     const agentOptions: MemberAgentOptions = { ...strategy.agent, vision: withVisionFlag(strategy.agent?.vision, visionFlag) };
     const vision = resolveVision(agentOptions.vision);
     const { members, opened } = await connectGroup(def, opts.have, strategy.roleOf, bot => !strategy.memberBehaviors?.[bot]);
-    const board = new Blackboard(strategy.board);
+    // Observed members (a human, observed.ts) only when group.json names some: else the board as ever.
+    const board = new Blackboard(def.observed?.length ? { ...strategy.board, observed: def.observed } : strategy.board);
     const agents: MemberAgent<S>[] = [];
     const startedAt = Date.now();
     if (opts.save !== false) logFile = join(opts.dir, 'runs', `${stampOf(startedAt)}.log`);
@@ -189,7 +190,8 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         log(`${def.name}: ${members.map(m => `${m.sdk.getPlayer()!.name} (${m.sdk.getPlayer()!.className} L${m.sdk.getPlayer()!.level}, ${m.role})`).join(', ')}; strategy ${strategy.name}`);
         log(`routines: ${members.map(m => `${m.bot} from its ${routines[m.bot]!.from}`).join(', ')}`);
         log(`vision: ${describeVision(vision)}`);
-        if (opts.form !== false) for (const line of await formGroup(members, def.leader)) log(`group: ${line}`);
+        if (def.observed?.length) log(`observed: ${def.observed.map(o => o.name).join(', ')} (no agent: healed, buffed, rezzed and guarded first, left their kills)`);
+        if (opts.form !== false) for (const line of await formGroup(members, def.leader, def.observed?.map(o => o.name))) log(`group: ${line}`);
 
         board.onEvent(e => {
             if (isLoggedEvent(e)) log(`${e.member ? `${e.member}: ` : ''}${e.kind === 'orders' ? '» ' : ''}${e.text}`);

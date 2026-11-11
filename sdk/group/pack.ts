@@ -224,7 +224,8 @@ const COLUMN_RANK: Record<Role, number> = { tank: 0, melee: 1, nuker: 2, support
  */
 export function columnOrder(main: readonly MemberReport[]): { driver: string; order: string[] } | null {
     if (main.length < 2) return null;
-    const lead = (m: MemberReport) => (m.capabilities.cc ? (m.role === 'support' ? 0 : m.role === 'nuker' ? 1 : 2) : m.role === 'tank' ? 3 : 4);
+    // An observed member (a human, observed.ts) never leads: nobody walks it.
+    const lead = (m: MemberReport) => (m.observed ? 5 : m.capabilities.cc ? (m.role === 'support' ? 0 : m.role === 'nuker' ? 1 : 2) : m.role === 'tank' ? 3 : 4);
     const driver = [...main].sort((a, b) => lead(a) - lead(b) || a.name.localeCompare(b.name))[0]!;
     const order = main.filter(m => m !== driver).sort((a, b) => COLUMN_RANK[a.role] - COLUMN_RANK[b.role] || a.name.localeCompare(b.name)).map(m => m.name);
     return { driver: driver.name, order };

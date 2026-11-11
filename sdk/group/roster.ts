@@ -48,11 +48,30 @@ export function loadGroup(dir: string, opts: { lineup?: readonly string[] } = {}
     if (def.limits !== undefined && (typeof def.limits !== 'object' || def.limits === null || Array.isArray(def.limits)
         || Object.entries(def.limits).some(([role, n]) => !roles.includes(role) || !Number.isInteger(n) || (n as number) < 0)))
         throw new Error(`${path}: "limits" must be { "<role>": <count>, ... } with roles ${roles.join(', ')}`);
+    const observedProblem = observedEntriesProblem(def.observed);
+    if (observedProblem) throw new Error(`${path}: ${observedProblem}`);
     const out: GroupDefinition = { ...def, name: def.name || basename(dir) };
     // `{ lineup: undefined }` reads group.json as it is, whatever the command line says.
     const lineup = 'lineup' in opts ? opts.lineup : lineupArg();
     if (!lineup) return out;
     return applyLineup(out, lineup, path);
+}
+
+/**
+ * What is wrong with group.json's "observed" (members with no bot behind them, such as a human: observed.ts), or null.
+ * A character name each (letters, 3 to 24), once each, and a role if any that isn't 'tank': the group's tank is a bot.
+ */
+export function observedEntriesProblem(observed: unknown): string | null {
+    if (observed === undefined) return null;
+    if (!Array.isArray(observed)) return '"observed" must be a list of { "name": "<character>" }';
+    const seen = new Set<string>();
+    for (const [i, o] of observed.entries()) {
+        if (!o || typeof o !== 'object' || typeof o.name !== 'string' || !/^[A-Za-z]{3,24}$/.test(o.name)) return `observed entry ${i + 1} needs a "name": the character's name, letters only`;
+        if (o.role !== undefined && (!ROLES.includes(o.role) || o.role === 'tank')) return `observed ${o.name} has role ${JSON.stringify(o.role)}; use one of ${ROLES.filter(r => r !== 'tank').join(', ')} (the tank is a bot)`;
+        if (seen.has(o.name.toLowerCase())) return `observed ${o.name} is listed twice`;
+        seen.add(o.name.toLowerCase());
+    }
+    return null;
 }
 
 /** The group with `lineup` as its members, in that order, and everyone else on the bench. */
@@ -134,8 +153,10 @@ function sameBot(sdk: BotSDK, bot: string): boolean {
 /**
  * Put everyone in one in-game group led by `leader` (default: the group's leader).
  * Starts each member's accept before the invite, retries twice. Returns one line per member.
+ * `observed` (character names, GroupDefinition.observed) get one invite each from the leader once the bots are in, unless
+ * already in the group: they answer it themselves, in their own time, and nothing waits for that.
  */
-export async function formGroup(members: Member[], leaderBot?: string): Promise<string[]> {
+export async function formGroup(members: Member[], leaderBot?: string, observed: readonly string[] = []): Promise<string[]> {
     const leader = members.find(m => m.bot === leaderBot) ?? members[0]!;
     const name = (m: Member) => m.sdk.getPlayer()?.name ?? m.bot;
     const out: string[] = [];
@@ -165,6 +186,12 @@ export async function formGroup(members: Member[], leaderBot?: string): Promise<
             out.push(`${name(m)}: ${inv.success ? 'invited' : inv.message} / ${joined.success ? 'joined' : joined.message}`);
             if (joined.success) break;
         }
+    }
+    for (const who of observed) {
+        if (leader.sdk.getGroup().some(g => g.name.toLowerCase() === who.toLowerCase())) continue;
+        await Bun.sleep(1500);
+        const inv = await leader.actions.invite(who);
+        out.push(`${who}: ${inv.success ? 'invited (observed: answers it in its own time)' : inv.message}`);
     }
     return out;
 }

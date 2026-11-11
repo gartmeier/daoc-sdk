@@ -145,6 +145,11 @@ export interface MemberReport {
     summons?: number[];
     /** It has no pet, and the summon it keeps one up with is on its recast: pet-down's reason. Absent otherwise. */
     petRecast?: true;
+    /**
+     * A group member with no member agent, such as a human (observed.ts): the board puts its report together from the group
+     * window and what members see of it. `bot` is '', it has no capabilities and is never given orders. Absent on bots.
+     */
+    observed?: true;
 }
 
 /** A monster (or enemy player) as one member saw it in one snapshot. */
@@ -350,6 +355,12 @@ export interface GroupDefinition {
     requires?: { classes?: (string | string[])[] };
     /** At most this many of a role in a line-up (pickLineup), e.g. { "healer": 1 }; a required class may go over it. */
     limits?: Partial<Record<Role, number>>;
+    /**
+     * Group members with no bot behind them, such as a human, by character name (observed.ts): bots heal, buff, rez and guard
+     * them first, count them in formation and in the outnumbered and retreat checks, and leave them the kills. The run invites
+     * them; nobody controls them. A role overrides the class's, never 'tank'.
+     */
+    observed?: { name: string; role?: Exclude<Role, 'tank'> }[];
 }
 
 /** One entry of group.json's members or bench. */

@@ -90,7 +90,8 @@ export function planBuffs(caster: string, members: MemberReport[], opts: BuffOpt
     for (const m of members) for (const s of m.capabilities.buffSpells ?? []) bySpell.set(s.name, s.slot);
     const targets = members.filter(m => !m.isDead)
         .map((m, i) => ({ m, i }))
-        .sort((a, b) => TARGET_ORDER.indexOf(a.m.role) - TARGET_ORDER.indexOf(b.m.role) || a.i - b.i)
+        // An observed member (a human, observed.ts) first: each round's first buff is its.
+        .sort((a, b) => Number(!!b.m.observed) - Number(!!a.m.observed) || TARGET_ORDER.indexOf(a.m.role) - TARGET_ORDER.indexOf(b.m.role) || a.i - b.i)
         .map(x => x.m);
     // Each target's needs that someone in the group can provide, with that provider: a slot
     // nobody has yet (casters' acuity before the Druid gets it) doesn't hold up the next one.

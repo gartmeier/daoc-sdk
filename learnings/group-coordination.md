@@ -296,7 +296,33 @@ export default defineStrategy(pveLeveling, {
 - **Melee duos can roam (`roam: true`):** no base. A passive mob is an engage for everyone at once, they rest where they finish, and only an aggressive mob gets pulled to where the others stand. Against a base at the same camps it made about 5-26 % more XP/h (table in `groups/connla/lab_log.md` style: 5.75M against 5.49M on roane maidens, 3.89M against 3.09M on primroses, few runs), because hitting a mob among its friends brings more of them: 4-9 adds a run against 1-2, fights 27-33 s against 20-21 s, and the tank's lowest health 14-45 % against 34-36 %. A base spends 21-26 % of its time pulling. So roaming earns more and is riskier; a camp of 11 spawns ran dry in 20 minutes of either.
 - **`aggroTolerance` also switches off the check for aggressive mobs on the way to a target.** With roaming, the walk to a passive mob now checks them regardless.
 - **`findCamp` searches 60,000 units from the leader,** so it can come up empty in a region with camps. Moving the leader closer (a channeler) moves the search with it.
-- Settings worth knowing (all in `PVE_SETTINGS`): `minCon`/`maxCon`, `camp` (hunt here), `campLevelBand`/`campAggressiveWeight`, `huntRadius`, `baseClearance`, `ready`, `holdMs`, `assistAfterMs`, `heal.*`, `rest`, `combatRange`, `formation`, `pullDistance`, `engageRadius`, `avoidAggressive`/`aggroPad`/`maxAggroNeighbors`/`pullAggressive`, `roamMs`/`newCampMs`, `retreat.*`, `shedLoadAt`/`keepItems`, `tauntOpenMs`/`peelAfterMs`/`guard`, `slotSlack`, `basePlan`/`aggroTolerance`, `pet.*`.
+- Settings worth knowing (all in `PVE_SETTINGS`): `minCon`/`maxCon`, `camp` (hunt here), `campLevelBand`/`campAggressiveWeight`, `huntRadius`, `baseClearance`, `ready`, `holdMs`, `assistAfterMs`, `heal.*`, `rest`, `combatRange`, `formation`, `pullDistance`, `engageRadius`, `avoidAggressive`/`aggroPad`/`maxAggroNeighbors`/`pullAggressive`, `roamMs`/`newCampMs`, `retreat.*`, `shedLoadAt`/`keepItems`, `tauntOpenMs`/`peelAfterMs`/`guard`, `slotSlack`, `basePlan`/`aggroTolerance`, `pet.*`, `observed.leaveBelow`.
+
+## Observed members: a human in the group (`sdk/group/observed.ts`)
+
+Phase 1's first piece (plan doc "Humans in groups"). A group member with no member agent, such as a human, is a second kind of member on the board. Offline tests only so far (`observed.test.ts`, the gateway's `groups.test.ts`); not run live.
+
+```json
+{ "leader": "tank1", "members": [ { "bot": "tank1" }, ... ], "observed": [ { "name": "Vue" }, { "name": "Ana", "role": "healer" } ] }
+```
+
+- **Named by character name** in `group.json` under `observed`, a role if the class's doesn't fit, never `tank` (`loadGroup` and the gateway refuse it). They are in no roster, so a run publishes with no "roster mismatch" 409, and the gateway's passive view doesn't call them strangers. `formGroup` sends each one invite after the bots are in, and waits for no answer.
+- **What the board knows of it** comes from the bots' clients, as `Observation.groupmates` (only when the board has observed names, `MemberSelf.observed`):
+  - health, power, endurance and dead from the group window (0x16/06 who, 0x70 status; `BotWorldState.group`);
+  - position from any member that has its player entry in view, held 5 s (`OBSERVED_STALE_MS`) after the last one: then its `regionId` reads `OUT_OF_SIGHT` (-1), so nothing region-scoped (heal reach, rez, guard, the outnumbered count) takes it;
+  - what it fights from its swings and hostile spells that members' clients see, as for an enemy player (`attacking`, `targetId` for 6 s): a mob it hits is the group's fight (a threat), and a mob on it resolves `target` to its name;
+  - `effects`: only the concentration buffs bots hold on it, from each caster's own 0x75 list. The server sends nobody another player's effects by name. The window's icons (0x70 `icons` records) are decoded and dropped by the client model; they could tell timed buffs later (`Spellbook` has each spell's `icon`).
+- **On the picture** it is a `MemberReport` with `observed: true`, after the bots' reports, `bot: ''`, no capabilities, activity `observed`, its death a `death` event with no killer. A tank class reads as `melee` (`observedRole`): it is never `ctx.tank()`, the puller, the leader, a mezzer (`assignCc` and `packCc` by capabilities, `mezzMelee` by `!observed`) or a column driver.
+- **Bots put it first:**
+  - `heal` (`healOrder`): anyone below `heal.emergency` first, then the observed member, then the most hurt.
+  - `buff` (`planBuffs`): first in each round. A timed buff on it never shows, so after a landed one the same buff waits its duration less 30 s instead of 20 s.
+  - `rez` (`rezOrder`): its corpse before the rezzers', and its answer gets 12 s (`REZ_ANSWER_OBSERVED_MS`): a human reads the box.
+  - `guard`: Guard goes on it before the member `guard.guard` names, Protect stays as set. Two tanks spread as before ("already guarding").
+- **It counts** wherever members are counted: a formation slot (the same-role index, after the bots, so their slots don't move; nothing moves it), the retreat's dead and the outnumbered checks (in its region), wipes, the ready gate's health.
+- **It gets its kills** (`finishedBy`, `leftTo`): a target it has hit within 6 s, at or below `observed.leaveBelow` % (default 25), is skipped by `assist` (nukes and melee, so `spareNuke` too) and `tank` ("assist: <mob> left to Vue"); a tank already on it stops. An add the tank peels off a soft member is still taken. Not covered yet: `petControl` (pets still attack the focus), class kits with their own fight behaviours, and the coordinator's focus choice, which can pick its target (the bots then hold off until it dies).
+- **The observer** keeps its row (deaths, minimum health, targeted) but leaves it out of idle and moving, which say nothing about a member with no list.
+- **No observed member, no change.** With none in `group.json` the board is built as before, `observeState` adds nothing, and every new ordering reduces to the old one. A one-off replay of 40 seeded observation streams through HEAD's board and decides (pve, rvr, pack) against this one's: 4,800 pictures and 14,400 decides, no difference (`w4-observed-replay.ts` in the day's session notes). The committed tests do the same between a board with no observed members and one told of one who never shows.
+- **Not built** (they wait for the plan's open question on which mode comes first): the group calling what it does in group chat (bot-led), and the human leading with `/assist` and chat commands (human-led). Neither is needed by the above.
 
 ## Group tactics (`sdk/group/tactics/`)
 
