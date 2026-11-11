@@ -606,13 +606,20 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // that is in water. It holds until the stand-off takes over, the lead changes, or the stalk is left.
     if (d <= k.standoff + STALK_STALL_BAND) {
         if (now - (mem.stalkSeen ?? -Infinity) > 5000 || mem.stalkLead !== lead.objectId) {
-            mem.stalkLead = lead.objectId; mem.stalkBest = d; mem.stalkBestAt = now; mem.stalkClosing = false;
+            mem.stalkLead = lead.objectId; mem.stalkBest = d; mem.stalkBestAt = now; mem.stalkClosing = false; mem.stalkAnchor = undefined;
         }
         mem.stalkSeen = now;
         if (d < mem.stalkBest - STALK_GAIN) { mem.stalkBest = d; mem.stalkBestAt = now; }
-        if ((mem.stalkClosing || now - mem.stalkBestAt >= STALK_STALL_MS) && !isWet(regionId, goal)) {
+        // The members stand round the anchor in formation, healers and casters behind it, so the centre trails the anchor:
+        // Midgard's ~330, Hibernia's more, and an anchor openAt - 100 from the lead left the centre 1515 away for 7 minutes
+        // (round 164, 2026-11-11, Midgard session). The anchor goes that lag nearer, measured from the last one, STALK_LAG_MAX at most.
+        const lag = mem.stalkAnchor ? Math.min(STALK_LAG_MAX, Math.max(0, d - dist(mem.stalkAnchor, lead))) : 0;
+        const near = Math.max(k.openAt - 100 - lag, 1);
+        const close = { x: lead.x + (centre.x - lead.x) * Math.min(1, near / d), y: lead.y + (centre.y - lead.y) * Math.min(1, near / d) };
+        if ((mem.stalkClosing || now - mem.stalkBestAt >= STALK_STALL_MS) && !isWet(regionId, close)) {
             mem.stalkClosing = true;
-            const to = { x: Math.round(goal.x), y: Math.round(goal.y) };
+            const to = { x: Math.round(close.x), y: Math.round(close.y) };
+            mem.stalkAnchor = to;
             return say({ ...none, phase: 'travel', anchor: { ...to, z: zAt(to) }, ...(facing ? { facing } : {}), objective: 'stand off', reason: `closing in on ${tag(lead)}, ${Math.round(d)} away: the stalk stalled` });
         }
     }
@@ -625,6 +632,8 @@ const STALK_STALL_BAND = 1200;
 /** ... that got no closer by STALK_GAIN for STALK_STALL_MS closes in on a direct anchor. */
 const STALK_STALL_MS = 10_000;
 const STALK_GAIN = 150;
+/** The centre's lag behind a closing anchor that the next anchor makes up, at most (Hibernia's casters stand 600-900 back). */
+const STALK_LAG_MAX = 900;
 
 /** A fan-out step is this long at most (one turn, then it looks again). */
 const FAN_LEG = 500;

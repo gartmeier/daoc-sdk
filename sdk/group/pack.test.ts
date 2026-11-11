@@ -286,6 +286,15 @@ describe('decidePack: stalking', () => {
         expect(stalled.reason).toContain('the stalk stalled');
         expect(stalled.phase).toBe('travel');
         expect(distTo(stalled.anchor!, { x: 11_700, y: 10_000 })).toBeLessThanOrEqual(1400);
+        // Round 164: in formation the centre stood ~330 behind that anchor, 1515 away for 7 minutes. The next anchor makes up the lag.
+        const first1 = distTo(stalled.anchor!, { x: 11_700, y: 10_000 });
+        const behind = team({}, { x: stalled.anchor!.x - 330 + 120, y: 10_000 });
+        const centreX = behind.reduce((s, m) => s + m.x, 0) / behind.length;
+        const lagged = decidePack(ctx(picture(behind, fiveAt(11_700)), { memory: m, now: 13_000 }));
+        expect(lagged.reason).toContain('the stalk stalled');
+        const lag = 11_700 - centreX - first1;
+        expect(lag).toBeGreaterThan(200);
+        expect(distTo(lagged.anchor!, { x: 11_700, y: 10_000 })).toBeCloseTo(first1 - lag, -1);
         // A stalk that gains ground is left to its legs.
         const g: any = {};
         decidePack(ctx(picture(team(), fiveAt(11_700)), { memory: g, now: 1000 }));
