@@ -11,7 +11,7 @@ import { Blackboard } from './blackboard';
 import { enemy, picture, report } from './fixtures';
 import { MemberAgent, type Behavior, type MemberAgentOptions } from './member';
 import { RVR_SETTINGS } from './rvr';
-import { checkSkillSetting, describeSkill, LATE_HEAL_BELOW, REACTION_GRACE_MS, resolveSkill, SKILL_PRESETS, SkillLens, type Skill } from './skill';
+import { abSlot, checkSkillSetting, describeSkill, LATE_HEAL_BELOW, REACTION_GRACE_MS, resolveSkill, SKILL_PRESETS, SkillLens, type Skill } from './skill';
 import type { GroupPicture, Orders, OrdersUpdate } from './types';
 
 describe('resolveSkill', () => {
@@ -42,6 +42,27 @@ describe('resolveSkill', () => {
         expect(() => checkSkillSetting({ mistakeRate: 2 })).toThrow(/mistakeRate/);
         expect(() => checkSkillSetting({ members: { x: { reactionMs: -1 } } })).toThrow(/members\.x\.reactionMs/);
         expect(() => checkSkillSetting({ realms: { midgard: 'average' } })).not.toThrow();
+    });
+
+    test('a typo in a key stops the run too', () => {
+        expect(() => checkSkillSetting({ reactionms: 300 })).toThrow(/unknown reactionms/);
+        expect(() => checkSkillSetting({ realms: { midgard: { switchMS: 1 } } })).toThrow(/realms\.midgard: unknown switchMS/);
+    });
+
+    test('an A/B: on in the odd slots of ab minutes, off in the even ones; ab alone turns nobody on', () => {
+        const slot = 20 * 60_000;
+        const s = { realms: { midgard: 'average' }, ab: 20 };
+        expect(abSlot(s, 0)).toBe('off');
+        expect(abSlot(s, slot)).toBe('on');
+        expect(abSlot(s, 2 * slot - 1)).toBe('on');
+        expect(abSlot(s, 2 * slot)).toBe('off');
+        expect(abSlot({ realms: { midgard: 'average' } }, slot)).toBeNull();
+        expect(resolveSkill(s, 'x', 'midgard', slot)).toEqual(SKILL_PRESETS.average);
+        expect(resolveSkill(s, 'x', 'midgard', 0)).toBeNull();
+        expect(resolveSkill(s, 'x', 'albion', slot)).toBeNull();
+        expect(resolveSkill({ ab: 20 }, 'x', 'albion', slot)).toBeNull();
+        expect(() => checkSkillSetting({ ab: 0 })).toThrow(/ab/);
+        expect(() => checkSkillSetting(s)).not.toThrow();
     });
 
     test('describeSkill', () => {

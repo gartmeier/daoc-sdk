@@ -19,7 +19,7 @@ import { resolveVision, type NoticeClock, type VisionMode, type VisionOptions } 
 import { type Blackboard, observeState, SHADE_REFUSED, steppedInFront, UNATTACKABLE_MS } from './blackboard';
 import type { Character } from './character';
 import { petOrderedOn, petsAllowed } from './pets';
-import { checkSkillSetting, describeSkill, resolveSkill, SkillLens, type SkillSetting } from './skill';
+import { abSlot, checkSkillSetting, describeSkill, resolveSkill, SkillLens, type SkillSetting } from './skill';
 import { Spellbook } from './spells';
 import { canWield } from './styles';
 import { dryMoveGuard } from './water';
@@ -288,7 +288,10 @@ export class MemberAgent<S = any> {
     constructor(readonly member: Member, readonly board: Blackboard, readonly behaviors: Behavior<S>[], settings: S, private readonly options: MemberAgentOptions = {}) {
         const setting = (settings as { skill?: SkillSetting } | null)?.skill ?? options.skill;
         checkSkillSetting(setting);
-        const skill = resolveSkill(setting, member.bot, member.sdk.getPlayer()?.realm);
+        // An A/B (skill.ab) goes by when this process started: field mode starts one per sortie, so a sortie is all on or all off.
+        const realm = member.sdk.getPlayer()?.realm;
+        const skill = resolveSkill(setting, member.bot, realm, performance.timeOrigin);
+        const slot = abSlot(setting, performance.timeOrigin);
         this.lens = skill ? new SkillLens(skill, options.skillRandom) : null;
         this.vision = resolveVision(options.vision);
         this.sideBehaviors = behaviors.filter(b => b.side);
@@ -311,7 +314,8 @@ export class MemberAgent<S = any> {
         };
         const unguard = (settings as { stayDry?: unknown }).stayDry === undefined ? null : member.sdk.setMoveGuard?.(dryMoveGuard(fightingDry));
         if (unguard) this.unsubscribe.push(unguard);
-        if (this.lens) board.emit({ at: Date.now(), kind: 'note', member: this.ctx.name, text: `skill: ${describeSkill(this.lens.skill)}` });
+        if (this.lens) board.emit({ at: Date.now(), kind: 'note', member: this.ctx.name, text: `skill: ${describeSkill(this.lens.skill)}${slot ? ' (A/B slot on)' : ''}` });
+        else if (slot === 'off' && resolveSkill(setting, member.bot, realm)) board.emit({ at: Date.now(), kind: 'note', member: this.ctx.name, text: 'skill: off (A/B slot off)' });
         this.publish();
     }
 

@@ -19,6 +19,8 @@
 //   --skill.realms.midgard=sharp             the members of one realm (field mode passes its flags to every realm)
 //   --skill.members.Thorgrim=novice          one member, by bot folder name
 //   --skill=off                              none (also: no skill at all)
+//   --skill.ab=20                            an A/B in one run: on only in every other 20-minute slot, by when the
+//                                            run's process started (field mode starts one per sortie: a sortie is all on or all off)
 // A member's own entry beats its realm's, which beats the group-wide one.
 
 import type { Realm } from '../types';
@@ -50,6 +52,8 @@ export type SkillSetting = SkillValue | (Partial<Skill> & {
     preset?: SkillPreset | 'off';
     realms?: Partial<Record<Realm, SkillValue>>;
     members?: Record<string, SkillValue>;
+    /** Minutes: on only in the odd slots of this length (abSlot), for an A/B within one run. */
+    ab?: number;
 });
 
 const LIMITS: Record<keyof Skill, number> = { reactionMs: 3000, switchMs: 5000, mistakeRate: 1 };
@@ -67,6 +71,8 @@ function resolveValue(v: unknown, where: string): Skill | null {
     if (typeof v === 'string') return presetOf(v, where);
     if (typeof v !== 'object') throw new Error(`${where}: expected a preset or { reactionMs, switchMs, mistakeRate }, got ${String(v)}`);
     const o = v as Partial<Skill> & { preset?: unknown };
+    const unknown = Object.keys(o).filter(k => k !== 'preset' && !(k in LIMITS));
+    if (unknown.length) throw new Error(`${where}: unknown ${unknown.join(', ')} (expected preset, reactionMs, switchMs, mistakeRate)`);
     const base = o.preset === undefined ? { ...SKILL_PRESETS.average } : presetOf(o.preset, `${where}.preset`);
     if (!base) return null;
     for (const k of Object.keys(LIMITS) as (keyof Skill)[]) {
@@ -82,19 +88,31 @@ function resolveValue(v: unknown, where: string): Skill | null {
  * One member's skill from a setting, or null (off): its own entry (by bot folder name, any case), else its realm's, else
  * the group-wide value. Throws on a value it can't read, so a typo in a flag stops the run at its start.
  */
-export function resolveSkill(setting: unknown, bot: string, realm?: Realm | null): Skill | null {
+export function resolveSkill(setting: unknown, bot: string, realm?: Realm | null, startedAt?: number): Skill | null {
     if (setting === undefined || setting === null || typeof setting !== 'object') return resolveValue(setting, '--skill');
-    const { realms, members, ...rest } = setting as { realms?: Record<string, unknown>; members?: Record<string, unknown> };
+    if (startedAt !== undefined && abSlot(setting, startedAt) === 'off') return null;
+    const { realms, members, ab: _ab, ...rest } = setting as { realms?: Record<string, unknown>; members?: Record<string, unknown>; ab?: unknown };
     const own = members && Object.entries(members).find(([name]) => name.toLowerCase() === bot.toLowerCase());
     if (own) return resolveValue(own[1], `--skill.members.${own[0]}`);
     if (realm && realms && realms[realm] !== undefined) return resolveValue(realms[realm], `--skill.realms.${realm}`);
     return Object.keys(rest).length ? resolveValue(rest, '--skill') : null;
 }
 
+/**
+ * With `ab` (minutes): 'on' in the odd slots of that length since the epoch, 'off' in the even ones, by `at` (a run's
+ * process start); null without. Every member of one process lands in the same slot.
+ */
+export function abSlot(setting: unknown, at: number): 'on' | 'off' | null {
+    const ab = setting && typeof setting === 'object' ? Number((setting as { ab?: unknown }).ab) : NaN;
+    if (!(ab > 0)) return null;
+    return Math.floor(at / (ab * 60_000)) % 2 === 1 ? 'on' : 'off';
+}
+
 /** Check a whole setting (every realm and member entry), for a run's start. */
 export function checkSkillSetting(setting: unknown): void {
     if (setting === undefined || setting === null || typeof setting !== 'object') { resolveValue(setting, '--skill'); return; }
-    const { realms, members, ...rest } = setting as { realms?: Record<string, unknown>; members?: Record<string, unknown> };
+    const { realms, members, ab, ...rest } = setting as { realms?: Record<string, unknown>; members?: Record<string, unknown>; ab?: unknown };
+    if (ab !== undefined && !(Number(ab) > 0)) throw new Error(`--skill.ab: expected minutes > 0, got ${String(ab)}`);
     for (const [r, v] of Object.entries(realms ?? {})) resolveValue(v, `--skill.realms.${r}`);
     for (const [m, v] of Object.entries(members ?? {})) resolveValue(v, `--skill.members.${m}`);
     if (Object.keys(rest).length) resolveValue(rest, '--skill');
