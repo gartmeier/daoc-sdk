@@ -49,6 +49,27 @@ describe('pickLineup with an any-of class', () => {
     });
 });
 
+describe('pickLineup with role limits', () => {
+    // Camelot: Cleric and Friar together won none of 4 (Albion session, 2026-11-11).
+    const pool = [c('galahad', 'tank', false, 'Armsman'), c('tuck', 'healer', false, 'Friar'), c('nimue', 'healer', true, 'Cleric'),
+        c('merlin', 'support', true, 'Sorcerer'), c('morgana', 'nuker', false, 'Wizard'), c('taliesin', 'nuker', false, 'Theurgist')];
+
+    test('a capped role takes no second place while someone else is left; a required class may go over it', () => {
+        const played = { galahad: 5, tuck: 5, nimue: 0, merlin: 5, morgana: 5, taliesin: 5 };
+        const capped = pickLineup({ pool, current: [], size: 5, played, limits: { healer: 1 } });
+        expect(capped.lineup.filter(b => b === 'tuck' || b === 'nimue')).toHaveLength(1);
+        expect(capped.lineup).toHaveLength(5);
+        const forced = pickLineup({ pool, current: [], size: 5, played, limits: { healer: 1 }, classes: ['Friar', 'Cleric'] });
+        expect(forced.lineup).toEqual(expect.arrayContaining(['tuck', 'nimue']));
+    });
+
+    test('nobody else left: the line-up fills to its size over the limit, noted', () => {
+        const choice = pickLineup({ pool: pool.slice(0, 5), current: [], size: 5, limits: { healer: 1 } });
+        expect(choice.lineup).toHaveLength(5);
+        expect(choice.why).toContain('over the healer limit');
+    });
+});
+
 describe('pickLineup with required classes', () => {
     // Hibernia: Hero, Druid, Bard, Mentalist, Enchanter; Blademaster, Warden, Eldritch on the bench.
     const pool = [c('cuchulainn', 'tank', false, 'Hero'), c('brigid', 'healer', false, 'Druid'), c('oisin', 'support', true, 'Bard'),

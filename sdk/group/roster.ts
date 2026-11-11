@@ -44,6 +44,10 @@ export function loadGroup(dir: string, opts: { lineup?: readonly string[] } = {}
     const classes = def.requires?.classes;
     if (def.requires !== undefined && (typeof def.requires !== 'object' || (classes !== undefined && (!Array.isArray(classes) || classes.some(c => typeof c !== 'string' && (!Array.isArray(c) || !c.length || c.some(x => typeof x !== 'string')))))))
         throw new Error(`${path}: "requires" must be { "classes": ["<class>" or ["<class>", "<class>"] (any one of), ...] }`);
+    const roles = ['tank', 'healer', 'support', 'nuker', 'melee'];
+    if (def.limits !== undefined && (typeof def.limits !== 'object' || def.limits === null || Array.isArray(def.limits)
+        || Object.entries(def.limits).some(([role, n]) => !roles.includes(role) || !Number.isInteger(n) || (n as number) < 0)))
+        throw new Error(`${path}: "limits" must be { "<role>": <count>, ... } with roles ${roles.join(', ')}`);
     const out: GroupDefinition = { ...def, name: def.name || basename(dir) };
     // `{ lineup: undefined }` reads group.json as it is, whatever the command line says.
     const lineup = 'lineup' in opts ? opts.lineup : lineupArg();

@@ -348,6 +348,8 @@ export interface GroupDefinition {
      * A list in it is any one of those: ["Healer", ["Warrior", "Thane"]] is a Healer and a Warrior or Thane.
      */
     requires?: { classes?: (string | string[])[] };
+    /** At most this many of a role in a line-up (pickLineup), e.g. { "healer": 1 }; a required class may go over it. */
+    limits?: Partial<Record<Role, number>>;
 }
 
 /** One entry of group.json's members or bench. */
