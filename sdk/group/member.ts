@@ -19,7 +19,9 @@ import { resolveVision, type NoticeClock, type VisionMode, type VisionOptions } 
 import { type Blackboard, observeState, SHADE_REFUSED, steppedInFront, UNATTACKABLE_MS } from './blackboard';
 import type { Character } from './character';
 import { petOrderedOn, petsAllowed } from './pets';
+import { checkSkillSetting, describeSkill, resolveSkill, SkillLens, type SkillSetting } from './skill';
 import { Spellbook } from './spells';
+import { canWield } from './styles';
 import { dryMoveGuard } from './water';
 import type { Activity, Capabilities, Contact, GroupPicture, MemberCombat, MemberReport, Orders, Role } from './types';
 
@@ -123,8 +125,9 @@ export class MemberContext<S = any> {
      * @param onSide The side tick's context: the same member and memory, no say in the turn.
      */
     constructor(private readonly agent: MemberAgent<S>, private readonly baseSettings: S, readonly memory = new Map<string, any>(), private readonly onSide = false) {
-        this.bot = agent.member.actions;
-        this.sdk = agent.member.sdk;
+        // With a skill (skill.ts) style choices go through it; without, the member's own objects as ever.
+        this.bot = agent.skilled ? agent.slipActions() : agent.member.actions;
+        this.sdk = agent.skilled ? agent.slipSdk() : agent.member.sdk;
         this.spells = agent.spells;
     }
 
@@ -145,8 +148,10 @@ export class MemberContext<S = any> {
     get role(): Role { return this.agent.member.role; }
     get name(): string { return this.me()?.name ?? this.agent.member.bot; }
     me(): PlayerState { return this.sdk.getPlayer()!; }
-    picture(): GroupPicture { return this.agent.board.picture(); }
-    orders(): Orders { return this.agent.board.getOrders(); }
+    /** The group's picture as this member takes it in: with a skill (skill.ts), only the contacts it has reacted to, and its own focus. */
+    picture(): GroupPicture { return this.agent.skilled ? this.agent.seen().picture : this.agent.board.picture(); }
+    /** The coordinator's orders as this member acts on them: with a skill, the focus it has switched to so far. */
+    orders(): Orders { return this.agent.skilled ? this.agent.seen(true).orders : this.agent.board.getOrders(); }
     members(): MemberReport[] { return this.picture().members; }
     member(name: string): MemberReport | undefined { return this.members().find(m => m.name === name); }
     /** The living tank, if the group has one. */
@@ -222,6 +227,29 @@ export interface MemberAgentOptions {
     failedTurnMs?: number;
     /** How often the behaviours marked `side` run (default 250 ms, a snapshot). */
     sideTickMs?: number;
+    /**
+     * The members' skill at the keyboard (skill.ts): reaction, switch time, mistakes. Off by default. The settings' `skill`
+     * (a strategy's, or a run's `--skill=average`, `--skill.realms.midgard=sharp`, `--skill.members.<bot>=novice`) goes over this.
+     */
+    skill?: SkillSetting;
+    /** The skill's dice (default Math.random), for tests. */
+    skillRandom?: () => number;
+}
+
+/** How often a member with a skill looks again whether the orders it acts on have changed (a switch ends on the clock, not on an order). */
+const SKILL_LOOK_MS = 100;
+/** A picture this recent does for orders(): the lens needs only which contacts live. */
+const SKILL_PICTURE_MS = 100;
+
+/** `target` with some of its methods replaced; the rest bound to it. */
+function overriding<T extends object>(target: T, over: Partial<Record<keyof T, unknown>>): T {
+    return new Proxy(target, {
+        get(t, k) {
+            if (Object.prototype.hasOwnProperty.call(over, k)) return over[k as keyof T];
+            const v = Reflect.get(t, k, t);
+            return typeof v === 'function' ? v.bind(t) : v;
+        },
+    });
 }
 
 export class MemberAgent<S = any> {
@@ -251,7 +279,17 @@ export class MemberAgent<S = any> {
     /** When each enemy came into this member's view, for vision.noticeMs (observeState). */
     private readonly noticeClock: NoticeClock = new Map();
 
+    /** This member's skill (skill.ts), from its own entry, its realm's or the group's; null when off, and then nothing below runs. */
+    private readonly lens: SkillLens | null;
+    private seenCache: { at: number; picture: GroupPicture } | null = null;
+    /** The orders as the member last acted on them, to tell when its view changed. */
+    private lastSeenOrders: Orders | null = null;
+
     constructor(readonly member: Member, readonly board: Blackboard, readonly behaviors: Behavior<S>[], settings: S, private readonly options: MemberAgentOptions = {}) {
+        const setting = (settings as { skill?: SkillSetting } | null)?.skill ?? options.skill;
+        checkSkillSetting(setting);
+        const skill = resolveSkill(setting, member.bot, member.sdk.getPlayer()?.realm);
+        this.lens = skill ? new SkillLens(skill, options.skillRandom) : null;
         this.vision = resolveVision(options.vision);
         this.sideBehaviors = behaviors.filter(b => b.side);
         this.spells = new Spellbook(member.sdk, member.actions);
@@ -260,7 +298,10 @@ export class MemberAgent<S = any> {
         this.capabilities = this.ownCapabilities();
         this.lastMessageId = member.sdk.getGameMessages().at(-1)?.id ?? -1;
         this.unsubscribe.push(member.sdk.onStateUpdate(() => this.publish()));
-        this.unsubscribe.push(board.onOrders((next, prev) => { if (this.affected(next, prev)) this.interrupt(`orders: ${next.phase}`); }));
+        this.unsubscribe.push(board.onOrders((next, prev) => {
+            if (this.skilled) this.lookAgain();
+            else if (this.affected(next, prev)) this.interrupt(`orders: ${next.phase}`);
+        }));
         // With stayDry (RvR and the pack have it, PvE has none), no fight move of ours ends in the river: casts from the bank
         // (water.ts dryMoveGuard). Only while pulling or engaged: travel, recovery and retreat legs cross rivers and must not
         // be cut (round 72: Midgard and Camelot held at the bank all round on a leg's mid-river step).
@@ -270,7 +311,71 @@ export class MemberAgent<S = any> {
         };
         const unguard = (settings as { stayDry?: unknown }).stayDry === undefined ? null : member.sdk.setMoveGuard?.(dryMoveGuard(fightingDry));
         if (unguard) this.unsubscribe.push(unguard);
+        if (this.lens) board.emit({ at: Date.now(), kind: 'note', member: this.ctx.name, text: `skill: ${describeSkill(this.lens.skill)}` });
         this.publish();
+    }
+
+    /** This member plays with a skill (skill.ts). */
+    get skilled(): boolean { return this.lens !== null; }
+
+    /**
+     * The board through this member's skill. `forOrders`: a picture up to SKILL_PICTURE_MS old will do, since the orders
+     * need only which contacts live (behaviours read orders() far more often than picture()). Only with a skill.
+     */
+    seen(forOrders = false): { picture: GroupPicture; orders: Orders } {
+        const now = Date.now();
+        let picture: GroupPicture;
+        if (forOrders && this.seenCache && now - this.seenCache.at < SKILL_PICTURE_MS) picture = this.seenCache.picture;
+        else this.seenCache = { at: now, picture: picture = this.board.picture(now) };
+        const target = this.member.sdk.getPlayer()?.targetObjectId;
+        return this.lens!.view(picture, this.board.getOrders(), now, target ? new Set([target]) : undefined);
+    }
+
+    /** With a skill: an orders change as the member sees it interrupts as a board change does without. */
+    private lookAgain(): void {
+        const next = this.seen(true).orders;
+        const prev = this.lastSeenOrders;
+        this.lastSeenOrders = next;
+        if (prev && this.affected(next, prev)) this.interrupt(`orders: ${next.phase}`);
+    }
+
+    /** The positional styles this member has and can swing with what it holds (a style for another weapon would make killNpc change weapons), best first. */
+    private positionalStyles(): { name: string; skillIndex: number }[] {
+        const equipment = this.member.sdk.getState()?.equipment ?? [];
+        return this.member.sdk.getSkills().styles
+            .filter(s => s.details?.opening === 'positional' && canWield(s, equipment))
+            .sort((a, b) => (b.details!.openingDamage ?? 0) - (a.details!.openingDamage ?? 0));
+    }
+
+    /** The member's actions, with killNpc's and killPlayer's style choices through the skill's slips. */
+    slipActions(): BotActions {
+        const actions = this.member.actions;
+        const slipping = <T extends { useStyle?: (...a: any[]) => any }>(options: T | undefined): T | undefined => {
+            const pick = options?.useStyle;
+            if (!pick) return options;
+            return { ...options!, useStyle: (seen: unknown) => this.lens!.styleSlip(pick(seen), this.positionalStyles().map(s => s.name)) } as T;
+        };
+        return overriding(actions, {
+            killNpc: ((target: Parameters<BotActions['killNpc']>[0], options?: Parameters<BotActions['killNpc']>[1]) => actions.killNpc(target, slipping(options))) as BotActions['killNpc'],
+            killPlayer: ((target: Parameters<BotActions['killPlayer']>[0], options?: Parameters<BotActions['killPlayer']>[1]) => actions.killPlayer(target, slipping(options))) as BotActions['killPlayer'],
+        });
+    }
+
+    /** The member's SDK, with a style sent by hand (assist's queue) through the skill's slips. */
+    slipSdk(): BotSDK {
+        const sdk = this.member.sdk;
+        return overriding(sdk, {
+            sendUseSkill: ((index: number, ...rest: unknown[]) => {
+                const style = sdk.getSkills().styles.find(s => s.skillIndex === index);
+                if (style) {
+                    const positional = this.positionalStyles();
+                    const slipped = this.lens!.styleSlip(style.name, positional.map(s => s.name));
+                    const name = typeof slipped === 'string' ? slipped : slipped?.[0];
+                    if (name && name !== style.name) index = positional.find(s => s.name === name)!.skillIndex;
+                }
+                return (sdk.sendUseSkill as (...a: unknown[]) => unknown)(index, ...rest);
+            }) as BotSDK['sendUseSkill'],
+        });
     }
 
     /**
@@ -299,6 +404,7 @@ export class MemberAgent<S = any> {
         const petRecast = state.pet === null && this.capabilities.pet === 'main' && (this.spells.summon()?.spell.cooldownRemaining ?? 0) > 0;
         const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat, petRecast, petOrderedOn: petOrderedOn(this.ctx), observed: this.board.observedNames?.() }, this.options.sightRadius, this.vision, undefined, this.noticeClock);
         if (obs) this.board.publish(obs);
+        if (this.lens) for (const s of this.lens.takeSlips()) this.board.emit({ at: Date.now(), kind: 'note', member: this.ctx.name, text: `skill: ${s.text}` });
     }
 
     setActivity(kind: string, targetId: number | null, detail: string): void {
@@ -336,6 +442,8 @@ export class MemberAgent<S = any> {
         const ended = new AbortController();
         const sideSignal = AbortSignal.any([signal, ended.signal]);
         const side = this.runSide(sideSignal);
+        // With a skill a switch ends on the clock: look again every SKILL_LOOK_MS whether what the member acts on has changed.
+        const looking = this.lens ? setInterval(() => { if (!signal.aborted) this.lookAgain(); }, SKILL_LOOK_MS) : null;
         try {
             while (!signal.aborted) {
                 // Out of the world (a relog): every behaviour reads `me` as there, and "petenc: healer threw: null is not an object (evaluating 'me.constitutionLost')".
@@ -345,8 +453,14 @@ export class MemberAgent<S = any> {
                 }
                 const turn = Date.now();
                 let acted = false;
+                if (this.lens) {
+                    this.lens.watchHealth(this.board.picture(turn).members, turn);
+                    this.lastSeenOrders = this.seen(true).orders;
+                }
                 for (const b of list) {
                     if (signal.aborted || !this.member.sdk.getPlayer()) break;
+                    // A late heal (skill.ts): the heal sits this turn out, the rest of the list goes on.
+                    if (this.lens?.holdBack(b.name, Date.now())) { this.lastSkip = 'late heal'; continue; }
                     this.stepFailed = false;
                     if (await this.step(b, signal)) { acted = true; break; }
                 }
@@ -366,6 +480,7 @@ export class MemberAgent<S = any> {
                 this.lastSkip = '';
             }
         } finally {
+            if (looking) clearInterval(looking);
             ended.abort(new Error('member stopped'));
             await side;
         }
