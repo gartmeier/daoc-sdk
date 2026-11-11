@@ -1171,3 +1171,92 @@ describe('what a report says of a run a round would read wrong', () => {
         });
     });
 });
+
+describe('fight quality (roadmap phase 0)', () => {
+    const at = (i: number) => T0 + i * 1000;
+    const foe = (objectId: number, over: Parameters<typeof contact>[1] = {}) => contact(objectId, { kind: 'player', name: 'Norseman', realm: 'midgard', threat: true, target: 'Tank', ...over });
+    const ms = (dead: string[] = []) => members(Object.fromEntries(dead.map(n => [n, { isDead: true }])));
+    const kill = (i: number) => ({ at: at(i), kind: 'kill' as const, member: 'Tank', targetId: 300 + i, text: 'Norseman died', data: { name: 'Norseman', level: 24, kind: 'player', realm: 'midgard' } });
+    const death = (i: number, member: string) => ({ at: at(i), kind: 'death' as const, member, text: `${member} died`, data: { killer: { name: 'Norseman', kind: 'player', realm: 'midgard' } } });
+    /**
+     * A fight from 1 to `end` s with enemy players, events at their seconds, the dead dead from their death on; then calm. The
+     * observer closes a fight on its third calm sample, so a fight of `end` samples lasts end + 2 s.
+     */
+    const fight = (o: GroupObserver, end: number, events: GroupEvent[], from = 0) => {
+        const deadBy = (i: number) => events.filter(e => e.kind === 'death' && e.at <= at(i)).map(e => e.member!);
+        for (let i = from + 1; i <= from + end; i++) {
+            for (const e of events.filter(e => e.at === at(i))) o.handle(e);
+            o.sample(picture(ms(deadBy(i)), [foe(300), foe(301)], { seq: from + 1, phase: 'engage', focus: 300 }, at(i)));
+        }
+        for (let i = from + end + 1; i <= from + end + 4; i++) o.sample(picture(ms(deadBy(i)), [], { seq: from + 2, phase: 'travel' }, at(i)));
+    };
+
+    test('length, the time to the first heal, and a comeback of ours: down 2, then three of theirs', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        fight(o, 20, [
+            death(2, 'Druid'), death(3, 'Menta'),
+            { at: at(5), kind: 'activity', member: 'Tank', targetId: 1, text: 'heal', data: { activity: 'heal' } },
+            kill(8), kill(10), kill(12),
+        ]);
+        const r = o.report();
+        expect(r.fights[0]).toMatchObject({ reactMs: 4000, behind: { us: 2, them: 1 }, comeback: 'us' });
+        expect(r.totals).toMatchObject({ fightLengthS: { median: 22, max: 22 }, comebacks: { us: 1, them: 0 }, reactMs: 4000, wipedUnreacted: 0 });
+        const md = formatReport(r);
+        expect(md).toContain('Fight quality: fights with enemy players median 22 s, longest 22 s; comebacks (down 2, still ahead) ours 1, theirs 0; first heal, mezz or retreat 4.0 s after contact (median); wiped before reacting 0.');
+        expect(md).toContain('reacted in 4.0 s, most behind: us 2, them 1, a comeback (ours)');
+    });
+
+    test('theirs: two of them down, then we wipe with no heal, mezz or retreat: wiped before reacting', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        fight(o, 10, [kill(2), kill(3), death(5, 'Druid'), death(6, 'Menta'), death(7, 'Tank')]);
+        const r = o.report();
+        expect(r.fights[0]).toMatchObject({ outcome: 'wiped', reactMs: null, comeback: 'them' });
+        expect(r.totals).toMatchObject({ comebacks: { us: 0, them: 1 }, reactMs: null, wipedUnreacted: 1 });
+        expect(r.findings.map(f => f.topic)).toContain('no-reaction');
+    });
+
+    test('a retreat order is a reaction; a heal before the fight is none', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        o.handle({ at: at(0), kind: 'activity', member: 'Druid', targetId: 1, text: 'heal', data: { activity: 'heal' } });
+        fight(o, 8, [{ at: at(3), kind: 'orders', text: 'retreat', data: { phase: 'retreat' } }]);
+        expect(o.report().fights[0]!.reactMs).toBe(2000);
+    });
+
+    test('folded fights still count (field mode bounds)', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0, bounds: { fights: 1, samples: 10 } });
+        fight(o, 10, [kill(2), kill(3), death(5, 'Druid'), death(6, 'Menta'), death(7, 'Tank')]);
+        fight(o, 6, [], 20);
+        fight(o, 30, [], 40);
+        const r = o.report();
+        expect(r.foldedFights).toBe(2);
+        expect(r.totals).toMatchObject({ fightLengthS: { median: 12, max: 32 }, comebacks: { them: 1 }, wipedUnreacted: 1 });
+    });
+
+    test('a release is timed from its death, with the orders then: one under fight orders with others alive is a finding', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        for (let i = 1; i <= 3; i++) o.sample(picture(ms(), [foe(300)], { seq: 1, phase: 'engage', focus: 300 }, at(i)));
+        o.handle({ at: at(2), kind: 'orders', text: 'engage', data: { phase: 'engage' } });
+        o.handle(death(3, 'Druid'));
+        for (let i = 4; i <= 48; i++) o.sample(picture(ms(['Druid']), [foe(300)], { seq: 1, phase: 'engage', focus: 300 }, at(i)));
+        o.handle({ at: at(48), kind: 'result', member: 'Druid', text: 'release: ok', data: { action: 'release', success: true, reason: null } });
+        const r = o.report();
+        expect(r.releases).toEqual([{ member: 'Druid', atS: 48, afterDeathS: 45, phase: 'engage', inFight: true, alive: 2 }]);
+        expect(r.timeline.some(l => l.includes('Druid: released 45 s after dying (orders engage, a fight open, 2 alive near)'))).toBe(true);
+        expect(r.findings.find(f => f.topic === 'early-release')).toMatchObject({ member: 'Druid' });
+        expect(formatReport(r)).toContain('- 0:48 Druid: 45 s after dying, orders engage, a fight open, 2 alive');
+    });
+
+    test('a release after a wipe, or none at all, is no finding; a PvE report has none of the RvR fields', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        fight(o, 10, [kill(2), death(5, 'Druid'), death(6, 'Menta'), death(7, 'Tank')]);
+        o.handle({ at: at(20), kind: 'orders', text: 'recover', data: { phase: 'recover' } });
+        o.handle({ at: at(20), kind: 'result', member: 'Tank', text: 'release: ok', data: { action: 'release', success: true, reason: null } });
+        expect(o.report().findings.map(f => f.topic)).not.toContain('early-release');
+        const pve = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 });
+        for (let i = 1; i <= 5; i++) pve.sample(picture(members(), [contact(7, { target: 'Tank', threat: true })], { seq: 1, phase: 'engage', focus: 7 }, at(i)));
+        const r = pve.report();
+        expect('fightLengthS' in r.totals).toBe(false);
+        expect('reactMs' in r.fights[0]!).toBe(false);
+        expect('releases' in r).toBe(false);
+    });
+});

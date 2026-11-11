@@ -43,6 +43,7 @@ import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
 import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
 import { ONWARD_MIN } from './travel';
+import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
 export { BATTLEGROUND_LAYOUTS, homeOf, keepDangers, KEEP_CLEARANCE, THIDRANKI, type BattlegroundLayout, type Keep, type KeepSettings, type PlayerRealm } from './keeps';
@@ -62,8 +63,9 @@ export interface RvrSettings extends TacticsSettings, KeepSettings {
          * Run (or fall back from a group in sight) when the enemy players against us are at least the members
          * in the main body plus this. Against us: one realm's players that are free (not crowd-controlled) and
          * not fighting the third realm, the largest such realm, plus those of the other realm attacking us.
+         * A share of the group's size by default (size.ts): 3 at five, 5 at eight; a number is that number.
          */
-        margin: number;
+        margin: Count;
         /** ... but never while the focus is below this % health: finish it first. */
         focusHp: number;
         /** How far to run: toward our portal keep, or straight away when the enemies stand that way. */
@@ -157,7 +159,8 @@ export const RVR_SETTINGS: RvrSettings = {
     keepOwners: {},
     // margin 2 → 3 (round 6, 20261101-101056): Midgard on 3 retreated 4× instead of 12×, 10 player kills instead of 4,
     // 5 deaths instead of 7; Hibernia on 2 spent 42 % of the same run retreating, often caught rooted.
-    retreat: { enabled: true, margin: 3, focusHp: 25, distance: 3000, maxMs: 20_000 },
+    // Tuned for five (3 of 5): a share of the size now, 3 at five (size.ts).
+    retreat: { enabled: true, margin: { share: 0.6 }, focusHp: 25, distance: 3000, maxMs: 20_000 },
     switchBelow: 25,
     ready: { hp: 75, mana: 50 },
     gatherRadius: 2500,
@@ -548,7 +551,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const free = cs.filter(c => c.kind === 'player' && !c.cc && !busy(c));
         return [...new Set(free.map(c => c.realm))].map(r => free.filter(c => c.realm === r || onUs(c))).sort((a, b) => b.length - a.length)[0] ?? [];
     };
-    const outnumbered = (n: number) => s.retreat.enabled && n >= main.length + s.retreat.margin;
+    const margin = countFor(s.retreat.margin, groupSize(mem, p.members));
+    const outnumbered = (n: number) => s.retreat.enabled && n >= main.length + margin;
     const counted = (big: readonly Contact[], all: readonly Contact[]) => (big.length === all.length ? enemiesText(all.length) : `${big.length} of ${enemiesText(all.length)}`);
     const homeAt = home?.arrival ?? null;
     const gone = missing.length ? `; missing ${missing.map(m => `${m.name} (region ${m.regionId})`).join(', ')}` : '';
@@ -799,17 +803,18 @@ export function rvrFindings(r: RunReport, s: RvrSettings): Finding[] {
     const t = r.totals;
     const seen = t.enemiesSeen ?? 0, kills = t.playerKills ?? 0, lost = t.deathsToPlayers ?? 0, fights = t.engagements ?? t.fights;
     const phases = Object.entries(r.phases).map(([k, v]) => `${k} ${v}%`).join(', ');
+    const margin = describeCount(s.retreat.margin, Math.max(TUNED_SIZE, Object.keys(r.members).length));
     if (seen === 0 && r.durationMs > 120_000) {
         out.push({ severity: 'high', topic: 'no-contact', issue: 'No enemy player seen in the whole run', evidence: `phases ${phases}`, suggestion: `Raise huntRadius (${s.huntRadius}), or patrol where the other realms walk (settings.patrol; the default rings the meeting point). Members report enemies within the strategy's agent.sightRadius.` });
     }
     if (t.retreats >= 3 && t.retreats * 2 >= Math.max(1, fights)) {
-        out.push({ severity: 'medium', topic: 'outnumbered', issue: `The group retreated ${t.retreats}× in ${fights} fights`, evidence: r.timeline.filter(l => l.includes('retreat')).slice(-3).join(' | '), suggestion: `Raise retreat.margin (${s.retreat.margin}) to take more uneven fights, or lower huntRadius (${s.huntRadius}) so the group walks into fewer large groups.` });
+        out.push({ severity: 'medium', topic: 'outnumbered', issue: `The group retreated ${t.retreats}× in ${fights} fights`, evidence: r.timeline.filter(l => l.includes('retreat')).slice(-3).join(' | '), suggestion: `Raise retreat.margin (${margin}) to take more uneven fights, or lower huntRadius (${s.huntRadius}) so the group walks into fewer large groups.` });
     }
     if (lost >= 3 && lost >= 2 * Math.max(1, kills)) {
         const killers: Record<string, number> = {};
         for (const m of Object.values(r.members)) for (const [k, v] of Object.entries(m.killedBy ?? {})) killers[k] = (killers[k] ?? 0) + v;
         const by = Object.entries(killers).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join(', ');
-        out.push({ severity: 'high', topic: 'trades', issue: `${lost} members died to players for ${kills} player kills`, evidence: by ? `killed by ${by}` : `${fights} fights`, suggestion: `Kill faster: switch to the weakest sooner (switchBelow ${s.switchBelow}), keep the other enemies mezzed (crowd control assignments), and retreat earlier (retreat.margin ${s.retreat.margin}, retreat.focusHp ${s.retreat.focusHp}).` });
+        out.push({ severity: 'high', topic: 'trades', issue: `${lost} members died to players for ${kills} player kills`, evidence: by ? `killed by ${by}` : `${fights} fights`, suggestion: `Kill faster: switch to the weakest sooner (switchBelow ${s.switchBelow}), keep the other enemies mezzed (crowd control assignments), and retreat earlier (retreat.margin ${margin}, retreat.focusHp ${s.retreat.focusHp}).` });
     }
     if ((t.wetInFights ?? 0) >= 20) {
         const swimmers = Object.entries(r.members).filter(([, m]) => (m.wetInFights ?? 0) >= 20).map(([n, m]) => `${n} ${m.wetInFights}%`).join(', ');

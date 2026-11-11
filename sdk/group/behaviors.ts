@@ -1460,6 +1460,11 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
  * Two tanks: the server keeps one Guard (one Protect) per member and refuses a second ("Thorgrim is already guarding
  * Sigrid!", GuardAbilityHandler.cs). That member is then taken for GUARD_TAKEN_MS, and ours goes to the next back-liner
  * in BACK_LINE order, so two tanks cover two members (round 129: Sigurd retried Sigrid every 10 s).
+ *
+ * Guard pairs: the server puts the pair's effect on the guarded member too ("Sigrid guarded by Thorgrim",
+ * GuardECSEffect.cs PairedEffect), and members report their effects, so a member another of ours already guards
+ * (protects) counts as taken without asking: at eight, two tanks pair with two healers, a third guard goes to a caster.
+ * With one guard in the group nobody else's effect is there, and the pick is as before.
  */
 const GUARD_TAKEN_MS = 120_000;
 const BACK_LINE: readonly Role[] = ['healer', 'nuker', 'support'];
@@ -1475,9 +1480,11 @@ export const guard = (): Behavior<TacticsSettings> => ({
             const taken: Map<string, number> = ctx.memory.get(`${ability}Taken`) ?? new Map();
             ctx.memory.set(`${ability}Taken`, taken);
             for (const [name, until] of taken) if (until <= Date.now()) taken.delete(name);
-            const free = ctx.members().filter(x => !x.isDead && x.name !== ctx.name && !taken.has(x.name));
+            const mine = (x: MemberReport) => `${x.name} ${verb} by ${ctx.name}`;
+            const others = ctx.members().filter(x => x.effects?.some(e => e.startsWith(`${x.name} ${verb} by `) && e !== mine(x)));
+            const free = ctx.members().filter(x => !x.isDead && x.name !== ctx.name && !taken.has(x.name) && !others.includes(x));
             const m = free.find(x => x.name === want || x.role === want || x.className === want)
-                ?? (taken.size ? BACK_LINE.map(r => free.find(x => x.role === r)).find(x => !!x) : undefined);
+                ?? (taken.size || others.length ? BACK_LINE.map(r => free.find(x => x.role === r)).find(x => !!x) : undefined);
             if (!m || effects.includes(`${m.name} ${verb} by ${ctx.name}`)) continue;
             // Out of view a select doesn't take, and the ability lands on what we hold: "You can't guard yourself!" (GuardAbilityHandler.cs).
             if (!ctx.sdk.getNearbyPlayers().some(p => p.objectId === m.objectId)) continue;

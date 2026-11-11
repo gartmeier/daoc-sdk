@@ -6,6 +6,7 @@ import { contact, enemy, picture, report } from './fixtures';
 import type { RunReport } from './observer';
 import { memoryView } from './publish';
 import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, homeOf, keepDangers, pickRvrFocus, RVR_SETTINGS, rvrFindings, rvrRoaming, stepLeg, type RvrSettings } from './rvr';
+import { countFor } from './size';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { aggroZones, safePath } from './terrain';
 import { getTerrainStore } from '../terrain';
@@ -179,11 +180,21 @@ describe('decideRvr: fights', () => {
         expect(d.cc).toEqual([]);
     });
 
-    test('the default margin is 3 (round 6): seven against five is a fight, eight a retreat', () => {
-        expect(RVR_SETTINGS.retreat.margin).toBe(3);
-        const tuned = (n: number) => decideRvr(ctx(picture(team(), Array.from({ length: n }, (_, i) => foe(60 + i))), { settings: { retreat: { margin: 3 } } }));
-        expect(tuned(7).phase).toBe('engage');
-        expect(tuned(8).phase).toBe('retreat');
+    test('the default margin is 3 at five (round 6): seven against five is a fight, eight a retreat', () => {
+        expect(countFor(RVR_SETTINGS.retreat.margin, 5)).toBe(3);
+        for (const margin of [3, RVR_SETTINGS.retreat.margin]) {
+            const tuned = (n: number) => decideRvr(ctx(picture(team(), Array.from({ length: n }, (_, i) => foe(60 + i))), { settings: { retreat: { margin } } }));
+            expect(tuned(7).phase).toBe('engage');
+            expect(tuned(8).phase).toBe('retreat');
+        }
+    });
+
+    test('the margin grows with the group (size.ts): at eight, 12 against 8 is a fight, 13 a retreat; a number stays that number', () => {
+        const eight = [...team(), ...team().slice(0, 3).map((m, i) => ({ ...m, name: `${m.name}${i}`, objectId: 10 + i }))];
+        const run = (n: number, margin?: number) => decideRvr(ctx(picture(eight, Array.from({ length: n }, (_, i) => foe(60 + i))), { settings: { retreat: { margin: margin ?? RVR_SETTINGS.retreat.margin } } }));
+        expect(run(12).phase).toBe('engage');
+        expect(run(13).phase).toBe('retreat');
+        expect(run(11, 3).phase).toBe('retreat');
     });
 
     test('retreats when outnumbered by retreat.margin, not while the focus is nearly dead; caught after maxMs, it fights', () => {

@@ -71,6 +71,28 @@ export interface FightSummary {
     where?: { x: number; y: number };
     wetPct?: number;
     enemyWetPct?: number;
+    /**
+     * RvR: ms from the fight's start (first contact) to our first reaction: a heal, a crowd control or a retreat order.
+     * null: none came in the whole fight. A wipe with none is "wiped before reacting" (totals.wipedUnreacted).
+     */
+    reactMs?: number | null;
+    /** RvR: the most either side was behind in the fight, in players dead (ours against theirs, in the order they fell). */
+    behind?: { us: number; them: number };
+    /** RvR: a side down 2 or more that still came out ahead: more of the other side dead at the end, or the other side wiped (comebackOf). */
+    comeback?: 'us' | 'them';
+}
+
+/** A member's release to its bind point (the open "Thorgrim released early" item): when, and what the group was doing. */
+export interface ReleaseRecord {
+    member: string;
+    /** Seconds since the run started. */
+    atS: number;
+    /** Seconds from its death to the release; null when the death came before the observer saw it. */
+    afterDeathS: number | null;
+    /** The coordinator's orders phase then, whether the observer had a fight open, and how many others stood alive in its region. */
+    phase: string;
+    inFight: boolean;
+    alive: number;
 }
 
 /** A member's pet in the run. */
@@ -231,6 +253,15 @@ export interface RunReport {
         /** RvR, in a column: a follower's average distance from its place (|behind the driver − (rank + 1) × gap|), and the signed average (positive: too far back). */
         columnOffAvg?: number;
         columnTrailAvg?: number;
+        /**
+         * RvR fight quality, over fights with enemy players: their length (median and longest, s), comebacks (a side down 2
+         * that still came out ahead: FightSummary.comeback), the median time from first contact to our first heal, crowd
+         * control or retreat, and wipes that came before any of those.
+         */
+        fightLengthS?: { median: number | null; max: number };
+        comebacks?: { us: number; them: number };
+        reactMs?: number | null;
+        wipedUnreacted?: number;
     };
     /** % of run time per phase. */
     phases: Partial<Record<Phase, number>>;
@@ -245,6 +276,8 @@ export interface RunReport {
     classReads?: ClassReads;
     /** With ObserverBounds.fights: the earliest closed fights left out of `fights`. The totals count them all. */
     foldedFights?: number;
+    /** Every successful release (the last ObserverBounds.samples, else 200), in order. Absent when nobody released. */
+    releases?: ReleaseRecord[];
 }
 
 /**
@@ -271,6 +304,8 @@ interface FoldedFights {
     withoutNuke: Record<string, number>;
     /** contactTimes over them, carried on into the rest. */
     contact: ContactCarry;
+    /** Fight quality over the folded fights with enemy players: lengths and reaction times (the last ObserverBounds.samples), comebacks, wipes before reacting. */
+    lengths: number[]; reacts: number[]; comebacksUs: number; comebacksThem: number; wipedUnreacted: number;
 }
 
 /** What the samples say about a member's pet. */
@@ -326,6 +361,8 @@ interface OpenFight extends Omit<FightSummary, 'durationMs' | 'tankHold' | 'outc
     ordered: Map<string, Set<number>>;
     /** Member samples (alive) and those in deep water; the same for its enemy players. */
     memberSamples: number; memberWet: number; enemySamples: number; enemyWet: number;
+    /** Our first heal, crowd control or retreat order in it; players dead on each side so far, and the most each was behind. */
+    reactAt: number | null; ourDead: number; theirDead: number; usBehind: number; themBehind: number;
 }
 
 const pct = (a: number, b: number) => b > 0 ? Math.round(100 * a / b) : 0;
@@ -455,6 +492,32 @@ function nuked(f: OpenFight, name: string, at: number): void {
 }
 
 /** Phase for a picture without a coordinator: fighting when anything attacks the group. */
+/** The fight's first heal, crowd control or retreat (FightSummary.reactMs). */
+function reacted(f: OpenFight, at: number): void {
+    if (f.reactAt === null || at < f.reactAt) f.reactAt = Math.max(f.at, at);
+}
+
+/** A player of ours (`us`) or of theirs died in the fight: how far behind each side has been. */
+function fell(f: OpenFight, side: 'us' | 'them'): void {
+    if (side === 'us') f.ourDead++;
+    else f.theirDead++;
+    f.usBehind = Math.max(f.usBehind, f.ourDead - f.theirDead);
+    f.themBehind = Math.max(f.themBehind, f.theirDead - f.ourDead);
+}
+
+/** "A side down 2 that still won" (roadmap phase 0): behind by this many dead at some point. */
+const COMEBACK_DOWN = 2;
+
+/**
+ * Whose comeback a fight was, if any: down COMEBACK_DOWN or more at some point and ahead at the end. Ahead: more of the
+ * other side dead, or, for them, our wipe. We only know their dead by our kills, so a wipe of theirs we can't see stays a draw.
+ */
+export function comebackOf(f: Pick<OpenFight, 'ourDead' | 'theirDead' | 'usBehind' | 'themBehind'>, outcome: FightSummary['outcome']): 'us' | 'them' | undefined {
+    if (f.usBehind >= COMEBACK_DOWN && outcome !== 'wiped' && f.theirDead > f.ourDead) return 'us';
+    if (f.themBehind >= COMEBACK_DOWN && (outcome === 'wiped' || f.ourDead > f.theirDead)) return 'them';
+    return undefined;
+}
+
 export function inferPhase(p: GroupPicture): Phase {
     if (p.orders.seq > 0) return p.orders.phase;
     if (p.contacts.some(c => c.threat)) return 'engage';
@@ -523,7 +586,10 @@ export class GroupObserver {
     private readonly firstSightRanges: number[] = [];
     private firstSightClose = 0;
     /** Closed fights folded out of `fights` (bounds.fights). */
-    private readonly folded: FoldedFights = { n: 0, durationMs: 0, held: 0, holdSum: 0, engagements: 0, threeWay: 0, openers: {}, withoutNuke: {}, contact: { quiet: 0, from: 0, first: null } };
+    private readonly folded: FoldedFights = { n: 0, durationMs: 0, held: 0, holdSum: 0, engagements: 0, threeWay: 0, openers: {}, withoutNuke: {}, contact: { quiet: 0, from: 0, first: null }, lengths: [], reacts: [], comebacksUs: 0, comebacksThem: 0, wipedUnreacted: 0 };
+    /** Successful releases, and each member's last death (for the time between). */
+    private readonly releases: ReleaseRecord[] = [];
+    private readonly diedAt = new Map<string, number>();
     /** The samples behind every fight's tank hold. */
     private holdSamples = 0;
     /** Events for a member with no track yet: one starts with its first sample, up to a second into the run, and an instant summon or a death can be quicker (credit). */
@@ -673,6 +739,7 @@ export class GroupObserver {
                 memberSamples: 0, memberWet: 0, enemySamples: 0, enemyWet: 0,
                 start: Math.round((p.at - this.started) / 1000), at: p.at, focus: [], kills: [], petsDown: [], ordered: new Map(), maxAttackers: 0, deaths: [], retreated: false, attackers: new Set(), holdSamples: 0, heldSamples: 0,
                 engageAt: null, engaged: new Set(), firstNuke: new Map(), enemies: new Map(),
+                reactAt: null, ourDead: 0, theirDead: 0, usBehind: 0, themBehind: 0,
             };
         }
         if (this.early.length) this.settleEarly();
@@ -728,6 +795,10 @@ export class GroupObserver {
             // A walk to a crowd-control target is the way to a cast at something else: combatRange's limits, round the focus, have nothing to say about it.
             if (phase === 'engage' && m.activity.kind === 'move' && !m.activity.detail?.startsWith(CC_WALK)) t.moving++;
             if (ordered) f.engaged.add(m.name);
+            if (m.activity.kind === 'heal' || m.activity.kind === 'cc') {
+                const at = m.activity.since > 0 ? Math.min(m.activity.since, p.at) : p.at;
+                if (at >= f.at) reacted(f, at);
+            }
             // The activity's start is exact; a nuke begun before this fight is a leftover.
             if (m.activity.kind === 'nuke') {
                 const at = m.activity.since > 0 ? Math.min(m.activity.since, p.at) : p.at;
@@ -755,6 +826,14 @@ export class GroupObserver {
             if (f.tankHold !== null) { g.held++; g.holdSum += f.tankHold; }
             if (f.enemyPlayers) g.engagements++;
             if ((f.enemyRealms?.length ?? 0) >= 2) g.threeWay++;
+            if (f.enemyPlayers) {
+                g.lengths.push(f.durationMs);
+                keepLast(g.lengths, this.meta.bounds?.samples);
+                if (typeof f.reactMs === 'number') { g.reacts.push(f.reactMs); keepLast(g.reacts, this.meta.bounds?.samples); }
+                if (f.comeback === 'us') g.comebacksUs++;
+                if (f.comeback === 'them') g.comebacksThem++;
+                if (f.outcome === 'wiped' && f.reactMs === null) g.wipedUnreacted++;
+            }
             for (const [name, ms] of Object.entries(f.openerMs ?? {})) {
                 if (ms === null) { inc(g.withoutNuke, name); continue; }
                 (g.openers[name] ??= []).push(ms);
@@ -792,6 +871,10 @@ export class GroupObserver {
             if (f.where) fight.where = f.where;
             fight.wetPct = pct(f.memberWet, f.memberSamples);
             fight.enemyWetPct = pct(f.enemyWet, f.enemySamples);
+            fight.reactMs = f.reactAt === null ? null : Math.max(0, f.reactAt - f.at);
+            fight.behind = { us: f.usBehind, them: f.themBehind };
+            const comeback = comebackOf(f, outcome);
+            if (comeback) fight.comeback = comeback;
         }
         this.fightWet += f.memberWet;
         this.fightMemberSamples += f.memberSamples;
@@ -848,10 +931,15 @@ export class GroupObserver {
                 this.kills++;
                 this.fight?.kills.push(String(e.data?.name ?? e.text));
             }
-            if (e.data?.kind === 'player') this.playerKills++;
+            if (e.data?.kind === 'player') {
+                this.playerKills++;
+                if (this.fight) fell(this.fight, 'them');
+            }
         }
         if (e.kind === 'death') {
             if (deathBy(e).enemyRealm) this.deathsToPlayers++;
+            if (e.member) this.diedAt.set(e.member, e.at);
+            if (this.fight) fell(this.fight, 'us');
             if (t) this.fight?.deaths.push(e.member!);
             const p = this.latest;
             if (p && p.members.length && p.members.every(m => m.isDead || m.name === e.member)) this.wipes++;
@@ -864,7 +952,7 @@ export class GroupObserver {
             const phase = e.data?.phase;
             if (phase === 'retreat') {
                 if (this.ordersPhase !== 'retreat' && e.at - this.retreatEndedAt > RETREAT_RESUME_MS) this.retreats++;
-                if (this.fight) this.fight.retreated = true;
+                if (this.fight) { this.fight.retreated = true; reacted(this.fight, e.at); }
             } else if (this.ordersPhase === 'retreat') this.retreatEndedAt = e.at;
             this.ordersPhase = phase;
         }
@@ -872,6 +960,7 @@ export class GroupObserver {
             const kind = String(e.data?.activity);
             // Exact where a sample could miss a short cast.
             if (kind === 'nuke' && e.member && this.fight) nuked(this.fight, e.member, e.at);
+            if ((kind === 'heal' || kind === 'cc') && this.fight && e.at >= this.fight.at) reacted(this.fight, e.at);
             // Two members starting the same heal/cc on one target within a moment: wasted effort.
             if ((kind === 'cc' || kind === 'heal') && e.targetId !== null && e.targetId !== undefined) {
                 const window = kind === 'cc' ? 3000 : 1500;
@@ -880,8 +969,23 @@ export class GroupObserver {
             }
             return;
         }
+        if (e.kind === 'result' && e.data?.action === 'release' && e.data.success && e.member) this.released(e.member, e.at);
         if (e.kind === 'result' && e.data?.success) return;
         this.timelineEvents.push(`${this.stamp(e.at)} ${e.kind === 'orders' ? '[orders] ' : e.member ? `${e.member}: ` : ''}${e.text}`);
+        if (this.timelineEvents.length > 120) this.timelineEvents.splice(0, this.timelineEvents.length - 120);
+    }
+
+    /** A member's release went through: when, how long after its death, and what the group was doing (ReleaseRecord). */
+    private released(member: string, at: number): void {
+        const died = this.diedAt.get(member);
+        const p = this.latest;
+        const me = p?.members.find(m => m.name === member);
+        const alive = p ? p.members.filter(m => m.name !== member && !m.isDead && (!me || m.regionId === me.regionId)).length : 0;
+        const phase = String(this.ordersPhase ?? p?.orders.phase ?? 'unknown');
+        const rec: ReleaseRecord = { member, atS: Math.round((at - this.started) / 1000), afterDeathS: died === undefined ? null : Math.round((at - died) / 1000), phase, inFight: this.fight !== null, alive };
+        this.releases.push(rec);
+        keepLast(this.releases, this.meta.bounds?.samples ?? 200);
+        this.timelineEvents.push(`${this.stamp(at)} ${member}: released${rec.afterDeathS === null ? '' : ` ${rec.afterDeathS} s after dying`} (orders ${phase}${rec.inFight ? ', a fight open' : ''}, ${alive} alive near)`);
         if (this.timelineEvents.length > 120) this.timelineEvents.splice(0, this.timelineEvents.length - 120);
     }
 
@@ -962,8 +1066,10 @@ export class GroupObserver {
                 threeWay: g.threeWay + this.fights.filter(f => (f.enemyRealms?.length ?? 0) >= 2).length,
                 columnPct: pct(this.columnMs, this.travelMs), travelSpreadAvg: this.travelSamples ? Math.round(this.travelSpreadSum / this.travelSamples) : 0, ccFrontPct: pct(this.ccFrontSamples, this.travelSamples),
                 ...(this.columnPlaceSamples ? { columnOffAvg: Math.round(this.columnOffSum / this.columnPlaceSamples), columnTrailAvg: Math.round(this.columnTrailSum / this.columnPlaceSamples) } : {}),
+                ...this.quality(),
             });
         }
+        if (this.releases.length) report.releases = this.releases.map(x => ({ ...x }));
         if (rvr) {
             const reads = this.classReads.result(this.meta.classTruth?.() ?? null);
             if (reads) report.classReads = reads;
@@ -977,6 +1083,21 @@ export class GroupObserver {
             }
         }
         return report;
+    }
+
+    /** Fight quality over every fight with enemy players, folded ones included (RunReport.totals.fightLengthS ...). */
+    private quality(): Pick<RunReport['totals'], 'fightLengthS' | 'comebacks' | 'reactMs' | 'wipedUnreacted'> {
+        const g = this.folded;
+        const theirs = this.fights.filter(f => f.enemyPlayers);
+        const lengths = [...g.lengths, ...theirs.map(f => f.durationMs)];
+        const reacts = [...g.reacts, ...theirs.map(f => f.reactMs).filter((v): v is number => typeof v === 'number')];
+        const medianMs = median(lengths);
+        return {
+            fightLengthS: { median: medianMs === null ? null : Math.round(medianMs / 1000), max: Math.round(Math.max(0, ...lengths) / 1000) },
+            comebacks: { us: g.comebacksUs + theirs.filter(f => f.comeback === 'us').length, them: g.comebacksThem + theirs.filter(f => f.comeback === 'them').length },
+            reactMs: median(reacts),
+            wipedUnreacted: g.wipedUnreacted + theirs.filter(f => f.outcome === 'wiped' && f.reactMs === null).length,
+        };
     }
 
     /**
@@ -1043,6 +1164,9 @@ const isRvr = (r: RunReport) => (r.totals.enemiesSeen ?? 0) > 0 || (r.totals.pla
 const hasRvrTotals = (r: RunReport) => isRvr(r) || (r.totals.deathsToPlayers ?? 0) > 0;
 
 /** Rule-based findings: what went wrong and which setting or behaviour to look at. */
+/** Orders under which a corpse holds its release (behaviors.ts fightGoesOn's FIGHT_PHASES). */
+const HOLD_PHASES = new Set(['engage', 'retreat', 'pull']);
+
 export function findingsFor(r: RunReport): Finding[] {
     const out: Finding[] = [];
     const t = r.totals;
@@ -1063,6 +1187,14 @@ export function findingsFor(r: RunReport): Finding[] {
     if (!rvr && onPets > 25 && r.fights.filter(f => f.tankHold !== null).reduce((a, f) => a + f.durationMs, 0) >= PET_AGGRO_FIGHT_MS) {
         const causes = drew.map(([n, m]) => ({ n, share: m.pet!.drewFocus, ...drewCause(n, m, r) }));
         out.push({ severity: 'medium', topic: 'pet-aggro', ...(drew.length === 1 ? { member: drew[0]![0] } : {}), issue: `The focus was on a pet ${onPets}% of fight time`, evidence: causes.map(c => `on ${c.n}'s pet ${c.share}%${c.note ? ` (${c.note})` : ''}`).join(', '), suggestion: [...new Set(causes.map(c => c.advice))].join(' ') });
+    }
+    // The open "Thorgrim released early" item: a release under fight orders with others still alive is one the hold should have kept.
+    for (const x of r.releases ?? []) {
+        if (!HOLD_PHASES.has(x.phase) || x.alive === 0) continue;
+        out.push({ severity: 'medium', topic: 'early-release', member: x.member, issue: `${x.member} released ${x.afterDeathS ?? '?'} s after dying while the orders said ${x.phase}`, evidence: `at ${clock(x.atS)}, ${x.alive} others alive in its region${x.inFight ? ', a fight open' : ''}`, suggestion: 'Compare afterDeathS with rez.fightHoldMs (the cap from the death): at or past it, the hold ran out; well under it, fightGoesOn read the fight as over (its threats or the orders it saw).' });
+    }
+    if (rvr && (t.wipedUnreacted ?? 0) > 0) {
+        out.push({ severity: 'high', topic: 'no-reaction', issue: `${t.wipedUnreacted} wipes came before any heal, mezz or retreat`, evidence: r.fights.filter(f => f.outcome === 'wiped' && f.reactMs === null).slice(-3).map(f => `${clock(f.start)} ${f.enemyPlayers ?? '?'} enemies, ${Math.round(f.durationMs / 1000)} s`).join(' | '), suggestion: 'See who the healers and crowd controllers were doing then (activity, idle reasons); retreat earlier (retreat.margin) or keep power for the opening (SAVING_POWER).' });
     }
     for (const [name, m] of Object.entries(r.members)) {
         out.push(...petFindings(name, m, r));
@@ -1126,6 +1258,10 @@ export function formatReport(r: RunReport): string {
         const where = Object.entries(t.wetWhere ?? {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${v}% ${WET_WHERE[k] ?? k}`).join(', ');
         lines.push(`Water: we swam ${t.wetPct}% of the time alive and ${t.wetInFights}% of fight time${where ? ` (${where})` : ''}, the enemies in our fights ${t.enemiesWetInFights}%. Fights with both other realms: ${t.threeWay} of ${t.engagements ?? 0}.`);
     }
+    if (rvr && t.fightLengthS) {
+        const len = t.fightLengthS.median === null ? 'none' : `median ${t.fightLengthS.median} s, longest ${t.fightLengthS.max} s`;
+        lines.push(`Fight quality: fights with enemy players ${len}; comebacks (down 2, still ahead) ours ${t.comebacks?.us ?? 0}, theirs ${t.comebacks?.them ?? 0}; first heal, mezz or retreat ${t.reactMs == null ? 'never' : `${secs(t.reactMs)} after contact (median)`}; wiped before reacting ${t.wipedUnreacted ?? 0}.`);
+    }
     if (rvr && t.contactS !== undefined) lines.push(`Contact: first enemy player seen ${t.contactS === null ? 'never' : `at ${clock(t.contactS)}`}, first fight with them ${t.firstFightS == null ? 'never' : `at ${clock(t.firstFightS)}`}; ${t.engagements ?? 0} such fights, the longest stretch without one ${clock(t.quietMaxS ?? 0)}.`);
     if (rvr && t.steepPct !== undefined) lines.push(`Slope: on ground steeper than 35° ${t.steepPct}% of the time alive, ${t.steepInFights}% of fight time, ${t.steepInTravel}% of travel${t.steepSpots?.length ? `; most at ${t.steepSpots.join(', ')}` : ''}.`);
     if (rvr && t.firstSightRange != null) lines.push(`First sight of an enemy player: median ${t.firstSightRange} units from the nearest member, ${t.firstSightClose ?? 0} within 1000.`);
@@ -1169,7 +1305,11 @@ export function formatReport(r: RunReport): string {
     if (r.foldedFights) lines.push(`${r.foldedFights} earlier fights are counted in the totals, not listed.`, '');
     for (const f of r.fights) {
         const openers = Object.entries(f.openerMs ?? {}).map(([n, ms]) => `${n} ${ms === null ? 'none' : secs(ms)}`).join(', ');
-        lines.push(`- ${String(Math.floor(f.start / 60)).padStart(2, '0')}:${String(f.start % 60).padStart(2, '0')} ${f.focus.join(' / ') || '?'}: ${f.outcome} in ${Math.round(f.durationMs / 1000)} s, kills ${f.kills.length}, adds ${f.adds}, tank hold ${f.tankHold ?? '-'}%${f.enemyPlayers ? `, ${f.enemyPlayers} enemy players (${(f.enemyRealms ?? []).join(', ')})` : ''}${f.where ? ` at (${f.where.x}, ${f.where.y})` : ''}${f.wetPct || f.enemyWetPct ? `, in water: us ${f.wetPct ?? 0}%, them ${f.enemyWetPct ?? 0}%` : ''}${openers ? `, first nuke: ${openers}` : ''}${f.deaths.length ? `, died: ${f.deaths.join(', ')}` : ''}`);
+        lines.push(`- ${String(Math.floor(f.start / 60)).padStart(2, '0')}:${String(f.start % 60).padStart(2, '0')} ${f.focus.join(' / ') || '?'}: ${f.outcome} in ${Math.round(f.durationMs / 1000)} s, kills ${f.kills.length}, adds ${f.adds}, tank hold ${f.tankHold ?? '-'}%${f.enemyPlayers ? `, ${f.enemyPlayers} enemy players (${(f.enemyRealms ?? []).join(', ')})` : ''}${f.where ? ` at (${f.where.x}, ${f.where.y})` : ''}${f.wetPct || f.enemyWetPct ? `, in water: us ${f.wetPct ?? 0}%, them ${f.enemyWetPct ?? 0}%` : ''}${openers ? `, first nuke: ${openers}` : ''}${f.reactMs !== undefined ? `, reacted ${f.reactMs === null ? 'never' : `in ${secs(f.reactMs)}`}` : ''}${f.behind && (f.behind.us || f.behind.them) ? `, most behind: us ${f.behind.us}, them ${f.behind.them}` : ''}${f.comeback ? `, a comeback (${f.comeback === 'us' ? 'ours' : 'theirs'})` : ''}${f.deaths.length ? `, died: ${f.deaths.join(', ')}` : ''}`);
+    }
+    if (r.releases?.length) {
+        lines.push('', '## Releases', '', 'Each release that went through: seconds after the death, the orders then, and the others alive in its region.', '');
+        for (const x of r.releases) lines.push(`- ${clock(x.atS)} ${x.member}: ${x.afterDeathS === null ? '?' : x.afterDeathS} s after dying, orders ${x.phase}${x.inFight ? ', a fight open' : ''}, ${x.alive} alive`);
     }
     lines.push('', '## Timeline (last events)', '', '```', ...r.timeline, '```', '');
     return lines.join('\n');

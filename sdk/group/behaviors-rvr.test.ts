@@ -902,6 +902,35 @@ describe('refusals that come back at once: reported, so the agent paces them (me
         expect(selected).toEqual([7, 8]);
     });
 
+    test('guard pairs: a healer another tank of ours already guards (its effect says so) is passed over without asking; with nobody else guarding, the pick is as before', async () => {
+        const scene = (healerEffects: string[]) => {
+            const healer = report('Sigrid', { role: 'healer', regionId: R, x: 10_000, y: 10_000, objectId: 7, effects: healerEffects });
+            const healer2 = report('Hild', { role: 'healer', regionId: R, x: 10_020, y: 10_000, objectId: 9 });
+            const nuker = report('Gudrun', { role: 'nuker', regionId: R, x: 10_050, y: 10_000, objectId: 8 });
+            const s = stub({ name: 'Sigurd', role: 'tank', at: ANCHOR, members: [healer, nuker, healer2], orders: { phase: 'travel', focus: null }, settings: { ...LEASHED, guard: { guard: 'healer' } } as TacticsSettings });
+            const selected: number[] = [];
+            Object.assign(s.ctx.sdk, {
+                findAbility: (re: RegExp) => (re.test('Guard') ? { name: 'Guard' } : null),
+                getNearbyPlayers: () => [{ objectId: 7 }, { objectId: 8 }, { objectId: 9 }],
+                sendSetTarget: async (id: number) => { selected.push(id); return { success: true, message: '' }; },
+            });
+            (s.ctx.bot as unknown as { useAbility: unknown }).useAbility = async () => ({ success: true, message: '', messages: [{ text: 'You are now guarding them.' }] });
+            (s.ctx.bot as unknown as { isDead: unknown }).isDead = () => false;
+            return { s, selected };
+        };
+        const alone = scene([]);
+        expect(await guard().run(alone.s.ctx)).toBe(true);
+        expect(alone.selected).toEqual([7]);
+        // Thorgrim has Sigrid: the second healer, at once.
+        const paired = scene(['Sigrid guarded by Thorgrim']);
+        expect(await guard().run(paired.s.ctx)).toBe(true);
+        expect(paired.selected).toEqual([9]);
+        // Our own guard on her is ours, not another's: nothing to do.
+        const ours = scene(['Sigrid guarded by Sigurd']);
+        Object.assign(ours.s.ctx.sdk, { getState: () => ({ effects: [{ name: 'Sigrid guarded by Sigurd' }] }) });
+        expect(await guard().run(ours.s.ctx)).toBe(false);
+    });
+
     test('a leg cut by its own timeout is no failure: flee, tank and assist hand the next turn the decision that way, so a report gets no walk:timeout from them', async () => {
         const walk = { success: false, reason: 'timeout', message: 'Walk timed out after 6000ms' };
         const tankM = report('Tank', { role: 'tank', regionId: R, x: ANCHOR.x, y: ANCHOR.y, objectId: 3 });
