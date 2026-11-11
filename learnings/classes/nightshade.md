@@ -16,7 +16,7 @@ export default nightshade();
 ```
 
 - **Role melee** (as `roleForClass` gives it).
-- **`hide`** (an instant, above flee): out of a fight, alive, not hidden, 2.5 s past the client's own combat flag, it hides. A refusal waits its `retryAfterMs` or 3 s.
+- **`hide`** (an instant, above flee): out of a fight, alive, not hidden, 2.5 s past the client's own combat flag, it hides. A refusal waits its `retryAfterMs` or 3 s. Only a solo or a squad of stealthers hides (`allCanHide`): hidden it moves at 115, and anyone who can't hide would leave it behind at 191. In a mixed group it fights in the open.
 - **`ambush`** (fight, ahead of the melee fight), hidden, with an engage order:
   - **Lurk** by a hard target: no healer, caster or crowd controller by the class read or its deeds, another enemy player within 1000 of it, and above half health. It stays hidden and leaves that fight to the rest.
   - **Open** on a soft or lone one: walk hidden to its front (Perforate Artery, Critical Strike 21) or, without that, its back (Backstab II at 10, Backstab at 2), then the style click alone. A style used out of attack mode starts the attack itself, and that first swing is the opener. An attack request of our own after it re-sends the target, which unstealths at once, and the opener fails ("You fail to execute your Backstab II perfectly!").

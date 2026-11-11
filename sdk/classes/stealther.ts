@@ -89,6 +89,17 @@ export function softTarget(focus: Contact, contacts: readonly Contact[]): boolea
     return !contacts.some(c => c.objectId !== focus.objectId && c.kind === 'player' && isAlive(c) && !c.stale && c.regionId === focus.regionId && Math.hypot(c.x - focus.x, c.y - focus.y) <= LONE_RADIUS);
 }
 
+/** The classes with Stealth: the four Rogue lines' stealthers and the Minstrel (female names too). */
+export const STEALTH_CLASSES = /^(Infiltrator|Scout|Minstrel|Nightshade|Ranger|Shadowblade|Hunter|Huntress)$/;
+
+/**
+ * Hidden we move at 115 of 191: in a group with anyone who can't hide we would trail it. So only a solo or a squad of
+ * stealthers hides; others fight in the open (ambush needs stealth, so then the role's fight alone goes on).
+ */
+export function allCanHide(members: readonly { className: string; isDead: boolean }[]): boolean {
+    return members.filter(m => !m.isDead).every(m => STEALTH_CLASSES.test(m.className));
+}
+
 /** Hide when out of a fight. An instant: one click, false at once when there is nothing to do. */
 export const hide = (): Behavior => ({
     name: 'hide',
@@ -96,6 +107,7 @@ export const hide = (): Behavior => ({
     async run(ctx) {
         const me = ctx.me();
         if (me.isDead || ctx.sdk.isStealthed() || !ctx.sdk.findSpecialization('Stealth')) return false;
+        if (!allCanHide(ctx.members())) return false;
         const now = Date.now();
         if (me.inCombat || me.attacking) { ctx.memory.set('hideCombatAt', now); return false; }
         if (now - (ctx.memory.get('hideCombatAt') ?? 0) < AFTER_COMBAT_MS) return false;

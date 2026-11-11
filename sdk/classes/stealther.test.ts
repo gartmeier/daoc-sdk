@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Contact } from '../group/types';
 import type { Style } from '../types';
-import { angleFrom, openerFor, sideOf, sideToTake, softTarget, standPoint, stealther } from './stealther';
+import { allCanHide, angleFrom, openerFor, sideOf, sideToTake, softTarget, standPoint, stealther } from './stealther';
 
 const style = (name: string): Style => ({ name, internalId: 1, specLevel: 1, specName: 'Critical Strike', skillIndex: 3 } as Style);
 const contact = (over: Partial<Contact>): Contact => ({
@@ -62,6 +62,15 @@ describe('softTarget', () => {
         expect(softTarget(tank, [tank, { ...friend, stale: true }])).toBe(true);
         expect(softTarget(tank, [tank, { ...friend, kind: 'npc' }])).toBe(true);
     });
+});
+
+test('only a solo or a squad of stealthers hides: the rest would be trailed at 115', () => {
+    const m = (className: string, isDead = false) => ({ className, isDead });
+    expect(allCanHide([m('Infiltrator')])).toBe(true);
+    expect(allCanHide([m('Shadowblade'), m('Huntress')])).toBe(true);
+    expect(allCanHide([m('Nightshade'), m('Druid')])).toBe(false);
+    // A dead one doesn't hold it back.
+    expect(allCanHide([m('Scout'), m('Cleric', true)])).toBe(true);
 });
 
 test('the kit: melee, hide as an instant, the ambush ahead of the melee fight', () => {
