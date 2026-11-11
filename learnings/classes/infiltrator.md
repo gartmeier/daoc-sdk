@@ -48,7 +48,9 @@ The level-24 gear template (`sdk/group/gear-template.ts`, since c37a732): leathe
 - Hidden, run speed drops from 191 to 115 and speed buffs pause. Any blow taken ends it, and so do a swing and a target change in attack mode. A monster can uncover it ("X uncovers you!": 10 % a second, plus 1 % a level over our Stealth, inside 125 + 20 a level of difference).
 - **Who sees a stealther:** the server sends it only to a client that detects it, and deletes it from the rest (`SendObjectDelete`). A player of level L detects one with Stealth S (spec plus items) within 125 + 20 x (L - S), up to 1900; Detect Hidden makes it 250 + 50 x (L - S), and See Hidden 2700 - 36 x S against non-assassins. There is no realm check: our own realm loses sight of our stealther too. A detected one arrives with PlayerCreate's 0x10 flag (`NearbyPlayer.stealthed`). So a bot sees exactly what a human client would.
 
-**Verified** (2026-11-11, Mordred and Tristram at the Albion arrival point, `bots/mordred/stealth-check.ts`): hidden, run speed 115; Tristram 160 and more away lost Mordred from view, at 90 saw him again with `stealthed: true`; `unstealth()` showed him at once.
+**Verified** (2026-11-11):
+- Mordred and Tristram at the Albion arrival point (`bots/mordred/stealth-check.ts`): hidden, run speed 115; Tristram 160 and more away lost Mordred from view, at 90 saw him again with `stealthed: true`; `unstealth()` showed him at once.
+- Across realms (`bots/mordred/duel-check.ts`, Mordred against Hodur, both level 24 with Stealth 24, north of the Midgard portal keep): Hodur saw him as "Saracen" (an enemy shows under its race) at 1431; once he hid, not at 1421, 751 or 243; at 92 and 70 again, flagged stealthed. That is 125 + 20 x (24 - 24): the server's rule, nothing more.
 
 ## The opener
 
@@ -60,9 +62,11 @@ The level-24 gear template (`sdk/group/gear-template.ts`, since c37a732): leathe
 - Backstab II from behind, hidden, by the style click alone: "You perform your Backstab II perfectly! (+158)", 236 damage and its stun.
 - The same with an attack request after the click: "You fail to execute your Backstab II perfectly!", as it re-sends the target.
 - A Hitback Dummy hit before swings at us when we come back, and the blow unstealths: test on a fresh one.
+- On a player (Hodur, Shadowblade 24 in template gear, standing): Backstab II from behind "perfectly" (+163), 153 after his armour and its stun; Perforate Artery from the front "perfectly" (+245), 204 after armour and a bleed. Each took him to about half health with the swings after it.
+- Walking out of a fight toward an enemy portal keep killed Mordred: its guards ("Nordic Jarl") stand round it.
 
 ## Open
 
 - Not yet played in a field run: run B (from 23:15) is the first, run C (02:15) the one before the freeze.
 - Poisons (Envenom) are trained but not applied: no poison in the bag and no kit step for it.
-- Perforate Artery from the front: positioned and queued live, not yet landed on a fresh target.
+- Fight picking is the squad's (`sizeUp`): in a 100 s solo run 1400 from a lone, half-health Hodur the squad patrolled on and never engaged. The opener's worth (about 200 and a stun or bleed) isn't in its strength count.
