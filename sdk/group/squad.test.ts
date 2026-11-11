@@ -97,6 +97,15 @@ describe('decideSquad: picking fights', () => {
         expect(decide(picture(squad(['Merc', 'Cleric', 'Wizard']), [foe(51, 1500), foe(52, 1600), foe(53, 1700)])).phase).toBe('engage');
     });
 
+    test('the patrol skips waypoints by a group it keeps clear of', () => {
+        const t = 1_000_000;
+        const memory: Record<string, any> = { wp: 1, squad: { avoid: { 51: t + 30_000, 52: t + 30_000, 53: t + 30_000 }, flee: null, stand: false, fled: 0, caught: 0, avoided: 1 } };
+        const three = [foe(51, 4500, {}, { x: BASE.x, y: BASE.y - 1000 }), foe(52, 4600, {}, { x: BASE.x, y: BASE.y - 1000 }), foe(53, 4700, {}, { x: BASE.x, y: BASE.y - 1000 })];
+        const d = decide(picture(squad(['Merc']), three, {}, t), { memory, now: t });
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toContain('waypoint 1/3');   // (13000, 10000) and (13000, 13000) are within 4500 of them
+    });
+
     test('a hurt solo does not start a fight it would start at full health', () => {
         expect(decide(picture(squad(['Merc'], { Merc: { hp: 60 } }), [foe(51, 1500)])).reason).toStartWith('avoid:');
     });

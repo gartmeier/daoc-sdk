@@ -365,6 +365,16 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     // A fight we are in (taken, caught, or they attack us) shows everyone: the avoided ones too.
     const showAll = sq.stand || hit || engaged;
     const contacts = showAll ? p.contacts : p.contacts.filter(c => !hidden.has(c.objectId) || nearOnUs(c));
+    // The patrol's next waypoint by enemies we keep clear of is skipped (at most the whole loop once): else the loop walks
+    // us back to them as soon as we stepped away.
+    const loop: Point3[] | null = innerSettings.patrol ?? mem.patrol ?? null;
+    const shunned = enemies.filter(c => hidden.has(c.objectId) && !nearOnUs(c));
+    if (!showAll && loop?.length && shunned.length && typeof mem.wp === 'number') {
+        for (let k = 0; k < loop.length && shunned.some(c => dist(c, loop[mem.wp % loop.length]!) <= r.sizeUp + 1000); k++) {
+            mem.wp = (mem.wp + 1) % loop.length;
+            mem.legKind = null;
+        }
+    }
     const u = callInner(contacts);
     return sq.stand && u.phase === 'engage' ? { ...u, reason: `caught: ${u.reason ?? ''}` } : u;
 }
