@@ -197,7 +197,7 @@ export type MoveGuard = (
     waypoints: readonly Vec3[],
 ) => { to: { x: number; y: number; z?: number }; waypoints: Vec3[] } | null;
 
-/** A guarded move whose cut ends this close to us is refused (reason 'water'): there is nothing left of it to walk. */
+/** A guarded move whose cut ends this close to us, or within the move's tolerance, is refused (reason 'water'): there is nothing left of it to walk. */
 export const MOVE_GUARD_HERE = 48;
 
 /** Case-insensitive substring for strings; RegExp as given (g/y flags ignored). */
@@ -1063,17 +1063,23 @@ export class BotSDK {
         return this.config?.connectionMode ?? 'control';
     }
 
-    /** Walk/run to x,y (z optional) via the client's mover; optional waypoints and speed factor (≤1). */
-    async sendMoveTo(x: number, y: number, z?: number, opts: { tolerance?: number; waypoints?: Vec3[]; speedFactor?: number } = {}): Promise<ActionResult> {
+    /**
+     * Walk/run to x,y (z optional) via the client's mover; optional waypoints and speed factor (≤1). A move the move guard
+     * cut is sent to the cut and says where in `heldAt`.
+     */
+    async sendMoveTo(x: number, y: number, z?: number, opts: { tolerance?: number; waypoints?: Vec3[]; speedFactor?: number } = {}): Promise<ActionResult & { heldAt?: { x: number; y: number } }> {
         const guard = this.moveGuard;
         const p = guard ? this.getPlayer() : null;
         const cut = p && guard ? guard(p, { x, y, z }, opts.waypoints ?? []) : null;
         if (p && cut) {
-            if (!cut.waypoints.length && Math.hypot(cut.to.x - p.x, cut.to.y - p.y) <= MOVE_GUARD_HERE) {
+            // Within the move's own tolerance counts as here too: the mover would "arrive" without a step.
+            if (!cut.waypoints.length && Math.hypot(cut.to.x - p.x, cut.to.y - p.y) <= Math.max(MOVE_GUARD_HERE, (opts.tolerance ?? 0) + 2)) {
                 return { success: false, reason: 'water', message: `(${Math.round(x)}, ${Math.round(y)}) is in deep water: holding at the bank` };
             }
             ({ x, y, z } = cut.to);
             opts = { ...opts, waypoints: cut.waypoints };
+            const r = await this.sendAction({ type: 'moveTo', x, y, z, ...opts, reason: 'SDK' });
+            return r.success ? { ...r, heldAt: { x: cut.to.x, y: cut.to.y } } : r;
         }
         return this.sendAction({ type: 'moveTo', x, y, z, ...opts, reason: 'SDK' });
     }

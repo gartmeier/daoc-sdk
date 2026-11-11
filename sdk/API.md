@@ -266,7 +266,7 @@
 | Signature | Description |
 |---|---|
 | `async sendAction(action: BotAction): Promise<ActionResult>` | Dispatch one BotAction and resolve with the client's ActionResult. Timeouts, disconnects mid-flight and gateway errors come back as a failed result (phase 'dispatch'); only "not connected" throws. |
-| `async sendMoveTo(x: number, y: number, z?: number, opts: { tolerance?: number; waypoints?: Vec3[]; speedFactor?: number } = {}): Promise<ActionResult>` | Walk/run to x,y (z optional) via the client's mover; optional waypoints and speed factor (≤1). |
+| `async sendMoveTo(x: number, y: number, z?: number, opts: { tolerance?: number; waypoints?: Vec3[]; speedFactor?: number } = {}): Promise<ActionResult & { heldAt?: { x: number; y: number } }>` | Walk/run to x,y (z optional) via the client's mover; optional waypoints and speed factor (≤1). A move the move guard cut is sent to the cut and says where in `heldAt`. |
 | `async sendStop(): Promise<ActionResult>` | Stop moving (final position update with speed 0). |
 | `async sendFace(heading: number): Promise<ActionResult>` | Turn to a heading (0..4095). |
 | `async sendFaceObject(objectId: number): Promise<ActionResult>` | Turn to face an object. |

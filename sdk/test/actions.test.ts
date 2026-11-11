@@ -85,6 +85,29 @@ describe('walkTo', () => {
         expect(w.sentOf('moveTo').length).toBe(2);
     });
 
+    test('a walk the move guard holds at the bank ends with reason water at once, not 8 re-issues and stuck', async () => {
+        // Hibernia, rounds 139 and 172: the real mover stops up to its tolerance short of the bank spot, and each
+        // re-issue, cut to that spot again, "arrived" at once until the walk gave up as stuck.
+        const { w, bot, sdk } = world();
+        const bankX = w.player.x + 1000;
+        sdk.setMoveGuard((_from, to) => (to.x > bankX ? { to: { x: bankX, y: to.y }, waypoints: [] } : null));
+        w.handlers.moveTo = (a, world) => {
+            if (a.type !== 'moveTo') return;
+            const p = world.player, d = Math.hypot(a.x - p.x, a.y - p.y), short = Math.max(0, (a.tolerance ?? 16) - 5);
+            const k = d > short ? (d - short) / d : 0;
+            defaultHandlers.moveTo!({ ...a, x: Math.round(p.x + (a.x - p.x) * k), y: Math.round(p.y + (a.y - p.y) * k), tolerance: 1 }, world);
+        };
+        const t0 = Date.now();
+        const r = await bot.walkTo(w.player.x + 3000, w.player.y, { tolerance: 80 });
+        expect(r).toMatchObject({ success: false, reason: 'water' });
+        expect(w.sentOf('moveTo')).toHaveLength(1);
+        expect(bankX - w.player.x).toBeGreaterThan(48);
+        expect(Date.now() - t0).toBeLessThan(2000);
+        // The next walk there, the bank spot within its tolerance, is refused without a move.
+        expect(await bot.walkTo(w.player.x + 3000, w.player.y, { tolerance: 80 })).toMatchObject({ success: false, reason: 'water' });
+        expect(w.sentOf('moveTo')).toHaveLength(1);
+    });
+
     test('fails when the player dies en route', async () => {
         const { w, bot } = world();
         w.stepSize = 20;

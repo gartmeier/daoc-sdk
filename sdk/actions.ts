@@ -6052,6 +6052,8 @@ export class BotActions {
             const last = remaining[remaining.length - 1]!;
             const r = await this.sdk.sendMoveTo(last.x, last.y, last.z, { tolerance, waypoints: remaining.slice(0, -1), speedFactor: options.speedFactor });
             if (!r.success) return at({ message: `Move refused: ${r.message}`, reason: r.reason ?? 'dispatch_failed', reissues });
+            // The move guard (stayDry) cut it at the bank: the end of what the mover got is not `dest`.
+            const held = r.heldAt ?? null;
             // Wait until a snapshot shows the new move (or arrival) before reading stop reasons.
             await this.helpers.waitFor(s => s.movement.moving || (s.player && Math.hypot(dest.x - s.player.x, dest.y - s.player.y) <= tolerance), 2000);
             let lastSeenRemaining: Vec3[] = remaining;
@@ -6075,6 +6077,11 @@ export class BotActions {
                         return at({ message: `No progress for ${stuckMs}ms at (${p.x}, ${p.y})${why}`, reason: 'stuck', reissues });
                     }
                     continue;
+                }
+                // Stopped at the bank the guard held us at: a re-issue goes there again and "arrives" at once. Hibernia, rounds 139
+                // and 172: 8 such re-issues in 2 s, then 'stuck', which the behaviours' water rules (noteWet, slotWet) don't read.
+                if (held && Math.hypot(held.x - p.x, held.y - p.y) <= tolerance + 2) {
+                    return at({ message: `(${Math.round(dest.x)}, ${Math.round(dest.y)}) is in deep water: held at the bank`, reason: 'water', reissues });
                 }
                 // Stopped short: corrected by the server, interrupted, or arrived outside tolerance.
                 if (++reissues > 8) return at({ message: `Gave up after ${reissues - 1} re-issues at (${p.x}, ${p.y}); last stop: ${s.movement.lastStopReason}`, reason: 'stuck', reissues });
