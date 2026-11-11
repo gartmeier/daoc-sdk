@@ -6,6 +6,7 @@ import { contact, enemy, picture, report } from './fixtures';
 import type { RunReport } from './observer';
 import { memoryView } from './publish';
 import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, homeOf, keepDangers, pickRvrFocus, RVR_SETTINGS, rvrFindings, rvrRoaming, stepLeg, type RvrSettings } from './rvr';
+import { countFor } from './size';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { aggroZones, safePath } from './terrain';
 import { getTerrainStore } from '../terrain';
@@ -179,11 +180,21 @@ describe('decideRvr: fights', () => {
         expect(d.cc).toEqual([]);
     });
 
-    test('the default margin is 3 (round 6): seven against five is a fight, eight a retreat', () => {
-        expect(RVR_SETTINGS.retreat.margin).toBe(3);
-        const tuned = (n: number) => decideRvr(ctx(picture(team(), Array.from({ length: n }, (_, i) => foe(60 + i))), { settings: { retreat: { margin: 3 } } }));
-        expect(tuned(7).phase).toBe('engage');
-        expect(tuned(8).phase).toBe('retreat');
+    test('the default margin is 3 at five (round 6): seven against five is a fight, eight a retreat', () => {
+        expect(countFor(RVR_SETTINGS.retreat.margin, 5)).toBe(3);
+        for (const margin of [3, RVR_SETTINGS.retreat.margin]) {
+            const tuned = (n: number) => decideRvr(ctx(picture(team(), Array.from({ length: n }, (_, i) => foe(60 + i))), { settings: { retreat: { margin } } }));
+            expect(tuned(7).phase).toBe('engage');
+            expect(tuned(8).phase).toBe('retreat');
+        }
+    });
+
+    test('the margin grows with the group (size.ts): at eight, 12 against 8 is a fight, 13 a retreat; a number stays that number', () => {
+        const eight = [...team(), ...team().slice(0, 3).map((m, i) => ({ ...m, name: `${m.name}${i}`, objectId: 10 + i }))];
+        const run = (n: number, margin?: number) => decideRvr(ctx(picture(eight, Array.from({ length: n }, (_, i) => foe(60 + i))), { settings: { retreat: { margin: margin ?? RVR_SETTINGS.retreat.margin } } }));
+        expect(run(12).phase).toBe('engage');
+        expect(run(13).phase).toBe('retreat');
+        expect(run(11, 3).phase).toBe('retreat');
     });
 
     test('retreats when outnumbered by retreat.margin, not while the focus is nearly dead; caught after maxMs, it fights', () => {
@@ -1054,8 +1065,48 @@ describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('decideRvr with stayDry: 
         expect(decide(swim(40_900), { memory, now: 1000 }).reason).toMatch(/wait ashore/);
         expect(decide(swim(40_900), { memory, now: 40_000 }).reason).toMatch(/wait ashore/);
         expect(decide(swim(40_900), { memory, now: 47_000 }).reason).not.toMatch(/wait ashore/);
+        // Gone for a tick (a contact flickering at the edge of sight): no new wait.
         decide([], { memory, now: 50_000 });
-        expect(decide(swim(40_900), { memory, now: 51_000 }).reason).toMatch(/wait ashore/);
+        expect(decide(swim(40_900), { memory, now: 51_000 }).reason).not.toMatch(/wait ashore/);
+        // Gone for ASHORE_GONE_MS: the next ones start a new wait.
+        decide([], { memory, now: 62_000 });
+        expect(decide(swim(40_900), { memory, now: 63_000 }).reason).toMatch(/wait ashore/);
+    });
+
+    test('swimmers flickering out of sight every other tick: the wait still ends after ASHORE_WAIT_MS', () => {
+        // Field mode, 2026-11-11: Midgard switched between waiting and patrolling every second for 5 minutes.
+        const memory: Record<string, any> = { realm: 'hibernia' };
+        let waited = 0;
+        for (let t = 1000; t < 120_000; t += 1000) {
+            const d = decide(t % 2000 ? swim(40_900) : [], { memory, now: t });
+            if (/wait ashore/.test(d.reason)) waited = t;
+        }
+        expect(waited).toBeLessThan(1000 + 45_000 + 1000);
+    });
+});
+
+describe('stepLeg: a spread formation reaches its leg', () => {
+    // Field mode, 2026-11-11: Albion's patrol stood 10 minutes 1000 short of waypoint 1 (35033, 37402): the leg was the
+    // waypoint, the tank stood 431 from it, and the support and a nuker idled in their slots 1417 and 1307 off it.
+    const leg = { x: 35_033, y: 37_402 };
+    const movers = [{ x: 35_376, y: 37_141 }, { x: 35_973, y: 37_126 }, { x: 36_177, y: 37_452 }, { x: 36_433, y: 37_180 }, { x: 36_199, y: 36_811 }];
+    const trip = (mem: Record<string, any>, now: number) => ({ mem, now, regionId: 252, level: 24, avoid: [], travelLeg: 1500, zAt: () => 0 });
+    const fresh = () => ({ legKind: 'patrol', leg: { ...leg, z: 0 }, legAt: 0, goal: { x: 30_000, y: 30_000 }, route: [{ x: 30_000, y: 30_000 }] } as Record<string, any>);
+
+    test('two in their slots beyond 1200: held for the leg timeout, then the next leg', () => {
+        const early = fresh();
+        stepLeg(trip(early, 10_000), 'patrol', { x: 30_000, y: 30_000 }, { from: leg, movers, replan: Infinity });
+        expect(early.leg).toMatchObject(leg);
+        const late = fresh();
+        stepLeg(trip(late, 31_000), 'patrol', { x: 30_000, y: 30_000 }, { from: leg, movers, replan: Infinity });
+        expect(late.leg).not.toMatchObject(leg);
+    });
+
+    test('two far behind (not in a slot): the leg holds', () => {
+        const mem = fresh();
+        const behind = [...movers.slice(0, 3), { x: 38_000, y: 37_400 }, { x: 38_200, y: 37_400 }];
+        stepLeg(trip(mem, 60_000), 'patrol', { x: 30_000, y: 30_000 }, { from: leg, movers: behind, replan: Infinity });
+        expect(mem.leg).toMatchObject(leg);
     });
 });
 

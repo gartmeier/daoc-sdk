@@ -27,6 +27,7 @@ import { aggroZones } from './terrain';
 import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
+import { countFor, groupSize, type Count } from './size';
 import type { ColumnOrder, Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 import { drySpot, isWet, waitAshore } from './water';
 
@@ -46,10 +47,10 @@ export interface PackOptions {
     idleMs: number;
     /** After this long at the stand-off with nobody coming, move in to reach. */
     waitMs: number;
-    /** At least this many together to start a raid. */
-    minPack: number;
-    /** Fewer than this together: the pack is broken and goes home. */
-    minTogether: number;
+    /** At least this many together to start a raid. A share of the group's size by default (size.ts): 3 of 5, 5 of 8. */
+    minPack: Count;
+    /** Fewer than this together: the pack is broken and goes home. A share of the group's size by default: 3 of 5, 5 of 8. */
+    minTogether: Count;
     /** Below this a member makes the pack rest, up to settings.ready ... */
     raidReady: { hp: number; mana: number };
     /** ... where it stands, with enemies no nearer than this; nearer, it moves off first. */
@@ -78,8 +79,8 @@ export interface PackOptions {
     /** ... with this much more to finish a focus below finishHp ... */
     finishMs: number;
     finishHp: number;
-    /** ... and it ends at once when this many free enemies stand within closeIn of one of our casters. */
-    closeCount: number;
+    /** ... and it ends at once when this many free enemies stand within closeIn of one of our casters. A share of the group's size by default: 3 of 5, 5 of 8. */
+    closeCount: Count;
     closeIn: number;
     /** How far a pull back runs before it turns round. */
     pullBack: number;
@@ -140,15 +141,24 @@ export interface PackOptions {
     columnSpeed: number;
 }
 
+/** PackOptions for one group size: the counts (size.ts) as numbers. */
+export type SizedPackOptions = Omit<PackOptions, 'minPack' | 'minTogether' | 'closeCount'> & { minPack: number; minTogether: number; closeCount: number };
+
+/** `k` with its counts resolved for a group of `size`. */
+export function sizedPack(k: PackOptions, size: number): SizedPackOptions {
+    return { ...k, minPack: countFor(k.minPack, size), minTogether: countFor(k.minTogether, size), closeCount: countFor(k.closeCount, size) };
+}
+
 export interface PackSettings extends RvrSettings {
     pack: PackOptions;
 }
 
 export const PACK_OPTIONS: PackOptions = {
-    standoff: 1500, reach: 1500, openAt: 1450, idleMs: 3000, waitMs: 0, minPack: 3, minTogether: 3,
+    // minPack, minTogether and closeCount were 3, tuned for five (3 of 5): shares of the size now, 3 at five (size.ts).
+    standoff: 1500, reach: 1500, openAt: 1450, idleMs: 3000, waitMs: 0, minPack: { share: 0.6 }, minTogether: { share: 0.6 },
     // User, live: fights may be joined head on, the first version avoided all of them. Only a real crowd is refused.
     boltRun: 0, boltMs: 15_000, boltCoolMs: 30_000, frozenMs: 20_000, phantomMs: 120_000, maxFoes: 8, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
-    raidMs: 8000, finishMs: 4000, finishHp: 25, closeCount: 3, closeIn: 700,
+    raidMs: 8000, finishMs: 4000, finishHp: 25, closeCount: { share: 0.6 }, closeIn: 700,
     pullBack: 1500, pullMs: 6000, maxChasers: 2, chaseGap: 800, maxLegs: 0, killMs: 12_000, preyHp: 40, healedBy: 30, droppedMs: 15_000,
     leave: 2000, cooldownMs: 0,
     rebuffMs: 20_000, rebuffReady: { hp: 90, mana: 80 }, keepRadius: 2500,
@@ -256,7 +266,8 @@ export function noticePhantom(mem: Record<string, any>, contacts: readonly Conta
 
 export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     const { picture: p, orders: o, memory: mem, settings: s, now } = ctx;
-    const k = s.pack;
+    // The counts as numbers for this group's size (size.ts): at five, today's 3s.
+    const k = sizedPack(s.pack, groupSize(mem, p.members));
     const players = (c: Contact) => c.kind === 'player';
     // rvr-roam with no enemy players on the board: patrol, rest, regroup, monsters that attack us, winding down.
     const calm = () => decideRvr({ ...ctx, picture: { ...p, contacts: p.contacts.filter(c => !players(c)) } });

@@ -1,0 +1,77 @@
+From b3cac47c5436e3b048886656a504c5846b69f3a7 Mon Sep 17 00:00:00 2001
+From: Joshua Gartmeier <joshua@gartmeier.dev>
+Date: Wed, 11 Nov 2026 12:01:44 +0100
+Subject: [PATCH] `GamePlayer`: Open a trade under both players' trade locks
+
+`ReceiveTradeItem` and `ReceiveTradeMoney` held the receiver's `_tradeLock` and the source's monitor, so two players adding an item or money to each other in the same tick held disjoint locks. Both passed the null checks and both ran `OpenTrade`, each creating its own pair of windows with its own sync lock, and the assignments could interleave so that each player ended up with a window from a different pair. The next two adds at once then deadlocked: each held its window's lock in `AddItemToTrade`/`AddMoneyToTrade` and waited in `SendTradeWindow` for the other window's lock. The game loop waits for every client's packet handling, so the whole server stopped. The watchdog interrupts one stuck worker, but the next hang lasted until a restart. When the race didn't cross the windows, one of the two adds was refused instead ("X is still trading with Y").
+
+Take both players' trade locks in a fixed order (by `InternalID`) before checking and opening the windows, in both receive methods and in `OpenTrade`. The second add of a simultaneous pair now waits, sees the window the first one opened and adds to it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ GameServer/gameobjects/GamePlayer.cs | 28 +++++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/GameServer/gameobjects/GamePlayer.cs b/GameServer/gameobjects/GamePlayer.cs
+index 0d62fb75f..ab743cc1a 100644
+--- a/GameServer/gameobjects/GamePlayer.cs
++++ b/GameServer/gameobjects/GamePlayer.cs
+@@ -6256,7 +6256,10 @@ namespace DOL.GS
+             if (source == null || item == null || source == this)
+                 return false;
+ 
+-            lock (_tradeLock)
++            (Lock first, Lock second) = TradeLocksWith(source);
++
++            lock (first)
++            lock (second)
+             {
+                 lock (source)
+                 {
+@@ -6314,7 +6317,10 @@ namespace DOL.GS
+             if (source == null || source == this || money == 0)
+                 return false;
+ 
+-            lock (_tradeLock)
++            (Lock first, Lock second) = TradeLocksWith(source);
++
++            lock (first)
++            lock (second)
+             {
+                 lock (source)
+                 {
+@@ -12062,6 +12068,19 @@ namespace DOL.GS
+             set { m_tradeWindow = value; }
+         }
+ 
++        /// <summary>
++        /// Both players' trade locks, in an order that doesn't depend on which of the two asks.
++        /// Opening a trade checks and sets the windows of both players, so it must hold both locks.
++        /// With only the receiver's, two players adding an item to each other in the same tick each
++        /// passed the checks and opened their own pair of windows, sharing no lock, and the next two
++        /// adds at once deadlocked in <see cref="PlayerTradeWindow.TradeUpdate"/>, each holding its
++        /// window's lock and waiting for the other's to send the trade window packet.
++        /// </summary>
++        private (Lock first, Lock second) TradeLocksWith(GamePlayer other)
++        {
++            return string.CompareOrdinal(InternalID, other.InternalID) < 0 ? (_tradeLock, other._tradeLock) : (other._tradeLock, _tradeLock);
++        }
++
+         /// <summary>
+         /// Opens the trade between two players
+         /// </summary>
+@@ -12069,7 +12088,10 @@ namespace DOL.GS
+         /// <returns>true if trade has started</returns>
+         public bool OpenTrade(GamePlayer tradePartner)
+         {
+-            lock (_tradeLock)
++            (Lock first, Lock second) = TradeLocksWith(tradePartner);
++
++            lock (first)
++            lock (second)
+             {
+                 lock (tradePartner)
+                 {
+-- 
+2.45.1.windows.1
+
