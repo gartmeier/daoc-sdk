@@ -169,7 +169,7 @@ async function viaGateway(mode: 'live' | 'wind-down'): Promise<number> {
             if (o.waiting.length) console.log(`  waiting:   ${o.waiting.map(w => `${w.name} (${w.why})`).join(', ')}`);
             if (run.state === 'starting' || run.state === 'live' || run.state === 'stale') {
                 const t = run.timing;
-                console.log(`  time:      ${t.windingDown ? `winding down, hard stop in ${span(t.hardStop + run.skewMs - now)}` : `${span(t.deadline + run.skewMs - now)} left, then the current fight`}`);
+                console.log(`  time:      ${t.windingDown ? `winding down, hard stop in ${t.hardStop === null ? '?' : span(t.hardStop + run.skewMs - now)}` : t.deadline === null ? 'no end time' : `${span(t.deadline + run.skewMs - now)} left, then the current fight`}`);
             }
             const pending = run.control.find(c => !c.appliedAt);
             if (pending) console.log(`  wind-down: ${pending.deliveredAt ? 'delivered' : 'pending'}${pending.reason ? ` (${pending.reason})` : ''}`);

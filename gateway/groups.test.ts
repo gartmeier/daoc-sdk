@@ -668,6 +668,17 @@ describe('group run publishes', () => {
         expect((await http('/groups')).body.groups[0].run).toMatchObject({ runId: RUN, state: 'live', strategy: 'test-pve', phase: 'engage', windingDown: false });
     });
 
+    test('a field run (seconds: Infinity) has no end time: its deadline stays null, not 0', async () => {
+        start();
+        await attachBot('tankuser', tankState());
+        // The runner's Infinity goes over JSON as null.
+        await publish(makePublish({ timing: { windingDown: false, deadline: Infinity, hardStop: Infinity } }));
+        expect((await live()).body.run.timing).toEqual({ windingDown: false, deadline: null, hardStop: null });
+        // Wound down, the clock is finite again (windDownClock).
+        await publish(makePublish({ timing: { windingDown: true, deadline: clock, hardStop: clock + 60_000 } }));
+        expect((await live()).body.run.timing).toEqual({ windingDown: true, deadline: clock, hardStop: clock + 60_000 });
+    });
+
     test('RvR: an enemy player\'s board flags and the members\' realm points reach the frame', async () => {
         start();
         await attachBot('tankuser', tankState({ nearbyPlayers: [makePlayerObj({ objectId: 700, name: 'Troll', realm: 'midgard', x: 1500, y: 1000 })] }));

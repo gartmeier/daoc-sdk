@@ -249,7 +249,8 @@ export interface RunView {
     orders: Orders;
     /** Runner clock of the picture. */
     pictureAt: number;
-    timing: { windingDown: boolean; deadline: number; hardStop: number };
+    /** Runner clock. deadline and hardStop are null for a run with no end time (field mode) until it winds down. */
+    timing: { windingDown: boolean; deadline: number | null; hardStop: number | null };
     coordinator: CoordinatorView | null;
     /** Only when the request's ?planRev= differs from planRev. */
     plan?: PlanView | null;
