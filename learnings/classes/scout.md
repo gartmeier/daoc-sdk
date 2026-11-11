@@ -47,12 +47,14 @@ The level-24 gear template (`sdk/group/gear-template.ts`, since c37a732): studde
 - At the release the target must be within 90 degrees in front ("... is not in view!").
 - Hidden, the shot unstealths ("You are no longer hidden!" just before "You shoot Hitback Dummy ... for 223 damage!"). Nocking keeps the stealth with a chance of Stealth x 100 / level (AttackComponent.cs:605-616).
 
+- In the loop (`groups/camelot-s2/rvr.ts 100`, a solo squad, 2026-11-11): Tristram engaged a lone Shadowblade 2000 away, standing still, and killed him with 6 shots in 41 s, no failure, never in melee.
+
 **Server code:** reach by bow (AttackComponent.AttackRange): longbow 1760, recurve 1680, composite 1600. Arrows come from the active quiver slot, else the first arrows in the backpack (RangeAttackComponent.cs:67-77); without them "You must select a quiver slot".
 
 Stealth itself is in [infiltrator.md](infiltrator.md) "Stealth on this server".
 
 ## Open
 
-- Not yet played in a field run: run B (from 23:15) is the first, run C (02:15) the one before the freeze.
+- Not yet played in a field run: run B (from 23:15) is the first, run C (02:15) the one before the freeze. Against a target that moves or fights back it is untried.
 - Critical Shot, Rapid Fire and Volley aren't used. After 600 shots the arrows are gone and the kit fights in melee.
 - A target that turns more than 90 degrees from our front during the 4.6 s draw is "not in view" at the release: the shot faces once, before the draw.
