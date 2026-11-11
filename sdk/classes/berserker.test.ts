@@ -7,7 +7,7 @@ import { packBehaviors } from '../group/pack';
 import { rvrBehaviors } from '../group/rvr';
 import { pickStyle, STYLE_RULES } from '../group/styles';
 import type { SpellDetails, Style } from '../types';
-import { berserker, berserkNow, BERSERK_REUSE_MS, chainOpener, withChain } from './berserker';
+import { abilityWaitMs, berserker, berserkNow, BERSERK_REUSE_MS, chainOpener, withChain } from './berserker';
 import { stylesFor } from './skald';
 
 /** Ragnar's styles at Left Axe 24, Hammer 21 (data/class-sheet.ts Berserker): growth x 200, endurance, opening. */
@@ -79,5 +79,12 @@ describe('berserker kit', () => {
         expect(berserkNow({ ...base, readyAt: now + BERSERK_REUSE_MS })).toBe(false);
         expect(berserkNow({ ...base, focus: enemy(1, 'hibernia', { hp: 40, cc: { by: 'x', kind: 'mezz', until: now + 5000 } }) })).toBe(false);
         expect(berserkNow({ ...base, focus: { ...hurt, kind: 'npc' } })).toBe(false);
+    });
+
+    test('a refusal that names the wait sets the clock (the server keeps the last round timer)', () => {
+        expect(abilityWaitMs('You must wait 1 minute 7 seconds to use this ability.')).toBe(68_000);
+        expect(abilityWaitMs('You must wait 21 seconds to use this ability.')).toBe(22_000);
+        expect(abilityWaitMs('You must wait 2 minutes to use this ability.')).toBe(121_000);
+        expect(abilityWaitMs("You can't do that while mesmerized!")).toBeNull();
     });
 });

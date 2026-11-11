@@ -69,6 +69,16 @@ const BERSERK_SOFT_HP = 75;
 const BERSERK_MY_HP = 50;
 const BERSERK_MAX_ON_ME = 1;
 
+/**
+ * The wait a refusal names, in ms: "You must wait 1 minute 7 seconds to use this ability." Null for any other refusal. Round 158
+ * (2026-11-11): each round is a fresh process, so the kit's clock starts empty while the server still holds the last round's 7 minutes.
+ */
+export function abilityWaitMs(message: string | undefined): number | null {
+    const m = /must wait (?:(\d+) minutes? ?)?(?:(\d+) seconds?)?/i.exec(message ?? '');
+    if (!m || (m[1] === undefined && m[2] === undefined)) return null;
+    return (Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0) + 1) * 1000;
+}
+
 /** Whether now is the time for Berserk, from what he sees. */
 export function berserkNow(o: { focus: Contact | null; distance: number | null; myHp: number; onMe: number; readyAt: number; now: number }): boolean {
     const f = o.focus;
@@ -104,6 +114,7 @@ export const berserk = (): Behavior<TacticsSettings> => ({
         const r = await ctx.bot.useAbility(/^Berserk/i);
         ctx.result('berserk', r, o.focus);
         if (r.success) ctx.memory.set('berserkReadyAt', now + BERSERK_REUSE_MS);
+        else { const wait = abilityWaitMs(r.message); if (wait !== null) ctx.memory.set('berserkReadyAt', Date.now() + wait); }
         return true;
     },
 });
