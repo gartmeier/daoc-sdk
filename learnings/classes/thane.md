@@ -20,7 +20,7 @@ export default thane();
 - **Fight, `thaneFight` (named `tank`, the role's fight):** against a monster the tank's own, with its taunts. Against a player the melee assist. The plain tank's fight against a player is one `killPlayer` of up to 90 s, and nothing above it in his list gets a turn until it ends; the melee assist comes back about every 400 ms.
 - **`interrupt()` (instant, above flee):** the shared behaviour, which casts Toothgrinder's Horn at a casting enemy, healers first, as Bragi's Warshriek does. That is why the fight has short turns.
 
-**Not played.** Bench bot Sigurd, from 2026-11-10. To look for: `interrupt` in his actions, Disable, Numb and Incapacitate in the styles column, and his damage. Round 123 (before the kit) on the generic tank list: 171 damage, no style landed, `guard` once.
+**Verified, arena rounds 129-185 (2026-11-10/11, Sigurd, 21 rounds with the kit):** the Horn interrupts 2-8 times a round through `interrupt()` (the short turns work); Numb in most rounds, Disable in 5, Crushing Blow once. Damage 69-1428: 575-1428 in won rounds, 69-490 in most lost ones. He is often the enemy's first target (targeted 53-100 % in rounds 138, 178, 181, 185) and dies with little damage then: chain armour and less health than the Warrior at the front of the formation. His character adds `guardSoft` (groups/midgard/plan.ts) from round 164, which also brings him within Guard's 256 of the member he guards.
 
 ## Stormcalling at 22
 

@@ -19,7 +19,7 @@ export default runemaster();                       // the Darkness nuker
 - **Role nuker.** Its fight is the Spiritmaster kit's (`steppingAssist`, then `nukeInReach`: [spiritmaster.md](spiritmaster.md)) and Quickcast under fire, the Cabalist kit's. A Runemaster has Quickcast once promoted (a Mystic doesn't).
 - **What is its own: which lines it nukes from.** Each of the three behaviours gets a view of the Spellbook (`onlyLines`) that sees damage spells only from the build's lines, `Darkness` and `Runes of Darkness` by default. Debuffs, buffs and the root stay as they are. The member's own book is untouched.
 
-**Not played.** Bench bot Gudrun, from 2026-11-10. To look for: Rune of Obscurity in her casts (not Symbol of Destruction or Greater Runebolt), her damage against Hrafna's, and her time moving (77 % in round 123 on the generic list, 3.3 s to her first nuke, 68 damage).
+**Verified, arena rounds 130-187 (2026-11-10/11, Gudrun, 21 rounds with the kit):** 0-4261 damage a round, about 1500 on average and over 2000 in 7 rounds, with up to 37 nukes (Rune of Obscurity); the group's best damage in rounds 144, 150, 161 and 167. Before the kit (rounds 122-123, the generic nuker list) she dealt 881 and 68 and walked 54-77 % of the fight; with it 13-58 %. Her idle time is mostly "focus out of reach, holding ground" (5-36 %), as Hrafna's; round 142's 83 % came from a role focus behind their line, which the group's `roleNukerReach` (a role focus within 1500 of a nuker) addressed from round 143.
 
 ## Why the lines
 

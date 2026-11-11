@@ -20,7 +20,8 @@ export default berserker();
 - **`berserkerStyle`:** `fighterStyle` without taunts at a player (the Skald kit's `stylesFor`: Snowblind and Provoke taunt, and a player has no threat table), and with the Left Axe chain's opener as the plain swing (`withChain`). Reactions, positionals and follow-ups keep their places in front.
 - **`berserk`** (instant, above flee): Berserk on the focus when it is a player within 250, not crowd-controlled, under 60 % (a healer, caster or cc class under 75 %), with Ragnar above 50 % and at most one enemy swinging at him in the last 8 s. The kit keeps its own 7-minute clock, because `findAbility` lists the ability while it waits; a refused try waits 10 s.
 
-**Not played.** Bench bot Ragnar, from 2026-11-10. To look for in the next rounds: `berserk` in his actions (it should come once a round at most), Ravager, Atrophy and Scathing Blade in the styles column, and his damage against Bragi's.
+**Verified, arena rounds 127-187 (2026-11-10/11, Ragnar, 26 rounds with the kit):** the chain fires every round he gets to swing: Ravager 1-7 a round, Atrophy in 15 of them, Scathing Blade in 10, and the side positional Frost Hammer with its stun follow-up Demolish (round 187). Damage 0-2505 a round, about 1150 on average, the group's best in rounds 127 and 160; before the kit (rounds 122-123, generic melee list) his swings were Provoke and nothing else. Berserk fires once a round (a fresh process starts its clock empty; since 434ddcf a refusal that names the wait sets it). Two zero-damage rounds were a swimming focus (round 146, the shared assistMelee retry, fixed in feb811e) and a no-fight round.
+- Ragnar's character adds Bragi's `guardSoft` and `hitInReach` (groups/midgard/plan.ts) from round 137: with Bragi benched nobody of the melee peeled.
 
 ## Styles at Left Axe 24, Hammer 21, Parry 10
 
