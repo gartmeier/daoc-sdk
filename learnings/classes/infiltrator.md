@@ -63,10 +63,12 @@ The level-24 gear template (`sdk/group/gear-template.ts`, since c37a732): leathe
 - The same with an attack request after the click: "You fail to execute your Backstab II perfectly!", as it re-sends the target.
 - A Hitback Dummy hit before swings at us when we come back, and the blow unstealths: test on a fresh one.
 - On a player (Hodur, Shadowblade 24 in template gear, standing): Backstab II from behind "perfectly" (+163), 153 after his armour and its stun; Perforate Artery from the front "perfectly" (+245), 204 after armour and a bleed. Each took him to about half health with the swings after it.
+- In the loop (`groups/camelot-s1/rvr.ts 120`, a solo squad): hidden, the squad hunted a lone Shadowblade 2300 away, engaged, `ambush` walked in hidden and opened with Perforate Artery (success), then `meleeFight` swung Sting 5 times; dead in 41 s, Mordred never below full health (he didn't fight back: a client with no script).
 - Walking out of a fight toward an enemy portal keep killed Mordred: its guards ("Nordic Jarl") stand round it.
 
 ## Open
 
 - Not yet played in a field run: run B (from 23:15) is the first, run C (02:15) the one before the freeze.
 - Poisons (Envenom) are trained but not applied: no poison in the bag and no kit step for it.
-- Fight picking is the squad's (`sizeUp`): in a 100 s solo run 1400 from a lone, half-health Hodur the squad patrolled on and never engaged. The opener's worth (about 200 and a stun or bleed) isn't in its strength count.
+- Fight picking is the squad's (`sizeUp`): it leaves anyone within 4500 of an enemy keep alone (keep clearance), as it left Hodur 3150 from the Midgard portal keep. The opener's worth (about 200 and a stun or bleed) isn't in its strength count.
+- Against a target that fights back, or a group, it is untried.
