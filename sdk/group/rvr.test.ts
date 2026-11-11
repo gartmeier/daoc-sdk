@@ -5,7 +5,7 @@ import { Blackboard, observeState } from './blackboard';
 import { contact, enemy, picture, report } from './fixtures';
 import type { RunReport } from './observer';
 import { memoryView } from './publish';
-import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, homeOf, keepDangers, pickRvrFocus, RVR_SETTINGS, rvrFindings, rvrRoaming, stepLeg, type RvrSettings } from './rvr';
+import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, holdObservedFar, homeOf, keepDangers, pickRvrFocus, RVR_SETTINGS, rvrFindings, rvrRoaming, stepLeg, type RvrSettings } from './rvr';
 import { countFor } from './size';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { aggroZones, safePath } from './terrain';
@@ -119,6 +119,36 @@ describe('decideRvr: patrol, hunt, regroup', () => {
         const d = decideRvr(ctx(picture(team({ Encha: { regionId: 1, x: 500_000, hp: 30 } }))));
         expect(d.phase).toBe('travel');
         expect(d.objective).toContain('missing Encha (region 1)');
+    });
+
+    test('a still observed member (a human) just past the gather radius: the group goes all the way to it, and does not flip between gather and patrol', () => {
+        // Live 2026-11-11 18:41: Galahad stood at the portal keep 2700 off. The group switched between "gather: meeting Galahad" and
+        // "patrol" every second (60 times in 2.5 min): half a leg toward him put him inside the radius, and the patrol walked it out again.
+        const human = report('Vue', { role: 'melee', className: 'Paladin', objectId: 9, regionId: R, x: 10_000, y: 13_100, level: 20, bot: '', observed: true });
+        const memory: Record<string, any> = {};
+        let base: Point = BASE;
+        const phases: string[] = [];
+        let metAt: number | null = null;
+        for (let i = 0; i < 12; i++) {
+            const d = decideRvr(ctx(picture([...team({}, base), human]), { memory }));
+            phases.push(d.phase);
+            if (d.phase === 'travel' && metAt === null) metAt = Math.hypot(base.x - 320 - human.x, base.y - human.y);
+            if (d.anchor) base = { x: d.anchor.x + 320, y: d.anchor.y };   // the bots reach each leg (centre 320 behind the tank)
+        }
+        expect(phases[0]).toBe('gather');
+        expect(metAt).not.toBeNull();
+        expect(metAt!).toBeLessThanOrEqual(2500 * 0.5 + 1);
+        // Never back to gather the tick after a patrol: once met, the patrol goes on until the group is really away again.
+        for (let i = 2; i < phases.length; i++) expect(`${phases[i - 2]}>${phases[i - 1]}>${phases[i]}`).not.toBe('gather>travel>gather');
+        expect(memory.gatherObserved).toBeUndefined();
+    });
+
+    test('no observed member: holdObservedFar returns the split as it is and leaves the memory alone', () => {
+        const members = team({ Encha: { x: 18_000, y: 10_000 } });
+        const split = { main: members.slice(0, 4), far: members.slice(4) };
+        const memory: Record<string, any> = {};
+        expect(holdObservedFar(split, 2500, memory)).toBe(split);
+        expect(memory).toEqual({});
     });
 
     test('winding down: nothing new (no patrol, no fresh enemy), but a fight with an attacker goes on', () => {

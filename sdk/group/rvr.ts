@@ -489,6 +489,33 @@ export function mainBody(here: readonly MemberReport[], radius: number, mem: Rec
     return { main, far: here.filter(m => !main.includes(m)) };
 }
 
+/** A gather for an observed member ends once the group's bots stand within this share of the gather radius of it. */
+export const OBSERVED_GATHER_CLOSE = 0.5;
+
+/**
+ * mainBody's split with observed members (observed.ts: a human) held far until met. A bot that is far walks to the
+ * meeting point, but a human may stand still. With only the gather radius as the line, the group flipped between
+ * gather and patrol every second while a still human stood just past it. Gathering walked the group inside the radius,
+ * so it patrolled; patrolling walked it out again. That happened 60 times in 2.5 minutes in the live run of
+ * 2026-11-11 18:41, with Galahad standing at the portal keep 2700 away.
+ * Once a gather for one starts (`mem.gatherObserved`), it stays far until the bots' centre is within
+ * OBSERVED_GATHER_CLOSE of the radius of it. With no observed member, this returns the split unchanged and leaves the memory alone.
+ */
+export function holdObservedFar(split: { main: MemberReport[]; far: MemberReport[] }, radius: number, mem: Record<string, any>): { main: MemberReport[]; far: MemberReport[] } {
+    if (!split.far.some(m => m.observed) && !(mem.gatherObserved?.length && split.main.some(m => m.observed))) {
+        if (mem.gatherObserved) delete mem.gatherObserved;
+        return split;
+    }
+    const was = new Set<string>(mem.gatherObserved ?? []);
+    const bots = split.main.filter(m => !m.observed);
+    const at = bots.length ? centroid(bots) : null;
+    const still = at ? split.main.filter(m => m.observed && was.has(m.name) && dist(m, at) > radius * OBSERVED_GATHER_CLOSE) : [];
+    const far = [...split.far, ...still];
+    const pending = far.filter(m => m.observed).map(m => m.name);
+    if (pending.length) mem.gatherObserved = pending; else delete mem.gatherObserved;
+    return { main: split.main.filter(m => !still.includes(m)), far };
+}
+
 /** The region most living members are in (ties: the tank's). Members elsewhere were released to their bind point. */
 export function groupRegion(alive: readonly MemberReport[]): number {
     const n = new Map<number, number>();
@@ -535,7 +562,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const names0 = new Set(p.members.map(m => m.name));
     // A member whose pet is attacked counts as attacked: the fight is as far off as the pet.
     const attacked = new Set(contacts.filter(c => !c.stale && isAlive(c)).map(onWhom).filter((n): n is string => n !== null && names0.has(n)));
-    const { main, far } = mainBody(here, s.gatherRadius, mem, attacked);
+    const { main, far } = holdObservedFar(mainBody(here, s.gatherRadius, mem, attacked), s.gatherRadius, mem);
     const centre = centroid(main);
     if (!mem.realm || mem.realm === 'none') mem.realm = realmOfGroup(p.members);
     const realm: Realm = mem.realm;
@@ -756,8 +783,10 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         // A far tank walks back by himself: a leg toward a middle with him in it meets nobody. Only him to meet, they go to meet him: there is no base to wait at.
         const walking = farTank(here, s.gatherRadius);
         const meeting = far.filter(m => m !== walking);
-        const them = centroid(meeting.length ? meeting : far);
-        stepLeg(trip, 'gather', them, { from: centre, movers: main, replan: Infinity, meet: true });
+        const goers = meeting.length ? meeting : far;
+        const them = centroid(goers);
+        // Only observed members to meet (a human, who may stand still): the legs go all the way, not halfway.
+        stepLeg(trip, 'gather', them, { from: centre, movers: main, replan: Infinity, meet: goers.some(m => !m.observed) });
         return { ...calm, phase: 'gather', anchor: legAnchor(mem), facing: them, waiting: far.map(m => ({ name: m.name, why: 'away' })), objective: `regroup with ${names(far)}${gone}`, reason: `meeting ${names(far)}, ${Math.round(dist(centre, them))} away` };
     }
     if (low.length && !onTheWay) return { ...calm, phase: 'recover', anchor: stay, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)` };

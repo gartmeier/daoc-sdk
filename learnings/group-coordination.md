@@ -327,6 +327,38 @@ Phase 1's first piece (plan doc "Humans in groups"). A group member with no memb
 - **It gets its kills** (`finishedBy`, `leftTo`): a target it has hit within 6 s, at or below `observed.leaveBelow` % (default 25), is skipped by `assist` (nukes and melee, so `spareNuke` too) and `tank` ("assist: <mob> left to Vue"); a tank already on it stops. An add the tank peels off a soft member is still taken. Not covered yet: `petControl` (pets still attack the focus), class kits with their own fight behaviours, and the coordinator's focus choice, which can pick its target (the bots then hold off until it dies).
 - **The observer** keeps its row (deaths, minimum health, targeted) but leaves it out of idle and moving, which say nothing about a member with no list.
 - **No observed member, no change.** With none in `group.json` the board is built as before, `observeState` adds nothing, and every new ordering reduces to the old one. A one-off replay of 40 seeded observation streams through HEAD's board and decides (pve, rvr, pack) against this one's: 4,800 pictures and 14,400 decides, no difference (`w4-observed-replay.ts` in the day's session notes). The committed tests do the same between a board with no observed members and one told of one who never shows.
+- **First live run** (2026-11-11 18:32, Camelot 480 s against Hibernia; `bots/galahad/observed-human.ts` played the human). Galahad was observed and had no agent. He followed Gawain and charged any enemy player within 1200.
+  - **Seen working:**
+    - Invite and join: the group read 6.
+    - Guard: Gawain guarded him 12 s in, and again after each respawn, including once with "you must stand closer".
+    - Speed: on him while travelling.
+    - Buffs: after the first wipe, the buff round at the keep put five on him (Minor Shield of Magma, Bolstering Storm, Earthen Burst, Skin of Sand, Perception of Power). Before the first fight he had only Guard and speed.
+    - He counted in the wipe: one in the report, everyone dead, him included.
+  - **Not seen yet:**
+    - Heals: Tuck, the only healer, was mezzed or stunned for both fights and healed nobody.
+    - Rez: both times the whole group died, so nobody was left to rez.
+    - Kills left to him: no target of his reached 25 %.
+
+    These three need a fight that a group with a free healer survives.
+- **Second live run** (18:40, Camelot 600 s against Midgard, one mezzer). This time the human went in only once Gawain was fighting, or when an enemy came within 400.
+  - **Heals:** Tuck healed him for 40 ("You are healed by Tuck"). A second heal was refused as `out_of_range`. Buffs, Guard and speed were all on him again, now with Aura of Guarding and Blessing of Fortitude too.
+  - **Rez:** still not seen.
+    - He died 6th of 7 in a fight Camelot lost: only Gawain survived, and an Armsman has no rez.
+    - The coordinator handled it right: "recover: waiting for Galahad: a rez or a release" until he released, then a gather that met him.
+  - **Kills left to him:** still not seen.
+  - **Bug, gather flip-flop.** With the observed member 2700 from the group and not moving, the coordinator switched between "gather: meeting Galahad" and "travel: patrol" every second, 60 times in 2.5 minutes. It ended when he came over.
+    - It happened here because the test script waited for an invite that never came: he was still in the group from the run before.
+    - A real human who stands at the keep, or is away from the keyboard, would cause it too.
+    - The gather should either wait for them or go on without them, not alternate.
+    - **Cause:** with a gather radius of 2500, half a leg toward the human put him inside the radius, so the group patrolled. The patrol walked it back out. A far bot walks to meet the group, so with bots it settles; a still human never does.
+    - **Fixed** (`holdObservedFar` in `sdk/group/rvr.ts`):
+      - With only observed members to meet, the gather legs go all the way, not halfway.
+      - Once a gather for an observed member starts, it lasts until the bots' centre is within half the radius of them (`OBSERVED_GATHER_CLOSE`).
+      - So a group with a human standing still goes to the human and patrols from there. It stays within reach of the human and doesn't flip.
+      - With no observed member nothing changes, and a test checks that.
+      - Not run live yet.
+  - **Invites:** a human still grouped from an earlier run gets no invite (the server sends none to a member). `formGroup` is fine with that.
+  - **What the human did:** his first charge took him in alone from 1158, and he died in 6 s, before the group engaged. The group can't stop a human doing that. Whether it should follow him in is the human-led question.
 - **Not built** (they wait for the plan's open question on which mode comes first): the group calling what it does in group chat (bot-led), and the human leading with `/assist` and chat commands (human-led). Neither is needed by the above.
 
 ## Group size (`sdk/group/size.ts`)
