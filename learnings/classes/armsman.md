@@ -51,6 +51,8 @@ export default armsman();                     // { weapon: 'Two Handed' } for a 
 - Round 122 (2026-11-10, against Midgard, lost 0 / 6): 905 damage, Crippling Blow 7 landed, targeted 16 %, died once.
 - Round 124 (against Hibernia, lost 0 / 5), as the only tank: 418 damage, Crippling Blow 2 and Distract 1, targeted 41 %, died once.
 
+**Verified, with the kit,** arena rounds 126-165 (2026-11-10/11), 14 rounds: 1050 damage a round, the most of any Camelot member but the Wizard (Galahad 461 in the same rounds); targeted 36 % of fight time; 0.71 deaths a round. Styles landed: Crippling Blow 59, Defender's Cross 4, Distract 2, Disabler 1 (round 165, after Defender's Cross: the follow-up chain works). Executioner never landed (Parry 5 parries rarely). No shield style was queued and no swap refused. Wins with him: 143, 148, 161, 165 (with 126 his best fight, 1572).
+
 ## Open
 
 - How often Executioner and Defender's Cross land with Parry 5, and whether he runs dry at 1.2× endurance.

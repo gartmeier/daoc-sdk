@@ -47,6 +47,8 @@ export default wizard();
 
 **Verified,** round 122 (2026-11-10, against Midgard, lost 0 / 6), on the plain nuker list without the kit: 929 damage, the group's highest, 8 nukes and 3 roots, first nuke 3.6 s after the engage; in melee 34 % of the fight, targeted 12 %, died once ("walk: died", en route). In that round `rootMelee` gave her root assignments on their melee (she is a member whose only crowd control is a root).
 
+**Verified, with the kit,** arena rounds 130-165 (2026-11-10/11), 14 rounds: 1452 damage a round, the most of any Camelot member (Morgana 731, Taliesin 688 in the same rounds), up to 2696 (round 161); 170 nukes, 21 Quickcasts, 10 roots on assignments; targeted 28 %, in melee 27 % of fight time; 0.50 deaths a round, the fewest with the Cabalist. She runs dry in long fights (round 151: 5 casts refused for power, idle 16 % on it). Wins with her: 130, 143, 146, 151, 161, 162, 165.
+
 ## Open
 
 - Which nuke `assist` cast live before the kit (Ice Blast or Haze): the round's nuke lines don't name the spell. With the kit it is Ice Blast either way.

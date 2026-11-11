@@ -45,6 +45,8 @@ export default friar();
 
 - Round 126 (against Hibernia, lost 3 / 6), the first with the kit: 9 heals, Saint's Vigor twice, targeted 8 %, idle 55 % on "nothing to do"; no group heal or walk fired. Then `topUp` came in.
 
+**Verified, with the kit,** arena rounds 126-165 (2026-11-10/11), 15 rounds: 124 heals, 5 group heals, Saint's Vigor 22 times; idle 42 % of fight time (Nimue 51 % in the same rounds); targeted 23 %, in melee 12 %; 0.60 deaths a round. In long fights he runs dry (round 156: 16 heals, then 40 % idle on "not enough power"). Two-healer line-ups (with the Cleric) lost 4 of 4, so Camelot's group.json caps healers at one (limits, from round 165). Wins with him as the only healer: 143, 147, 148, 156, 162, 165.
+
 ## Open
 
 - Why "nothing to do" while the group died: nobody under the heal lines when he looked, members beyond 2000 (the kit's `reachHurt`), or another healer's claim. The next rounds' idle reasons say whether `reachHurt` moved it.
