@@ -90,8 +90,17 @@ In `rvrRoaming`, which is what Midgard runs, the list keeps `tank` and this repl
 **Proven:** Thorgrim is the group's steadiest damage (1100-3600 a round) with Pillager and Plunderer. **Positionals against players**, through the shared `fighterStyle` reading a player's last swing (22fa45a): Disable landed in rounds 22 and 52, Cleave and Valkyrie's Shield now and then.
 
 **Open:**
-- **Shield stuns are rare** (Disable 1-2 in a few rounds). Whether a stun opener on a caster focus would beat the damage style is untested. Since 2026-11-11 the kit swings them (`heroStyle`); to compare: his damage and the group's kill time against rounds 4-119.
-- He is the enemy's main target in many rounds (targeted 50-90 %) and dies with little damage then (rounds 81, 106, 115). That is peel and focus, the group's.
+- **Shield stuns: they now land; what they cost is open.** Since 44da8b2 the kit swings the stuns (`heroStyle`, below). Whether a stun beats the damage style needs a comparison of the group's kill time, which the reports don't give.
+- He is the enemy's main target in many rounds (targeted 50-90 %) and dies with little damage then (rounds 81, 106, 115). That is peel and focus, the group's. In the night's 11 rounds beside Sigurd (Thane), the two were targeted alike ([thane.md](thane.md) "Open").
+
+## The night of 2026-11-10/11 (arena rounds 126-225, Thorgrim on the `heroStyle` kit)
+
+**Verified,** from `groups/midgard/runs/*.md`:
+- **Arena:** 18 rounds won of 38 (vs Camelot 11/16, vs Hibernia 7/22).
+- **Stuns, rounds in which each landed:** Numb 34 (74 in all), Disable 19 (21). Before the kit, Disable landed 1-2 times in a few rounds.
+- **Damage:** 0-1997 a round, about 870 on average (891 in won rounds, 847 in lost ones), against 1100-3600 in rounds 4-119. The opponents changed too (the bench classes, other kits), so this doesn't price the stuns.
+- **Deaths:** he died in 20 of 38 rounds, the first of the group in 4. Targeted median 33 % of fight time, 50 % or more in 6 rounds.
+- **His failures:** `kill:died` 20, `kill:out_of_reach` 9, `kill:crowd_controlled` 8. As a tank he fights a player with one `killPlayer` (the `tank` behaviour), unlike Sigurd's short turns.
 
 ## Not supported yet
 

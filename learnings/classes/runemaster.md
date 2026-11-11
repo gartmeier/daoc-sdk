@@ -21,6 +21,14 @@ export default runemaster();                       // the Darkness nuker
 
 **Verified, arena rounds 130-187 (2026-11-10/11, Gudrun, 21 rounds with the kit):** 0-4261 damage a round, about 1500 on average and over 2000 in 7 rounds, with up to 37 nukes (Rune of Obscurity); the group's best damage in rounds 144, 150, 161 and 167. Before the kit (rounds 122-123, the generic nuker list) she dealt 881 and 68 and walked 54-77 % of the fight; with it 13-58 %. Her idle time is mostly "focus out of reach, holding ground" (5-36 %), as Hrafna's; round 142's 83 % came from a role focus behind their line, which the group's `roleNukerReach` (a role focus within 1500 of a nuker) addressed from round 143.
 
+**Verified, the whole night (rounds 126-225, 37 of Midgard's 65 rounds, from `groups/midgard/runs/*.md`):**
+- **Arena:** 15 rounds won of 37 (vs Camelot 7/14, vs Hibernia 8/23). Damage 0-4261 a round, on average 1823 in won rounds and 1481 in lost ones.
+- **Since round 189:** 666-4075 a round, 2000 or more in 7 of 15 rounds. She was the group's top damage in most of them, e.g. 3803 in round 216 and 4075 in round 222.
+- **Nukes:** a median of 9 a round (0-37). Quickcast under fire fired in 19 rounds.
+- **Failed nukes:** `out_of_range` 52, `not_visible` 44 (in 9 rounds: line of sight over hills), `crowd_controlled` 40, `interrupted` 29, `no_power` 2.
+- **Idle:** median 18 % of fight time. The reason named was "focus out of reach, holding ground" in 25 rounds and "nothing to do" in 5.
+- **Deaths:** she died in 21 rounds and was the first of the group to die in 3. Targeted median 14 % of fight time (50 % or more in 1 round), the least of the group.
+
 ## Why the lines
 
 **Server code:**
@@ -54,4 +62,6 @@ export default runemaster();                       // the Darkness nuker
 - **`pickNuke` by expected damage** would fix this for every list caster (Hrafna holds off-spec Suppression baselines too). That is shared code (`sdk/group/spells.ts`); the kit's line filter is the local answer.
 - **Greater Raven Bolt as an opener** on a fresh player focus: it gives up about 20 damage against Rune of Obscurity, and each later cold nuke on that target gains about 11. Measure before keeping it.
 - **A root on a diver** (Suppress Movement on a free melee closing on our healer, not the focus): written nowhere yet.
-- Power: about 150-170 before items (formula, PIE estimated). A Darkness focus staff of 23 or more cuts Rune of Obscurity to about 11.
+- **Her idle is the focus out of reach** (25 of 37 rounds), and `out_of_range` is her most common failure. The step toward a focus is the Spiritmaster kit's (`steppingAssist`, step 250); the group's `roleNukerReach` 1500 (groups/midgard/plan.ts) keeps a role focus near her. Whether a longer step or a role focus nearer than 1500 gets more nukes out is unmeasured.
+- **Line of sight:** 44 casts refused "not visible" over the night, the second-largest cost. `castSpell` steps toward the target until it sees it (CLAUDE.md "You can't see your target from here!"); a slot that sees the focus over the hills is the group's (`formation` in groups/midgard/rvr.ts).
+- Settled: power. She ran out twice in 37 rounds, so power is no limit at Darkness 24 in rounds of up to 10 minutes. About 150-170 before items (formula, PIE estimated); a Darkness focus staff of 23 or more cuts Rune of Obscurity to about 11.

@@ -125,6 +125,20 @@ Nothing else needed from her at that camp: at any `ready.mana` from 10 to 35 her
 - **She is the enemy's first target** in most losses (targeted 50-80 %, often crowd-controlled herself), and she is Midgard's only mezz cure. Nothing in the kit answers an area mezz on the group; that is positioning and peel (the group's).
 - **Halt Attack** (`stunPeel`, Albion's): 1-3 a round, often resisted or refused under crowd control; its worth is unmeasured.
 
+## The night of 2026-11-10/11 (arena rounds 126-225, Sigrid in all 65 Midgard rounds)
+
+**Verified,** from `groups/midgard/runs/*.md`:
+- **Arena:** 30 rounds won of 65 (vs Camelot 16/27, vs Hibernia 14/38).
+- **Cures:** 267 in all. Median 2.5 a round against Hibernia and 2 against Camelot, up to 19.
+- **Heals:** 241 in all. Median 3.5 a round against Hibernia and 2 against Camelot, up to 12.
+- **Stuns:** 26 Halt Attacks over the night.
+- **Under crowd control:** she was controlled in 33 rounds. 56 cures and 41 heals failed `crowd_controlled`, and 64 heals and 43 cures were interrupted.
+- **Deaths:** she died in 38 of 65 rounds and was the first of the group to die in 14, more than any other member (next: 5). Targeted median 28 % of fight time, 50 % or more in 15 rounds.
+
+**Open, from the night** (strategy items; she is the one they hurt most):
+- **One mezz cure against three mezzers.** Hibernia fields a Bard, an Eldritch and a Mentalist; Midgard has one cure, hers. A Healer of the line-up mezzing back (`healerMezz` in groups/midgard/plan.ts, rounds 141-155) gave 78 orders and 3 casts, so it is off by default (`--healerMezz=true` turns it on). Nothing answers an area mezz on both healers. Sigrid vs Hibernia: 14 of 38.
+- **The formation.** Healers stand 600 behind the tank (`formation` in groups/midgard/rvr.ts, from round 149) and only the healer `backHealer` picks steps back (`stayBehind`, groups/midgard/plan.ts). She is still the first to die in 14 rounds, so a diver reaches her anyway. A tank that peels is in Ragnar's and Sigurd's characters (`guardSoft`), but its effect can't be separated in the reports ([thane.md](thane.md) "Open").
+
 ## Not supported yet
 
 - **Group heals:** Eir's Glorious Touch is instant, for fights where several are hurt at once. A rule would have to count who is hurt.

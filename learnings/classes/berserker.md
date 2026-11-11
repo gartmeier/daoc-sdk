@@ -23,6 +23,13 @@ export default berserker();
 **Verified, arena rounds 127-187 (2026-11-10/11, Ragnar, 26 rounds with the kit):** the chain fires every round he gets to swing: Ravager 1-7 a round, Atrophy in 15 of them, Scathing Blade in 10, and the side positional Frost Hammer with its stun follow-up Demolish (round 187). Damage 0-2505 a round, about 1150 on average, the group's best in rounds 127 and 160; before the kit (rounds 122-123, generic melee list) his swings were Provoke and nothing else. Berserk fires once a round (a fresh process starts its clock empty; since 434ddcf a refusal that names the wait sets it). Two zero-damage rounds were a swimming focus (round 146, the shared assistMelee retry, fixed in feb811e) and a no-fight round.
 - Ragnar's character adds Bragi's `guardSoft` and `hitInReach` (groups/midgard/plan.ts) from round 137: with Bragi benched nobody of the melee peeled.
 
+**Verified, the whole night (rounds 126-225, 37 of Midgard's 65 rounds, from `groups/midgard/runs/*.md`):**
+- **Arena:** 16 rounds won of 37 (vs Camelot 8/13, vs Hibernia 8/24). Damage 0-2505 a round, on average 1247 in won rounds and 919 in lost ones.
+- **Styles, rounds in which each landed:** Ravager 31, Atrophy 18, Scathing Blade 11, Frost Hammer 5 with Demolish 3, Crushing Blow 1 (after a parry, round 217, with Slam behind it), Comeback 1 (after an evade, round 191).
+- **Berserk** fired in 30 rounds (31 times) and was refused 9 times. Since 434ddcf a refusal that names the wait sets the clock, so a refusal costs one try.
+- **What costs him swings:** `melee:out_of_reach` 92 and `melee:timeout` 61 over the night (a focus that runs or kites off), `melee:stuck` 31, `melee:crowd_controlled` 8. The 60 `melee:water` all came in rounds 146 and 150, before feb811e.
+- **Deaths:** he died in 20 of 37 rounds, and was the first of the group to die in 3. Targeted median 25 % of fight time, 50 % or more in 5 rounds. The enemy goes for him less than for Sigrid or Sigurd.
+
 ## Styles at Left Axe 24, Hammer 21, Parry 10
 
 **Data** (growth is the style's GrowthRate × 200; value is growth per endurance, what `pickStyle` ranks plain styles by):
@@ -59,6 +66,7 @@ export default berserker();
 
 ## Open
 
-- Berserk's thresholds are a first guess (Community: guides save it for a kill). Look at whether the focus dies within the 20 s after it.
-- A peel of his own: Bragi's `guardSoft` is in Bragi's character only. With Ragnar and no Skald, nobody of the melee peels.
+- Berserk's thresholds are a first guess (Community: guides save it for a kill). It fires in almost every round (30 of 37), but the reports don't say whether the focus died within the 20 s after it. That needs the event log of a round, read against the Berserk time.
+- **The chase.** Over 150 of his failures were a focus out of reach or a timeout: a kited focus or a caster behind their line. That is the group's focus choice (`hitInReach` in his character, `roleNukerReach` in groups/midgard/plan.ts), not the kit. A snare first (Frost Hammer from the side, Atrophy after Ravager) is what the kit has against it, and it comes only once he is in reach.
 - Parry 14 for Hammer 18 in his build.
+- Settled: a peel of his own. Ragnar's character has carried Bragi's `guardSoft` and `hitInReach` since round 137 (above).

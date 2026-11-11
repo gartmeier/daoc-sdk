@@ -77,6 +77,16 @@ Ulfgar plays Buffer healer. **Community, unverified:** Uthgard calls Augmentatio
 - **Infectious Spores on the focus** (`disease`): cast in most rounds, often resisted; its effect on kill time is unmeasured.
 - **His damage** is 0-400 a round. Under a melee (in melee 20-60 % in many losses) every spell of his has a cast time, so `disease`, `assist` and `heal` all skip. Where he stands is the group's.
 
+## The night of 2026-11-10/11 (arena rounds 126-225, Ulfgar)
+
+**Verified,** from `groups/midgard/runs/*.md`:
+- **Arena:** 14 rounds won of 36 (vs Camelot 8/14, vs Hibernia 6/22).
+- **Heals:** median 4 a round against Hibernia (1-19) and 3 against Camelot (0-12). 185 in all, beside Sigrid's 241.
+- **Damage:** 0-721 a round, median 200. 173 spells cast on the focus, counted as `nuke`; `disease` is among them.
+- **Failures:** 41 heals failed `crowd_controlled` and 39 were interrupted. 40 casts were refused "not visible". 41 walks were held at a river bank (`walk:water`, the shared water guard).
+- **Deaths:** he died in 21 of 36 rounds, the first of the group in 5. Targeted median 23 %, in melee range median 6 %. The formation's back slot keeps him out of melee more than before the night.
+- Still open: Infectious Spores' worth (above). The reports count it with his other spells.
+
 ## Not supported yet
 
 - **Area disease:** at Subterranean 27 Mold Cloud, the instant area disease every level 50 spec stops for (**community, unverified**).

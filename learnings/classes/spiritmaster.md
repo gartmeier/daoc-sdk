@@ -132,6 +132,17 @@ She can't wear chain, and for a long time `equipUpgrades` tried it on every visi
 - **Against Camelot** she still stands or walks: their casters stay back, and Obscuring Dust (sampled about 75 s of round 102) cuts her range by a third. The walk-in changes in order: 54c83a3 (a 3 s leg after 4 s), 5c491b5 (only within 900 beyond range), 12cc19c (1400 under Nearsight), 51e9c19 (each leg restarts the wait). Since 51e9c19 (rounds 108-119): moving 17-68 %, 0-9 nukes. Round 104 gave 27 nukes (before it), rounds 106 and 110 none. The rounds since were mostly dives and crowd control on her, so none of these is settled.
 - **Power**: she runs dry in long fights ("no power" 22-33 in rounds 90 and 104), partly from pet heals, which are the shared pet behaviour's.
 
+## The night of 2026-11-10/11 (arena rounds 126-225, Hrafna)
+
+**Verified,** from `groups/midgard/runs/*.md`:
+- **Arena:** 17 rounds won of 38 (vs Camelot 12/19, vs Hibernia 5/19).
+- **Damage:** 0-3225 a round, on average 1383 in won rounds and 923 in lost ones (her pet's damage is apart).
+- **Against Camelot she still stands or walks.** Median 5 nukes a round there with 38 % of fights spent moving. Against Hibernia it is 11 nukes and 24 %. This open item is unchanged.
+- **Failed nukes:** `not_visible` 58 (in 11 rounds: line of sight over hills, the group's slot choice), `crowd_controlled` 42, `interrupted` 39, `out_of_range` 27. No nuke failed for power. The group waited for her power between fights in 6 rounds (median 4 % of the run, at most 14 %). In fights her power is no longer the limit; between fights it still costs a little.
+- **Pet:** `petAttack` 311 orders, 25 summons.
+- **Deaths:** she died in 20 of 38 rounds but was the first of the group to die only once. Targeted median 17 %.
+- Gudrun (Runemaster) plays the same `steppingAssist` and `nukeInReach`, and her idle reason is the same ([runemaster.md](runemaster.md) "Open").
+
 ## Not supported yet
 
 - **Pet tactics beyond following the focus:** taking aggro, the pulsing damage shields (Spirit's Revenge, 5 s) and Convert Spirit. No behaviour casts those.

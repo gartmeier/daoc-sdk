@@ -85,6 +85,17 @@ About twice the damage, with the ranges apart. Styles, joining at once and the s
 - **His damage swings** from 0 to 2100 a round, following his in-melee share: whether the focus is a melee in reach or a caster behind their line. That is focus choice, not his kit (the group's `hitInReach` came in round 49).
 - **He is among the deaths in most losses**, as the melee the enemy reaches first: no defensive kit answer at 24.
 
+## The night of 2026-11-10/11 (arena rounds 126-225, Bragi)
+
+**Verified,** from `groups/midgard/runs/*.md`:
+- **Arena:** 23 rounds won of 37 (vs Camelot 11/17, vs Hibernia 12/20), the best record of any Midgard member. From round 190 `groups/midgard/group.json` requires a Skald or a Berserker, and the picker takes whichever played fewer.
+- **Warshriek interrupts:** median 6 a round (0-19), 224 in all.
+- **Crippling Shout:** median 1 a round (0-5), 55 in all; 6 resisted.
+- **Damage:** 0-3407 a round, on average 1212 in won rounds and 777 in lost ones. Pillager was his swing in 25 rounds, Plunderer in 7.
+- **Melee misses:** `melee:timeout` 82 and `melee:out_of_reach` 65 over the night, the same chase as Ragnar's ([berserker.md](berserker.md) "Open").
+- **Deaths:** he died in 17 of 37 rounds, the first of the group in 5. Targeted median 33 %, 50 % or more in 9 rounds.
+- His `guardSoft` and `hitInReach` (groups/midgard/plan.ts) are also in Ragnar's and Sigurd's characters since rounds 137 and 164.
+
 ## Not supported yet
 
 - **Warshriek** (49 damage, instant, range 700, 15 s between uses, 11 power) and the other shouts: `assist` casts nukes only without `melee`, so a Skald on `meleeFight` never shouts. **Community, unverified:** weapon or shout damage is the class's main choice.

@@ -22,6 +22,14 @@ export default thane();
 
 **Verified, arena rounds 129-185 (2026-11-10/11, Sigurd, 21 rounds with the kit):** the Horn interrupts 2-8 times a round through `interrupt()` (the short turns work); Numb in most rounds, Disable in 5, Crushing Blow once. Damage 69-1428: 575-1428 in won rounds, 69-490 in most lost ones. He is often the enemy's first target (targeted 53-100 % in rounds 138, 178, 181, 185) and dies with little damage then: chain armour and less health than the Warrior at the front of the formation. His character adds `guardSoft` (groups/midgard/plan.ts) from round 164, which also brings him within Guard's 256 of the member he guards.
 
+**Verified, the whole night (rounds 126-225, 37 of Midgard's 65 rounds, from `groups/midgard/runs/*.md`):**
+- **Arena:** 17 rounds won of 37 (vs Camelot 7/15, vs Hibernia 10/22). Damage 0-1428 a round, on average 827 in won rounds and 364 in lost ones.
+- **The Horn interrupts** a median of 3 times a round (0-9; 9 in round 216). 15 tries failed because he was crowd-controlled himself.
+- **Stuns, rounds in which each landed:** Numb 25, Disable 12, Incapacitate 1 (round 200, his only block reaction), Crushing Blow 1. Ruiner was his plain swing in 11 rounds.
+- **Guard and protect:** 50 guards and 55 protects over the night, between fights.
+- **Deaths:** he died in 22 of 37 rounds, and was the first of the group to die in 5 (Sigrid in 14). Targeted median 38 % of fight time, 50 % or more in 13 rounds.
+- **Failures:** `melee:out_of_reach` 34, `walk:stuck` 23, `melee:refused` 15, `kill:immune` 5 (a player still in PvP immunity, round 224).
+
 ## Stormcalling at 22
 
 **Data,** every spell energy damage:
@@ -47,7 +55,9 @@ export default thane();
 
 ## Open
 
-- **Guard reach.** Guard blocks only within 256 of the guarded member (Server code), and the pack's formation puts the healer 200 and more behind the tank, fanned out further by fanOut. Walking to the healer when a diver reaches it is the candidate behaviour (Bragi's `guardSoft` in `groups/midgard/plan.ts` is the model).
+- **Is he the enemy's first target because he is a Thane?** The night says no. In the 11 rounds he played beside Thorgrim (Warrior), the enemy targeted them alike (median 29 % against 28 %), and Sigurd died in 7 of them, Thorgrim in 5. As the only tank (26 rounds) he was targeted 40 % and died in 15. The front-liner the enemy reaches first gets the pressure, whatever his class. So standing him behind the Warrior is not the fix. The open part is the group's: peel and the formation (`formation` in groups/midgard/rvr.ts, tank at 0, healers 600 back). His deaths in losses cost more than his damage gains in wins.
+- **Guard reach.** Guard blocks only within 256 of the guarded member (Server code), and the pack's formation puts the healer 200 and more behind the tank (600 in Midgard's), fanned out further by fanOut. His character has carried `guardSoft` since round 164 (above). Its worth is unmeasured: from round 164 every member's targeted share rose (Sigurd 29 → 40 %, Sigrid 18 → 31 %, Ragnar 19 → 28 % median), so the rounds can't separate it from the rest.
+- **`walk:stuck` 23 times** over the night, at slopes and river banks. The cause was not read.
 - **The Horn on the focus** when nobody casts: 49 damage every 20 s. Left out for now, so the Horn is ready for an interrupt.
 - **Mjollnir before melee** (4 s cast, radius 350) as an opener while closing, with nobody swinging at him: not written.
 - His power pool at 24 is unread.
