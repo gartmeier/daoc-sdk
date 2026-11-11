@@ -1783,14 +1783,39 @@ async function walkTowardSlot(ctx: MemberContext<TacticsSettings>, slot: Point, 
     const d = dist(me, slot);
     let to: Point = slot;
     if (d > leg) {
-        const next = safePath(me.regionId, me.level, me, slot, keepCircles(ctx))[0] ?? slot;
+        const path = safePath(me.regionId, me.level, me, slot, keepCircles(ctx));
+        // A crossing comes as a waypoint every grid cell over the water: head for its far bank (pastTheRiver).
+        const next = (isWet(me.regionId, path[0] ?? slot) ? path.find(p => !isWet(me.regionId, p)) : path[0]) ?? slot;
         const f = Math.min(1, leg / dist(me, next));
-        to = { x: me.x + (next.x - me.x) * f, y: me.y + (next.y - me.y) * f };
+        to = pastTheRiver(me.regionId, { x: me.x + (next.x - me.x) * f, y: me.y + (next.y - me.y) * f }, next);
     }
     ctx.doing('move', null, o.detail ?? ctx.orders().phase);
     const w = await ctx.bot.walkTo(to.x, to.y, { tolerance: 80, ...(o.speedFactor ? { speedFactor: o.speedFactor } : {}), ...(o.stopOnAbort ? { stopOnAbort: o.stopOnAbort } : {}) });
     if (w.reason === 'water') ctx.memory.set(SLOT_WET, Date.now() + WET_SKIP_MS);
     if (!w.success) { ctx.result('walk', w); await Bun.sleep(500); }
+}
+
+/** How far past the far bank a lengthened leg ends (pastTheRiver): the mover stops up to its tolerance (80) short ... */
+const FAR_BANK_PAST = 120;
+/** ... and how finely the line is sampled for that bank. */
+const FAR_BANK_STEP = 32;
+
+/**
+ * A leg that ends in the river on its way to dry ground (`end`, where the leg heads) goes on to the far bank: the dry move
+ * guard holds a move that ends wet at the near bank, and the member stood there, its dry slot across the river. Round 172
+ * (2026-11-11): Brigid and Aine held the north bank ~1600 from the fight on 1000-legs, Hibernia fought with 3 of 5
+ * (Roaming session). A slot in the river itself stays the guard's and slotWet's.
+ */
+function pastTheRiver(regionId: number, to: Point, end: Point): Point {
+    if (!isWet(regionId, to) || isWet(regionId, end)) return to;
+    const d = dist(to, end);
+    const ux = (end.x - to.x) / d, uy = (end.y - to.y) / d;
+    for (let t = FAR_BANK_STEP; t < d; t += FAR_BANK_STEP) {
+        if (isWet(regionId, { x: to.x + ux * t, y: to.y + uy * t })) continue;
+        const s = Math.min(d, t + FAR_BANK_PAST);
+        return { x: Math.round(to.x + ux * s), y: Math.round(to.y + uy * s) };
+    }
+    return end;
 }
 
 /** Memory key: until when a slot in the river is left alone, after the dry move guard refused the walk there at the bank. */

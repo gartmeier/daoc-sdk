@@ -13,6 +13,7 @@ import { rvrBehaviors } from './rvr';
 import { contact, enemy, picture, report } from './fixtures';
 import type { MemberContext } from './member';
 import { assignCc, PVE_SETTINGS } from './pve';
+import { isWet } from './water';
 import type { Contact, MemberReport, Orders, Point, Role } from './types';
 
 const R = 9999;
@@ -781,6 +782,16 @@ describe('holdFormation with its slot in the river', () => {
         expect(await holdFormation().run(s.ctx)).toBe(false);
         expect(s.calls.walkTo.length).toBe(1);
         expect(s.skips.some(k => k.includes('slot in the river'))).toBe(true);
+    });
+
+    test('a leg toward a dry slot across the river goes on to the far bank, not mid-river where the guard holds it', async () => {
+        // Round 172 (2026-11-11): Brigid and Aine held the north bank, the river at x 23842 runs y ~36100-38300.
+        const s = stub({ name: 'Aine', role: 'healer', regionId: 252, at: { x: 23_842, y: 35_900 },
+            orders: { phase: 'recover', anchor: { x: 23_842, y: 39_400, z: 0 }, facing: { x: 23_842, y: 40_400 }, focus: null } });
+        expect(await holdFormation().run(s.ctx)).toBe(true);
+        const [to] = s.calls.walkTo;
+        expect(isWet(252, to!)).toBe(false);
+        expect(to!.y).toBeGreaterThan(38_000);
     });
 });
 
