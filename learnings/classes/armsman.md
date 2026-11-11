@@ -51,11 +51,17 @@ export default armsman();                     // { weapon: 'Two Handed' } for a 
 - Round 122 (2026-11-10, against Midgard, lost 0 / 6): 905 damage, Crippling Blow 7 landed, targeted 16 %, died once.
 - Round 124 (against Hibernia, lost 0 / 5), as the only tank: 418 damage, Crippling Blow 2 and Distract 1, targeted 41 %, died once.
 
-**Verified, with the kit,** arena rounds 126-165 (2026-11-10/11), 14 rounds: 1050 damage a round, the most of any Camelot member but the Wizard (Galahad 461 in the same rounds); targeted 36 % of fight time; 0.71 deaths a round. Styles landed: Crippling Blow 59, Defender's Cross 4, Distract 2, Disabler 1 (round 165, after Defender's Cross: the follow-up chain works). Executioner never landed (Parry 5 parries rarely). No shield style was queued and no swap refused. Wins with him: 143, 148, 161, 165 (with 126 his best fight, 1572).
+**Verified, with the kit,** arena rounds 126-226 (2026-11-10/11, the whole night; Camelot's reports in `groups/camelot/runs/`), 34 rounds:
+- **Damage:** 962 a round, the most of any Camelot member but the Wizard (Paladin Galahad 499), up to 2470 (round 139).
+- **Styles landed:** Crippling Blow 129, Defender's Cross 15, Distract 10, Disabler 8 (each after a Defender's Cross: the follow-up chain works). Executioner never landed in 34 rounds: with Parry 5 the parry it follows hardly comes. No shield style was queued, no swap refused, and no style was missed (`missedStyles` 0 from round 143), so endurance at 1.2× on the halberd didn't run out.
+- **Exposure:** targeted 35 % of fight time, the most of Camelot's members; 0.68 deaths a round. Of his fight turns, 19 ended in his death, 15 under crowd control, 11 timed out.
+- **Idle 5 %,** nearly all "tank: focus beyond the chase leash, no enemy inside it" (143 turns): Camelot's `STAND.chaseLeash` 800 in `groups/camelot/rvr.ts` keeps him by the casters while the focus stands back.
+- **Results:** 14 wins in 34 (against Hibernia 7 of 20, against Midgard 7 of 14): 143, 148, 156, 161, 165, 175, 181, 192, 196, 197, 207, 210, 214, 226.
 
 ## Open
 
-- How often Executioner and Defender's Cross land with Parry 5, and whether he runs dry at 1.2× endurance.
-- A stun mode: sword and shield for one Disable or Numb per 60 s stun immunity (the Hero's `StunLog`), then back to the halberd. It needs a weapon switch a style pick can ask for, and it shares the immunity with our Cleric's Stunning Flare.
-- Intercept on our healer when she is dived, and whether a shield mode near her (Guard, Intercept) beats the halberd's damage.
-- Crippling Blow's snare every swing against chaining Defender's Faith into Defender's Courage.
+- **Two tanks:** line-ups with him and the Paladin won 1 of 4, so `groups/camelot/group.json` limits Camelot to one tank (`"limits": { "tank": 1 }`, from round 165). With two, `guardAssignments` (`groups/camelot/hunt-mezzer.ts`) sends the second onto whoever melees the support or a nuker; too few rounds to say whether that fixes it.
+- **A stun mode:** sword and shield for one Disable or Numb per 60 s stun immunity (the Hero's `StunLog`), then back to the halberd. It needs a weapon switch a style pick can ask for, and it shares the immunity with our Cleric's Stunning Flare.
+- **Intercept** on our healer when she is dived, and whether a shield mode near her (Guard, Intercept) beats the halberd's damage. His `guard` and `protect` chores ran 37 and 39 times; nothing measured what they saved.
+- **Crippling Blow's snare every swing** against chaining Defender's Faith into Defender's Courage: Defender's Courage never landed in the night.
+- **The leash:** 143 idle turns past `chaseLeash` 800. A wider leash for the tank only (his settings, not the casters') is untried.

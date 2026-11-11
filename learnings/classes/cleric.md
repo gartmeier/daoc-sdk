@@ -134,7 +134,16 @@ Her `buff:no_response` failures (5-8 a round, 39 in round 26) are the server's c
 
 **Changed, 2026-11-10 night (Albion session):** the kit's fight has the Friar kit's `topUp` between the stun and her Smite: a member below 85 % gets a heal in her spare turns, above 50 % power (`cleric({ topUpBelow: 0 })` off). Round 128: 5 heals in a 197 s fight and idle 32 % on "no smite at players" while all five died.
 
+**Verified, arena rounds 126-226** (2026-11-10/11, Camelot's reports in `groups/camelot/runs/`), 34 rounds, with the top-up and without `spareNuke`:
+- **Casts a round:** 6.2 heals, 1.6 stuns (55 in the night: 12 resisted, 12 failed under crowd control, 7 `must_wait` on the immunity), 2.1 buffs.
+- **Exposure:** targeted 23 %, in melee 17 % of fight time; 0.65 deaths a round.
+- **Idle 44 % of fight time.** It reads "no smite at players below spareNuke's floor" (2037 turns), which in Camelot's list means nothing to heal: the kit's own Smite (`notOnPlayers` in `cleric.ts`) gives that reason for any player focus, and Camelot runs without `spareNuke`. The Friar was idle 41 % over the same night.
+- **Walks lost to water:** 91 `walk:water`, the move guard holding her at the river bank.
+- **Results:** 11 wins in 34. From round 143, against Hibernia 3 of 12 and against Midgard 7 of 17; the Friar's line-ups the reverse (11 of 16, 3 of 12). See friar.md.
+- **Two healers:** with the Friar, 0 wins in 4, so `groups/camelot/group.json` limits Camelot to one healer (from round 165).
+
 **Open:**
-- Against Hibernia she was sometimes the first focus (round 107: 73 % targeted, 0 heals). The likely cause is the list's opening `spareNuke` Smite flagging her as a caster. That's group- and orchestrator-side.
+- **Closed, round 107's first focus:** without `spareNuke` (from the round after 107) she was targeted 23 % over the night, below the Friar's 24 %.
+- **The idle reason's wording:** with `spareNuke` off, "no smite at players below spareNuke's floor" means nothing to heal, which hides the real reason. A plainer skip text in `cleric.ts` is a code change for after the freeze.
 - No way to heal through a melee on her beyond the one 15-minute instant.
 - Cure Nearsight needs Rejuvenation 20 (she has 19), and the build is the group's.

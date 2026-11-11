@@ -45,11 +45,18 @@ export default friar();
 
 - Round 126 (against Hibernia, lost 3 / 6), the first with the kit: 9 heals, Saint's Vigor twice, targeted 8 %, idle 55 % on "nothing to do"; no group heal or walk fired. Then `topUp` came in.
 
-**Verified, with the kit,** arena rounds 126-165 (2026-11-10/11), 15 rounds: 124 heals, 5 group heals, Saint's Vigor 22 times; idle 42 % of fight time (Nimue 51 % in the same rounds); targeted 23 %, in melee 12 %; 0.60 deaths a round. In long fights he runs dry (round 156: 16 heals, then 40 % idle on "not enough power"). Two-healer line-ups (with the Cleric) lost 4 of 4, so Camelot's group.json caps healers at one (limits, from round 165). Wins with him as the only healer: 143, 147, 148, 156, 162, 165.
+**Verified, with the kit,** arena rounds 126-226 (2026-11-10/11, the whole night; Camelot's reports in `groups/camelot/runs/`), 33 rounds:
+- **Casts a round:** 7.9 heals (0-3 before the kit), 0.4 group heals (12 in the night), Saint's Vigor 1.5, buffs 2.1; 4 rezzes in the night.
+- **Exposure:** targeted 24 %, in melee 16 % of fight time; 0.58 deaths a round, the fewest of Camelot's members.
+- **Heals lost:** `crowd_controlled` 55 (mezzed or stunned mid-cast or before it), `interrupted` 37, `out_of_range` 13, `no_power` 6.
+- **Idle 41 % of fight time** (Nimue 44 % over the same night): "nothing to do" 1677 turns, "heal: not enough power" 200. He still runs dry in long fights (round 156: 16 heals, then 40 % idle on power), which is why `topUp` stops at 70 % power from round 177.
+- **Results:** 14 wins in 33: 143, 147, 148, 156, 162, 165, 172, 176, 192, 196, 197, 210, 214, 223. From round 143, against Hibernia 11 of 16 and against Midgard 3 of 12. The Cleric over the same rounds: against Hibernia 3 of 12, against Midgard 7 of 17.
+- Two-healer line-ups (with the Cleric) lost 4 of 4, so `groups/camelot/group.json` caps healers at one (`"limits": { "healer": 1 }`, from round 165).
 
 ## Open
 
-- Why "nothing to do" while the group died: nobody under the heal lines when he looked, members beyond 2000 (the kit's `reachHurt`), or another healer's claim. The next rounds' idle reasons say whether `reachHurt` moved it.
-- Staff melee between heals (`assist({ melee: true })` while everyone is above the heal lines): Defender's Fury's slow on whoever is on our healer. It would pull him into the enemy's reach; not tried.
-- Cure Poison against style bleeds in his idle turns.
-- Which healer leads the buffs and the guard when he and a Cleric play together (camelot's `guardHealer` takes the first healer).
+- **"Nothing to do" is still most of his idle time** with `reachHurt` in the kit: only 13 heals failed on range, so distance isn't what keeps him idle. Those turns also count any below 70 % power, where `topUp` keeps quiet. Nobody has split them by his power at the time.
+- **Which healer against whom:** from round 143 the Friar's line-ups won 11 of 16 against Hibernia and 3 of 12 against Midgard, the Cleric's the reverse (3 of 12, 7 of 17). The rest of each line-up differed, so this is a lead, not a finding. The line-up picker (`sdk/group/lineup.ts`) chooses the healer without regard to the enemy realm.
+- **Crowd control on him:** 55 heals lost to it, the largest single loss. Camelot's `mezzerRead` and `huntMezzer` go after their mezzer; nothing protects him directly.
+- **Staff melee between heals** (`assist({ melee: true })` while everyone is above the heal lines): Defender's Fury's slow on whoever is on our healer. It would pull him into the enemy's reach; not tried.
+- **Cure Poison** against style bleeds in his idle turns.

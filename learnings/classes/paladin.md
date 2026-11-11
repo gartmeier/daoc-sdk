@@ -158,7 +158,13 @@ All of these are his and no behaviour casts them:
 - The chant twist runs inside `tank`.
 - Since 91d6e4c (2026-11-10 01:11) the shared `song()` no longer drains his power with Persistence out of fights: out of a fight nothing wants an endurance chant at 90 % or more (`ENDURANCE_REST_FULL`), and `song()` casts the running chant once to stop it, a twist's too (`pulse_cancelled` in his lines, 10 times from 02:00 on). Camelot's reports read "waiting for Galahad's power" up to 20261109-234645 and in none of the 51 after the fix. Rechecked after the arena: closed, the wrap-up's "Shared" line in groups/camelot/lab_log.md predates it.
 
+**Verified, arena rounds 126-226** (2026-11-10/11, Camelot's reports in `groups/camelot/runs/`), 33 rounds, Camelot's one tank or beside the Armsman:
+- **Damage:** 499 a round, up to 1102 (round 152). Uppercut landed 189 times and Enrage 9; chants 1.8 a round.
+- **Exposure:** targeted 38 % of fight time (the Armsman 35 %); 0.67 deaths a round.
+- **Idle 3 %:** mostly "tank: focus beyond the chase leash, no enemy inside it" (82 turns, `STAND.chaseLeash` 800 in `groups/camelot/rvr.ts`).
+- **Results:** 12 wins in 33 (against Hibernia 8 of 20, against Midgard 4 of 13). Line-ups with both tanks won 1 of 4, so `groups/camelot/group.json` limits Camelot to one tank from round 165 (armsman.md).
+
 **Open:**
-- Galahad was the focus 50-80 % of fight time in most rounds. Nothing in the kit protects him beyond chants.
+- Galahad was the focus 50-80 % of fight time in most rounds to round 119, and 38 % over rounds 126-226, with the Armsman sharing the front and Camelot's casters going for the enemy's casters first. Nothing in the kit protects him beyond chants.
 - Aggravate as an instant interrupt on enemy casters was considered and not built. It would need a raw cast mid-swing that doesn't lose his target.
 - Shield stun styles are deliberately unused. They share the 60 s StunImmunity with Nimue's Stunning Flare.

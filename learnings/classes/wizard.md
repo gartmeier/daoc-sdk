@@ -47,12 +47,17 @@ export default wizard();
 
 **Verified,** round 122 (2026-11-10, against Midgard, lost 0 / 6), on the plain nuker list without the kit: 929 damage, the group's highest, 8 nukes and 3 roots, first nuke 3.6 s after the engage; in melee 34 % of the fight, targeted 12 %, died once ("walk: died", en route). In that round `rootMelee` gave her root assignments on their melee (she is a member whose only crowd control is a root).
 
-**Verified, with the kit,** arena rounds 130-165 (2026-11-10/11), 14 rounds: 1452 damage a round, the most of any Camelot member (Morgana 731, Taliesin 688 in the same rounds), up to 2696 (round 161); 170 nukes, 21 Quickcasts, 10 roots on assignments; targeted 28 %, in melee 27 % of fight time; 0.50 deaths a round, the fewest with the Cabalist. She runs dry in long fights (round 151: 5 casts refused for power, idle 16 % on it). Wins with her: 130, 143, 146, 151, 161, 162, 165.
+**Verified, with the kit,** arena rounds 126-226 (2026-11-10/11, the whole night; Camelot's reports in `groups/camelot/runs/`), 39 rounds:
+- **Damage:** 1254 a round, the most of any Camelot member (Gawain 962, Taliesin 760, Morgana 659, Galahad 499, Merlin 460), up to 3009 (round 172). 10.7 nukes, 1.3 Quickcasts and 0.7 roots on assignments a round.
+- **Exposure:** targeted 25 %, in melee 30 % of fight time; 0.62 deaths a round, the second fewest after the Friar (0.58). Idle 9 % of fight time.
+- **What cost her casts:** nukes refused `out_of_range` 44, `interrupted` 43, `not_visible` 35 (a hill, `lineOfSight`), `crowd_controlled` 29, `no_power` 23. Her idle turns: "no power" 118, "focus in the river, holding the bank" 90, "focus out of reach, holding ground" 67, "focus not in view, holding ground" 64, "focus out of reach, enemies by the step" 63.
+- **Results:** 17 wins in 39 (against Hibernia 10 of 21, against Midgard 7 of 18): 130, 143, 146, 151, 161, 162, 165, 172, 176, 196, 197, 198, 207, 211, 214, 223, 226.
 
 ## Open
 
-- Which nuke `assist` cast live before the kit (Ice Blast or Haze): the round's nuke lines don't name the spell. With the kit it is Ice Blast either way.
-- Steaming Blast with Quickcast when two or more enemy players are on her (133 each, 24 power), away from anything under crowd control: a kit option to try once her deaths in melee are counted.
-- Searing Gust on the focus every 20 s: the 10 % on the next Ice Blasts is worth about 40 damage per 20 s, and whether a recast refreshes it is unchecked.
-- Roots against nukes: each root assignment is an Ice Blast lost. Camelot's tactics keep its Cabalist on damage against two healers; the same may pay for her.
-- How often the group waits for her power over a round (15 a nuke, no floor).
+- **Power is her most common idle reason** (118 turns, 23 nukes refused, over 39 rounds), with no floor (`saveBelow: 0`). Not tried: a floor, or Merlin's power regen and `sharePower` aimed at her first.
+- **Holding ground** ("not in view" 64, "out of reach" 67 + 63 turns) is the shared `assist` under Camelot's `standGround` (`groups/camelot/rvr.ts` STAND). Camelot's `closeIn` (`groups/camelot/close-in.ts`, a step toward a focus out of view or beyond 1500 plus the stand step) ran as an A/B by the run's start minute from round 187: off 4 W in 8, on 7 W in 17, no difference to call. `--closeIn=true|false` fixes it.
+- **The river:** "focus in the river, holding the bank" 90 turns. The move guard keeps her dry, so a focus in the water is out of her fight until it leaves.
+- **Steaming Blast under a dive:** in melee 30 % of fight time and 43 nukes interrupted. Quickcast and Steaming Blast (133 each around her, 24 power) when two or more enemy players are on her, away from anything under crowd control, is a kit option still to try.
+- **Searing Gust on the focus every 20 s:** the 10 % on the next Ice Blasts is worth about 40 damage per 20 s, and whether a recast refreshes it is unchecked.
+- **Roots against nukes:** 26 roots over the night (0.7 a round, 4 resisted), each an Ice Blast lost. Camelot's tactics keep its Cabalist on damage against two healers; nobody has measured whether that pays for her too.
