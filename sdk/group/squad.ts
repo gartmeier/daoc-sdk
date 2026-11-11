@@ -100,6 +100,13 @@ const FOE_ROLE: Record<FoeRole, number> = { healer: 0.9, caster: 1.1, cc: 1.2, t
 const HEALER_BACKING = 1.25;
 /** An enemy fighting a third realm (not us) counts this much. */
 const BUSY = 0.6;
+/**
+ * A stealther out of combat is hidden (its kit hides it: sdk/classes/stealther.ts) and opens from stealth: about 200 damage
+ * and a stun or bleed on the first swing, before the other side's defences are up (N5, 2026-11-11). It counts this much more
+ * when the squad decides whether to start a fight, not once in it.
+ */
+const OPENER = 1.4;
+const STEALTHERS = new Set(['Infiltrator', 'Nightshade', 'Shadowblade']);
 /** Per level of difference, a member or an enemy counts this much more or less (clamped). */
 const PER_LEVEL = 0.08;
 
@@ -146,6 +153,8 @@ export interface SizeUp {
     theirs: number;
     /** ours / theirs; Infinity with nobody against us. */
     ratio: number;
+    /** The same with our hidden stealthers' opener (OPENER): the odds of a fight we would start. */
+    opening: number;
 }
 
 /**
@@ -172,7 +181,8 @@ export function sizeUp(members: readonly MemberReport[], enemies: readonly Conta
     const theirWorth = foes.map(c => foeWorth(c, level) * (busy(c) ? BUSY : 1));
     const theirHealers = foes.filter(c => !c.isPet && foeRole(c) === 'healer').length;
     const a = sideStrength(ourWorth, ourHealers), b = sideStrength(theirWorth, theirHealers);
-    return { foes, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity };
+    const opened = sideStrength(alive.map((m, i) => ourWorth[i]! * (STEALTHERS.has(m.className) && !m.inCombat ? OPENER : 1)), ourHealers);
+    return { foes, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: b > 0 ? opened / b : Infinity };
 }
 
 // ── Roaming the edges ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -289,6 +299,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const engaged = o.phase === 'engage';
     const fmt = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : '∞');
     const odds = `${fmt(up.ratio)} (${here.length} vs ${up.foes.length})`;
+    const openOdds = `${fmt(up.opening)} (${here.length} vs ${up.foes.length}${up.opening > up.ratio ? ', from stealth' : ''})`;
 
     /** Where to run: toward friends near and not behind the enemy, else home (or straight away when they stand that way). */
     const fleeTarget = (): { way: Point; toward: 'friends' | 'home' | 'away'; target: Point | null } => {
@@ -350,7 +361,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     }
 
     // ── Not fighting: enemies we would not take are left alone, and stepped away from when near ──
-    if (!engaged && !hit && !sq.stand && up.foes.length && up.ratio < r.engageAt) {
+    if (!engaged && !hit && !sq.stand && up.foes.length && up.opening < r.engageAt) {
         if (!up.foes.every(c => (sq.avoid[c.objectId] ?? 0) > now)) sq.avoided++;
         for (const c of up.foes) sq.avoid[c.objectId] = now + r.avoidMs;
         const nearest = Math.min(...up.foes.map(c => dist(c, centre)));
@@ -358,7 +369,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
             const way = runWay(centre, up.foes, home?.arrival ?? null);
             const goal = spotAlong(trip, centre, way, r.sizeUp);
             stepLeg(trip, 'avoid', goal, { from: centre, movers: here, replan: 1500 });
-            return { phase: 'travel', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: legAnchor(mem), facing: mem.legFacing, objective: `keep clear of ${up.foes.length} enemies`, reason: `avoid: odds ${odds} below ${r.engageAt}, nearest ${Math.round(nearest)} away` };
+            return { phase: 'travel', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: legAnchor(mem), facing: mem.legFacing, objective: `keep clear of ${up.foes.length} enemies`, reason: `avoid: odds ${openOdds} below ${r.engageAt}, nearest ${Math.round(nearest)} away` };
         }
     }
     const hidden = new Set(Object.keys(sq.avoid).map(Number));
@@ -376,7 +387,10 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         }
     }
     const u = callInner(contacts);
-    return sq.stand && u.phase === 'engage' ? { ...u, reason: `caught: ${u.reason ?? ''}` } : u;
+    if (sq.stand && u.phase === 'engage') return { ...u, reason: `caught: ${u.reason ?? ''}` };
+    // Say who we keep clear of, for the log: the orders alone show only a patrol.
+    if (shunned.length && !showAll && u.phase !== 'engage') return { ...u, reason: `${u.reason ?? ''}; clear of ${shunned.length} at odds ${openOdds}` };
+    return u;
 }
 
 /** The shared small-squad strategy: rvrRoaming's behaviours, with the squad's decide and settings. */

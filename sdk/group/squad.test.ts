@@ -106,6 +106,16 @@ describe('decideSquad: picking fights', () => {
         expect(d.reason).toContain('waypoint 1/3');   // (13000, 10000) and (13000, 13000) are within 4500 of them
     });
 
+    test("a hidden stealther opens on what it would not take in the open: a lone mezzer, not two", () => {
+        const assassin = () => [report('Mordred', { role: 'melee', className: 'Infiltrator', capabilities: caps(), objectId: 1, regionId: R, x: BASE.x, y: BASE.y, z: 0, level: 24 })];
+        const mezzer = [foe(51, 1500, guess('cc'))];
+        expect(decide(picture(squad(['Merc']), mezzer)).reason).toStartWith('avoid:');
+        expect(decide(picture(assassin(), mezzer)).phase).toBe('engage');
+        expect(decide(picture(assassin(), [foe(51, 1500), foe(52, 1600)])).reason).toStartWith('avoid:');
+        // In combat it is seen: no opener.
+        expect(sizeUp(assassin().map(m => ({ ...m, inCombat: true })), mezzer, BASE, SQUAD_SETTINGS).opening).toBeCloseTo(sizeUp(assassin(), mezzer, BASE, SQUAD_SETTINGS).ratio, 5);
+    });
+
     test('a hurt solo does not start a fight it would start at full health', () => {
         expect(decide(picture(squad(['Merc'], { Merc: { hp: 60 } }), [foe(51, 1500)])).reason).toStartWith('avoid:');
     });

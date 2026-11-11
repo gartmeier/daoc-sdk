@@ -25,6 +25,8 @@ square law), so two against one is four to one.
 - An enemy busy with a third realm counts 0.6.
 - The squad takes a fight at a ratio of `squad.engageAt` (0.9) or better, and leaves one below `squad.leaveAt` (0.55). In between, a fight it is in goes on.
 - One against one at full health is 1: taken. A solo at 60 % health against a fresh enemy is not taken.
+- A stealther (Infiltrator, Nightshade, Shadowblade) out of combat counts 1.4 when starting a fight, not once in it. It is hidden then, and its opener does about 200 damage plus a stun or bleed (N5). So a hidden solo opens on a lone mezzer, but not on two.
+- A patrol that passes a group it keeps clear of says so in its reason (`; clear of N at odds ...`). That came from N5's solo run (2026-11-11 21:00): Mordred skipped a waypoint near four Midgarders, and the log showed only the patrol.
 
 **Leaving** (flee). A fight below leaveAt becomes a `retreat` order whose reason starts with `flee:`.
 - Where it runs: toward friends of our realm within `squad.friendMax` (9000) unless the enemy stands that way, else toward our portal keep, else straight away.
