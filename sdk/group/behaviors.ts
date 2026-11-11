@@ -1624,14 +1624,16 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
                 }
                 // The server's second "too far" on this focus within 15 s, though our view says in reach: leave it 8 s and let the
                 // turn go on (a kit's nukeInReach). Hrafna got 15 in 17 s in arena round 32 and 37 (2026-11-10, Midgard class session).
+                // "You can't see your target from here!" the same: castSpell already stepped toward it once. Ciaran got 71 a
+                // 2.5 s apart behind one hill in round 178 (2026-11-11, Hibernia session).
                 const strikes: Map<number, number[]> = ctx.memory.get('assistFar') ?? new Map();
                 ctx.memory.set('assistFar', strikes);
                 const recent = (strikes.get(mob.objectId) ?? []).filter(t => now - t < 15_000);
-                if (recent.length >= 2 && now - recent.at(-1)! < 8000) return skipping('assist: server says out of reach', mob.objectId);
+                if (recent.length >= 2 && now - recent.at(-1)! < 8000) return skipping('assist: server says out of reach or out of sight', mob.objectId);
                 ctx.doing('nuke', mob.objectId, sp.spell.name);
                 const c = await ctx.bot.castSpell(sp.spell, mob.objectId, stand ? { approach: false } : {});
                 ctx.result('nuke', c, mob.objectId);
-                if (c.reason === 'out_of_range') strikes.set(mob.objectId, [...recent, Date.now()]);
+                if (c.reason === 'out_of_range' || c.reason === 'not_visible') strikes.set(mob.objectId, [...recent, Date.now()]);
                 noteWet(ctx, mob.objectId, c);
                 noteNukeEnd(ctx.memory, sp, c, Date.now());
                 if (sp.type === 'DamageOverTime' && (c.success || /already has that effect/i.test(c.message ?? ''))) { dotted.add(dotFamily(sp)); ctx.memory.set(key, dotted); }

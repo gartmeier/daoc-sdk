@@ -1105,6 +1105,17 @@ describe('assist after the server\'s "too far" twice', () => {
         expect(s.calls.castSpell).toEqual([51, 51]);
         expect(s.skips.at(-1)).toMatch(/server says out of reach/);
     });
+
+    test('"You can\'t see your target from here!" twice the same (round 178: Ciaran 71 times behind one hill)', async () => {
+        const s = stub({ name: 'Ciaran', role: 'nuker', at: { x: 10_000, y: 10_000 }, contacts: [foe(51, 11_000, 10_000)], orders: { focus: 51 }, settings: { ...LEASHED, standGround: true, standStep: 0 } as TacticsSettings,
+            castSpell: async () => ({ success: false, reason: 'not_visible', message: "You can't see your target from here!" }) });
+        Object.assign(s.ctx.spells, { nuke: () => ({ spell: { name: 'Mana Bolt' }, type: 'DirectDamage', range: 1500, castTime: 2.5 }), capabilities: () => ({ nuke: true }) });
+        await assist().run(s.ctx);
+        await assist().run(s.ctx);
+        await assist().run(s.ctx);
+        expect(s.calls.castSpell).toEqual([51, 51]);
+        expect(s.skips.at(-1)).toMatch(/out of sight/);
+    });
 });
 
 describe('assist holding ground: the skip says whether the distance or an enemy by the step held it', () => {
