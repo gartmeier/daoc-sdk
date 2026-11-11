@@ -55,13 +55,32 @@ Thidranki Warden Blade and a medium shield, 621 health in scale. Blades 10: Glow
 
 **Before the kit** (generic healer list): round 121 (2026-11-10) 2 heals, 3 interrupted, died; round 123 6 heals, 9 buffs, idle 26 %, moving 61 %.
 
-**With the kit** (2026-11-10 night): rounds 126 (solo, not grouped), 128 (only healer: 7 heals, idle 37 %, two deaths), 131, 135, 136 (beside the Druid: idle 46-55 %, 4-11 heals, no deaths; won all three). The damage add started and stopped once a fight in 126-135.
+**Verified, with the kit** (38 rounds, 126-226, the night of 2026-11-10/11; numbers from `groups/hibernia/runs/*.md`):
+
+- **Line-ups:**
+  - The only healer once, in round 128: 7 heals, idle 37 %, won.
+  - From 881f449 on, every line-up needs a Druid (the user's rule: Druid and Bard for the spec buffs), so she always played beside Brigid. That is the two healers with one nuker make-up.
+- **Hibernia won 21 of the 38** (by wipe or holding the cap): 9 of 17 against Camelot, 12 of 21 against Midgard. That is below the realm's 46 of 74, and two healers with one nuker is the weak make-up (groups/hibernia/lab_log.md, morning report).
+- **The formation:** from round 199 the two healers stand apart (`twoHealerFormation` in the private `rvr.ts`). Before that, she and the Bard stood on one spot, and one area mezz took both (round 196). After the change she won 4 of 10, though by then the other realms were stronger too.
+- **Heals:**
+  - 385 heals, about 10 a round. 84 were interrupted (22 %).
+  - Group Revigoration only 5 times: four hurt members within reach is rare beside a Druid.
+  - Idle 0-80 % "nothing to do", about 30 % typically.
+  - 17 deaths in 38 rounds. She was targeted 12 % of fight time on average, up to 62 % in round 210.
+- **The damage add:**
+  - Under `song()` it cancelled itself 7 times in rounds 126-145 (`song:pulse_cancelled`).
+  - Under the kit's own keeper (d9a79ba), none in rounds 150-226, with 12 casts in all. Mostly it was already pulsing from the round before.
+- **Her bladeturn** reports as `buff`, so a report doesn't count it apart.
+
+**Verified 2026-11-10 night** (her effects between rounds 139 and 140, `bun sdk/cli.ts aine`):
+- Nature's Shield is up out of a fight, and Nature's Retaliation still pulses.
+- A round's script stops only a pulse it started itself (`song()`'s memory), and every round is a fresh process. So a damage add started in one round runs on into the next, and it costs no power.
 
 ## Open
 
-- Not yet played with the kit: the damage add, the bubble in fights, Group Revigoration at four.
-- The heal thresholds as the only healer (tank 90, others 83, emergency 55) are unmeasured.
-- Major Regeneration over Regrowth for a member missing more than ~110 (`pickHeal` ties them).
-- **Verified 2026-11-10 night** (her effects between rounds 139 and 140, `bun sdk/cli.ts aine`): Nature's Shield is up out of a fight, and Nature's Retaliation still pulses. A round's script stops only a pulse it started itself (`song()`'s memory), and every round is a fresh process, so the damage add started in one round runs on into the next; it costs no power. That is why rounds 136 and 139 show no damage-add result: it was already on.
-- Glowing Blade on a diver beside her while a Druid carries the heals.
+- **Two healers with one nuker** is the make-up she plays in, and it is the weakest. Requiring two nukers would bench her, so the picker's mix stands. A line-up with her as the Druid's partner and two nukers needs a fifth class that isn't the Bard, the Druid or a tank, and there is none.
+- **The heal thresholds as the only healer** (tank 90, others 83, emergency 55) are still unmeasured. She can't be the only healer while the Druid is required.
+- **Major Regeneration over Regrowth** for a member missing more than ~110 (`pickHeal` ties them).
+- **Glowing Blade** on a diver beside her while the Druid carries the heals. At idle 30 % she has the time.
+- **Her bladeturn in fights:** give it a result name of its own (now `buff`), so its recasts can be counted.
 

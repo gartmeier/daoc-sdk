@@ -50,9 +50,28 @@ export default blademaster();
 
 **Before the kit** (generic melee list, `fighterStyle`): round 121 (2026-11-10, with the Hero) 3,589 damage, Ice Storm 3, Hurricane 2, Taunting Blade 1; round 123 (no Hero, as melee) 317 damage, 2 styles, `melee:out_of_reach` 3.
 
+**Verified, with the kit** (37 rounds, 128-225, the night of 2026-11-10/11; numbers from `groups/hibernia/runs/*.md`):
+
+- **The tank in 36 of them**: the line-up had no Hero (`roleOfLineup`). The one round beside Cuchulainn (160) he played the melee, and it was lost.
+- **Hibernia won 25 of the 37** (by wipe or holding the cap): 12 of 18 against Camelot, 13 of 19 against Midgard.
+- **Styles:**
+  - Hurricane 193 in all, 1-16 a round.
+  - Ice Storm 59, 0-7 a round, and none in 11 rounds.
+  - Taunting Blade 8, swung at enemy pets: the tank's monster pick.
+  - About 1,250 damage a round.
+- **Triple Wield** 31 times, refused 8. Every round is a new process, so the kit doesn't know the 7-minute reuse from the round before. Since 7b759bc a refusal waits as long as the server says.
+- **Deaths:**
+  - Against Midgard, 14 deaths in 13 of 19 rounds. Their two-front line-ups (Warrior + Berserker) had him as target 47 % of fight time on average, up to 63 % in round 206.
+  - Against Camelot, 7 deaths in 6 of 18 rounds, targeted 37 %.
+- **Idle 0-21 %:**
+  - "focus beyond the chase leash, no enemy inside it" in 7 rounds, when the last enemy runs. The Hero shows it too as tank: 63 % in round 213.
+  - "focus unknown" in 8 rounds.
+
 ## Open
 
-- Not yet played with the kit: the stun log, Triple Wield, and the tank's role without a Hero.
-- Intercept (19) on our Bard or healer: no behaviour casts it.
-- Ice Storm from the side: he swings from where he stands; a flank step to the target's side (as the Bard's ccFlank does for casts) would make it land more often on a target that fights him.
-- Shields 13 is dead weight at 24 while he dual-wields.
+- **Intercept** (19) on our Bard or healer: no behaviour casts it. Against Albion, which dives our casters first (Lugh died in 10 of 18 Camelot rounds, [eldritch.md](eldritch.md)), it is the tank's one answer that works on players.
+- **Ice Storm** lands 1.6 times a round. It needs the side, and he swings from where he stands. A flank step to the target's side (as the Bard's ccFlank does for casts) would land it more often on a target that fights him.
+- **The chase leash** (the shared `tank` behaviour): when the last enemy runs, the tank stands. This matters for him and the Hero alike.
+- **Taunting Blade at enemy pets**: the tank's monster pick, also in [hero.md](hero.md).
+- **Midgard's dive on him**: he dies in most Midgard rounds. Nothing of his reduces it: Evade only, no shield, no Guard.
+- **Shields 13** is dead weight at 24 while he dual-wields.
