@@ -18,7 +18,7 @@ import {
     type ConcentrationEntry,
 } from '../protocol/incoming/combat';
 import {
-    decodeModelChange, decodeNpcCreate, decodeObjectCreate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate,
+    decodeModelChange, decodeModelTypeChange, decodeNpcCreate, decodeObjectCreate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate,
     decodePlayerHeading, decodePlayerPosition, decodeRemoveObject, decodeObjectDataUpdate, decodeEquipmentUpdate,
 } from '../protocol/incoming/objects';
 import {
@@ -175,6 +175,8 @@ export interface PlayerEntry {
     diedAt: number;
     isSitting: boolean;
     inCombat: boolean;
+    /** Hidden as its create showed it (flag 0x10, PacketLib1124.cs:388): only a stealther we can detect is created at all. */
+    stealthed: boolean;
     lastUpdate: number;
 }
 
@@ -236,6 +238,8 @@ export interface SelfState {
     lastDeathAt: number | null;
     lastCombatAt: number;
     statusReceived: boolean;
+    /** Hidden: 0x8D type 3 on stealth, 2 when it ends (StealthECSEffect.cs:27, :54). */
+    stealthed: boolean;
 }
 
 /** What we remember of a pet of ours with no window. */
@@ -284,7 +288,7 @@ function newSelf(): SelfState {
         experience: 0, experienceForNextLevel: 0, levelPermill: 0, realmPoints: 0, bountyPoints: 0,
         specPoints: 0, realmSpecPoints: 0, money: emptyMoney(), stats: null, statsWithoutItems: null, constitutionLost: 0, encumbrance: null,
         isDead: false, isSitting: false, attacking: false, targetObjectId: null, deathCount: 0,
-        lastDeathAt: null, lastCombatAt: 0, statusReceived: false,
+        lastDeathAt: null, lastCombatAt: 0, statusReceived: false, stealthed: false,
     };
 }
 
@@ -826,8 +830,17 @@ export class WorldModel {
                 this.players.set(d.objectId, {
                     objectId: d.objectId, sessionId: d.sessionId, name: d.name, guildName: d.guildName, lastName: d.lastName,
                     level: d.level, model: d.model, realm: d.realm, x: d.x, y: d.y, z: d.z, heading: d.heading, speed: 0,
-                    healthPercent: d.isDead ? 0 : 100, isDead: d.isDead, diedAt: 0, isSitting: false, inCombat: false, lastUpdate: now,
+                    healthPercent: d.isDead ? 0 : 100, isDead: d.isDead, diedAt: 0, isSitting: false, inCombat: false, stealthed: d.stealthed, lastUpdate: now,
                 });
+                return true;
+            }
+            case ServerOp.PlayerModelTypeChange: {
+                const d = decodeModelTypeChange(p);
+                if (d.objectId === this.self.objectId) this.self.stealthed = d.modelType === 3;
+                else {
+                    const pl = this.players.get(d.objectId);
+                    if (pl) pl.stealthed = d.modelType === 3;
+                }
                 return true;
             }
             case ServerOp.EquipmentUpdate: {
@@ -1526,7 +1539,7 @@ export class WorldModel {
                 heading: pl.heading, distance: Math.round(dist3(pos, pl)), distance2d: Math.round(dist2(pos, pl)),
                 lastSeenAgo: now - pl.lastUpdate, sessionId: pl.sessionId, guildName: pl.guildName, lastName: pl.lastName,
                 level: pl.level, realm: realmName(pl.realm), healthPercent: pl.healthPercent, isDead: pl.isDead,
-                isSitting: pl.isSitting, inCombat: pl.inCombat, model: pl.model, isShade: pl.model === SHADE_MODEL,
+                isSitting: pl.isSitting, inCombat: pl.inCombat, model: pl.model, isShade: pl.model === SHADE_MODEL, stealthed: pl.stealthed,
                 ...(this.gear.has(pl.objectId) ? { gear: this.gear.get(pl.objectId) } : {}),
             });
         }

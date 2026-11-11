@@ -3160,3 +3160,42 @@ describe('WorldModel: a model that changes (0xDB), and a Necromancer in shade', 
         expect(new WorldModel().handle(ServerOp.ModelChange, Uint8Array.of(1, 2))).toBe(true);
     });
 });
+
+describe('WorldModel stealth', () => {
+    const create = (oid: number, session: number, name: string, realm: number, stealthed: boolean) =>
+        W().f32le(ME.x + 50).f32le(ME.y).f32le(ME.z).u16(session).u16(oid).u16(0).u16(32).u8(24).u8((realm << 2) | (stealthed ? 0x10 : 0)).fill(0, 10)
+            .pascal(name).pascal('').pascal('').pascal('').pascal('').u8(0).toBytes();
+
+    test('a stealther we detect is created with the flag (PacketLib1124.cs:388), the rest without', () => {
+        const m = new WorldModel();
+        m.handle(ServerOp.PlayerCreate172, create(301, 9, 'Kobold', 2, true));
+        m.handle(ServerOp.PlayerCreate172, create(302, 10, 'Briton', 1, false));
+        const seen = m.nearbyPlayers(ME);
+        expect(seen.find(p => p.objectId === 301)?.stealthed).toBe(true);
+        expect(seen.find(p => p.objectId === 302)?.stealthed).toBe(false);
+    });
+
+    test('one that hides out of our detection is deleted (StealthECSEffect.cs:36-40): gone, and its relayed moves ask, never place it', () => {
+        const asked: number[] = [];
+        const m = new WorldModel({ onUnknownSession: s => asked.push(s) });
+        m.handle(ServerOp.PlayerCreate172, create(301, 9, 'Kobold', 2, false));
+        expect(m.nearbyPlayers(ME)).toHaveLength(1);
+        m.handle(ServerOp.ObjectDelete, W().u16(301).u16(1).toBytes());
+        expect(m.nearbyPlayers(ME)).toHaveLength(0);
+        // The server relays its moves only to those that detect it (PlayerPositionUpdateHandler.cs:438); one that came anyway is not drawn.
+        m.handle(ServerOp.PlayerPosition, W().f32le(1).f32le(2).f32le(3).f32le(0).f32le(0).u16(9).u16(400).u16(0).u8(0).u8(0).u16(0).u16(0).u8(0).u8(0).u8(0).u8(100).u8(100).u8(100).u16(0).toBytes());
+        expect(m.nearbyPlayers(ME)).toHaveLength(0);
+    });
+
+    test('0x8D marks us hidden and shown again; another player\'s marks that one', () => {
+        const m = new WorldModel();
+        m.self.objectId = 123;
+        m.handle(ServerOp.PlayerModelTypeChange, W().u16(123).u8(3).u8(8).toBytes());
+        expect(m.self.stealthed).toBe(true);
+        m.handle(ServerOp.PlayerModelTypeChange, W().u16(123).u8(2).u8(0).toBytes());
+        expect(m.self.stealthed).toBe(false);
+        m.handle(ServerOp.PlayerCreate172, create(301, 9, 'Kobold', 2, false));
+        m.handle(ServerOp.PlayerModelTypeChange, W().u16(301).u8(3).u8(8).toBytes());
+        expect(m.nearbyPlayers(ME)[0]?.stealthed).toBe(true);
+    });
+});

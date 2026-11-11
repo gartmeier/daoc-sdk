@@ -248,7 +248,7 @@ export class DaocClient {
             realmSpecPoints: self.realmSpecPoints, money: { ...self.money }, stats: self.stats ? { ...self.stats } : null, statsWithoutItems: self.statsWithoutItems ? { ...self.statsWithoutItems } : null,
             constitutionLost: self.constitutionLost, encumbrance: self.encumbrance ? { ...self.encumbrance } : null,
             isDead: self.isDead, isSitting: self.isSitting || mv.sitting, attacking: self.attacking, inCombat: m.inCombat(),
-            targetObjectId: self.targetObjectId, deathCount: self.deathCount, lastDeathAt: self.lastDeathAt, isShade: m.isShade(),
+            targetObjectId: self.targetObjectId, deathCount: self.deathCount, lastDeathAt: self.lastDeathAt, isShade: m.isShade(), stealthed: self.stealthed,
         } : null;
         return {
             tick: this.tick,
@@ -505,6 +505,17 @@ export class DaocClient {
                 this.send(ClientOp.UseSkill, out.encodeUseSkill(this.prefix(), a.skillIndex, 1, this.useFlags()));
                 const sk = m.usableSkills[a.skillIndex + specCount];
                 return ok(`used skill ${sk?.name ?? a.skillIndex}`);
+            }
+            case 'useSpec': {
+                // A click on a specialization: type 0 indexes the whole list, the specs first (UseSkillHandler.cs:57-64), as Stealth is used (StealthSpecHandler.cs).
+                const specCount = m.specCount();
+                if (!Number.isInteger(a.specIndex) || a.specIndex < 0 || a.specIndex >= specCount) {
+                    return fail('bad_args', `specIndex ${a.specIndex} out of range (0..${specCount - 1})`);
+                }
+                const stale = this.ensureFreshPosition();
+                if (stale) return stale;
+                this.send(ClientOp.UseSkill, out.encodeUseSkill(this.prefix(), a.specIndex, 0, this.useFlags()));
+                return ok(`used spec ${m.usableSkills[a.specIndex]?.name ?? a.specIndex}`);
             }
             case 'castSpell': {
                 const line = m.spellLines.get(a.lineIndex);

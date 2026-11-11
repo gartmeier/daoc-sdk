@@ -704,6 +704,29 @@ export interface SkillUseResult extends ActionResult {
     messages: GameMessage[];
 }
 
+export interface StealthResult extends ActionResult {
+    /** Hidden after the call, as the server last said. */
+    stealthed: boolean;
+    /** With reason `cooldown`: when the server lets the next toggle through. */
+    retryAfterMs?: number;
+    messages: GameMessage[];
+}
+
+/** StealthSpecHandler.cs and GamePlayer.Stealth's refusals (language/EN/Ability.txt:167-174). */
+const STEALTH_REFUSALS: readonly [RegExp, string][] = [
+    [/too close to an enemy to hide/i, 'enemy_near'],
+    [/been in combat recently and can't hide/i, 'in_combat'],
+    [/must end your current action before hiding/i, 'busy'],
+    [/must wait (\d+) more second to attempt to hide/i, 'cooldown'],
+    [/can't hide while (stunned|mesmerized)/i, 'crowd_controlled'],
+    [/can't hide when dead/i, 'dead'],
+    [/pulsing spell effect and cannot hide|can't stealth while/i, 'refused'],
+];
+const NOW_HIDDEN = /^You are now hidden!/i;
+const NO_LONGER_HIDDEN = /^You are no longer hidden!/i;
+/** The server takes a toggle no sooner than 2 s after the last (StealthSpecHandler.cs:35-41). */
+const STEALTH_TOGGLE_MS = 2000;
+
 export interface FindKillableOptions {
     /** NPC name filter. */
     pattern?: NamePattern;
@@ -2815,6 +2838,52 @@ export class BotActions {
         const ability = this.sdk.findAbility(name);
         if (!ability) return fail(`Ability not found: ${describeTarget(name)}`, 'not_found', { name: String(name), messages: [] });
         return this.useSkillObserved(ability.name, ability.skillIndex, null, ABILITY_REFUSALS);
+    }
+
+    /**
+     * Hide: a click on the Stealth spec, success when the server says "You are now hidden!" (or its 0x8D). Already hidden
+     * succeeds at once. Reasons: `not_found` (no Stealth line), `enemy_near` (an enemy inside 1024 - 896 x stealth / its
+     * level, twice that for Detect Hidden), `in_combat` (the server's 10 s), `busy` (attack mode or casting: we stop
+     * attacking first), `cooldown` (2 s since the last toggle; `retryAfterMs`), `crowd_controlled`, `dead`, `no_response`.
+     * Hidden we move slower, speed buffs pause, and a swing, a cast or a mob that spots us ("X uncovers you!") ends it.
+     */
+    async stealth(): Promise<StealthResult> {
+        return this.toggleStealth(true);
+    }
+
+    /** Show again: the same click. Not hidden succeeds at once. */
+    async unstealth(): Promise<StealthResult> {
+        return this.toggleStealth(false);
+    }
+
+    private async toggleStealth(want: boolean): Promise<StealthResult> {
+        const specs = this.sdk.getSkills().specializations;
+        const index = specs.findIndex(s => /^stealth$/i.test(s.name));
+        if (index < 0) return { ...fail('No Stealth line', 'not_found', {}), stealthed: this.sdk.isStealthed(), messages: [] };
+        if (this.sdk.isStealthed() === want) return { success: true, message: want ? 'already hidden' : 'not hidden', stealthed: want, messages: [] };
+        if (want && this.sdk.getPlayer()?.attacking) await this.sdk.sendAttack(false);
+        const watch = this.helpers.watch();
+        try {
+            const r = await this.sdk.sendUseSpec(index);
+            if (!r.success) return { ...r, stealthed: this.sdk.isStealthed(), messages: [] };
+            const refusal = () => STEALTH_REFUSALS.find(([re]) => watch.find([re]));
+            const got = await this.helpers.waitFor(() => {
+                if (watch.find([want ? NOW_HIDDEN : NO_LONGER_HIDDEN]) || this.sdk.isStealthed() === want) return 'ok';
+                return refusal() ? 'refused' : null;
+            }, 2500);
+            const messages = watch.messages().slice();
+            const stealthed = got === 'ok' ? want : this.sdk.isStealthed();
+            if (got === 'ok') return { success: true, message: want ? 'You are now hidden!' : 'You are no longer hidden!', stealthed, messages };
+            if (got === 'refused') {
+                const [re, reason] = refusal()!;
+                const text = watch.findText([re])!;
+                const wait = reason === 'cooldown' ? Math.max(1, Number(/(\d+) more second/.exec(text)?.[1] ?? 1)) * 1000 : undefined;
+                return { ...fail(text, reason, {}), stealthed, messages, ...(wait !== undefined && { retryAfterMs: Math.min(wait, STEALTH_TOGGLE_MS) }) };
+            }
+            return { ...fail(`No answer to the Stealth click`, 'no_response', {}), stealthed, messages };
+        } finally {
+            watch.dispose();
+        }
     }
 
     /**

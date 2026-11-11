@@ -1144,6 +1144,18 @@ export class BotSDK {
         return this.sendAction({ type: 'useSkill', skillIndex, reason: 'SDK' });
     }
 
+    /** Click a specialization, as Stealth is used: its index in getSkills().specializations (see bot.stealth). An older client answers `unknown_action`. */
+    async sendUseSpec(specIndex: number): Promise<ActionResult> {
+        return this.sendAction({ type: 'useSpec', specIndex, reason: 'SDK' });
+    }
+
+    /** Hidden in stealth: the server's 0x8D, or on an older client the Stealth effect. */
+    isStealthed(): boolean {
+        const p = this.getPlayer();
+        if (p?.stealthed !== undefined) return p.stealthed;
+        return this.getEffects().some(e => /^stealth$/i.test(e.name));
+    }
+
     /** Cast a spell by lineIndex/spellIndex (see findSpell) on the current target. */
     async sendCastSpell(lineIndex: number, spellIndex: number): Promise<ActionResult> {
         return this.sendAction({ type: 'castSpell', lineIndex, spellIndex, reason: 'SDK' });

@@ -558,3 +558,34 @@ describe('DaocClient position-prefixed packets after a 0xA9 gap', () => {
         expect(sent).not.toContain(ClientOp.UseSkill);
     });
 });
+
+describe('DaocClient useSpec', () => {
+    test('a spec click is 0xBB with type 0 and the index among the specs (UseSkillHandler.cs:57-64)', async () => {
+        const { client, s, sent, payloads } = playingClient();
+        s.model.usableSkills = [
+            { skillType: 0, level: 21, internalId: 1, special: 0, bonus: 0, icon: 0, name: 'Critical Strike' },
+            { skillType: 0, level: 19, internalId: 2, special: 0, bonus: 0, icon: 0, name: 'Stealth' },
+            { skillType: 5, level: 1, internalId: 3, special: 0, bonus: 0, icon: 0, name: 'Sprint' },
+        ];
+        s.mover.sendUpdate();
+        sent.length = 0;
+        payloads.length = 0;
+        const r = await client.execute({ type: 'useSpec', specIndex: 1 });
+        expect(r).toMatchObject({ success: true, message: 'used spec Stealth' });
+        const p = payloads[sent.lastIndexOf(ClientOp.UseSkill)]!.split(' ');
+        expect(p.slice(20, 22)).toEqual(["01", "00"]);
+        // Sprint is no spec: out of range, nothing sent.
+        sent.length = 0;
+        expect(await client.execute({ type: 'useSpec', specIndex: 2 })).toMatchObject({ success: false, reason: 'bad_args' });
+        expect(sent).not.toContain(ClientOp.UseSkill);
+    });
+
+    test('our stealth reaches the snapshot from 0x8D', () => {
+        const { client, s } = playingClient();
+        expect(client.collectState().player?.stealthed).toBe(false);
+        s.model.handle(ServerOp.PlayerModelTypeChange, new PacketWriter().u16(1).u8(3).u8(8).toBytes());
+        expect(client.collectState().player?.stealthed).toBe(true);
+        s.model.handle(ServerOp.PlayerModelTypeChange, new PacketWriter().u16(1).u8(2).u8(0).toBytes());
+        expect(client.collectState().player?.stealthed).toBe(false);
+    });
+});

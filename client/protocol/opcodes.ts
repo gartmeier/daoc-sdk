@@ -72,6 +72,7 @@ export const ServerOp = {
     Dialog: 0x81,
     QuestEntry: 0x83,
     PetWindow: 0x88,
+    PlayerModelTypeChange: 0x8D,
     PlayerRevive: 0x89,
     CharacterPointsUpdate: 0x91,
     ObjectUpdate: 0xA1,

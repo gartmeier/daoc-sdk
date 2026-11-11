@@ -141,6 +141,15 @@ export function decodeModelChange(p: Uint8Array): { objectId: number; model: num
     return { objectId: r.u16(), model: r.u16(), size: r.u32le() };
 }
 
+/**
+ * 0x8D PlayerModelTypeChange (PacketLib168.cs:2853-2862): u16 oid, u8 type, u8 flag. Stealth sends it to the stealther alone:
+ * type 3 on hiding, 2 on showing again (StealthECSEffect.cs:27, :54).
+ */
+export function decodeModelTypeChange(p: Uint8Array): { objectId: number; modelType: number } {
+    const r = new PacketReader(p);
+    return { objectId: r.u16(), modelType: r.u8() };
+}
+
 /** 0xE1 ObjectDelete (PacketLib168.cs:2864): u16 oid, u16 1. */
 export function decodeObjectDelete(p: Uint8Array): { objectId: number } {
     return { objectId: new PacketReader(p).u16() };

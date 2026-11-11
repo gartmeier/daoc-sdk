@@ -117,6 +117,8 @@ export interface PlayerState {
     lastDeathAt: number | null;
     /** A Necromancer in shade (the negative effect with icon 403, ShadeECSEffect.cs:8, :10; Stealth has that icon as a positive one): the servant fights, we can't melee (ClassDisciple.cs:91), and its death is ours. Leaving shade cuts our health to the pet's percent as it last went (:72-82, :149): a release or the tether leaves min(current, max(10, its %)), its death 10 %. A zone change or a quit in shade uses that percent stale (:155-160), 10 % with no release this session: releasePet first. False out of shade, absent from an older client. */
     isShade?: boolean;
+    /** Hidden in stealth, from the server's own word (0x8D, StealthECSEffect.cs:27, :54). Absent from an older client. */
+    stealthed?: boolean;
 }
 
 // ── World objects ───────────────────────────────────────────────────────────
@@ -189,6 +191,13 @@ export interface NearbyPlayer extends WorldObjectBase {
     isShade?: boolean;
     /** What it shows it wears and holds (0x15 EquipmentUpdate), as any client in view draws it. Absent before its first 0x15 and from an older client. */
     gear?: PlayerGear;
+    /**
+     * Created hidden (PlayerCreate flag 0x10). The server sends a stealthed enemy only to a client that detects it
+     * (GamePlayer.CanDetect: 125 + 20 per level over its Stealth spec, more with Detect Hidden or See Hidden, at most 1900),
+     * and deletes it from the rest (StealthECSEffect.cs:36-40), so what is listed here is what a human would see.
+     * One that hides while we see it keeps the flag it was created with. Absent from an older client.
+     */
+    stealthed?: boolean;
 }
 
 /** A living's visible equipment (0x15, PacketLib1124.cs:52-105). */
@@ -862,6 +871,7 @@ export type BotAction = ActionBase & (
     // Combat
     | { type: 'attack'; on: boolean }
     | { type: 'useSkill'; skillIndex: number }
+    | { type: 'useSpec'; specIndex: number }
     | { type: 'castSpell'; lineIndex: number; spellIndex: number }
     | { type: 'setGroundTarget'; x: number; y: number; z?: number }
 

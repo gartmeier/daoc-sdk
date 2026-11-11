@@ -49,6 +49,8 @@
 | `async acceptResurrection(options: { timeout?: number } = {}): Promise<AcceptResurrectionResult>` | Wait for a resurrection offer, say yes and observe the revive. We come back standing at the caster, with the spell's health and power (10 % and none for a baseline rez). That saves the release's XP loss, grave and constitution loss; resurrection illness comes all the same. Reasons: not_in_game, not_dead, timeout (no offer came), expired (the offer was gone when we answered). |
 | `async takeMeleeSlot(options: { styles?: readonly string[]; weapon?: string; keepOnTie?: boolean } = {}): Promise<MeleeSlotResult>` | Take a melee weapon in hand, for a fighter who may stand with the wrong one or a bow: the state can't say which is active, and the server swings what it is. The weapon the first of `styles` needs, else the higher spec of the two weapon types worn, else the one we took last, else the right hand. With `weapon` (a style tooltip's word, as "This style requires a X weapon!" has it) the slot holding that. Observed by the server's "You attempt to use" (GamePlayer.cs:6564), which comes for a weapon in hand as well: that one changes nothing, and a swing going stops only at a real switch (:4995-4996). A cast going stops with it too (:5004-5008). With `keepOnTie`, two weapons that neither the style nor the spec tells apart (in Midgard a sword and a great sword, one object type and one line, and so with axes and hammers; in Albion and Hibernia a two-hander has a line of its own, so a mace and a two-hander at equal spec, and the higher spec takes the hand whatever the damage) stay as the owner left them: success, slot null, and nothing sent. Equipping a two-hander brings it out by itself, and nothing here knows its damage. A bow left in hand then goes at the first swing (attack, killNpc, killPlayer). Reasons: not_in_game, dead, refused (no melee weapon worn), not_found (none of that `weapon`), no_response. |
 | `async useAbility(name: NamePattern): Promise<SkillUseResult>` | Use an ability (e.g. Sprint); success when the server answers without a refusal or an effect appears. |
+| `async stealth(): Promise<StealthResult>` | Hide: a click on the Stealth spec, success when the server says "You are now hidden!" (or its 0x8D). Already hidden succeeds at once. Reasons: `not_found` (no Stealth line), `enemy_near` (an enemy inside 1024 - 896 x stealth / its level, twice that for Detect Hidden), `in_combat` (the server's 10 s), `busy` (attack mode or casting: we stop attacking first), `cooldown` (2 s since the last toggle; `retryAfterMs`), `crowd_controlled`, `dead`, `no_response`. Hidden we move slower, speed buffs pause, and a swing, a cast or a mob that spots us ("X uncovers you!") ends it. |
+| `async unstealth(): Promise<StealthResult>` | Show again: the same click. Not hidden succeeds at once. |
 | `isInCombat(): boolean` | In combat: attack mode on, recently hit, an NPC is fighting us (getAttackers) or targets our pet or a summon, or an enemy player hit us (getPlayerAttackers). |
 | `resurrectSpell(): Spell \| null` | Our strongest resurrection spell, or null. The higher its level, the more it restores: 10 %, then 30, 50 and 100 % on a spec line. |
 | `async resurrect(target: PlayerTarget, options: ResurrectOptions = {}): Promise<ResurrectResult>` | Resurrect a dead player of our realm: walk into range, cast, and wait for its answer. Success means it is alive again: a finished cast only asks, and a corpse no script controls never answers (the power is gone then). It comes back at our feet. It must be in view. Costs half our full power at equal level (resurrectCost), paid when the cast ends. Reasons: those of castSpell, plus spell_not_found, not_found, invalid_target, not_dead (alive, or released meanwhile), no_power, already_considering (someone else's rez waits for its answer), no_answer. |
@@ -240,6 +242,7 @@
 | `getNpcDialog(): NpcDialog \| null` | Last NPC dialogue with its [keywords]; answer with sendWhisper(npcObjectId, keyword). |
 | `getTextWindow(): TextWindow \| null` | Last custom text window (0xC4), or null. |
 | `getGroup(): GroupMember[]` | Group members (empty when not grouped). |
+| `isStealthed(): boolean` | Hidden in stealth: the server's 0x8D, or on an older client the Stealth effect. |
 | `getPetAttackSentAt(): number \| null` | When the last attack order went to our pet (Date.now()), null before any. Its refusal comes on the one line stream with everything else, and castSpell has to tell it from its own. |
 
 ### Chat
@@ -277,6 +280,7 @@
 | `async sendPickup(objectId: number): Promise<ActionResult>` | Pick up loot on the ground. |
 | `async sendAttack(on: boolean = true): Promise<ActionResult>` | Toggle melee auto-attack on the current target. |
 | `async sendUseSkill(skillIndex: number): Promise<ActionResult>` | Use a style or ability by skillIndex (see findStyle/findAbility). |
+| `async sendUseSpec(specIndex: number): Promise<ActionResult>` | Click a specialization, as Stealth is used: its index in getSkills().specializations (see bot.stealth). An older client answers `unknown_action`. |
 | `async sendCastSpell(lineIndex: number, spellIndex: number): Promise<ActionResult>` | Cast a spell by lineIndex/spellIndex (see findSpell) on the current target. |
 | `async sendSetGroundTarget(x: number, y: number, z?: number): Promise<ActionResult>` | Set the ground target. Without `z` the client snaps it to its terrain, the ground the mover walks on, under a river the mesh's plane 16 below the surface (else our own height); a z passed goes out as given. In a zone where the server has a navmesh loaded it drops a target more than 16 units off the mesh (ground_target_snap_max_distance), and says only "Your ground target is not visible!", and it snaps one it takes to the nearest walkable ground, so its spot can differ from state.groundTarget: usually by a few units, by more beside a gap in the mesh (PlayerGroundTargetHandler.cs:21-33, ground.ts groundTargetSnap). An NPC's coordinates are always a valid spot. Two sets need a pause of about 300 ms: that line names no spot, so the answer to a bad one wipes a good one sent within the round trip from state.groundTarget, and the next cast reads it as not in view. |
 | `async sendPetCommand(command: PetCommand, targetObjectId?: number): Promise<ActionResult>` | Order our pet; with `targetObjectId`, target that first (our target stays moved). Success means dispatched: bot.* observes the answer. |
@@ -437,6 +441,8 @@ interface PlayerState {
   lastDeathAt: number | null;
   /** A Necromancer in shade (the negative effect with icon 403, ShadeECSEffect.cs:8, :10; Stealth has that icon as a positive one): the servant fights, we can't melee (ClassDisciple.cs:91), and its death is ours. Leaving shade cuts our health to the pet's percent as it last went (:72-82, :149): a release or the tether leaves min(current, max(10, its %)), its death 10 %. A zone change or a quit in shade uses that percent stale (:155-160), 10 % with no release this session: releasePet first. False out of shade, absent from an older client. */
   isShade?: boolean;
+  /** Hidden in stealth, from the server's own word (0x8D, StealthECSEffect.cs:27, :54). Absent from an older client. */
+  stealthed?: boolean;
 }
 ```
 
@@ -490,6 +496,8 @@ interface NearbyPlayer extends WorldObjectBase {
   isShade?: boolean;
   /** What it shows it wears and holds (0x15 EquipmentUpdate), as any client in view draws it. Absent before its first 0x15 and from an older client. */
   gear?: PlayerGear;
+  /** Created hidden (PlayerCreate flag 0x10). The server sends a stealthed enemy only to a client that detects it (GamePlayer.CanDetect: 125 + 20 per level over its Stealth spec, more with Detect Hidden or See Hidden, at most 1900), and deletes it from the rest (StealthECSEffect.cs:36-40), so what is listed here is what a human would see. One that hides while we see it keeps the flag it was created with. Absent from an older client. */
+  stealthed?: boolean;
 }
 ```
 
@@ -1590,6 +1598,18 @@ interface MeleeSlotResult extends ActionResult {
 ```typescript
 interface SkillUseResult extends ActionResult {
   name: string;
+  messages: GameMessage[];
+}
+```
+
+### StealthResult
+
+```typescript
+interface StealthResult extends ActionResult {
+  /** Hidden after the call, as the server last said. */
+  stealthed: boolean;
+  /** With reason `cooldown`: when the server lets the next toggle through. */
+  retryAfterMs?: number;
   messages: GameMessage[];
 }
 ```

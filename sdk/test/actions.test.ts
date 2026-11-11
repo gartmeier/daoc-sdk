@@ -1639,6 +1639,63 @@ describe('useStyle / useAbility', () => {
     });
 });
 
+describe('stealth / unstealth', () => {
+    const specs = { specializations: [{ name: 'Critical Strike', level: 21, internalId: 1, bonus: 0 }, { name: 'Stealth', level: 19, internalId: 2, bonus: 0 }], abilities: [], styles: [], spells: [] };
+    const hidden = (on: boolean) => (_a: BotAction, world: FakeWorld) => {
+        setTimeout(() => { world.player.stealthed = on; world.message(on ? 'You are now hidden!' : 'You are no longer hidden!'); }, 10);
+    };
+
+    test('clicks the Stealth spec by its index and reads the answer', async () => {
+        const { w, bot, sdk } = world({ skills: specs });
+        w.player.stealthed = false;
+        w.handlers.useSpec = hidden(true);
+        expect(await bot.stealth()).toMatchObject({ success: true, stealthed: true });
+        expect(w.sentOf('useSpec')).toEqual([expect.objectContaining({ specIndex: 1 })]);
+        expect(sdk.isStealthed()).toBe(true);
+        // Already hidden: nothing sent.
+        expect(await bot.stealth()).toMatchObject({ success: true, message: 'already hidden' });
+        expect(w.sentOf('useSpec')).toHaveLength(1);
+        w.handlers.useSpec = hidden(false);
+        expect(await bot.unstealth()).toMatchObject({ success: true, stealthed: false });
+    });
+
+    test('an older client: the message alone is enough, and the effect reads as hidden', async () => {
+        const { w, bot, sdk } = world({ skills: specs });
+        delete (w.player as { stealthed?: boolean }).stealthed;
+        w.handlers.useSpec = (_a, world) => { setTimeout(() => { world.state.effects = [{ name: 'Stealth' } as never]; world.message('You are now hidden!'); }, 10); };
+        expect(await bot.stealth()).toMatchObject({ success: true, stealthed: true });
+        expect(sdk.isStealthed()).toBe(true);
+    });
+
+    test('the server refusals, by reason', async () => {
+        const { w, bot } = world({ skills: specs });
+        w.player.stealthed = false;
+        const refuse = (text: string) => (_a: BotAction, world: FakeWorld) => { setTimeout(() => world.message(text), 10); };
+        w.handlers.useSpec = refuse('You are too close to an enemy to hide!');
+        expect(await bot.stealth()).toMatchObject({ success: false, reason: 'enemy_near', stealthed: false });
+        w.handlers.useSpec = refuse("You've been in combat recently and can't hide yet!");
+        expect((await bot.stealth()).reason).toBe('in_combat');
+        w.handlers.useSpec = refuse('You must wait 1 more second to attempt to hide!');
+        expect(await bot.stealth()).toMatchObject({ reason: 'cooldown', retryAfterMs: 1000 });
+        w.handlers.useSpec = refuse("You can't hide while mesmerized!");
+        expect((await bot.stealth()).reason).toBe('crowd_controlled');
+        w.handlers.useSpec = () => {};
+        expect((await bot.stealth()).reason).toBe('no_response');
+    });
+
+    test('attack mode is turned off first; no Stealth line is not_found', async () => {
+        const { w, bot } = world({ skills: specs });
+        w.player.stealthed = false;
+        w.player.attacking = true;
+        await Bun.sleep(30); // the next snapshot
+        w.handlers.useSpec = hidden(true);
+        expect((await bot.stealth()).success).toBe(true);
+        expect(w.sent.map(a => a.type).slice(0, 2)).toEqual(['attack', 'useSpec']);
+        const none = world();
+        expect((await none.bot.stealth()).reason).toBe('not_found');
+    });
+});
+
 // ── Loot / recovery ─────────────────────────────────────────────────────────
 
 describe('lootNearby', () => {
