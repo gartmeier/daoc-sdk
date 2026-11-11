@@ -715,6 +715,10 @@ describe('group page logic', () => {
         expect(timeLeft({ ...timing, deadline: 4 * 3600_000 }, 0, 0)!.text).toBe('4:00:00 left');
         expect(timeLeft(null, 0, 0)).toBeNull();
         expect(timeLeft({ windingDown: false, deadline: NaN, hardStop: 0 }, 0, 0)).toBeNull();
+        // A field run: no end time until it winds down (the gateway keeps the runner's Infinity, JSON null, as null).
+        expect(timeLeft({ windingDown: false, deadline: null, hardStop: null }, 0, 0)).toEqual({ text: 'no end time', ms: Infinity, windingDown: false });
+        expect(timeLeft({ windingDown: true, deadline: 5000, hardStop: 65_000 }, 0, 5000)!.text).toBe('winding down · stops within 1:00');
+        expect(timeLeft({ windingDown: true, deadline: null, hardStop: null }, 0, 0)).toBeNull();
     });
 
     test('run log lines: kinds, and the context around a death', () => {

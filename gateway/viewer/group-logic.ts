@@ -354,14 +354,19 @@ export function retryRuns(held: boolean, busy: boolean, failedWith: string | nul
 /**
  * The run's clock: time until pulling stops (deadline), or while winding down
  * until it stops even mid-fight (hardStop). `now` on the gateway clock.
+ * A null deadline is a run with no end time.
  */
 export function timeLeft(timing: RunView['timing'] | null | undefined, skewMs: number, now: number): { text: string; ms: number; windingDown: boolean } | null {
-    if (!timing || !Number.isFinite(timing.deadline) || !Number.isFinite(timing.hardStop)) return null;
+    if (!timing) return null;
     const skew = num(skewMs);
     if (timing.windingDown) {
+        if (typeof timing.hardStop !== 'number' || !Number.isFinite(timing.hardStop)) return null;
         const ms = Math.max(0, timing.hardStop + skew - now);
         return { text: `winding down · stops within ${mmss(ms)}`, ms, windingDown: true };
     }
+    // A field run (seconds: Infinity) runs until it is wound down.
+    if (timing.deadline === null) return { text: 'no end time', ms: Infinity, windingDown: false };
+    if (!Number.isFinite(timing.deadline)) return null;
     const ms = Math.max(0, timing.deadline + skew - now);
     return { text: `${mmss(ms)} left`, ms, windingDown: false };
 }

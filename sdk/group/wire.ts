@@ -112,8 +112,8 @@ export interface GroupPublish {
     meta: RunMeta;
     /** The board's picture (Blackboard.picture), members without capabilities.buffSpells, at most 200 contacts nearest the members. */
     picture: GroupPicture;
-    /** Runner clock. deadline: when pulling stops; hardStop: when the run stops even mid-fight. */
-    timing: { windingDown: boolean; deadline: number; hardStop: number };
+    /** Runner clock. deadline: when pulling stops; hardStop: when the run stops even mid-fight. A run with no end time sends Infinity, which JSON carries as null (the gateway keeps null). */
+    timing: { windingDown: boolean; deadline: number | null; hardStop: number | null };
     coordinator: CoordinatorView | null;
     /** Sent when it changed (planRev bumped) and every 30 s; absent = unchanged. null = no plan. */
     plan?: PlanView | null;

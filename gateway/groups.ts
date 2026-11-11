@@ -173,6 +173,8 @@ export interface GroupStore {
 const isObj = (x: unknown): x is Record<string, any> => !!x && typeof x === 'object' && !Array.isArray(x);
 const num = (x: unknown, d = 0): number => (typeof x === 'number' && Number.isFinite(x) ? x : d);
 const numOrNull = (x: unknown): number | null => (typeof x === 'number' && Number.isFinite(x) ? x : null);
+/** A run clock: null stays null (a field run's Infinity deadline arrives as JSON null: no end time), anything else as num. */
+const runClock = (x: unknown): number | null => (x === null ? null : num(x));
 const str = (x: unknown, max: number, d = ''): string => (typeof x === 'string' ? x.slice(0, max) : d);
 const strOrNull = (x: unknown, max: number): string | null => (typeof x === 'string' ? x.slice(0, max) : null);
 const bool = (x: unknown): boolean => x === true;
@@ -856,7 +858,7 @@ export function sanitizePublish(raw: unknown, limits: Partial<GroupLimits> = {})
             contacts: list(raw.picture.contacts, L.maxContacts, contactOf),
             orders: ordersOf(raw.picture.orders),
         },
-        timing: { windingDown: bool(timing.windingDown), deadline: num(timing.deadline), hardStop: num(timing.hardStop) },
+        timing: { windingDown: bool(timing.windingDown), deadline: runClock(timing.deadline), hardStop: runClock(timing.hardStop) },
         coordinator: coordinatorOf(raw.coordinator),
         planRev: num(raw.planRev),
         reportRev: num(raw.reportRev),
