@@ -31,7 +31,7 @@
 
 import { estimateZ, getClass, realmName } from '../../data/index';
 import type { Realm } from '../types';
-import { assist, buff, crowdControl, flee, guard, hand, heal, holdFormation, meleeFight, position, rejoinFight, release, rest, retreat, rez, SAVING_POWER, shedLoad, song, spareNuke, sprint, tank, type TacticsSettings } from './behaviors';
+import { assist, buff, crowdControl, fightSit, flee, guard, hand, heal, holdFormation, meleeFight, position, rejoinFight, release, rest, retreat, rez, SAVING_POWER, shedLoad, song, spareNuke, sprint, tank, type TacticsSettings } from './behaviors';
 import type { Behavior } from './member';
 import type { Finding, RunReport } from './observer';
 import { isAlive, untouchable } from './blackboard';
@@ -825,9 +825,9 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 export function rvrBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     return {
         tank: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
-        healer: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), spareNuke(), shedLoad(), holdFormation(), buff(), rest()],
-        support: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), rest()],
-        nuker: [release(), sprint(), retreat(), rejoinFight(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), rest()],
+        healer: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), spareNuke(), shedLoad(), holdFormation(), buff(), fightSit(), rest()],
+        support: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), fightSit(), rest()],
+        nuker: [release(), sprint(), retreat(), rejoinFight(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), fightSit(), rest()],
         melee: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
     };
 }

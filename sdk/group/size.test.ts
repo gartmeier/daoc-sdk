@@ -28,7 +28,9 @@ describe('countFor', () => {
         const k = sizedPack(PACK_SETTINGS.pack, 5);
         expect([k.minPack, k.minTogether, k.closeCount, countFor(RVR_SETTINGS.retreat.margin, 5)]).toEqual([3, 3, 3, 3]);
         const e = sizedPack(PACK_SETTINGS.pack, 8);
-        expect([e.minPack, e.minTogether, e.closeCount, countFor(RVR_SETTINGS.retreat.margin, 8)]).toEqual([5, 5, 5, 5]);
+        // minTogether 0.55 (night 2026-11-11, W2's candidate): 4 of eight keep the pack out, 3 of five as before, 3 of six.
+        expect([e.minPack, e.minTogether, e.closeCount, countFor(RVR_SETTINGS.retreat.margin, 8)]).toEqual([5, 4, 5, 5]);
+        expect(sizedPack(PACK_SETTINGS.pack, 6).minTogether).toBe(3);
         const flagged = mergeSettings(PACK_SETTINGS, { pack: { minPack: 1, minTogether: 1 }, retreat: { margin: 99 } } as any);
         expect([sizedPack(flagged.pack, 8).minPack, sizedPack(flagged.pack, 8).minTogether, countFor(flagged.retreat.margin, 8)]).toEqual([1, 1, 99]);
     });

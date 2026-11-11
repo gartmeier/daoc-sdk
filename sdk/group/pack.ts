@@ -19,7 +19,7 @@
 import { estimateZ } from '../../data/index';
 import type { Realm } from '../types';
 import type { Behavior } from './member';
-import { backupHeal, confuse, crowdControl, flee, interrupt, rest, rez, release, retreat, SAVING_POWER, shedLoad, song, sprint, holdFormation, buff } from './behaviors';
+import { backupHeal, confuse, crowdControl, fightSit, flee, interrupt, rest, rez, release, retreat, SAVING_POWER, shedLoad, song, sprint, holdFormation, buff } from './behaviors';
 import { isAlive, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
@@ -155,7 +155,8 @@ export interface PackSettings extends RvrSettings {
 
 export const PACK_OPTIONS: PackOptions = {
     // minPack, minTogether and closeCount were 3, tuned for five (3 of 5): shares of the size now, 3 at five (size.ts).
-    standoff: 1500, reach: 1500, openAt: 1450, idleMs: 3000, waitMs: 0, minPack: { share: 0.6 }, minTogether: { share: 0.6 },
+    // minTogether 0.55 (night 2026-11-11): 3 at five as before, 4 at eight, where 0.6 sent five of eight home (W2's 8 v 8: an 8-pack ran after losing 4).
+    standoff: 1500, reach: 1500, openAt: 1450, idleMs: 3000, waitMs: 0, minPack: { share: 0.6 }, minTogether: { share: 0.55 },
     // User, live: fights may be joined head on, the first version avoided all of them. Only a real crowd is refused.
     boltRun: 0, boltMs: 15_000, boltCoolMs: 30_000, frozenMs: 20_000, phantomMs: 120_000, maxFoes: 8, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
     raidMs: 8000, finishMs: 4000, finishHp: 25, closeCount: { share: 0.6 }, closeIn: 700,
@@ -746,7 +747,7 @@ export const fanOut = (): Behavior<PackSettings> => ({
 export function packBehaviors(): Record<Role, Behavior<RvrSettings>[]> {
     const lists = rvrBehaviors() as Record<Role, Behavior<RvrSettings>[]>;
     const out = Object.fromEntries(Object.entries(lists).map(([role, list]) => [role, list.filter(b => b.name !== 'position')])) as Record<Role, Behavior<RvrSettings>[]>;
-    out.support = [release(), sprint(), retreat(), flee(), rez(), interrupt(), crowdControl(), backupHeal(), confuse(), song(), shedLoad(), holdFormation(), buff(), rest()] as Behavior<RvrSettings>[];
+    out.support = [release(), sprint(), retreat(), flee(), rez(), interrupt(), crowdControl(), backupHeal(), confuse(), song(), shedLoad(), holdFormation(), buff(), fightSit(), rest()] as Behavior<RvrSettings>[];
     const before = (list: Behavior<RvrSettings>[], name: string) => { const i = list.findIndex(b => b.name === name); return i < 0 ? list : [...list.slice(0, i), fanOut() as unknown as Behavior<RvrSettings>, ...list.slice(i)]; };
     out.nuker = before(out.nuker, 'assist');
     out.healer = before(out.healer, 'crowdControl');

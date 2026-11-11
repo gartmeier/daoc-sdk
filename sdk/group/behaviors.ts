@@ -474,6 +474,14 @@ export function fightGoesOn(phase: string, threats: readonly Pick<Contact, 'stal
     return FIGHT_PHASES.has(phase) || threats.some(t => !t.stale && t.regionId === regionId);
 }
 
+/** A death this fresh may not have reached the board yet: the rezzer who died with us can read alive a snapshot longer. */
+const NO_REZZER_GRACE_MS = 3000;
+
+/** No member but the corpse who could bring it back: nobody alive who knows a rez, nor an observed member (a human, who may know one we can't see). */
+export function noRezzerLeft(members: readonly Pick<MemberReport, 'name' | 'isDead' | 'capabilities' | 'observed'>[], corpse: string): boolean {
+    return !members.some(m => m.name !== corpse && !m.isDead && (m.capabilities.rez || m.observed));
+}
+
 /**
  * Dead: say yes to a rez; while the group still fights, wait for the fight to end (rez.fightHoldMs, RvR); with a
  * rezzer near, wait for one a while (REZ_SETTINGS); otherwise release and respawn at the bind point (holdFormation
@@ -496,8 +504,11 @@ export const release = (): Behavior => ({
         const s = rezSettings(ctx.settings);
         const now = Date.now();
         const diedAt = me.lastDeathAt ?? 0;
-        // Nobody releases until the fight is over: a rez can come then, and nobody walks back into it alone.
-        if (s.fightHoldMs > 0 && now - diedAt < s.fightHoldMs && fightGoesOn(ctx.orders().phase, ctx.threats(), ctx.members(), me.regionId)) {
+        // Nobody releases until the fight is over: a rez can come then, and nobody walks back into it alone. Unless no rez can come:
+        // nobody who knows one is alive (noRezzerLeft), so the hold only keeps a member out of the next fight. W2's 8 v 8 (2026-11-11):
+        // corpses waited out the fight with every rezzer dead, up to fightHoldMs (300 s in rvr-roam).
+        const noRez = s.fightHoldMs > 0 && now - diedAt >= NO_REZZER_GRACE_MS && noRezzerLeft(ctx.members(), ctx.name);
+        if (!noRez && s.fightHoldMs > 0 && now - diedAt < s.fightHoldMs && fightGoesOn(ctx.orders().phase, ctx.threats(), ctx.members(), me.regionId)) {
             ctx.memory.set('fightHeldAt', now);
             ctx.doing(AWAIT_FIGHT, null, ctx.orders().phase);
             return true;
@@ -1041,6 +1052,31 @@ export function standStep(me: Point, focus: Point & { distance: number }, range:
 }
 /** A step in stays this far from any free enemy player. */
 const STEP_CLEAR = 500;
+/** frontStep keeps this much farther from the focus than our nearest tank or melee to it ... */
+export const FRONT_BEHIND = 350;
+/** ... walks at most this far a turn, then looks again ... */
+const FRONT_LEG = 600;
+/** ... and only with that front-liner this near the focus: one fighting it, not one standing back too. */
+const FRONT_ENGAGED = 900;
+
+/**
+ * Where a caster holding its ground steps toward a focus beyond range + standStep, or null: while one of our tanks or melee is
+ * on the focus (within FRONT_ENGAGED), up to FRONT_BEHIND behind that front-liner, FRONT_LEG a turn, and the step's end clear of
+ * free enemy players (STEP_CLEAR). Midgard's longer standStep (1000, rounds 21-27) walked Hrafna into Camelot's casters: this one
+ * goes no farther in than our own melee. Run A baseline (2026-11-11 field, 4 h): nukers idle 6-16 % of fights, most of it "focus out
+ * of reach, holding ground".
+ */
+export function frontStep(me: Point & { name: string; regionId: number }, focus: Point, range: number, members: readonly MemberReport[], contacts: readonly Contact[]): Point | null {
+    const front = members.filter(m => !m.isDead && m.name !== me.name && m.regionId === me.regionId && (m.role === 'tank' || m.role === 'melee'))
+        .map(m => dist(m, focus)).filter(d => d <= FRONT_ENGAGED).sort((a, b) => a - b)[0];
+    if (front === undefined) return null;
+    const d = dist(me, focus);
+    const stop = Math.max(range - 100, front + FRONT_BEHIND);
+    const leg = Math.min(d - stop, FRONT_LEG);
+    if (leg < 100 || d < 1) return null;
+    const to = { x: me.x + (focus.x - me.x) * leg / d, y: me.y + (focus.y - me.y) * leg / d };
+    return contacts.some(c => c.kind === 'player' && !c.stale && alive(c) && !c.cc && dist(c, to) <= STEP_CLEAR) ? null : to;
+}
 
 /** A flank (flankStep) keeps this far from every free enemy player but its target ... */
 export const FLANK_CLEAR = 700;
@@ -1387,6 +1423,34 @@ export function leashFallback(ctx: MemberContext<TacticsSettings>, also: (t: Con
         .sort((a, b) => dist(me, a) - dist(me, b))[0] ?? null;
 }
 
+/** Guard blocks for its member only within this (GuardAbilityHandler.GUARD_DISTANCE 256): a little inside it. */
+const GUARD_STAND = 200;
+/** One walk's length toward the guarded member, then the list again. */
+const GUARD_STAND_MS = 3000;
+
+/** The living member of ours we guard, from our own effects ("Brigid guarded by Cuchulainn"), in our region; null without one. */
+export function guardedBy(me: { name: string; regionId: number }, effects: readonly string[], members: readonly MemberReport[]): MemberReport | null {
+    const suffix = ` guarded by ${me.name}`;
+    const name = effects.find(e => e.endsWith(suffix))?.slice(0, -suffix.length);
+    return (name && members.find(m => m.name === name && !m.isDead && m.regionId === me.regionId)) || null;
+}
+
+/**
+ * The tank with nothing to hit (the focus beyond the chase leash, no enemy inside it): stand beside the member he guards, where
+ * his Guard blocks for it, rather than where the last chase left him. Run A baseline (2026-11-11 field, 4 h): tanks idle 4-13 % of
+ * fights on "focus beyond the chase leash", Hibernia's most. True when it walked.
+ */
+async function standByGuarded(ctx: MemberContext<TacticsSettings>): Promise<boolean> {
+    const me = ctx.me();
+    const m = guardedBy({ name: ctx.name, regionId: me.regionId }, (ctx.sdk.getState()?.effects ?? []).map(e => e.name), ctx.members());
+    if (!m || dist(me, m) <= GUARD_STAND) return false;
+    // Not into enemies: the guarded member may be the one a diver is on, and then the peel (peelTarget) has it, not this walk.
+    await stopSwinging(ctx);
+    ctx.doing('move', null, `to ${m.name}, whom we guard (focus beyond the leash)`);
+    reportLeg(ctx, await ctx.bot.walkTo(m.x, m.y, { z: m.z, tolerance: GUARD_STAND - 50, timeout: GUARD_STAND_MS }));
+    return true;
+}
+
 /**
  * Tank: fight the focus to the death (an orders change switches targets), with a taunt
  * style while it hits someone else and for tauntOpenMs from the first hit. An add on a
@@ -1405,7 +1469,7 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
         const stand = !add && away ? leashFallback(ctx) : null;
         const mob = add ?? stand ?? focus;
         if (!mob) return ctx.skip('tank: focus unknown');
-        if (mob === focus && away) return ctx.skip('tank: focus beyond the chase leash, no enemy inside it');
+        if (mob === focus && away) return (await standByGuarded(ctx)) || ctx.skip('tank: focus beyond the chase leash, no enemy inside it');
         // Its kill is an observed member's (a human): we stop hitting it. An add on a soft member is still peeled.
         const leaving = () => { const c = ctx.contact(mob.objectId); return mob !== add && !!c && !!leftTo(ctx, c); };
         if (leaving()) {
@@ -1617,7 +1681,17 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
         const seen = foeInView(ctx, mob.objectId);
         if (seen && isDown(ctx, seen)) return skipping('assist: focus just died');
         if (!seen) {
-            if (ctx.settings.standGround || opts.holdGround !== undefined) return skipping('assist: focus not in view, holding ground');
+            if (ctx.settings.standGround || opts.holdGround !== undefined) {
+                // Our front-liner on it sees it where we don't: a leg in behind him, as for a focus out of reach (frontStep). Not the healer's spare nuke.
+                const reach = !opts.melee && opts.holdGround === undefined ? ctx.spells.nuke({ aoe: ctx.settings.aoe })?.range : undefined;
+                const front = reach ? frontStep({ ...ctx.me(), name: ctx.name }, mob, reach, ctx.members(), ctx.picture().contacts) : null;
+                if (front) {
+                    ctx.doing('move', mob.objectId, 'step in behind our front line (focus out of view)');
+                    noteWet(ctx, mob.objectId, await ctx.bot.walkTo(front.x, front.y, { tolerance: 40, timeout: 3500 }));
+                    return true;
+                }
+                return skipping('assist: focus not in view, holding ground');
+            }
             // Others see it, we don't (beyond our view): close in on where the group last saw it.
             const me0 = ctx.me();
             const d = dist(me0, mob);
@@ -1650,6 +1724,13 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
                 if (stand && seen.distance > sp.range) {
                     // Just out of reach: a short step in, unless that means walking onto enemies (standStep). Further: hold.
                     const step = standStep(ctx.me(), seen, sp.range, opts.holdGround ?? ctx.settings.standStep ?? 0, ctx.picture().contacts);
+                    // Too far for the step: behind our own front-liner on it, a leg closer (frontStep). Not the healer's spare nuke (holdGround).
+                    const front = !('to' in step) && step.none === 'far' && opts.holdGround === undefined ? frontStep({ ...ctx.me(), name: ctx.name }, seen, sp.range, ctx.members(), ctx.picture().contacts) : null;
+                    if (front) {
+                        ctx.doing('move', mob.objectId, 'step in behind our front line');
+                        noteWet(ctx, mob.objectId, await ctx.bot.walkTo(front.x, front.y, { tolerance: 40, timeout: 3500 }));
+                        return true;
+                    }
                     if (!('to' in step)) return skipping(step.none === 'enemies' ? 'assist: focus out of reach, enemies by the step' : 'assist: focus out of reach, holding ground', mob.objectId);
                     ctx.doing('move', mob.objectId, 'step in range');
                     noteWet(ctx, mob.objectId, await ctx.bot.walkTo(step.to.x, step.to.y, { tolerance: 40, timeout: 3000 }));
@@ -2084,6 +2165,71 @@ export const rest = (): Behavior<TacticsSettings> => ({
             return ctx.skip(why);
         }
         if (!res.success) { ctx.result('rest', res); return ctx.skip(`rest: ${res.reason}`); }
+        return true;
+    },
+});
+
+/** fightSit sits below this % power ... */
+export const FIGHT_SIT_BELOW = 90;
+/** ... with no free enemy player nearer than this (a sitting player takes double melee damage and can't evade, parry or block: AttackAction.cs:229-231, GameLiving.cs:958) ... */
+export const FIGHT_SIT_CLEAR = 2000;
+/** ... nor a crowd-controlled one nearer than this (a mezz breaks) ... */
+const FIGHT_SIT_CC_CLEAR = 1200;
+/** ... and nothing hit us this recently. */
+const FIGHT_SIT_HIT_MS = 5000;
+/** A turn sitting lasts this long, then the list runs again from the top (a heal stands us up: castSpell sends the stand first). */
+const FIGHT_SIT_TURN_MS = 600;
+
+/** Why a member may not sit in a lull of the fight now, or null when it may (fightSit). */
+export function fightSitBlock(me: Point & { name: string; regionId: number; manaPercent: number; maxMana: number }, contacts: readonly Contact[], o: { swimming: boolean; moving: boolean; hitAt: number; now: number }): string | null {
+    if (me.maxMana <= 0) return 'no power to sit for';
+    if (me.manaPercent >= FIGHT_SIT_BELOW) return `power ${me.manaPercent} %`;
+    if (o.swimming) return 'swimming';
+    if (o.moving) return 'moving';
+    if (o.now - o.hitAt < FIGHT_SIT_HIT_MS) return 'hit lately';
+    for (const c of contacts) {
+        if (c.stale || !alive(c) || c.regionId !== me.regionId) continue;
+        if (c.target === me.name) return `${c.name} on us`;
+        if (c.kind !== 'player' && !c.isPet) continue;
+        const d = dist(me, c);
+        if (d <= (c.cc ? FIGHT_SIT_CC_CLEAR : FIGHT_SIT_CLEAR)) return `${c.name} ${Math.round(d)} away`;
+    }
+    return null;
+}
+
+/**
+ * Last in a caster's list in a fight: nothing above had a turn, power is below FIGHT_SIT_BELOW, and no free enemy is near (fightSitBlock):
+ * sit, as a player does in a lull. The server's power tick comes every 3 s sitting against 6 s standing, and 10 s against 14 s in combat
+ * (GamePlayer.GetHealthAndPowerRegenerationInterval), so a lull of 30 s sitting is about one more heal. Any cast or walk stands us up
+ * (castSpell sends the stand first; a move stands us: GamePlayer.OnPlayerMove), so the list above loses nothing but a packet; and we
+ * stand ourselves the moment an enemy comes near. Run A (2026-11-11 night): healers idle 30-50 % of fights, the group waiting on power
+ * between them, and "heal: not enough power" late in long fights.
+ */
+export const fightSit = (): Behavior<TacticsSettings> => ({
+    name: 'fightSit',
+    async run(ctx) {
+        if (ctx.orders().phase !== 'engage') return false;
+        const me = ctx.me();
+        const now = Date.now();
+        const hit = ctx.bot.getAttackers().length > 0 || ctx.bot.getPlayerAttackers().length > 0;
+        if (hit) ctx.memory.set('fightSitHitAt', now);
+        const move = ctx.sdk.getState()?.movement;
+        const block = fightSitBlock(me, ctx.picture().contacts, { swimming: !!move?.swimming, moving: !!move?.moving, hitAt: ctx.memory.get('fightSitHitAt') ?? 0, now });
+        if (block) {
+            if (!me.isSitting) return false;
+            ctx.doing('rest', null, `stand up: ${block}`);
+            await ctx.sdk.sendSit(false);
+            return true;
+        }
+        if (!me.isSitting) {
+            // Refused (stunned, mezzed, moving): the server says so and we stay up; the next turn tries again.
+            if (now - (ctx.memory.get('fightSitAt') ?? 0) < 2000) return ctx.skip('fightSit: sat down just now, not seen yet');
+            ctx.memory.set('fightSitAt', now);
+            await stopSwinging(ctx);
+            await ctx.sdk.sendSit(true);
+        }
+        ctx.doing('rest', null, 'sit in a lull of the fight');
+        await Bun.sleep(FIGHT_SIT_TURN_MS);
         return true;
     },
 });
