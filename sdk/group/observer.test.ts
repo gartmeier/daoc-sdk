@@ -1260,3 +1260,66 @@ describe('fight quality (roadmap phase 0)', () => {
         expect('releases' in r).toBe(false);
     });
 });
+
+describe('decisions: flapping and engaged without hitting', () => {
+    const at = (i: number) => T0 + i * 1000;
+    const foe = (hp = 100, objectId = 300) => contact(objectId, { kind: 'player', name: 'Norseman', realm: 'midgard', threat: true, target: 'Tank', hp });
+    const orders = (i: number, phase: string) => ({ at: at(i), kind: 'orders' as const, text: phase, data: { phase } });
+    const engage = (o: GroupObserver, from: number, to: number, hp: (i: number) => number, objectId = 300) => {
+        for (let i = from; i <= to; i++) o.sample(picture(members(), [foe(hp(i), objectId)], { seq: 1, phase: 'engage', focus: objectId }, at(i)));
+    };
+    const travel = (o: GroupObserver, i: number) => o.sample(picture(members(), [], { seq: 2, phase: 'travel' }, at(i)));
+
+    test('engage, retreat and engage again within 20 s is a flap; one turn, or turns far apart, are none', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        engage(o, 1, 1, () => 100);
+        for (const [i, ph] of [[1, 'engage'], [10, 'retreat'], [15, 'engage'], [18, 'retreat'], [60, 'engage']] as const) o.handle(orders(i, ph));
+        const r = o.report();
+        expect(r.totals.flaps).toBe(2);
+        expect(r.totals.flapAt).toEqual(['00:15 retreat→engage 5.0 s after the last turn', '00:18 engage→retreat 3.0 s after the last turn']);
+        expect(r.findings.map(f => f.topic)).not.toContain('flapping');
+        expect(formatReport(r)).toContain('Decisions: the orders turned between engage and retreat within 20 s of the last turn 2×');
+    });
+
+    test('three flaps or more are a finding, with the last turns as evidence', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        engage(o, 1, 1, () => 100);
+        for (const [i, ph] of [[1, 'engage'], [5, 'retreat'], [9, 'engage'], [13, 'retreat'], [17, 'engage']] as const) o.handle(orders(i, ph));
+        const f = o.report().findings.find(x => x.topic === 'flapping');
+        expect(f).toMatchObject({ severity: 'medium' });
+        expect(f!.evidence).toContain('00:17 retreat→engage 4.0 s after the last turn');
+    });
+
+    test('an engage of 15 s or more whose focus lost no health is engaged without hitting; a short one is not counted', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        engage(o, 1, 20, () => 100);
+        travel(o, 21);
+        engage(o, 30, 50, i => 100 - (i - 30));
+        travel(o, 51);
+        engage(o, 60, 65, () => 100);
+        travel(o, 66);
+        const r = o.report();
+        expect(r.totals.noHit).toEqual({ n: 1, of: 2, s: 19, at: ['00:01 Norseman 19.0 s'] });
+        expect(r.findings.map(f => f.topic)).not.toContain('no-hit');
+        expect(formatReport(r)).toContain('engages on an enemy player of 15 s or more with no health lost by the focus 1 of 2 (19 s)');
+    });
+
+    test('a new focus closes the stretch; three without a hit in at least 30 % of them is a finding', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 'rvr', startedAt: T0 });
+        engage(o, 1, 17, () => 100, 300);
+        engage(o, 18, 34, () => 90, 301);
+        engage(o, 35, 51, () => 80, 302);
+        travel(o, 52);
+        const r = o.report();
+        expect(r.totals.noHit).toMatchObject({ n: 3, of: 3 });
+        expect(r.findings.find(f => f.topic === 'no-hit')).toMatchObject({ severity: 'medium' });
+    });
+
+    test('a PvE report has none of it', () => {
+        const o = new GroupObserver(null, { group: 'g', strategy: 's', startedAt: T0 });
+        for (let i = 1; i <= 5; i++) o.sample(picture(members(), [contact(7, { target: 'Tank', threat: true })], { seq: 1, phase: 'engage', focus: 7 }, at(i)));
+        o.handle(orders(2, 'retreat'));
+        o.handle(orders(3, 'engage'));
+        expect('flaps' in o.report().totals).toBe(false);
+    });
+});

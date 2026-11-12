@@ -262,6 +262,15 @@ export interface RunReport {
         comebacks?: { us: number; them: number };
         reactMs?: number | null;
         wipedUnreacted?: number;
+        /**
+         * RvR decisions: how often the orders turned between engage and retreat within FLAP_MS of their last turn (a fight
+         * taken, left and taken again as the odds swing: squads on 2026-11-12 flipped 107 times in 46 logs), with the last
+         * few as "m:ss engage→retreat 6.0 s after the last turn".
+         */
+        flaps?: number;
+        flapAt?: string[];
+        /** RvR engages on an enemy player of NO_HIT_MS or more: how many, and in how many the focus never lost health. */
+        noHit?: { n: number; of: number; s: number; at: string[] };
     };
     /** % of run time per phase. */
     phases: Partial<Record<Phase, number>>;
@@ -410,6 +419,10 @@ const keepLast = (xs: unknown[], n: number | undefined) => { if (n !== undefined
 const PLAYER_REALMS = new Set(['albion', 'midgard', 'hibernia']);
 /** A retreat ordered again this soon after the last one ended goes on with it. */
 const RETREAT_RESUME_MS = 5000;
+/** The orders turning between engage and retreat again this soon after their last turn: flapping. */
+const FLAP_MS = 20_000;
+/** An engage on an enemy player at least this long whose focus lost no health: engaged without hitting (walking up takes ~10 s). */
+const NO_HIT_MS = 15_000;
 /** What a member's track counts: an event before its first sample waits for that. */
 const CREDITED: ReadonlySet<GroupEvent['kind']> = new Set(['death', 'note', 'result']);
 /** A mob reading on a pet this soon after the pet took a blow for its owner reads so through that: a mob's next swing comes in this. */
@@ -540,6 +553,17 @@ export class GroupObserver {
     /** The last orders event's phase, and when a retreat last ended: each retreat counts once (handle). */
     private ordersPhase: unknown = null;
     private retreatEndedAt = -Infinity;
+    /** Flapping: the last engage or retreat order and when the orders last turned between them. */
+    private lastFightOrder: 'engage' | 'retreat' | null = null;
+    private lastTurnAt = -Infinity;
+    private flaps = 0;
+    private readonly flapAt: string[] = [];
+    /** Engaged without hitting: the open engage on an enemy player, and the closed ones of NO_HIT_MS or more. */
+    private stretch: { id: number; name: string; from: number; last: number; hp0: number; minHp: number } | null = null;
+    private stretches = 0;
+    private noHit = 0;
+    private noHitMs = 0;
+    private readonly noHitAt: string[] = [];
     private wipes = 0;
     private playerKills = 0;
     private deathsToPlayers = 0;
@@ -729,6 +753,7 @@ export class GroupObserver {
             const t = this.members.get(w.name);
             if (t) inc(t.waitMs, w.why, dt);
         }
+        this.sampleStretch(p, phase);
         const fighting = phase === 'engage' || phase === 'retreat' || threats.length > 0;
         // Close a fight after 3 calm samples: a mob's target field flickers during a body pull.
         this.calm = fighting ? 0 : this.calm + 1;
@@ -956,6 +981,17 @@ export class GroupObserver {
                 if (this.fight) { this.fight.retreated = true; reacted(this.fight, e.at); }
             } else if (this.ordersPhase === 'retreat') this.retreatEndedAt = e.at;
             this.ordersPhase = phase;
+            if (phase === 'engage' || phase === 'retreat') {
+                if (this.lastFightOrder && this.lastFightOrder !== phase) {
+                    if (e.at - this.lastTurnAt <= FLAP_MS) {
+                        this.flaps++;
+                        this.flapAt.push(`${this.stamp(e.at)} ${this.lastFightOrder}→${phase} ${secs(e.at - this.lastTurnAt)} after the last turn`);
+                        keepLast(this.flapAt, 5);
+                    }
+                    this.lastTurnAt = e.at;
+                }
+                this.lastFightOrder = phase;
+            }
         }
         if (e.kind === 'activity') {
             const kind = String(e.data?.activity);
@@ -974,6 +1010,28 @@ export class GroupObserver {
         if (e.kind === 'result' && e.data?.success) return;
         this.timelineEvents.push(`${this.stamp(e.at)} ${e.kind === 'orders' ? '[orders] ' : e.member ? `${e.member}: ` : ''}${e.text}`);
         if (this.timelineEvents.length > 120) this.timelineEvents.splice(0, this.timelineEvents.length - 120);
+    }
+
+    /** Engaged without hitting: an engage order on an enemy player, from its first sample to the last on that focus, and the focus's lowest health. */
+    private sampleStretch(p: GroupPicture, phase: Phase): void {
+        const focus = phase === 'engage' && p.orders.seq > 0 ? p.contacts.find(c => c.objectId === p.orders.focus && c.kind === 'player') : undefined;
+        if (this.stretch && (!focus || focus.objectId !== this.stretch.id)) this.closeStretch();
+        if (!focus || !isAlive(focus)) return;
+        if (!this.stretch) this.stretch = { id: focus.objectId, name: focus.name, from: p.at, last: p.at, hp0: focus.hp, minHp: focus.hp };
+        this.stretch.last = p.at;
+        this.stretch.minHp = Math.min(this.stretch.minHp, focus.hp);
+    }
+
+    private closeStretch(): void {
+        const s = this.stretch;
+        this.stretch = null;
+        if (!s || s.last - s.from < NO_HIT_MS) return;
+        this.stretches++;
+        if (s.minHp < s.hp0) return;
+        this.noHit++;
+        this.noHitMs += s.last - s.from;
+        this.noHitAt.push(`${this.stamp(s.from)} ${s.name} ${secs(s.last - s.from)}`);
+        keepLast(this.noHitAt, 5);
     }
 
     /** A member's release went through: when, how long after its death, and what the group was doing (ReleaseRecord). */
@@ -1068,6 +1126,8 @@ export class GroupObserver {
                 columnPct: pct(this.columnMs, this.travelMs), travelSpreadAvg: this.travelSamples ? Math.round(this.travelSpreadSum / this.travelSamples) : 0, ccFrontPct: pct(this.ccFrontSamples, this.travelSamples),
                 ...(this.columnPlaceSamples ? { columnOffAvg: Math.round(this.columnOffSum / this.columnPlaceSamples), columnTrailAvg: Math.round(this.columnTrailSum / this.columnPlaceSamples) } : {}),
                 ...this.quality(),
+                flaps: this.flaps, flapAt: [...this.flapAt],
+                noHit: { n: this.noHit, of: this.stretches, s: Math.round(this.noHitMs / 1000), at: [...this.noHitAt] },
             });
         }
         if (this.releases.length) report.releases = this.releases.map(x => ({ ...x }));
@@ -1197,6 +1257,9 @@ export function findingsFor(r: RunReport): Finding[] {
     if (rvr && (t.wipedUnreacted ?? 0) > 0) {
         out.push({ severity: 'high', topic: 'no-reaction', issue: `${t.wipedUnreacted} wipes came before any heal, mezz or retreat`, evidence: r.fights.filter(f => f.outcome === 'wiped' && f.reactMs === null).slice(-3).map(f => `${clock(f.start)} ${f.enemyPlayers ?? '?'} enemies, ${Math.round(f.durationMs / 1000)} s`).join(' | '), suggestion: 'See who the healers and crowd controllers were doing then (activity, idle reasons); retreat earlier (retreat.margin) or keep power for the opening (SAVING_POWER).' });
     }
+    if ((t.flaps ?? 0) >= 3) out.push({ severity: t.flaps! >= 6 ? 'high' : 'medium', topic: 'flapping', issue: `The orders turned between engage and retreat ${t.flaps}× within ${FLAP_MS / 1000} s of the last turn`, evidence: (t.flapAt ?? []).join(' | '), suggestion: 'A fight taken, left and taken again: the members arrive at nothing and burn endurance on sprints. Hold a decision for a minimum time and turn only when the odds move well past the other threshold; check what swung the count each tick (friends passing by, an enemy at the edge of sight).' });
+    const nh = t.noHit;
+    if (nh && nh.n >= 3 && nh.n * 10 >= nh.of * 3) out.push({ severity: 'medium', topic: 'no-hit', issue: `${nh.n} of ${nh.of} engages on an enemy player (${NO_HIT_MS / 1000} s or more) never cost the focus health`, evidence: nh.at.join(' | '), suggestion: 'See what the members did in them: walking after a runner (chase, intercept), out of range or line of sight, out of endurance or power, or the orders turning before they arrived (flapping).' });
     for (const [name, m] of Object.entries(r.members)) {
         out.push(...petFindings(name, m, r));
         if (m.deaths) {
@@ -1263,6 +1326,7 @@ export function formatReport(r: RunReport): string {
         const len = t.fightLengthS.median === null ? 'none' : `median ${t.fightLengthS.median} s, longest ${t.fightLengthS.max} s`;
         lines.push(`Fight quality: fights with enemy players ${len}; comebacks (down 2, still ahead) ours ${t.comebacks?.us ?? 0}, theirs ${t.comebacks?.them ?? 0}; first heal, mezz or retreat ${t.reactMs == null ? 'never' : `${secs(t.reactMs)} after contact (median)`}; wiped before reacting ${t.wipedUnreacted ?? 0}.`);
     }
+    if (rvr && t.flaps !== undefined) lines.push(`Decisions: the orders turned between engage and retreat within ${FLAP_MS / 1000} s of the last turn ${t.flaps}×; engages on an enemy player of ${NO_HIT_MS / 1000} s or more with no health lost by the focus ${t.noHit?.n ?? 0} of ${t.noHit?.of ?? 0}${t.noHit?.n ? ` (${t.noHit.s} s)` : ''}.`);
     if (rvr && t.contactS !== undefined) lines.push(`Contact: first enemy player seen ${t.contactS === null ? 'never' : `at ${clock(t.contactS)}`}, first fight with them ${t.firstFightS == null ? 'never' : `at ${clock(t.firstFightS)}`}; ${t.engagements ?? 0} such fights, the longest stretch without one ${clock(t.quietMaxS ?? 0)}.`);
     if (rvr && t.steepPct !== undefined) lines.push(`Slope: on ground steeper than 35° ${t.steepPct}% of the time alive, ${t.steepInFights}% of fight time, ${t.steepInTravel}% of travel${t.steepSpots?.length ? `; most at ${t.steepSpots.join(', ')}` : ''}.`);
     if (rvr && t.firstSightRange != null) lines.push(`First sight of an enemy player: median ${t.firstSightRange} units from the nearest member, ${t.firstSightClose ?? 0} within 1000.`);
