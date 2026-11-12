@@ -17,7 +17,8 @@ export default ranger();
 
 - **Role nuker:** the group keeps it at a caster's distance (combatRange 700-1400), inside every bow's reach.
 - **`hide`** (an instant, above flee): the assassins' hide. The first arrow comes from stealth. Only a solo or a squad of stealthers hides (`allCanHide`): hidden it moves at 115, and anyone who can't hide would leave it behind at 191. In a mixed group it fights in the open.
-- **`shoot`** (fight, ahead of the melee fight): on the focus in view, within the bow's reach less 150, with no enemy player within 350 and arrows in the backpack: stop, target, face once, take the bow, draw, and a second use so it releases by itself; then wait for the shot's line (up to 7 s). Beyond reach it steps in to 85 % of it. Close, or out of arrows: false, and `meleeFight` swings (attack takes a melee weapon in hand on the bow's refusal).
+- **`swat`** (fight, first): a monster or pet attacking us within 250 (not a keep guard) while the focus stands 500 or more off: melee weapon in hand, hit it.
+- **`shoot`** (fight, ahead of the melee fight): on the focus in view, within the bow's reach less 300, with no enemy player and nothing attacking us within 350, and arrows in the backpack: stop and stand still 0.6 s, target, face once, take the bow, draw, send nothing until "You are ready to fire!", then release. A draw that ends without a shot lowers the bow (attack off). Beyond reach it steps in to 85 % of it. Close, or out of arrows: it takes the melee weapon (with the bow in hand the melee fight's attack request would draw the bow) and `meleeFight` swings.
 - **Arrows:** Thidranki has no fletcher. `bun bots/gmlevel/give-arrows.ts <bot> ...` (gmlevel at PrivLevel 3) trades 3 stacks of 200 barbed footed flight broadhead arrows; each archer got 600 on 2026-11-11.
 
 ## Builds
