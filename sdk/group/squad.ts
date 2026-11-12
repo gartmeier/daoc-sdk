@@ -111,6 +111,26 @@ const BUSY = 0.6;
  */
 const OPENER = 1.4;
 const STEALTHERS = new Set(['Infiltrator', 'Nightshade', 'Shadowblade']);
+/**
+ * The opener's target is half out of the fight before it can answer: its worth and its head count this much less in the
+ * odds of a fight a hidden stealther starts. The freeze on 11-12 (N5): with the opener only as 1.4 of our worth, the three
+ * assassins kept clear of "1 vs 2" 140 times and opened twice in 4 h.
+ */
+const OPEN_TAKE = 0.5;
+/**
+ * Enemies farther than this from the opener's target come in after the burst: they count LATE (worth and head). The kit
+ * calls a target with no enemy player this near a lone one, and opens on it (sdk/classes/stealther.ts LONE_RADIUS).
+ */
+const LATE_RADIUS = 1000, LATE = 0.6;
+/** Under this % health a target is worth the opener whatever it is (stealther.ts SOFT_HP). */
+const OPEN_SOFT_HP = 50;
+/**
+ * A fight we chose against players is fought out through an add or two, not through a whole group: with this many enemy
+ * players in view per member of ours (plus one) it is left at once, at the health we still have. The commit hour on 11-12
+ * (17:36-18:38): squads fled only once 40 points down, and 14 died fleeing (7 in the 4 h freeze). Aine and Fionn took
+ * "2 vs 2" and fled at "2 vs 7" with health 100 to 50 %; both died within 13 s.
+ */
+const OVERRUN = 2;
 /** An enemy that killed one of ours in the last GRUDGE_MS counts this much more when deciding to start a fight with it: the duo that beat us twice is no even fight the third time. */
 const GRUDGE = 1.5;
 const GRUDGE_MS = 10 * 60_000;
@@ -235,8 +255,18 @@ export interface SizeUp {
     theirs: number;
     /** ours / theirs; Infinity with nobody against us. */
     ratio: number;
-    /** The same with our hidden stealthers' opener (OPENER): the odds of a fight we would start. */
+    /** The same with our hidden stealthers' opener (OPENER, OPEN_TAKE, LATE): the odds of a fight we would start. */
     opening: number;
+    /** The enemy player a hidden stealther of ours would open on (the one that gives the best opening), if any. */
+    openOn: number | null;
+}
+
+/** Would the stealther kit open on `c` (stealther.ts softTarget): soft by role, going down, or with no enemy player within LATE_RADIUS. */
+function openable(c: Contact, foes: readonly Contact[]): boolean {
+    const role = foeRole(c);
+    if (role === 'healer' || role === 'caster' || role === 'cc') return true;
+    if (c.hp < OPEN_SOFT_HP) return true;
+    return !foes.some(o => o !== c && !o.isPet && !o.stale && dist(o, c) <= LATE_RADIUS);
 }
 
 /**
@@ -272,10 +302,26 @@ export function sizeUp(members: readonly MemberReport[], enemies: readonly Conta
     const theirHealers = foes.filter(c => !c.isPet && foeRole(c) === 'healer').length;
     const heads = foes.map(c => (c.isPet ? PET_HEAD : 1));
     const a = sideStrength(ourWorth, ourHealers), b = sideStrength(theirWorth, theirHealers, heads);
+    const hidden = alive.some(m => STEALTHERS.has(m.className) && !m.inCombat);
     const opened = sideStrength(ourWorth.map((w, i) => w * (i < alive.length && STEALTHERS.has(alive[i]!.className) && !alive[i]!.inCombat ? OPENER : 1)), ourHealers);
     // To start a fight, those that beat us lately count more (GRUDGE).
-    const wary = sideStrength(foes.map((c, i) => theirWorth[i]! * (grudge.has(c.objectId) ? GRUDGE : 1)), theirHealers, heads);
-    return { foes, allies: helping.length, allyNames: helping.flatMap(f => (f.name ? [f.name] : [])), beside: helping, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: wary > 0 ? opened / wary : Infinity };
+    const grudged = foes.map((c, i) => theirWorth[i]! * (grudge.has(c.objectId) ? GRUDGE : 1));
+    const wary = sideStrength(grudged, theirHealers, heads);
+    // A hidden stealther opens on one it can (openable, in view): that one is half out of the fight (OPEN_TAKE), and those
+    // farther than LATE_RADIUS from it come in late (LATE). The target that leaves them weakest.
+    let opening = wary > 0 ? opened / wary : Infinity, openOn: number | null = null;
+    if (hidden) {
+        let best = -1;
+        for (const t of foes) {
+            if (t.isPet || t.stale || !openable(t, foes)) continue;
+            const f = (c: Contact) => (c === t ? 1 - OPEN_TAKE : dist(c, t) > LATE_RADIUS ? LATE : 1);
+            const theirs = sideStrength(foes.map((c, i) => grudged[i]! * f(c)), theirHealers, foes.map((c, i) => heads[i]! * f(c)));
+            const odds = theirs > 0 ? opened / theirs : Infinity;
+            if (odds > best) { best = odds; openOn = t.objectId; }
+        }
+        opening = Math.max(opening, best);
+    }
+    return { foes, allies: helping.length, allyNames: helping.flatMap(f => (f.name ? [f.name] : [])), beside: helping, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening, openOn };
 }
 
 /**
@@ -425,6 +471,8 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const here = mainBody(inRegion, 2 * s.gatherRadius, scratch, attacked).main;
     mem.squadLead = scratch.gatherLead;
     const centre = centroid(here);
+    // All of us hidden stealthers, out of combat: unseen. Such a squad opens (sizeUp opening) and walks away hidden, never sprints.
+    const unseen = here.length > 0 && here.every(m => STEALTHERS.has(m.className) && !m.inCombat);
     const nearOnUs = (c: Contact) => inView(c) && onUs(c) && dist(c, centre) <= s.engageRadius + 1000;
     // A new death of ours: those near it killed it, and are remembered (GRUDGE).
     for (const m of p.members.filter(x => x.isDead && !(sq.dead ?? []).includes(x.name))) {
@@ -461,7 +509,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     // The fight's start, and whether we chose it (taken at engageAt or better): a fight we chose is held (FIGHT_HOLD_MS),
     // against players committed (COMMIT_LOSS).
     if (engaged || hit) {
-        if (!sq.fight || now - sq.fight.last > FIGHT_GAP_MS) sq.fight = startFight(engaged && up.ratio >= r.engageAt);
+        if (!sq.fight || now - sq.fight.last > FIGHT_GAP_MS) sq.fight = startFight(engaged && (up.ratio >= r.engageAt || (unseen && up.opening >= r.engageAt)));
         sq.fight.last = now;
     }
     const fight = sq.fight;
@@ -470,8 +518,11 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     if (inFight && fight.chosen && fight.players && !fight.lost) {
         const died = p.members.find(m => m.isDead && !(fight.dead0 ?? []).includes(m.name));
         const hpNow = meanHp();
+        // A whole group in view, not an add or two (OVERRUN): left now, at the health we have. Not beside a friend in it.
+        const seen = up.foes.filter(c => !c.isPet && inView(c)).length;
         if (died) fight.lost = `${died.name} died`;
         else if ((fight.hp0 ?? 100) - hpNow >= COMMIT_LOSS) fight.lost = `health ${Math.round(fight.hp0 ?? 100)} to ${Math.round(hpNow)} %`;
+        else if (!up.allies && seen >= OVERRUN * here.length + 1 && up.ratio < r.leaveAt) fight.lost = `${seen} in view`;
     }
     const committed = inFight && fight.chosen && !!fight.players && !fight.lost;
     let held = committed || (inFight && fight.chosen && !fight.players && now - fight.start < FIGHT_HOLD_MS);
@@ -507,7 +558,8 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         const where = f.toward === 'friends' ? 'friends' : f.toward === 'home' ? 'our portal keep' : 'open ground';
         // Nobody following within engageRadius: on at a walk (travel), so sprint (retreat only) is off and endurance is kept for
         // the next fight. The user, 14:44 on 11-12: Fionn, a Blademaster, at 5 % endurance from sprinting every flee.
-        if (walk) return { phase: 'travel', focus: null, puller: null, cc: [], waiting: [], retreatTo: null, anchor: f.to, objective: `walk on away from ${up.foes.length || 'the'} enemies toward ${where}`, reason: `flee: ${why}, none within ${s.engageRadius}: walking` };
+        // Hidden, a retreat would show us (stealther.ts hide) to sprint: walk on hidden instead.
+        if (walk || unseen) return { phase: 'travel', focus: null, puller: null, cc: [], waiting: [], retreatTo: null, anchor: f.to, objective: `walk on away from ${up.foes.length || 'the'} enemies toward ${where}`, reason: `flee: ${why}, ${unseen ? 'hidden' : `none within ${s.engageRadius}`}: walking` };
         return { phase: 'retreat', focus: null, puller: null, cc: [], waiting: [], retreatTo: f.to, anchor: f.to, objective: `get away from ${up.foes.length || 'the'} enemies toward ${where}`, reason: `flee: ${why}` };
     };
 
@@ -625,7 +677,6 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         // Closing on us: run (retreat sprints). Run B, 08:32: a group of five walked Camelot's duo down from 3300 to 900 while it
         // stepped away at a walk, then caught it 45 s into the flee and killed both.
         // A hidden stealther (alone or with others hidden) is unseen: it walks away.
-        const unseen = here.every(m => STEALTHERS.has(m.className) && !m.inCombat);
         // One enemy player (and its pet) closing is no group to run from: it runs as fast, or shoots (run B 09:15: Skadi, resting
         // after a mob, ran from a lone Celt at 175 and died to it).
         const players = bad.filter(c => !c.isPet).length;
@@ -668,7 +719,12 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     let u = callInner(contacts);
     // In a friend's fight: the target of the nearest friend on one of these enemies, as our own bots see it (the region frame).
     // Two fighting one each, 1000 apart, is how both died (the user, 15:47 on 11-12).
-    if (u.phase === 'engage' && up.beside.length) {
+    // Hidden: on the one the opener goes to (sizeUp openOn), soft or alone, which is what the odds were taken on.
+    const opener = unseen && up.openOn !== null ? up.foes.find(c => c.objectId === up.openOn) : undefined;
+    if (u.phase === 'engage' && opener && u.focus !== opener.objectId && (u.focus === null || up.foes.some(c => c.objectId === u.focus))) {
+        u = { ...u, focus: opener.objectId, reason: `${u.reason ?? ''}; open on ${opener.name}#${opener.objectId}` };
+    }
+    if (u.phase === 'engage' && up.beside.length && !opener) {
         const there = new Map(up.foes.filter(c => !c.isPet).map(c => [c.objectId, c]));
         const on = up.beside.filter(f => f.targetId != null && there.has(f.targetId)).sort((a, b) => dist(a, centre) - dist(b, centre))[0];
         if (on && on.targetId !== u.focus) {

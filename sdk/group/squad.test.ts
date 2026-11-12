@@ -116,6 +116,45 @@ describe('decideSquad: picking fights', () => {
         expect(sizeUp(assassin().map(m => ({ ...m, inCombat: true })), mezzer, BASE, SQUAD_SETTINGS).opening).toBeCloseTo(sizeUp(assassin(), mezzer, BASE, SQUAD_SETTINGS).ratio, 5);
     });
 
+    test('a hidden stealther opens on one it can take before the rest come (OPEN_TAKE, LATE), and focuses it', () => {
+        // The freeze on 11-12: the assassins kept clear of "1 vs 2, from stealth" 140 times and opened twice in 4 h.
+        const assassin = () => [report('Scathach', { role: 'melee', className: 'Nightshade', capabilities: caps(), objectId: 1, regionId: R, x: BASE.x, y: BASE.y, z: 0, level: 24 })];
+        // Two fighters 1500 apart: one is opened on alone, the other comes late.
+        const apart = [foe(51, 1500), foe(52, 3000)];
+        const d = decide(picture(assassin(), apart));
+        expect(d.phase).toBe('engage');
+        // A caster with a fighter 1500 off, nearer us: the caster is the one, and the focus goes to it.
+        const casterApart = [foe(51, 1500), foe(52, 3000, guess('caster'))];
+        const up = sizeUp(assassin(), casterApart, BASE, SQUAD_SETTINGS);
+        expect(up.openOn).toBe(52);
+        expect(up.opening).toBeGreaterThan(SQUAD_SETTINGS.squad.engageAt);
+        const e = decide(picture(assassin(), casterApart));
+        expect(e.phase).toBe('engage');
+        expect(e.focus).toBe(52);
+        // A player and its pet: the player opened on, the pet no match.
+        expect(sizeUp(assassin(), [foe(51, 1500), foe(52, 1600, { isPet: true })], BASE, SQUAD_SETTINGS).opening).toBeGreaterThan(SQUAD_SETTINGS.squad.engageAt);
+        // Two side by side, or three apart: still no.
+        expect(decide(picture(assassin(), [foe(51, 1500), foe(52, 1600, guess('caster'))])).reason).toStartWith('avoid:');
+        expect(decide(picture(assassin(), [foe(51, 1500), foe(52, 3000), foe(53, 3100)])).reason).toStartWith('avoid:');
+        // Seen (in combat), none of it: the odds of a fighter in the open.
+        const seen = sizeUp(assassin().map(m => ({ ...m, inCombat: true })), apart, BASE, SQUAD_SETTINGS);
+        expect(seen.openOn).toBeNull();
+        expect(seen.opening).toBeCloseTo(seen.ratio, 5);
+        // Not on a target out of view.
+        expect(sizeUp(assassin(), [foe(51, 1500, { stale: true, lastSeen: 0 })], BASE, SQUAD_SETTINGS).openOn).toBeNull();
+    });
+
+    test('a hidden squad that leaves a fight walks away hidden, never a retreat (which would show it)', () => {
+        const t0 = 1_000_000;
+        const assassin = () => [report('Hodur', { role: 'melee', className: 'Shadowblade', capabilities: caps(), objectId: 1, regionId: R, x: BASE.x, y: BASE.y, z: 0, level: 24 })];
+        const memory: Record<string, any> = {};
+        expect(decide(picture(assassin(), [foe(51, 1200, guess('caster'))], {}, t0), { memory, now: t0 }).phase).toBe('engage');
+        // Engaged, still hidden, and a group of five closes in.
+        const five = [51, 52, 53, 54, 55].map((id, i) => foe(id, 900 + 50 * i, i ? {} : guess('caster')));
+        const d = decide(picture(assassin(), five, { phase: 'engage', focus: 51 }, t0 + 3000), { memory, now: t0 + 3000 });
+        expect(d.phase).not.toBe('retreat');
+    });
+
     test('a hurt solo does not start a fight it would start at full health', () => {
         expect(decide(picture(squad(['Merc'], { Merc: { hp: 60 } }), [foe(51, 1500)])).reason).toStartWith('avoid:');
     });
@@ -285,31 +324,57 @@ describe('decideSquad: leaving a fight that turned', () => {
         const us = (over: Parameters<typeof squad>[1] = {}) => squad(['Merc', 'Cleric'], { Merc: { inCombat: true }, ...over });
         const two = [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 500)];
         const three = [...two, foe(53, 700)];
-        const five = [...three, foe(54, 800), foe(55, 900)];
+        const four = [...three, foe(54, 800)];
+        const five = [...four, foe(55, 900)];
         const run = (memory: Record<string, any>, steps: [number, Contact[], Parameters<typeof squad>[1]?][]) =>
             steps.map(([t, cs, over]) => decide(picture(us(over), cs, { phase: 'engage', focus: 51 }, t0 + t), { memory, now: t0 + t }));
         const memory: Record<string, any> = {};
         let [d] = run(memory, [[0, two]]);
         expect(d!.phase).toBe('engage');
         expect(memory.squad.fight.chosen).toBe(true);
-        // A third at 13 s, five at 21 s and 40 s: still in it.
-        const ds = run(memory, [[5000, two], [10_000, two], [13_000, three], [21_000, five], [30_000, five], [40_000, five]]);
+        // A third at 13 s, a fourth at 21 s and 40 s: still in it.
+        const ds = run(memory, [[5000, two], [10_000, two], [13_000, three], [21_000, four], [30_000, four], [40_000, four]]);
         for (const x of ds) expect(x.phase).toBe('engage');
         expect(ds.at(-1)!.reason).toContain('committed 40 s, no losses');
         // Our mean health 45 points down: lost, and by the odds gone.
-        [d] = run(memory, [[42_000, five, { Merc: { inCombat: true, hp: 30 }, Cleric: { hp: 80 } }]]);
+        [d] = run(memory, [[42_000, four, { Merc: { inCombat: true, hp: 30 }, Cleric: { hp: 80 } }]]);
         expect(d!.phase).toBe('retreat');
         expect(d!.reason).toContain('health 100 to 55 %');
         // A member dead: lost too.
         const m2: Record<string, any> = {};
         run(m2, [[0, two]]);
-        expect(run(m2, [[5000, five]])[0]!.phase).toBe('engage');
-        [d] = run(m2, [[8000, five, { Cleric: { isDead: true, hp: 0 } }]]);
+        expect(run(m2, [[5000, four]])[0]!.phase).toBe('engage');
+        [d] = run(m2, [[8000, four, { Cleric: { isDead: true, hp: 0 } }]]);
         expect(d!.phase).toBe('retreat');
         expect(d!.reason).toContain('Cleric died');
         // A fight we did not choose (caught at 0.50 from the start) is not held.
         const m3: Record<string, any> = {};
         expect(run(m3, [[0, three]])[0]!.phase).toBe('retreat');
+    });
+
+    test('a fight we chose is left at once, at full health, when a whole group comes into view (OVERRUN)', () => {
+        // The commit hour on 11-12: Aine and Fionn took "2 vs 2", fled at "2 vs 7" with health 100 to 50 %, both dead in 13 s.
+        const t0 = 1_000_000;
+        const duo = () => squad(['Merc', 'Cleric'], { Merc: { inCombat: true } });
+        const two = [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 500)];
+        const five = [...two, foe(53, 700), foe(54, 800), foe(55, 900)];
+        const memory: Record<string, any> = {};
+        expect(decide(picture(duo(), two, { phase: 'engage', focus: 51 }, t0), { memory, now: t0 }).phase).toBe('engage');
+        const d = decide(picture(duo(), five, { phase: 'engage', focus: 51 }, t0 + 8000), { memory, now: t0 + 8000 });
+        expect(d.phase).toBe('retreat');
+        expect(d.reason).toContain('5 in view');
+        // Out of view they are no group we noticed: fought on.
+        const m2: Record<string, any> = {};
+        decide(picture(duo(), two, { phase: 'engage', focus: 51 }, t0), { memory: m2, now: t0 });
+        const late = [...two, ...five.slice(2).map(c => ({ ...c, stale: true, lastSeen: t0 + 7000 }))];
+        expect(decide(picture(duo(), late, { phase: 'engage', focus: 51 }, t0 + 8000), { memory: m2, now: t0 + 8000 }).phase).toBe('engage');
+        // A trio that took one fights on against six (the user's case, N1 on 11-12): 6 is under 2 x 3 + 1.
+        const trio = () => squad(['Merc', 'Cleric', 'Wizard'], { Merc: { inCombat: true } });
+        const m3: Record<string, any> = {};
+        const one = [foe(51, 300, { target: 'Merc', threat: true })];
+        decide(picture(trio(), one, { phase: 'engage', focus: 51 }, t0), { memory: m3, now: t0 });
+        const six = [...one, ...[52, 53, 54, 55, 56].map((id, i) => foe(id, 500 + 100 * i))];
+        expect(decide(picture(trio(), six, { phase: 'engage', focus: 51 }, t0 + 8000), { memory: m3, now: t0 + 8000 }).phase).toBe('engage');
     });
 
     test('a fight we chose against a pet alone is held 20 s, and left at once far past the line', () => {
