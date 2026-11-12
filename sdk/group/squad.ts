@@ -481,7 +481,10 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         // stepped away at a walk, then caught it 45 s into the flee and killed both.
         // A hidden stealther (alone or with others hidden) is unseen: it walks away.
         const unseen = here.every(m => STEALTHERS.has(m.className) && !m.inCombat);
-        if (nearest <= r.runAt && worst < r.leaveAt && !unseen && !atFriends && !ourInKeepReach) {
+        // One enemy player (and its pet) closing is no group to run from: it runs as fast, or shoots (run B 09:15: Skadi, resting
+        // after a mob, ran from a lone Celt at 175 and died to it).
+        const players = bad.filter(c => !c.isPet).length;
+        if (nearest <= r.runAt && worst < r.leaveAt && players >= 2 && !unseen && !atFriends && !ourInKeepReach) {
             const t = fleeTarget(bad);
             sq.flee = { start: now, lastFollowed: now, to: { x: Math.round(centre.x), y: Math.round(centre.y), z: zAt(centre) }, toward: t.toward, target: t.target };
             sq.fled++;

@@ -157,6 +157,10 @@ describe('decideSquad: what run B showed (2026-11-11 23:10-23:27)', () => {
         expect(d.reason).toStartWith('flee: 5 closing');
         expect(d.retreatTo!.x).toBeLessThan(BASE.x);
         expect(memory.squad.fled).toBe(1);
+        // One enemy closing on a hurt solo is not run from: it steps away, and fights if attacked.
+        const e = decide(picture(squad(['Merc'], { Merc: { hp: 50 } }), [foe(51, 1500)]), { memory: {} });
+        expect(e.phase).toBe('travel');
+        expect(e.reason).toStartWith('avoid:');
     });
 
     test('where it last saw a group it kept clear of, the patrol does not go back on the same line: it skips and goes round', () => {
