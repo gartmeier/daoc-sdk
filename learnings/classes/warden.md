@@ -45,7 +45,21 @@ Health per power is about the same (6.8 against 7.4), so she runs dry no sooner,
 
 ## Melee
 
-Thidranki Warden Blade and a medium shield, 621 health in scale. Blades 10: Glowing Blade (side, 60 % snare, 14 s) is the one style worth a swing in RvR. No Guard, Protect or Intercept. The kit doesn't melee: her turns are heals.
+Thidranki Warden Blade and a medium shield, 621 health in scale. Blades 10: Glowing Blade (side, 60 % snare, 14 s) is the one style worth a swing in RvR. No Guard, Protect or Intercept. In a group the kit doesn't melee: her turns are heals.
+
+## On her own: `lastStand` (2026-11-12, R7)
+
+**Why.** hibernia-s1, 19:51 UTC: her Blademaster partner died in a caught fight against an Albion Highlander. With nobody left to heal, the healer list gave her only `flee`'s kite step (no tank to run to: a step straight away). Her heals were skipped while he was on her (`castBlocked`). She walked to the river bank ("held at the bank" eleven times) and died 75 s after him.
+
+**What it does** (the character's `instant` slot, so above `flee` and below the emergency heal, which skips while a melee is on her). Only when no other member of hers is alive within 2000 in her region and an enemy player is targeting her (`onHerOwn`, `attackerOn`, within 1500). `lastStandMove` decides:
+- **Not snared, he within 750:** she swings at him with the melee list's `assist`, whatever the squad's focus. The style is `wardenStyle` (`kitStyle` with Glowing Blade as its opener): Glowing Blade first whenever it isn't on him, the best plain swing behind it (Taunting Blade, 116 growth for 10; a taunt's growth is damage).
+- **The side step.** Glowing Blade needs his side (45-150° or 210-315° off his heading, `StyleProcessor.cs:97-104`). A melee on her faces her, so while it is due and she stands in front of or behind him, she steps 90 units square to his heading, at most once per 4 s. A bot attacker turns back to face her within about 0.5 s (`actions.ts` attack re-faces past 200 heading units), so the step lands only when her swing falls in that window. A human attacker turns slower.
+- **Snared** (read from "You perform your Glowing Blade perfectly!", 14 s):
+  - She heals herself (`spells.heal`) once he is 450 off and she is below 70 %. Snared at 40 % speed, he covers about 250 of a 3.2 s heal.
+  - Otherwise she fights it out if she is as healthy as he is or he is at 30 % or below.
+  - Else she walks a 500 leg away from him, the straightest dry one (straight on, then 45° and 90° either way; `isWet`).
+- **A caster on her from range** (beyond 750, not snared): a heal on herself from 800 when hurt; otherwise nothing, and the list goes on.
+- `warden({ lastStand: false })` leaves it out.
 
 ## Builds
 
@@ -82,5 +96,6 @@ Thidranki Warden Blade and a medium shield, 621 health in scale. Blades 10: Glow
 - **The heal thresholds as the only healer** (tank 90, others 83, emergency 55) are still unmeasured. She can't be the only healer while the Druid is required.
 - **Major Regeneration over Regrowth** for a member missing more than ~110 (`pickHeal` ties them).
 - **Glowing Blade** on a diver beside her while the Druid carries the heals. At idle 30 % she has the time.
+- **`lastStand` live:** untested in a fight so far (tests only, `warden.test.ts`). In her sortie logs, look for `lastStand` results, `move ... for Glowing Blade` steps, and "You perform your Glowing Blade perfectly!". Open questions: does the side step ever land Glowing Blade against a bot, and does fighting it out at even health beat getting away?
 - **Her bladeturn in fights:** give it a result name of its own (now `buff`), so its recasts can be counted.
 
