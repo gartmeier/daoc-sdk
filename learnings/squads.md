@@ -76,3 +76,18 @@ shares (`size.ts`, floor 5) do nothing for a squad.
 - **Back on the same line** (the user, 08:40): Hibernia's duo stepped clear of Albion's group, then patrolled straight back into it, again and again.
   - Fix (c80b776): the spot where a group the squad avoided or fled was last seen is kept for four minutes. Its radius is the group's spread plus 2000, at least 3000.
   - The patrol skips waypoints in that spot and goes round it (`safePath`, as round a keep). The reason says "round a group last seen at (x, y)".
+- **Behind a group** (08:47): Midgard's trio fled east, then patrolled west past the group toward its next waypoint, and was run off again every ten seconds.
+  - Fix (a9ed1a1): a waypoint whose way passes through a remembered spot is skipped. The patrol goes round only when every waypoint is behind one.
+- **A pet read as a second enemy** (08:49): Tristram read a Hunter and its pet as 1 vs 2, ran for 45 s and died to its arrows.
+  - Fix (0cd6b32, a2b1a3f): a pet counts 0.4 of a head. In a fight, one enemy player (with its pet) is fought out unless safety is near, whatever its role and whether or not the board reads its target. An archer's arrows name none.
+- **One friend as safety** (08:53): Midgard's trio turned to fight 1 s into its flee because one friendly bot passed within reach, and all three died.
+  - Fix (4ea4c35): only friends with another friend within `joinRadius` count, as a place to run to or stand by.
+- **A spread-out duo** (09:10): Hibernia's duo stood about 2000 apart, and Mordred took each Celt as a lone enemy in turn.
+  - Fix (c508e53): `joinRadius` went from 1500 to 2500.
+- **Running from one** (09:15): Skadi, resting after a mob, ran from one Celt at 175 and died to it.
+  - Fix (9a37723): running from a closing group (`runAt`) needs two or more enemy players.
+- **A chase split the duo** (09:17): Camelot's and Hibernia's duos each read "1 vs 2" with their tank chasing out to the leash, and both fled an even fight.
+  - Fix (a2e546e): our side is the main body at twice the gather radius (4000).
+- **Open:**
+  - Diarmuid, solo, died to four perturbed bwca in a row at 09:42, on the lane from Hibernia's bank to its road. `safePath` clears the camp by only ~280 there, and the squad fought each mob instead of leaving the camp.
+  - Squads take the pair banks and roads as lanes, so a lane into an enemy half meets that realm's main group often. Most "fled" rows are that, with no blood.
