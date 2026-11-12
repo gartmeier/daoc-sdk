@@ -367,7 +367,10 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, here[0]?.z ?? 0, { radius: 8000 });
     const trip: Trip = { mem, now, regionId, level: Math.min(...here.map(m => m.level)), avoid: keeps, travelLeg: s.travelLeg, zAt, dry: staysDry(s) };
     const ourInKeepReach = !!home && dist(centre, home.keep) <= r.keepReach;
-    const friends = (opts.friends?.() ?? []).filter(f => dist(f, centre) <= r.friendMax);
+    // A friendly group is two or more of ours together: one passing by (a stealther, a solo) is no safety to stand by.
+    // Run B 08:53: Midgard's trio turned to fight 1 s into its flee, by one friend, and all three died.
+    const known = opts.friends?.() ?? [];
+    const friends = known.filter(f => dist(f, centre) <= r.friendMax && known.some(g => g !== f && dist(g, f) <= r.joinRadius));
     const nearestFriend = friends.reduce<Point | null>((best, f) => (!best || dist(f, centre) < dist(best, centre) ? f : best), null);
     const atFriends = !!nearestFriend && dist(nearestFriend, centre) <= r.friendReach;
 

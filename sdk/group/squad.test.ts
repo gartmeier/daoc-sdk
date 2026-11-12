@@ -227,13 +227,15 @@ describe('decideSquad: leaving a fight that turned', () => {
 
     test('runs toward friends when they are near and not behind the enemy', () => {
         const two = [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 800)];
-        const friends = [{ x: BASE.x, y: BASE.y + 5000 }];
+        const friends = [{ x: BASE.x, y: BASE.y + 5000 }, { x: BASE.x + 200, y: BASE.y + 5100 }];
         const d = decide(picture(squad(['Merc']), two, { phase: 'engage', focus: 51 }), { friends });
         expect(d.phase).toBe('retreat');
         expect(d.objective).toContain('toward friends');
         expect(d.retreatTo!.y).toBeGreaterThan(BASE.y + 1000);
+        // One friend alone is no group to run to.
+        expect(decide(picture(squad(['Merc']), two, { phase: 'engage', focus: 51 }), { friends: [{ x: BASE.x, y: BASE.y + 5000 }] }).objective).not.toContain('toward friends');
         // Friends behind the enemy (east): not that way.
-        const e = decide(picture(squad(['Merc']), two, { phase: 'engage', focus: 51 }), { friends: [{ x: BASE.x + 5000, y: BASE.y }] });
+        const e = decide(picture(squad(['Merc']), two, { phase: 'engage', focus: 51 }), { friends: [{ x: BASE.x + 5000, y: BASE.y }, { x: BASE.x + 5100, y: BASE.y }] });
         expect(e.objective).not.toContain('toward friends');
         expect(e.retreatTo!.x).toBeLessThan(BASE.x);
     });
@@ -244,7 +246,7 @@ describe('decideSquad: leaving a fight that turned', () => {
         const d = decide(picture(us(), opener, { phase: 'engage', focus: 51 }));
         expect(d.phase).toBe('engage');
         expect(d.focus).toBe(51);
-        const e = decide(picture(us(), opener, { phase: 'engage', focus: 51 }), { friends: [{ x: BASE.x - 3000, y: BASE.y }] });
+        const e = decide(picture(us(), opener, { phase: 'engage', focus: 51 }), { friends: [{ x: BASE.x - 3000, y: BASE.y }, { x: BASE.x - 3100, y: BASE.y + 100 }] });
         expect(e.phase).toBe('retreat');
         // An archer or caster on us shoots at our back: fought out too (run B 08:49: Tristram ran from a Hunter and died), its pet with it.
         const f = decide(picture(us(), [foe(51, 1200, { ...guess('caster'), target: 'Wizard', threat: true }), foe(52, 300, { isPet: true, threat: true, target: 'Wizard' })], { phase: 'engage', focus: 51 }));
