@@ -175,6 +175,12 @@ describe('decideSquad: what run B showed (2026-11-11 23:10-23:27)', () => {
         expect(d.phase).toBe('travel');
         expect(d.reason).toContain('round a group last seen at');
         expect(Math.abs(d.anchor!.y - BASE.y)).toBeGreaterThan(300);
+        // With another lane clear of their spot, that lane is taken instead of going round.
+        const OTHER = [{ x: 10_000, y: 10_000, z: 0 }, { x: 22_000, y: 10_000, z: 0 }, { x: 5_000, y: 20_000, z: 0 }];
+        memory.wp = 1;
+        d = decide(picture(squad(['Merc', 'Cleric']), [], {}, t + 60_500), { memory, now: t + 60_500, settings: { patrol: OTHER } });
+        expect(d.reason).toContain('waypoint 3/3');
+        expect(d.reason).not.toContain('round a group');
         // A waypoint inside their spot is skipped.
         const NEAR = [{ x: 10_000, y: 10_000, z: 0 }, { x: 13_500, y: 10_000, z: 0 }, { x: 10_000, y: 16_000, z: 0 }];
         memory.wp = 1;

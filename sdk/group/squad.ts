@@ -496,11 +496,17 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const shunned = enemies.filter(c => hidden.has(c.objectId) && !nearOnUs(c));
     const zones = sq.zones ?? [];
     const kept = (q: Point) => shunned.some(c => dist(c, q) <= r.sizeUp + 1000) || zones.some(z => dist(z, q) <= z.r + 500);
+    // Another lane first: a waypoint whose way passes through such a spot is skipped too (run B 08:47: Midgard's trio fled
+    // east from a group, patrolled west past it to the next waypoint, and was run off again every ten seconds). Only with
+    // every waypoint behind one does the patrol go round (below).
+    const blocked = (q: Point) => kept(q) || zones.some(z => dist(z, centre) > z.r && segmentDist(z, centre, q) < z.r);
     if (!showAll && loop?.length && (shunned.length || zones.length) && typeof mem.wp === 'number') {
-        for (let k = 0; k < loop.length && kept(loop[mem.wp % loop.length]!); k++) {
-            mem.wp = (mem.wp + 1) % loop.length;
-            mem.legKind = null;
-        }
+        const start = mem.wp % loop.length;
+        let k = 0;
+        while (k < loop.length && blocked(loop[(start + k) % loop.length]!)) k++;
+        // All blocked: the first one not in a spot itself, to go round to.
+        if (k === loop.length) { k = 0; while (k < loop.length && kept(loop[(start + k) % loop.length]!)) k++; }
+        if (k > 0 && k < loop.length) { mem.wp = (start + k) % loop.length; mem.legKind = null; }
     }
     const u = callInner(contacts);
     if (sq.stand && u.phase === 'engage') return { ...u, reason: `caught: ${u.reason ?? ''}` };
