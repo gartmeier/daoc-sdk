@@ -4,9 +4,9 @@ import { archer, bowOf, CLOSE, shotPlan } from './archer';
 
 describe('bowOf', () => {
     test('the bow in the ranged slot, its reach less the margin', () => {
-        expect(bowOf([{ slot: EquipmentSlot.Ranged, objectType: ObjectType.Longbow }])).toEqual({ objectType: ObjectType.Longbow, reach: 1610 });
-        expect(bowOf([{ slot: EquipmentSlot.Ranged, objectType: ObjectType.CompositeBow }])?.reach).toBe(1450);
-        expect(bowOf([{ slot: EquipmentSlot.Ranged, objectType: ObjectType.RecurvedBow }])?.reach).toBe(1530);
+        expect(bowOf([{ slot: EquipmentSlot.Ranged, objectType: ObjectType.Longbow }])).toEqual({ objectType: ObjectType.Longbow, reach: 1460 });
+        expect(bowOf([{ slot: EquipmentSlot.Ranged, objectType: ObjectType.CompositeBow }])?.reach).toBe(1300);
+        expect(bowOf([{ slot: EquipmentSlot.Ranged, objectType: ObjectType.RecurvedBow }])?.reach).toBe(1380);
         // No bow, or a bow elsewhere: none.
         expect(bowOf([{ slot: EquipmentSlot.RightHand, objectType: ObjectType.ThrustWeapon }])).toBeNull();
         expect(bowOf([{ slot: 45, objectType: ObjectType.Longbow }])).toBeNull();

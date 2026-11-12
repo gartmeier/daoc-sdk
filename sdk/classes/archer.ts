@@ -25,11 +25,16 @@ import { hide } from './stealther';
 
 /** An enemy player this near: melee instead of a draw. */
 export const CLOSE = 350;
-/** Reach by bow type, less a margin for the target's own step. */
+/** Reach by bow type. */
 export const BOW_REACH: Readonly<Record<number, number>> = { [ObjectType.Longbow]: 1760, [ObjectType.RecurvedBow]: 1680, [ObjectType.CompositeBow]: 1600 };
-const MARGIN = 150;
-/** The most a shot takes, draw and flight, before the turn gives up waiting for its line. */
-const SHOT_MS = 7000;
+/** Less this for the target's own run during the 4.6 s draw: at 150, run B (2026-11-11 22:07) had "X is too far away to attack!". */
+const MARGIN = 300;
+/** The most the draw takes before "You are ready to fire!" (4.6 s seen with a longbow). */
+const DRAW_MS = 7000;
+/** After the release, the most its line takes. */
+const SHOT_MS = 3000;
+/** Before a draw we stand still this long: any x/y change in a packet while drawing interrupts it (PlayerMovementComponent.cs:103-106). */
+const SETTLE_MS = 600;
 /** After "out of arrows", the bow rests this long (the melee fight goes on). */
 const NO_ARROWS_MS = 300_000;
 
@@ -77,25 +82,51 @@ export const shoot = (): Behavior => ({
     },
 });
 
-/** One shot: target, face once, bow in hand, draw, and a use before it is ready so it releases by itself. */
+/** Stop and stand: no speed and the same spot over SETTLE_MS, a stop sent again while not (a walk from an earlier turn may still re-issue). */
+async function settle(ctx: MemberContext): Promise<void> {
+    const until = Date.now() + 2000;
+    let at = ctx.me(), since = Date.now();
+    await ctx.sdk.sendStop();
+    while (Date.now() < until) {
+        await Bun.sleep(150);
+        const me = ctx.me();
+        if (me.speed !== 0 || Math.hypot(me.x - at.x, me.y - at.y) > 1) { at = me; since = Date.now(); await ctx.sdk.sendStop(); continue; }
+        if (Date.now() - since >= SETTLE_MS) return;
+    }
+}
+
+/**
+ * One shot: stand still, target, face, bow in hand, draw; nothing more sent until "You are ready to fire!", then the
+ * release. In run B's first 19 minutes (2026-11-11 22:04-22:23) 11 of 12 shots failed: 4 "You move and interrupt your
+ * shot!" (the old kit sent a second use half a second into the draw), 2 "not in view", 1 "too far away", the rest with no
+ * line. Any packet whose x/y differs from what the server holds, a heading turn's 0xA9 included, interrupts a draw.
+ */
 async function loose(ctx: MemberContext, targetId: number): Promise<boolean> {
     const since = ctx.sdk.getGameMessages().at(-1)?.id ?? 0;
     const said = () => ctx.sdk.getGameMessages().filter(m => m.id > since);
+    const done = () => said().find(m => SHOT_LINE.test(m.text) || SHOT_REFUSAL.test(m.text))?.text;
+    const report = (line: string | undefined) => {
+        if (line && /quiver/i.test(line)) ctx.memory.set('noArrowsUntil', Date.now() + NO_ARROWS_MS);
+        ctx.result('shoot', { success: !!line && SHOT_LINE.test(line), message: line ?? 'no shot line' }, targetId);
+        return true;
+    };
     ctx.doing('shoot', targetId);
-    await ctx.sdk.sendStop();
     if (ctx.me().attacking) await ctx.sdk.sendAttack(false);
+    await settle(ctx);
     if (ctx.me().targetObjectId !== targetId) await ctx.sdk.sendSetTarget(targetId);
     await ctx.sdk.sendFaceObject(targetId);
     let use = await ctx.bot.useItem(EquipmentSlot.Ranged);
     // The first use only took the bow in hand.
     if (use.success && /^You wield/i.test(use.message)) use = await ctx.bot.useItem(EquipmentSlot.Ranged);
     if (!use.success) { ctx.result('shoot', use, targetId); return true; }
-    if (/prepare your shot/i.test(use.message)) await ctx.bot.useItem(EquipmentSlot.Ranged);
-    await ctx.sdk.waitForCondition(() => said().some(m => SHOT_LINE.test(m.text) || SHOT_REFUSAL.test(m.text)), SHOT_MS).catch(() => null);
-    const line = said().find(m => SHOT_LINE.test(m.text) || SHOT_REFUSAL.test(m.text))?.text;
-    if (line && /quiver/i.test(line)) ctx.memory.set('noArrowsUntil', Date.now() + NO_ARROWS_MS);
-    ctx.result('shoot', { success: !!line && SHOT_LINE.test(line), message: line ?? 'no shot line' }, targetId);
-    return true;
+    // A draw left ready by an earlier turn fires at once.
+    if (done()) return report(done());
+    const ready = () => said().some(m => /ready to fire/i.test(m.text));
+    await ctx.sdk.waitForCondition(() => ready() || !!done(), DRAW_MS).catch(() => null);
+    if (!ready()) return report(done());
+    await ctx.bot.useItem(EquipmentSlot.Ranged);
+    await ctx.sdk.waitForCondition(() => !!done(), SHOT_MS).catch(() => null);
+    return report(done());
 }
 
 /** The kit: hide above flee, shoot ahead of the melee fight. */
