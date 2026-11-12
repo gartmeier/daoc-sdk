@@ -40,8 +40,53 @@ Scathach (scathach) plays **Stealth assassin** (`bots/scathach/build.ts`). Spec 
 
 The level-24 gear template (`sdk/group/gear-template.ts`, since c37a732): leather, a dagger in each hand (Celtic Dual 4), every stat, hit point, resist and skill bonus at the cap. Scathach wears it (audit 2026-11-11: no shortfall).
 
+## Poisons
+
+`sdk/classes/poison.ts`, in the kit since a6fdd4b: `swapPoison` (an instant), `restock` and `envenom` (chores).
+- **What each weapon carries** (`envenom`, out of combat after a fight or every 5 minutes, one delve per weapon):
+  - the main hand: the damage over time;
+  - the off hand: the debuff;
+  - 3 spare main hands in the bag (the gear template's main hand, `bun bots/gmlevel/give-poisons.ts <bot>`): the snare, the disease and a second damage over time.
+- **Which debuff** (`debuffFor`): by the stat the target's weapon uses (GamePlayer.GetWeaponStat). Disease on a healer, caster or archer: it halves heals, and DEX shortens casting. The STR (or STR/CON) debuff on the rest.
+- **In a fight** (`swapPoison`, every 2.5 s or on a runner):
+  - a spare comes into the main hand when its poison would land: the snare when the focus runs;
+  - the disease once per healer, caster or archer;
+  - a fresh damage over time 18 s after the last one fired.
+- **Each poison has one charge:** the first hit that lands with that weapon fires it.
+- **Buying** (`restock`): a solo below 2 damage over time or 1 debuff leaves Thidranki for its realm's poison merchant and comes back (enterBattleground: bind, medallion, port). The merchants: Onyg (Castle Sauvage), Riber (Druim Ligen), Gwaell (Audliten, by Young Gothi from Svasud).
+  - One buy is a pack of 20, so a trip buys one pack of each kind, about 22s.
+
+**Verified** (2026-11-12, Mordred, `bots/mordred/poison-check.ts`, log in `bots/mordred/runs/poison-check-20261112.log`):
+- The trip out to Onyg and back took 4 min 45 s.
+- All 5 weapons were poisoned at once ("You apply the greater lethal poison to the Thidranki Infiltrator Dirk."), and the delves read back dot, debuff, snare, disease, dot.
+- The delve's lines as the server sends them:
+  - "Inflicts 26 body damage every 4 seconds for 20 seconds."
+  - "Decreases the target's strength by 44 for 1 minute."
+  - "The target is slowed by 40% for 1 minute 1 second."
+  - "Inflicts a wasting disease on the target that slows target by 15%, reduces its strength by 7.5% and inhibits healing by 50% for 1 minute 30 seconds."
+- Not yet seen: a poison firing in a fight, and a swap in combat.
+
+## Nightshade Magic
+
+`sdk/classes/nightshade-magic.ts`, in her kit since a6fdd4b (`sdk/classes/nightshade.ts`). These are baseline spells of the NightshadeNuke type. The group's interrupt takes only DirectDamage and Amnesia spells, and the melee role never casts, so the kit casts them itself.
+- **The instant "…of Night"** (range 700, reuse 20 s): at 24 the best is Knife of Night, 38 damage for 8 power. Arrow of Night does 33 for 15.
+  - `nightInstant` (an instant behaviour) casts it on an enemy player that started a cast within the last 2.5 s and is in reach.
+  - Otherwise it casts it on the focus out of melee reach (over 180) when the focus runs or is under half health.
+  - Never from stealth: the opener is worth five times as much.
+- **The 3 s cast "…Strike"** (range 1500): Lesser Nocturnal Strike, 39 damage.
+  - `nightCast` (fight, after `ambush`) casts it only on a runner past 700, under 40 %, with nobody on her, because a swing at her would interrupt it.
+- Not yet seen live.
+
+## Against a moving target
+
+`sdk/classes/intercept.ts`, in `ambush`'s opener since a6fdd4b. Hidden we walk at 115, and a runner moves at 191. A walk to its front, aimed again each turn, ends as a chase behind it that never catches up: the user watched Mordred do that to a Ranger in run B. So:
+- From its last positions (`trackFix`, `velocityOf`), a target faster than 40 a second is moving.
+- **Coming at us** (its course passes within 120): hold, facing it, and open as it walks into reach.
+- **Passing:** go to the earliest point on its path we can reach first, 0.8 s ahead of it.
+- **Running off faster than we walk:** no chase; stay hidden.
+- Not yet seen against a moving player.
+
 ## Open
 
-- Not yet played in a field run: run B (from 23:15) is the first, run C (02:15) the one before the freeze.
-- Poisons (Envenom) are trained but not applied: no poison in the bag and no kit step for it.
+- Played in run B and the freeze (11-12) as a solo. Mostly it stayed out of fights: sizeUp counts a hidden assassin as 1 against the enemy's number and avoids. Two openers in the freeze, both failed. Hodur's, because the skill setting's style slip changed Backstab II into Pincer; fixed in 79d73cf (no slip while hidden).
 - Perforate Artery from the front: positioned and queued live, not yet landed on a fresh target.
