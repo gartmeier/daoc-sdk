@@ -641,6 +641,26 @@ describe('run A on 11-12, 19:48-19:52: what the user watched (camelot-s1 against
         expect(e.reason).toStartWith('caught:');
     });
 
+    test('a duo apart gathers and holds it until together: no patrol, no engage in between unless one of us is attacked', () => {
+        // hibernia-s1 20:01:08-16: gather and patrol every second at 2009-2085 apart, then an engage still split; Aine died alone.
+        const memory: Record<string, any> = {};
+        const at = (dx: number) => squad(['Merc', 'Cleric'], { Cleric: { x: BASE.x - dx, y: BASE.y } });
+        const lone = [foe(51, 1500)];
+        let d = decide(picture(at(2050), lone, {}, t0), { memory, now: t0 });
+        expect(d.phase).toBe('gather');
+        expect(d.reason).toStartWith('gather:');
+        // 1900 apart: below the line, the gather holds.
+        d = decide(picture(at(1900), lone, {}, t0 + 1000), { memory, now: t0 + 1000 });
+        expect(d.phase).toBe('gather');
+        // Together: the fight is taken.
+        d = decide(picture(at(500), lone, {}, t0 + 2000), { memory, now: t0 + 2000 });
+        expect(d.phase).toBe('engage');
+        // Attacked while apart: no gather order over the fight.
+        const m2: Record<string, any> = {};
+        const onUs = [foe(51, 300, { target: 'Merc', threat: true })];
+        expect(decide(picture(at(2050).map(m => (m.name === 'Merc' ? { ...m, inCombat: true } : m)), onUs, {}, t0), { memory: m2, now: t0 }).phase).not.toBe('gather');
+    });
+
     test("the focus is held while a friend is still on it, not moved to the nearest friend's target", () => {
         // camelot-s1 19:49-19:50: Celt#464 and Celt#471 by turns, "on Mordred's target", "on Tristram's target".
         const us = () => squad(['Merc'], { Merc: { inCombat: true } });

@@ -212,6 +212,13 @@ const REMEMBER_MS = 30_000;
  * "attacked by something unseen 1859 from Thidranki Faste", 4-8 min apart. Legs lie travelLeg apart; a crossing's far bank ~3000.
  */
 const LEG_JUMP = 6000;
+/**
+ * Members apart by more than gatherRadius gather, and the gather is held until they stand within this of each other: no
+ * patrol and no new engage in between, unless an enemy is on one of us. The inner decide's own line is gatherRadius from
+ * its lead, and a duo standing at it flipped gather and patrol every second: run A on 11-12, hibernia-s1 20:01:08-16 at
+ * 2009-2085 apart, Aine's heals out of range, then an engage at 20:01:25 still split, and Aine died alone at 20:01:34.
+ */
+const TOGETHER = 700;
 /** A help call we were asked to is answered from at most this far (the director asks within 7000) ... */
 const CALL_REACH = 7000;
 /** ... one we were not asked to, from at most this far, and only at engageAt or better with the friends there. */
@@ -514,6 +521,8 @@ interface SquadMemory {
     callsSeen?: Record<string, number>;
     /** Calls answered 'coming', for the report. */
     answered?: number;
+    /** Gathering: members were more than gatherRadius apart, and aren't yet within TOGETHER. */
+    gathering?: boolean;
 }
 
 export interface SquadOptions {
@@ -880,6 +889,16 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
             const goal = spotAlong(trip, centre, way, r.sizeUp);
             stepLeg(trip, 'avoid', goal, { from: centre, movers: here, replan: 1500 });
             return { phase: 'travel', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: legAnchor(mem), facing: mem.legFacing, objective: `keep clear of ${bad.length} enemies`, reason: `avoid: odds ${worstText} below ${r.engageAt}, nearest ${Math.round(nearest)} away` };
+        }
+        // Apart: together first (TOGETHER), toward the middle of us, before any patrol, call or new engage.
+        const inRegionAlive = alive.filter(m => m.regionId === regionId);
+        const spread = inRegionAlive.reduce((most, a) => Math.max(most, ...inRegionAlive.map(b => dist(a, b))), 0);
+        sq.gathering = spread > s.gatherRadius || (!!sq.gathering && spread > TOGETHER);
+        if (sq.gathering && inRegionAlive.length > 1) {
+            const mid = centroid(inRegionAlive);
+            const at = { x: Math.round(mid.x), y: Math.round(mid.y), z: zAt(mid) };
+            const names = inRegionAlive.map(m => m.name).join(' and ');
+            return { phase: 'gather', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: at, facing: null, objective: `regroup: ${names}`, reason: `gather: ${names} ${Math.round(spread)} apart, together first (within ${TOGETHER})` };
         }
         // On the way to a call; a muster's rally is held until it says go.
         if (call && sq.call) {
