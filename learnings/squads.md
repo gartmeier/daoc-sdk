@@ -59,3 +59,15 @@ shares (`size.ts`, floor 5) do nothing for a squad.
 - Caught: an `engage` whose reason starts with `caught:`.
 - Kept clear: `travel` with `avoid:`.
 - The decide's memory counts `squad.fled`, `squad.caught` and `squad.avoided` per run.
+
+## Run B, first 19 minutes (2026-11-11 23:10-23:27), and the fixes (f7e66ef)
+
+- **Bait.** A stray at the edge of a group counted as a lone enemy, because only enemies within `sizeUp` of us counted, plus those within `joinRadius` of them. Camelot's duo engaged a Kobold "1 vs 1" and fled 13 s later from six. Midgard's Hodur did the same against a Lurikeen with two behind it.
+  - Fix: before a fight starts, each group of enemies within reach is judged whole (`enemyClusters`: any realm, linked through `joinRadius`, step by step).
+- **Flip-flop.** A lone Hibernian caster stood at 3600 and a Midgard group of four at 3400. The orders flipped every second between hunting the caster and stepping away from the group, because the judged set changed with the distance.
+  - Fix: groups are judged one by one. Once the squad steps away it keeps going until the group is 1000 beyond `sizeUp`, and a group judged too strong stays hidden for 10 s.
+- **The far member.** Tuck (a Friar) alone took a Celt at "2 vs 1": Galahad was counted while walking back from the portal keep, 9000 off. Tuck died.
+  - Fix: our side is the main body (`rvr.ts mainBody`).
+- **The same duo three times.** Camelot's Tuck and Galahad lost to Hibernia's Niamh and Cuchulainn (Bard and Hero) three times in five minutes. The odds read about 1.15 each time; the Bard's mezz on the Friar decided it.
+  - Fix: enemies near one of ours when it died count 1.5× for ten minutes when deciding to start a fight.
+- **Solos on a healer.** Scathach and Diarmuid, solo, each held Kobold#469 at 38-40 % for minutes without a kill. Open.
