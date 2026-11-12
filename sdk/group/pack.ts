@@ -25,12 +25,13 @@ import { immuneKinds } from './cc';
 import { assignCc } from './pve';
 import { aggroZones } from './terrain';
 import { lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, type Quarry, type Tracks } from './tactics/ambush';
+import { offRoadsOut, roadsOut } from './tactics/roads';
 import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import { countFor, groupSize, type Count } from './size';
 import type { ColumnOrder, Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
-import { drySpot, isWet, waitAshore } from './water';
+import { drySpot, isDry, isWet, waitAshore } from './water';
 
 export { focusHealed, pickPackFocus } from './rvr';
 
@@ -308,6 +309,13 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     if (s.ambush) noteTracks((mem.ambushTracks ??= {}) as Tracks, p.contacts.filter(c => players(c) && !c.stale && c.regionId === regionId), now);
     const free = foes.filter(c => !c.cc).sort((a, b) => dist(a, centre) - dist(b, centre));
     const stay: Point3 = onLand(centre, centre);
+    // Where the pack sits to rest or regroup: off every enemy's way out of its portal keep (tactics/roads.ts), as decideRvr.
+    let restMemo: { at: Point3; why: string } | undefined;
+    const rest = () => (restMemo ??= (() => {
+        const off = offRoadsOut(stay, roadsOut(regionId, realm, s), q => clearOf(q, keeps) && (!dry || isDry(regionId, q)));
+        if (!off?.road) return { at: stay, why: '' };
+        return { at: { x: off.x, y: off.y, z: zAt(off) }, why: `, off ${off.road.realm}'s road out of its portal keep (${Math.round(dist(centre, off))} away)` };
+    })());
     const facing = free[0] ? { x: free[0].x, y: free[0].y } : undefined;
     // Released members at the keep stay put until the pack is within gatherRadius of them (they are in `main` then).
     // In a pair round nobody is picked up: those released walk out to the pack at its ring, which rests there for them (decideRvr).
@@ -507,7 +515,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'go home to regroup', reason: pickups.length ? `picking up ${pickups.map(m => m.name).join(', ')}` : `regrouping: ${main.length} together of ${here.length}` });
         } else {
             if (dead.length) mem.hadDead = true;
-            return say({ ...calm(), phase: 'recover', anchor: stay, reason: 'regrouping: waiting for the others' });
+            return say({ ...calm(), phase: 'recover', anchor: rest().at, reason: 'regrouping: waiting for the others' });
         }
     }
 
@@ -518,14 +526,14 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         if (beastOnUs) return say(calm());
         if (free.some(c => dist(c, centre) <= k.standoff)) mem.pack = 'stalk';
         else {
-            if (pickups.length || (far.length && !pairRound) || dead.length) { mem.pack = 'home'; mem.legKind = null; return say({ ...none, phase: 'recover', anchor: stay, reason: 'regrouping: someone is missing again' }); }
+            if (pickups.length || (far.length && !pairRound) || dead.length) { mem.pack = 'home'; mem.legKind = null; return say({ ...none, phase: 'recover', anchor: rest().at, reason: 'regrouping: someone is missing again' }); }
             const low = here.flatMap(m => [
                 ...(m.hp < k.rebuffReady.hp ? [{ name: m.name, why: 'health' }] : []),
                 ...(usesMana(m) && m.mana < k.rebuffReady.mana ? [{ name: m.name, why: powerWhy(m) }] : []),
             ]);
             const buffing = here.filter(m => m.activity?.kind === 'buff');
             if (now - mem.rebuffAt < k.rebuffMs || low.length || buffing.length) {
-                return say({ ...none, phase: 'recover', anchor: stay, waiting: low, objective: 'rebuff and rest together', reason: `rebuffing: ${buffing.length} casting, waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ') || 'the buffs to go round'}` });
+                return say({ ...none, phase: 'recover', anchor: rest().at, waiting: low, objective: 'rebuff and rest together', reason: `rebuffing: ${buffing.length} casting, waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ') || 'the buffs to go round'}${rest().why}` });
             }
             mem.pack = 'stalk';
             mem.raids = mem.raids ?? 0;
@@ -534,7 +542,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
 
     // ── Stalking ──
     if (dead.length) mem.hadDead = true;
-    if (mem.hadDead && !dead.length && !far.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.hadDead = false; mem.pack = 'rebuff'; mem.rebuffAt = now; return say({ ...none, phase: 'recover', anchor: stay, reason: 'rebuffing: someone is back' }); }
+    if (mem.hadDead && !dead.length && !far.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.hadDead = false; mem.pack = 'rebuff'; mem.rebuffAt = now; return say({ ...none, phase: 'recover', anchor: rest().at, reason: 'rebuffing: someone is back' }); }
     if (pickups.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.pack = 'home'; mem.legKind = null; stepLeg(trip, 'home', homeSpot!, { from: centre, movers: main, replan: Infinity }); return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'pick up the released', reason: `picking up ${pickups.map(m => m.name).join(', ')}` }); }
     const seen = free.filter(c => dist(c, centre) <= s.huntRadius);
     if (!seen.length) {
@@ -583,7 +591,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'keep away while resting', reason: `resting: ${who.map(m => m.name).join(', ')}, moving off (nearest ${Math.round(d)} away)` });
         }
         mem.movingOff = false;
-        return say({ ...none, phase: 'recover', anchor: stay, objective: 'rest', waiting: who.map(m => ({ name: m.name, why: powerWhy(m) })), reason: `resting: ${who.map(m => m.name).join(', ')} (nearest enemy ${Math.round(d)} away)` });
+        return say({ ...none, phase: 'recover', anchor: rest().at, objective: 'rest', waiting: who.map(m => ({ name: m.name, why: powerWhy(m) })), reason: `resting: ${who.map(m => m.name).join(', ')} (nearest enemy ${Math.round(d)} away)${rest().why}` });
     }
     // Prey: all that is in sight is a couple of stragglers and we clearly outnumber them. No cooldown, no stand-off and no
     // raid clock for those: turn round and kill them, the Hero too. Live, 5 v 2 at the end of a round was refused as "still cooling down".

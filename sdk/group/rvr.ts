@@ -43,6 +43,7 @@ import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
 import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
 import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, TRAIL_MS, trailGoal, type Quarry, type Tracks } from './tactics/ambush';
+import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -606,7 +607,14 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     };
     // Without the last leg's way on (Orders.anchor.onward): standing here goes nowhere.
     const stay: Point3 = o.anchor ? { x: o.anchor.x, y: o.anchor.y, z: o.anchor.z } : standHere();
-    const calm = { focus: null, puller: null, cc: [], retreatTo: null, waiting: [] };
+    // Every enemy's way out of its portal keep (tactics/roads.ts): no resting or lying in wait on it, where its units come out one by one.
+    const roads = roadsOut(regionId, realm, s);
+    const restAt = (): { at: Point3; why: string } => {
+        const off = offRoadsOut(stay, roads, q => clearOf(q, keeps) && (!dry || isDry(regionId, q)));
+        if (!off?.road) return { at: stay, why: '' };
+        return { at: { x: off.x, y: off.y, z: zAt(off) }, why: `, off ${off.road.realm}'s road out of its portal keep (${Math.round(dist(centre, off))} away)` };
+    };
+    const calm ={ focus: null, puller: null, cc: [], retreatTo: null, waiting: [] };
 
     // ── Who a fight here is with: enemies near the main body (any kind) or attacking one of it ──
     // An enemy attacking a member away from the main body (walking back from the portal keep) counts only
@@ -804,7 +812,10 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const pairRing = ring?.pair ? ring : null;
     const atRing = !!pairRing && dist(centre, pairRing) <= pairRing.r + AT_RING;
     const onTheWay = !!pairRing && !atRing && low.length <= HUNT_UNREADY && low.every(w => w.why === 'power' || w.why === 'pet power');
-    if (far.length && atRing) return { ...calm, phase: 'recover', anchor: stay, waiting: [...far.map(m => ({ name: m.name, why: 'away' })), ...low], objective: `wait at the ring for ${names(far)}${gone}`, reason: `waiting at the ring for ${names(far)}, ${Math.round(dist(centre, centroid(far)))} away${low.length ? `, and ${low.map(w => `${w.name}'s ${w.why}`).join(', ')}` : ''}` };
+    if (far.length && atRing) {
+        const rest = restAt();
+        return { ...calm, phase: 'recover', anchor: rest.at, waiting: [...far.map(m => ({ name: m.name, why: 'away' })), ...low], objective: `wait at the ring for ${names(far)}${gone}`, reason: `waiting at the ring for ${names(far)}, ${Math.round(dist(centre, centroid(far)))} away${low.length ? `, and ${low.map(w => `${w.name}'s ${w.why}`).join(', ')}` : ''}${rest.why}` };
+    }
     if (far.length && !pairRing) {
         // A far tank walks back by himself: a leg toward a middle with him in it meets nobody. Only him to meet, they go to meet him: there is no base to wait at.
         const walking = farTank(here, s.gatherRadius);
@@ -815,14 +826,18 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         stepLeg(trip, 'gather', them, { from: centre, movers: main, replan: Infinity, meet: goers.some(m => !m.observed) });
         return { ...calm, phase: 'gather', anchor: legAnchor(mem), facing: them, waiting: far.map(m => ({ name: m.name, why: 'away' })), objective: `regroup with ${names(far)}${gone}`, reason: `meeting ${names(far)}, ${Math.round(dist(centre, them))} away` };
     }
-    if (low.length && !onTheWay) return { ...calm, phase: 'recover', anchor: stay, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)` };
+    if (low.length && !onTheWay) {
+        const rest = restAt();
+        return { ...calm, phase: 'recover', anchor: rest.at, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)${rest.why}` };
+    }
 
     // ── The quarry: a squad a hunt lost. Lost once: follow where its walk leads, never into a keep. Lost again: it walks a way
     // in; wait beside it, off its line and hidden from it where the terrain allows (tactics/ambush.ts) ──
     const q: Quarry | undefined = mem.quarry;
     if (s.ambush && q && q.regionId === regionId && !seen.length) {
         const age = now - q.lostAt;
-        const standable = (pt: Point) => clearOf(pt, keeps) && (!dry || isDry(regionId, pt));
+        // Never on an enemy's road out of its portal keep: that is camping its spawn, not waiting for a squad (tactics/roads.ts).
+        const standable = (pt: Point) => clearOf(pt, keeps) && !onRoadOut(pt, roads) && (!dry || isDry(regionId, pt));
         if (q.losses < AMBUSH_AFTER && age <= TRAIL_MS) {
             const goal = trailGoal(q, now);
             if (goal && standable(goal)) {
