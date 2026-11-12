@@ -13,8 +13,7 @@ import type { ScriptContext } from '../runner';
 import { THIDRANKI } from './keeps';
 import { loadGroup } from './roster';
 import { groupArgs, runGroup, runGroupScript } from './runner';
-import { squadStrategy } from './squad';
-import type { Point } from './types';
+import { squadStrategy, type Friend } from './squad';
 
 const GATEWAY = process.env.GATEWAY_HTTP ?? 'http://127.0.0.1:7780';
 const FRIENDS_EVERY_MS = 5000;
@@ -25,17 +24,17 @@ export function squadVariant(name: string): number {
     return m ? Number(m[1]) : 0;
 }
 
-/** From a region frame's bots: where our realm's bots outside this squad stand, alive. Our realm is that of our own bots in it. */
-export function friendsIn(bots: readonly { realm: Realm; x: number; y: number; isDead: boolean; group: { id: string } | null; name: string }[], squad: string, ownNames: ReadonlySet<string> = new Set()): Point[] {
+/** From a region frame's bots: where our realm's bots outside this squad stand, alive, with their class, level and health. Our realm is that of our own bots in it. */
+export function friendsIn(bots: readonly { realm: Realm; x: number; y: number; isDead: boolean; group: { id: string } | null; name: string; hp?: number; level?: number; className?: string }[], squad: string, ownNames: ReadonlySet<string> = new Set()): Friend[] {
     const mine = bots.filter(b => b.group?.id === squad || ownNames.has(b.name));
     const realm = mine[0]?.realm;
     if (!realm || realm === 'none') return [];
-    return bots.filter(b => b.realm === realm && !b.isDead && !mine.includes(b)).map(b => ({ x: b.x, y: b.y }));
+    return bots.filter(b => b.realm === realm && !b.isDead && !mine.includes(b)).map(b => ({ x: b.x, y: b.y, hp: b.hp, level: b.level, className: b.className }));
 }
 
 /** Polls the region frame for friends until stopped; `friends()` is the latest answer (none until the first). */
-export function friendWatch(squad: string, password: string | undefined, regionId = THIDRANKI): { friends: () => Point[]; stop: () => void } {
-    let latest: Point[] = [];
+export function friendWatch(squad: string, password: string | undefined, regionId = THIDRANKI): { friends: () => Friend[]; stop: () => void } {
+    let latest: Friend[] = [];
     let stopped = false;
     const headers: Record<string, string> = password ? { Authorization: `Bearer ${password}` } : {};
     const tick = async () => {

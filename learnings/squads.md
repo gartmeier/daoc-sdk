@@ -25,6 +25,9 @@ square law), so two against one is four to one.
 - An enemy busy with a third realm counts 0.6.
 - The squad takes a fight at a ratio of `squad.engageAt` (0.9) or better, and leaves one below `squad.leaveAt` (0.55). In between, a fight it is in goes on.
 - One against one at full health is 1: taken. A solo at 60 % health against a fresh enemy is not taken.
+- A friendly group's fight counts as ours. Players of our realm outside the squad, two or more together, within 2000 (`ASSIST`) of the enemies or of us, count on our side. Each one's worth is its class's role, health and level from the gateway's region frame, times 0.8 (`ALLY`).
+  - The log shows them as `1+5 vs 5`, and a taken fight's reason ends `; beside N friends`.
+  - The cause (N5, 2026-11-12 09:53): Diarmuid, a solo Ranger, read "1 vs 3", then "1 vs 5", and patrolled away from Hibernia's own group fighting those five 3-4k off. A human archer would have joined.
 - A stealther (Infiltrator, Nightshade, Shadowblade) out of combat counts 1.4 when starting a fight, not once in it. It is hidden then, and its opener does about 200 damage plus a stun or bleed (N5). So a hidden solo opens on a lone mezzer, but not on two.
 - A patrol that passes a group it keeps clear of says so in its reason (`; clear of N at odds ...`). That came from N5's solo run (2026-11-11 21:00): Mordred skipped a waypoint near four Midgarders, and the log showed only the patrol.
 

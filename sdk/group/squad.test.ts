@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { enemy, picture, report } from './fixtures';
 import { BATTLEGROUND_LAYOUTS, homeOf, THIDRANKI } from './keeps';
 import { countFor } from './size';
-import { decideSquad, edgePatrol, sideStrength, sizeUp, SQUAD_SETTINGS, squadRoaming, type SquadSettings } from './squad';
+import { decideSquad, edgePatrol, sideStrength, sizeUp, SQUAD_SETTINGS, squadRoaming, type Friend, type SquadSettings } from './squad';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import type { Capabilities, Contact, GroupPicture, MemberReport, Orders, Point, Role } from './types';
 import { isDry } from './water';
@@ -37,7 +37,7 @@ function ctx(p: GroupPicture, o: { orders?: Partial<Orders>; memory?: Record<str
         settings: mergeSettings(SQUAD_SETTINGS, { patrol: LOOP, ...o.settings } as any),
     };
 }
-const decide = (p: GroupPicture, o: Parameters<typeof ctx>[1] & { friends?: Point[] } = {}) => decideSquad(ctx(p, o), undefined, { friends: () => o.friends ?? [] });
+const decide = (p: GroupPicture, o: Parameters<typeof ctx>[1] & { friends?: Friend[] } = {}) => decideSquad(ctx(p, o), undefined, { friends: () => o.friends ?? [] });
 
 describe('sizeUp: strength by role, health and numbers (Lanchester), never by who', () => {
     test('one against one at full health is even; two against one is four to one; one against two a quarter', () => {
@@ -252,6 +252,32 @@ describe('decideSquad: leaving a fight that turned', () => {
         expect(e.retreatTo!.x).toBeLessThan(BASE.x);
     });
 
+    test("a friendly group's fight is ours: a solo joins it rather than walking away, and stays in it", () => {
+        // Run B 09:53 (N5): Diarmuid, solo, read "1 vs 3" to "1 vs 5" and patrolled away from Hibernia's group fighting those five.
+        const five = [0, 150, 300, 450, 600].map((d, i) => foe(51 + i, 3400 + d));
+        const ours = [3100, 3200, 3300, 3400, 3500].map((dx, i) => ({ x: BASE.x + dx, y: BASE.y + 600 + 50 * i, hp: 90, level: 24, className: i === 0 ? 'Druid' : 'Hero' }));
+        const alone = decide(picture(squad(['Merc']), five), { friends: [] });
+        expect(alone.reason).toStartWith('avoid:');
+        const up = sizeUp(squad(['Merc']), five, BASE, SQUAD_SETTINGS, new Set(), ours);
+        expect(up.allies).toBe(5);
+        expect(up.ratio).toBeGreaterThan(SQUAD_SETTINGS.squad.engageAt);
+        const join = decide(picture(squad(['Merc']), five), { friends: ours });
+        expect(join.reason ?? '').not.toContain('avoid');
+        expect(join.reason ?? '').not.toContain('clear of');
+        expect(join.phase).not.toBe('retreat');
+        // In it (walked up to 3000 east), it stays: no leaving a fight our side is winning.
+        const there = { x: BASE.x + 3000, y: BASE.y };
+        const fight = decide(picture(squad(['Merc'], { Merc: { inCombat: true } }, there), five.map((c, i) => (i ? c : { ...c, target: 'Merc', threat: true })), { phase: 'engage', focus: 51 }), { friends: ours });
+        expect(fight.phase).toBe('engage');
+        expect(fight.reason).toContain('beside 5 friends');
+        // Friends far from those enemies are in no fight of theirs: still avoided.
+        const far = ours.map(f => ({ ...f, y: f.y + 6000 }));
+        expect(decide(picture(squad(['Merc']), five), { friends: far }).reason).toStartWith('avoid:');
+        // Hurt friends count for less: five at 10 % don't turn it.
+        const hurt = ours.map(f => ({ ...f, hp: 10 }));
+        expect(sizeUp(squad(['Merc']), five, BASE, SQUAD_SETTINGS, new Set(), hurt).ratio).toBeLessThan(SQUAD_SETTINGS.squad.engageAt);
+    });
+
     test("a stealther's opener: a lone melee on a hurt solo is fought out, unless friends are near to run to", () => {
         const opener = [foe(51, 100, { ...guess('melee'), target: 'Wizard', threat: true })];
         const us = () => squad(['Wizard'], { Wizard: { hp: 45, inCombat: true } });
@@ -387,6 +413,7 @@ describe('squad-run: lanes and friends', () => {
         const bot = (name: string, realm: any, group: string | null, over: object = {}) => ({ name, realm, x: 1, y: 2, isDead: false, group: group ? { id: group } : null, ...over });
         const bots = [bot('Mordred', 'albion', 'camelot-s1'), bot('Gawain', 'albion', 'camelot'), bot('Tuck', 'albion', 'camelot', { isDead: true }), bot('Sigrid', 'midgard', 'midgard'), bot('Lone', 'albion', null)];
         expect(friendsIn(bots, 'camelot-s1')).toHaveLength(2);
+        expect(friendsIn([...bots, bot('Lancelot', 'albion', 'camelot', { hp: 60, level: 23, className: 'Paladin' })], 'camelot-s1')[2]).toMatchObject({ hp: 60, level: 23, className: 'Paladin' });
         expect(friendsIn(bots, 'nobody')).toEqual([]);
     });
 });

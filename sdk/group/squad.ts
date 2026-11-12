@@ -23,7 +23,7 @@
 import { estimateZ } from '../../data/index';
 import type { Realm } from '../types';
 import { untouchable } from './blackboard';
-import type { FoeRole } from './class-read';
+import { roleOfClass, type FoeRole } from './class-read';
 import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, keepDangers, type PlayerRealm } from './keeps';
 import { decideRvr, legAnchor, mainBody, realmOfGroup, RVR_SETTINGS, runWay, rvrRoaming, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
 import { isLevel } from './slope';
@@ -132,6 +132,14 @@ const ZONE_MERGE = 3000;
 const PET_HEAD = 0.4;
 /** Per level of difference, a member or an enemy counts this much more or less (clamped). */
 const PER_LEVEL = 0.08;
+/**
+ * A friendly group (two or more of our realm, not this squad) within this of the enemies, or of us, is in the fight: its
+ * players count on our side. Run B 09:53 (N5): Diarmuid, a solo Ranger, read "1 vs 3", then "1 vs 5", and patrolled away from
+ * Hibernia's own group fighting those five 3-4k off, where a human archer would have joined and shot from range.
+ */
+const ASSIST = 2000;
+/** A friend's worth beside ours: not under our orders, and gone when its group moves on. */
+const ALLY = 0.8;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -176,9 +184,21 @@ export function sideStrength(worths: readonly number[], healers: number, heads?:
     return backed * n;
 }
 
+/** A friendly player of our realm outside the squad (squad-run.ts friendsIn): where it stands, and what the region frame tells. */
+export type Friend = Point & { hp?: number; level?: number; className?: string };
+
+/** A friend's worth against a side of level `ours`: its class's role, health and level, at ALLY. */
+export function allyWorth(f: Friend, ours: number): number {
+    const role = f.className ? roleOfClass(f.className) : undefined;
+    const lv = clamp(1 + PER_LEVEL * ((f.level || ours) - ours), 0.6, 1.5);
+    return (role ? FOE_ROLE[role] : 1) * health(f.hp ?? 100) * lv * ALLY;
+}
+
 export interface SizeUp {
     /** The enemies the fight is with (or would be): players and pets. */
     foes: Contact[];
+    /** Friends in the fight (ASSIST): counted on our side. */
+    allies: number;
     ours: number;
     theirs: number;
     /** ours / theirs; Infinity with nobody against us. */
@@ -189,9 +209,10 @@ export interface SizeUp {
 
 /**
  * The fight in front of us: the enemies against us near the centre (within sizeUp, else within huntRadius), the
- * largest realm among them plus any on us, and those within joinRadius of them; and both sides' strength.
+ * largest realm among them plus any on us, and those within joinRadius of them; and both sides' strength. Friends
+ * (`allies`) within ASSIST of those enemies, or of us, fight on our side.
  */
-export function sizeUp(members: readonly MemberReport[], enemies: readonly Contact[], centre: Point, s: Pick<SquadSettings, 'huntRadius' | 'squad'>, grudge: ReadonlySet<number> = new Set()): SizeUp {
+export function sizeUp(members: readonly MemberReport[], enemies: readonly Contact[], centre: Point, s: Pick<SquadSettings, 'huntRadius' | 'squad'>, grudge: ReadonlySet<number> = new Set(), allies: readonly Friend[] = []): SizeUp {
     const ours = new Set(members.map(m => m.name));
     const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
     const byId = new Map(enemies.map(c => [c.objectId, c]));
@@ -210,16 +231,17 @@ export function sizeUp(members: readonly MemberReport[], enemies: readonly Conta
     }
     const alive = members.filter(m => !m.isDead);
     const level = alive.length ? alive.reduce((a, m) => a + m.level, 0) / alive.length : 1;
-    const ourWorth = alive.map(m => memberWorth(m) * clamp(1 + PER_LEVEL * (m.level - level), 0.6, 1.5));
-    const ourHealers = alive.filter(m => m.role === 'healer' || m.capabilities.heal).length;
+    const helping = allies.filter(f => dist(f, centre) <= ASSIST || foes.some(c => !c.isPet && dist(c, f) <= ASSIST));
+    const ourWorth = [...alive.map(m => memberWorth(m) * clamp(1 + PER_LEVEL * (m.level - level), 0.6, 1.5)), ...helping.map(f => allyWorth(f, level))];
+    const ourHealers = alive.filter(m => m.role === 'healer' || m.capabilities.heal).length + helping.filter(f => f.className && roleOfClass(f.className) === 'healer').length;
     const theirWorth = foes.map(c => foeWorth(c, level) * (busy(c) ? BUSY : 1));
     const theirHealers = foes.filter(c => !c.isPet && foeRole(c) === 'healer').length;
     const heads = foes.map(c => (c.isPet ? PET_HEAD : 1));
     const a = sideStrength(ourWorth, ourHealers), b = sideStrength(theirWorth, theirHealers, heads);
-    const opened = sideStrength(alive.map((m, i) => ourWorth[i]! * (STEALTHERS.has(m.className) && !m.inCombat ? OPENER : 1)), ourHealers);
+    const opened = sideStrength(ourWorth.map((w, i) => w * (i < alive.length && STEALTHERS.has(alive[i]!.className) && !alive[i]!.inCombat ? OPENER : 1)), ourHealers);
     // To start a fight, those that beat us lately count more (GRUDGE).
     const wary = sideStrength(foes.map((c, i) => theirWorth[i]! * (grudge.has(c.objectId) ? GRUDGE : 1)), theirHealers, heads);
-    return { foes, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: wary > 0 ? opened / wary : Infinity };
+    return { foes, allies: helping.length, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: wary > 0 ? opened / wary : Infinity };
 }
 
 /**
@@ -310,8 +332,8 @@ interface SquadMemory {
 }
 
 export interface SquadOptions {
-    /** Where friendly players of our realm stand (not this squad): groups to run to. Read each tick; none by default. */
-    friends?: () => readonly Point[];
+    /** Where friendly players of our realm stand (not this squad): groups to run to, and to fight beside. Read each tick; none by default. */
+    friends?: () => readonly Friend[];
 }
 
 /** The squad's decide around `inner` (decideRvr by default, or a realm's own wrapper of it). */
@@ -377,12 +399,14 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const nearestFriend = friends.reduce<Point | null>((best, f) => (!best || dist(f, centre) < dist(best, centre) ? f : best), null);
     const atFriends = !!nearestFriend && dist(nearestFriend, centre) <= r.friendReach;
 
-    const up = sizeUp(here, enemies, centre, s, grudge);
+    // A friendly group's fight near us is ours too: its players count on our side (ASSIST).
+    const up = sizeUp(here, enemies, centre, s, grudge, friends);
     // Attacked: one on us near (the board keeps a runner's last target, so not at any range), or in combat with one beside us.
     const hit = up.foes.some(nearOnUs) || here.some(m => m.inCombat && up.foes.some(c => dist(c, m) < 400));
     const engaged = o.phase === 'engage';
     const fmt = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : '∞');
-    const odds = `${fmt(up.ratio)} (${here.length} vs ${up.foes.length})`;
+    const side = (n: number) => `${here.length}${n ? `+${n}` : ''}`;
+    const odds = `${fmt(up.ratio)} (${side(up.allies)} vs ${up.foes.length})`;
 
     /** Where to run: toward friends near and not behind the enemy, else home (or straight away when they stand that way). */
     const fleeTarget = (from: readonly Contact[] = up.foes): { way: Point; toward: 'friends' | 'home' | 'away'; target: Point | null } => {
@@ -474,13 +498,14 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         let worst = Infinity;
         for (const cl of groups) {
             // The group as a whole is what we would walk into, whichever realms are in it.
-            const odds = sizeUp(here, cl.map(c => ({ ...c, realm: cl[0]!.realm })), centre, whole, grudge).opening;
+            const su = sizeUp(here, cl.map(c => ({ ...c, realm: cl[0]!.realm })), centre, whole, grudge, friends);
+            const odds = su.opening;
             if (odds >= r.engageAt) { for (const c of cl) delete sq.shun[c.objectId]; continue; }
             if (!cl.every(c => (sq.shun[c.objectId] ?? 0) > now || (sq.avoid[c.objectId] ?? 0) > now)) sq.avoided++;
             for (const c of cl) sq.shun[c.objectId] = now + SHUN_MS;
             noteZone(cl);
             bad.push(...cl);
-            if (odds < worst) { worst = odds; worstText = `${fmt(odds)} (${here.length} vs ${cl.length}${here.some(m => STEALTHERS.has(m.className) && !m.inCombat) ? ', from stealth' : ''})`; }
+            if (odds < worst) { worst = odds; worstText = `${fmt(odds)} (${side(su.allies)} vs ${cl.length}${here.some(m => STEALTHERS.has(m.className) && !m.inCombat) ? ', from stealth' : ''})`; }
         }
         const nearest = bad.length ? Math.min(...bad.map(c => dist(c, centre))) : Infinity;
         sq.clearing = nearest <= r.sizeUp || (!!sq.clearing && nearest <= r.sizeUp + CLEAR_SLACK);
@@ -540,6 +565,8 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
             return { ...u, anchor: legAnchor(mem), facing: mem.legFacing, reason: `${u.reason}; round ${across.length === 1 ? 'a group' : `${across.length} groups`} last seen at ${at}` };
         }
     }
+    // Fighting beside a friendly group: say so, for the log and the ledger.
+    if (up.allies && u.phase === 'engage' && up.foes.length) return { ...u, reason: `${u.reason ?? ''}; beside ${up.allies} friends, odds ${odds}` };
     // Say who we keep clear of, for the log: the orders alone show only a patrol.
     if (shunned.length && !showAll && u.phase !== 'engage') return { ...u, reason: `${u.reason ?? ''}; clear of ${shunned.length}${worstText ? ` at odds ${worstText}` : ''}` };
     return u;
