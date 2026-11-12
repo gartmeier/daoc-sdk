@@ -509,12 +509,15 @@ describe('decideRvr: retreat among three realms', () => {
         const fighting = { phase: 'engage' as const, focus: d.focus!, anchor: d.anchor! };
         d = step(21_000, [...off, ...brawl], fighting);
         expect(d.reason).not.toContain('caught');
-        d = step(25_000, [...seven, ...brawl], fighting);
+        // More than RETREAT_COMMIT_MS after we turned on the brawl, never outnumbered since: a new retreat.
+        d = step(26_000, [...seven, ...brawl], fighting);
         expect(d.phase).toBe('retreat');
         expect(d.reason).toBe('retreat: 7 of 15 enemies vs 5');
     });
 
-    test('caught: fights on while they outnumber us, and runs again once the odds evened out in between', () => {
+    // Field 2026-11-12 (the freeze and the human-vision hour): caught ended on the first tick one of them was mezzed, and the
+    // next full count was a new retreat; Camelot's orders turned between engage and retreat within 20 s 72 times in 136 turns.
+    test('caught: fights on while they outnumber us, a mezz between, and runs again only after 20 s without being outnumbered', () => {
         const memory: Record<string, any> = {};
         const step = (ms: number, contacts: Contact[], orders: Partial<Orders> = {}) => decideRvr(ctx(picture(team(), contacts, orders, now + ms), { memory, now: now + ms }));
         let d = step(0, seven);
@@ -522,13 +525,55 @@ describe('decideRvr: retreat among three realms', () => {
         expect(d.reason).toContain('caught: ');
         const fighting = { phase: 'engage' as const, focus: d.focus!, anchor: d.anchor! };
         expect(step(26_000, seven, fighting).reason).toContain('caught: ');
-        // Three of them mezzed: four against us, below the margin.
-        const mezz = { by: 'Bard', kind: 'mezz', until: now + 40_000 };
-        d = step(27_000, seven.map(c => (c.objectId > 13 ? { ...c, cc: mezz } : c)), fighting);
+        // Three of them mezzed: four against us, below the margin. Still the fight we were caught in.
+        const mezz = { by: 'Bard', kind: 'mezz', until: now + 120_000 };
+        const mezzed = seven.map(c => (c.objectId > 13 ? { ...c, cc: mezz } : c));
+        d = step(27_000, mezzed, fighting);
         expect(d.phase).toBe('engage');
         expect(d.reason).not.toContain('caught');
-        // Awake again: seven against five is a new retreat, not a fight we were caught in.
-        expect(step(35_000, seven, fighting).phase).toBe('retreat');
+        // Awake again 8 s later: fought on, not run again.
+        d = step(35_000, seven, fighting);
+        expect(d.phase).toBe('engage');
+        expect(d.reason).toContain('caught: ');
+        // Mezzed again for 20 s: the next seven against five is a new retreat.
+        expect(step(40_000, mezzed, fighting).phase).toBe('engage');
+        expect(step(56_000, mezzed, fighting).phase).toBe('engage');
+        // (One of the seven, its health still 20 s, is a phantom by then: an eighth comes up with them.)
+        expect(step(57_000, [...seven, albion(17)], fighting).phase).toBe('retreat');
+    });
+
+    test('back at them soon after a retreat: committed, the rest of them coming up is no new retreat', () => {
+        const memory: Record<string, any> = {};
+        const step = (ms: number, contacts: Contact[], orders: Partial<Orders> = {}) => decideRvr(ctx(picture(team(), contacts, orders, now + ms), { memory, now: now + ms }));
+        let d = step(0, seven);
+        const off = seven.map(c => ({ ...c, x: 13_000 }));
+        // Nobody follows: the retreat ends, and the seven in sight are too many to hunt.
+        d = step(5000, off, { phase: 'retreat', retreatTo: d.retreatTo!, reason: d.reason });
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toContain('fall back');
+        // Two of them come on: a fight of two against five.
+        const two = off.map(c => (c.objectId <= 11 ? { ...c, x: 11_500 } : c));
+        d = step(8000, two, { phase: 'travel', anchor: d.anchor });
+        expect(d.phase).toBe('engage');
+        // The other five come up behind them: committed, fight it out.
+        d = step(10_000, seven, { phase: 'engage', focus: d.focus!, anchor: d.anchor! });
+        expect(d.phase).toBe('engage');
+        expect(d.reason).toContain('caught: ');
+    });
+
+    test('a retreat runs on past those of them we mezzed, instead of turning on them', () => {
+        const memory: Record<string, any> = {};
+        const step = (ms: number, contacts: Contact[], orders: Partial<Orders> = {}) => decideRvr(ctx(picture(team(), contacts, orders, now + ms), { memory, now: now + ms }));
+        let d = step(0, seven);
+        const retreating = { phase: 'retreat' as const, retreatTo: d.retreatTo!, reason: d.reason };
+        const mezz = { by: 'Bard', kind: 'mezz', until: now + 60_000 };
+        // Three mezzed near us, the other four 5000 off.
+        const left = seven.map(c => (c.objectId <= 12 ? { ...c, cc: mezz } : { ...c, x: 15_000 }));
+        d = step(5000, left, retreating);
+        expect(d.phase).toBe('retreat');
+        // retreat.maxMs on: the retreat ends there, and what is near is a fight we are committed to.
+        d = step(21_000, left, retreating);
+        expect(d.phase).toBe('engage');
     });
 });
 

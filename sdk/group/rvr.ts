@@ -311,6 +311,14 @@ const FOCUS_SLACK = 1000;
 /** A fight's anchor is moved back to the group's centre once it is this far from it (and toward a focus at most this far from it). */
 const FIGHT_DRIFT = 1500;
 /**
+ * A fight the group turns to within this of a retreat (caught at retreat.maxMs, or back at them) is one it is committed
+ * to: no new retreat until it went this long without being outnumbered. A player notices adds late and commits, or wipes.
+ * Before (field freeze and the human-vision hour, 2026-11-12): caught ended on the first tick an enemy was mezzed or
+ * stepped out of range, and the next tick's full count was a new retreat; Camelot turned between engage and retreat
+ * within 20 s 72 times in 136 turns, 39 of them the turn at maxMs and most of the rest the run again right after it.
+ */
+const RETREAT_COMMIT_MS = 20_000;
+/**
  * A focus beyond chaseLeash from the fight's anchor moves the anchor toward it, to leave it this share
  * of the leash away: with the default leash it runs 800 farther before the anchor moves again.
  */
@@ -636,12 +644,15 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // ── Retreating: keep running while enemies against us follow, on toward home from each point reached ──
     if (o.phase === 'retreat' && o.retreatTo) {
         // Counted as the retreat was (against): two other realms fighting each other near us don't follow us.
+        // Those we mezzed or rooted on the way are still the group we run from: run on past them, not turn on them
+        // (field 2026-11-12: "fight ... 0 of 3 enemies", the cc broken, and the rest on us again a few seconds later).
         const following = against(enemies.filter(inFight));
-        if (following.length && now - (mem.retreatStart ?? now) < s.retreat.maxMs) {
-            const to = dist(centre, o.retreatTo) < 600 ? spotAlong(trip, centre, runWay(centre, following, homeAt), s.retreat.distance) : o.retreatTo;
+        const held = enemies.filter(c => inFight(c) && c.cc && !busy(c));
+        if ((following.length || held.length) && now - (mem.retreatStart ?? now) < s.retreat.maxMs) {
+            const to = dist(centre, o.retreatTo) < 600 ? spotAlong(trip, centre, runWay(centre, following.length ? following : held, homeAt), s.retreat.distance) : o.retreatTo;
             return { phase: 'retreat', retreatTo: to, anchor: to, reason: o.reason };
         }
-        if (outnumbered(following.length)) mem.stand = true;
+        mem.retreatEnded = now;
     }
 
     // ── Fighting: enemy players near us or on us; monsters only when they attack us and no player is about ──
@@ -667,9 +678,12 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         if (soft && held && focusHealed(lowHp, held, soft.healedBy)) dropped[held.objectId] = now + soft.droppedMs;
         const current = held && !dropped[held.objectId] ? held : null;
         const big = against(players);
-        // Caught (retreat.maxMs): fight it out while they outnumber us. Once they don't, the next outnumbering is a new retreat.
-        if (!outnumbered(big.length)) mem.stand = false;
-        if (outnumbered(big.length) && !mem.stand && !(current && current.hp < s.retreat.focusHp)) {
+        // Caught (retreat.maxMs) or back at them soon after a retreat: committed (RETREAT_COMMIT_MS), fight it out while they
+        // outnumber us. The next outnumbering is a new retreat only once they haven't for RETREAT_COMMIT_MS.
+        if (o.phase !== 'engage' && now - (mem.retreatEnded ?? -Infinity) <= RETREAT_COMMIT_MS) mem.standUntil = Math.max(mem.standUntil ?? 0, now + RETREAT_COMMIT_MS);
+        if (outnumbered(big.length) && (mem.standUntil ?? 0) > now) mem.standUntil = now + RETREAT_COMMIT_MS;
+        const caught = (mem.standUntil ?? 0) > now;
+        if (outnumbered(big.length) && !caught && !(current && current.hp < s.retreat.focusHp)) {
             mem.retreatStart = now;
             const way = runWay(centre, big, homeAt);
             const to = spotAlong(trip, centre, way, s.retreat.distance);
@@ -735,10 +749,9 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         return {
             phase: 'engage', focus: focus.objectId, puller: null, cc, retreatTo: null, waiting: [], anchor: mem.fightAnchor, facing: { x: focus.x, y: focus.y },
             objective: `fight ${players.length ? 'enemy players' : 'monsters'} at ${at(mem.fightAnchor)}${gone}`,
-            reason: `${mem.stand ? 'caught: ' : ''}fight ${label(focus)}: ${players.length ? `${counted(big, players)} vs ${main.length}` : `${pool.length} attacking`}`,
+            reason: `${caught && outnumbered(big.length) ? 'caught: ' : ''}fight ${label(focus)}: ${players.length ? `${counted(big, players)} vs ${main.length}` : `${pool.length} attacking`}`,
         };
     }
-    mem.stand = false;
 
     if (ctx.windingDown) return { ...calm, phase: 'recover', anchor: stay, reason: 'time is up: no more roaming' };
 
