@@ -80,6 +80,10 @@ describe('wantHidden: open on the road, hidden by an enemy or a hotspot', () => 
         expect(wantHidden({ ...far, hidden: true, hotspotDist: 4800 })).toBe(true);
         expect(wantHidden({ ...far, hidden: false, hotspotDist: 4800 })).toBe(false);
     });
+    test('a retreat shows us, enemy in view or not: hidden we cannot sprint', () => {
+        expect(wantHidden({ ...far, hidden: true, enemyInView: true, sinceEnemyMs: 0, retreating: true })).toBe(false);
+        expect(wantHidden({ ...far, hidden: true, hotspotDist: 1000, retreating: true })).toBe(false);
+    });
     test("Thidranki's hotspots: the meeting point and the three pair spots", () => {
         expect(hotspotsOf(252)).toHaveLength(4);
         expect(hotspotsOf(1)).toEqual([]);

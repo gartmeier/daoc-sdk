@@ -106,8 +106,14 @@ export function hotspotsOf(regionId: number): { x: number; y: number }[] {
     return bg ? [bg.meet, ...Object.values(bg.pairs ?? {})] : [];
 }
 
-/** Whether to be hidden now. `hidden` is where we are: hysteresis on the hotspot ring and a 30 s memory of the last enemy seen. */
-export function wantHidden(o: { hidden: boolean; engaged: boolean; enemyInView: boolean; sinceEnemyMs: number; hotspotDist: number }): boolean {
+/**
+ * Whether to be hidden now. `hidden` is where we are: hysteresis on the hotspot ring and a 30 s memory of the last enemy seen.
+ * Never on a retreat: hidden we can't sprint and walk at 115, and the squad runs only from enemies already closing on us
+ * (a squad of hidden assassins steps away hidden instead and gets no retreat). Diarmuid fled hidden twice in the freeze
+ * ("You can't sprint while you are hidden!", 2026-11-12 14:05, 14:09) and was caught 3 s later.
+ */
+export function wantHidden(o: { hidden: boolean; engaged: boolean; enemyInView: boolean; sinceEnemyMs: number; hotspotDist: number; retreating?: boolean }): boolean {
+    if (o.retreating) return false;
     if (o.engaged || o.enemyInView || o.hotspotDist <= HOTSPOT_HIDE) return true;
     if (!o.hidden) return false;
     return o.sinceEnemyMs < SHOW_AFTER_MS || o.hotspotDist <= HOTSPOT_LEAVE;
@@ -139,11 +145,12 @@ export const hide = (): Behavior => ({
         const sinceEnemyMs = now - (ctx.memory.get('hideEnemyAt') ?? 0);
         const hotspotDist = Math.min(Infinity, ...hotspotsOf(me.regionId).map(h => Math.hypot(h.x - me.x, h.y - me.y)));
         const hidden = ctx.sdk.isStealthed();
-        const want = wantHidden({ hidden, engaged: ctx.orders().phase === 'engage', enemyInView: sinceEnemyMs === 0, sinceEnemyMs, hotspotDist });
+        const retreating = ctx.orders().phase === 'retreat';
+        const want = wantHidden({ hidden, engaged: ctx.orders().phase === 'engage', enemyInView: sinceEnemyMs === 0, sinceEnemyMs, hotspotDist, retreating });
         if (hidden === want) return false;
         if (hidden) {
             if (now < (ctx.memory.get('hideRetryAt') ?? 0)) return false;
-            ctx.doing('show', null, 'nobody in view, clear of the hotspots');
+            ctx.doing('show', null, retreating ? 'a retreat: shown, to sprint' : 'nobody in view, clear of the hotspots');
             const r = await ctx.bot.unstealth();
             ctx.result('show', r);
             if (!r.success) ctx.memory.set('hideRetryAt', Date.now() + (r.retryAfterMs ?? HIDE_RETRY_MS));
