@@ -47,6 +47,24 @@ export function bowOf(equipment: readonly { slot: number; objectType: number }[]
     return bow ? { objectType: bow.objectType, reach: BOW_REACH[bow.objectType]! - MARGIN } : null;
 }
 
+/**
+ * A bow duel lost: draws interrupted this many times in a row by an attacker ("X is attacking you and your shot is
+ * interrupted!"). Each arrow that lands on us ends our 4.6 s draw, so the archer who lands first keeps the other from ever
+ * firing: Diarmuid drew 7 times against Tristram and died without a shot (freeze, 2026-11-12 14:02, hibernia-s3).
+ */
+export const DUEL_LOST = 2;
+/** Then the bow rests this long and the melee fight goes in: a charge takes an arrow or two, standing takes them all. */
+export const DUEL_REST_MS = 30_000;
+const SHOT_HIT = /is attacking you and your shot is interrupted/i;
+
+/** After a shot's answer: the run of draws an attacker interrupted, and whether the bow now rests. */
+export function afterShot(interrupts: number, line: string | undefined): { interrupts: number; rest: boolean } {
+    if (line && SHOT_LINE.test(line)) return { interrupts: 0, rest: false };
+    if (!line || !SHOT_HIT.test(line)) return { interrupts, rest: false };
+    const n = interrupts + 1;
+    return n >= DUEL_LOST ? { interrupts: 0, rest: true } : { interrupts: n, rest: false };
+}
+
 /** What a shot turn does at this distance: 'melee' (too close, or out of arrows), 'shoot', 'close' (walk in), or null. */
 export function shotPlan(distance: number, reach: number, nearestEnemy: number, arrows: number): 'melee' | 'shoot' | 'close' {
     if (arrows <= 0 || nearestEnemy <= CLOSE) return 'melee';
@@ -64,6 +82,15 @@ export const shoot = (): Behavior => ({
         if (o.phase !== 'engage' || typeof o.focus !== 'number') return false;
         const bow = bowOf(ctx.sdk.getEquipment());
         if (!bow || Date.now() < (ctx.memory.get('noArrowsUntil') ?? 0)) return false;
+        if (Date.now() < (ctx.memory.get('bowRestUntil') ?? 0)) {
+            // A bow duel lost: melee weapon in hand, the melee fight below goes in.
+            if (ctx.memory.get('bowOut')) {
+                ctx.memory.set('bowOut', false);
+                await ctx.sdk.sendAttack(false);
+                ctx.result('melee weapon', await ctx.bot.takeMeleeSlot());
+            }
+            return false;
+        }
         const focus = ctx.focus();
         if (!focus || !isAlive(focus)) return false;
         const seen = foeInView(ctx, focus.objectId);
@@ -118,6 +145,9 @@ async function loose(ctx: MemberContext, targetId: number): Promise<boolean> {
     const done = () => said().find(m => SHOT_LINE.test(m.text) || SHOT_REFUSAL.test(m.text))?.text;
     const report = async (line: string | undefined) => {
         if (line && /quiver/i.test(line)) ctx.memory.set('noArrowsUntil', Date.now() + NO_ARROWS_MS);
+        const duel = afterShot(ctx.memory.get('shotInterrupts') ?? 0, line);
+        ctx.memory.set('shotInterrupts', duel.interrupts);
+        if (duel.rest) { ctx.memory.set('bowRestUntil', Date.now() + DUEL_REST_MS); ctx.note(`shoot: ${DUEL_LOST} draws in a row interrupted: into melee for ${DUEL_REST_MS / 1000} s`); }
         // No shot: lower the bow. A draw held 15 s tires ("You're too tired to use your ... Bow!", RangeAttackComponent.cs:23, :92).
         if (!line || !SHOT_LINE.test(line)) await ctx.sdk.sendAttack(false);
         ctx.result('shoot', { success: !!line && SHOT_LINE.test(line), message: line ?? 'no shot line' }, targetId);

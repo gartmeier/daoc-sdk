@@ -1,6 +1,19 @@
 import { describe, expect, test } from 'bun:test';
 import { EquipmentSlot, ObjectType } from '../types';
-import { archer, bowOf, CLOSE, shotPlan } from './archer';
+import { afterShot, archer, bowOf, CLOSE, shotPlan } from './archer';
+
+describe('afterShot', () => {
+    const hit = 'Tristram is attacking you and your shot is interrupted!';
+    test('two draws in a row interrupted by an attacker: the bow rests (Diarmuid against Tristram, 7 draws, no shot)', () => {
+        expect(afterShot(0, hit)).toEqual({ interrupts: 1, rest: false });
+        expect(afterShot(1, hit)).toEqual({ interrupts: 0, rest: true });
+    });
+    test('a shot that flies resets the run; other refusals leave it', () => {
+        expect(afterShot(1, 'You shoot Celt with your bow and hit for 98 damage!')).toEqual({ interrupts: 0, rest: false });
+        expect(afterShot(1, 'You move and interrupt your shot!')).toEqual({ interrupts: 1, rest: false });
+        expect(afterShot(1, undefined)).toEqual({ interrupts: 1, rest: false });
+    });
+});
 
 describe('bowOf', () => {
     test('the bow in the ranged slot, its reach less the margin', () => {
