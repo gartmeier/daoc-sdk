@@ -426,7 +426,10 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         const following = up.foes.filter(c => dist(c, centre) <= s.engageRadius || (onUs(c) && dist(c, centre) <= s.engageRadius + 1000));
         if (following.length) sq.flee.lastFollowed = now;
         const safe = atFriends || ourInKeepReach;
-        if (safe || now - sq.flee.lastFollowed >= r.shakenMs) {
+        // Only those we can take still following: turn on them (run B 09:42: Hibernia's duo ran 45 s from one Troll at
+        // odds 1.18, was caught and lost Aine). The fight logic below takes it from here.
+        if (following.length && up.ratio >= r.engageAt) sq.flee = null;
+        else if (safe || now - sq.flee.lastFollowed >= r.shakenMs) {
             for (const c of up.foes) sq.avoid[c.objectId] = now + r.avoidMs;
             noteZone(up.foes);
             sq.flee = null;

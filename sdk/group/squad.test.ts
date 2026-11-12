@@ -291,6 +291,14 @@ describe('decideSquad: leaving a fight that turned', () => {
         expect(d.reason).toContain('patrol');
         expect(memory.squad.avoid[51]).toBeGreaterThan(t0 + 12_000);
 
+        // Only one still following, and we can take it: turn on it.
+        const m3: Record<string, any> = {};
+        decide(picture(squad(['Merc', 'Cleric']), [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 400), foe(53, 500)], { phase: 'engage', focus: 51 }, t0), { memory: m3, now: t0 });
+        expect(m3.squad.flee).toBeTruthy();
+        d = decide(picture(squad(['Merc', 'Cleric']), [foe(51, 600, { target: 'Merc', threat: true })], o, t0 + 8000), { memory: m3, now: t0 + 8000 });
+        expect(d.phase).toBe('engage');
+        expect(m3.squad.flee).toBeNull();
+
         // Caught: still followed after fleeMaxMs, fight it out.
         const m2: Record<string, any> = {};
         decide(picture(squad(['Merc']), chasers(300), { phase: 'engage', focus: 51 }, t0), { memory: m2, now: t0 });
