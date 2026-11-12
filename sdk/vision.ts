@@ -15,6 +15,9 @@
 //
 // What hits us is known whatever this says: that part is up to the caller (observeState).
 //
+// In a fight a player watches the fight, not the field (inFightVision): with a skill (sdk/group/skill.ts fightAttention)
+// a member that fights narrows its cone and aware radius and is slower to notice an enemy new to its view.
+//
 // Noticing takes a moment: a member reports an enemy only once it has had it in view for noticeMs, which stands
 // for spotting it and calling it out to the group (observeState keeps the clock per member).
 //
@@ -78,6 +81,30 @@ export function resolveVision(v: VisionMode | Partial<VisionOptions> | null | un
 /** Short text for logs and reports: "human (cone 100°, aware 500, notice 800 ms)". */
 export function describeVision(v: VisionOptions | null): string {
     return v ? `human (cone ${v.fovDegrees}°, aware ${v.awareRadius}, notice ${v.noticeMs} ms)` : 'omniscient';
+}
+
+/**
+ * How much a member that fights still watches the field: `focus` 0..1 scales its cone and aware radius (1 changes
+ * nothing), and `extraNoticeMs` is added to noticeMs for an enemy new to its view. What swings or casts at it, and its
+ * own target, stay known at once (observeState). Past NOTICE_MAX_MS observeState reports the ids still being noticed
+ * (Observation.sight.pending), so the board's forget rule spares a contact the member hasn't taken in yet.
+ */
+export interface FightAttention {
+    focus: number;
+    extraNoticeMs: number;
+}
+
+/** The member's sight while it fights: `v` narrowed by `a`, or `v` itself when `a` changes nothing. */
+export function inFightVision(v: VisionOptions, a: FightAttention): VisionOptions {
+    const focus = Math.min(1, Math.max(0, a.focus));
+    const extra = Math.max(0, a.extraNoticeMs);
+    if (focus === 1 && extra === 0) return v;
+    return { ...v, fovDegrees: Math.round(v.fovDegrees * focus), awareRadius: Math.round(v.awareRadius * focus), noticeMs: Math.round(v.noticeMs + extra) };
+}
+
+/** Fighting, for inFightVision: its own target set, and swinging or in combat (attacked, or casting at an enemy). */
+export function fighting(p: { targetObjectId: number | null; inCombat: boolean; attacking?: boolean } | null | undefined): boolean {
+    return !!p && p.targetObjectId !== null && (p.inCombat || !!p.attacking);
 }
 
 /**

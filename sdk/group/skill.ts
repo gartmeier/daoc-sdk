@@ -23,8 +23,13 @@
 //   --skill.ab=20                            an A/B in one run: on only in every other 20-minute slot, by when the
 //                                            run's process started (field mode starts one per sortie: a sortie is all on or all off)
 // A member's own entry beats its realm's, which beats the group-wide one.
+//
+// With human vision (--vision=human) the skill also sets in-fight attention (fightAttention, sdk/vision.ts inFightVision):
+// a member that fights sees a narrower cone and notices a new enemy later; novice most, sharp least. Omniscient sight
+// has no attention: a member there sees everything the server sends, fighting or not.
 
 import type { Realm } from '../types';
+import type { FightAttention } from '../vision';
 import { isAlive } from './blackboard';
 import type { Contact, GroupPicture, MemberReport, Orders } from './types';
 
@@ -127,6 +132,20 @@ export function checkSkillSetting(setting: unknown): void {
 }
 
 /** "reaction 350 ms, switch 750 ms, mistakes 4 %", or "off". */
+/** fightAttention: notice delay added in a fight per ms of reactionMs. */
+export const FIGHT_NOTICE_PER_REACTION = 4;
+/** fightAttention: the narrowest a fight makes the cone and aware radius. */
+export const FIGHT_FOCUS_MIN = 0.3;
+
+/**
+ * In-fight attention by the skill (the user, 2026-11-12: "If you're in a fight, you're much less likely to notice an
+ * add"): cone and aware radius scaled by 1 - reactionMs/1000, notice delay up by 4 x reactionMs.
+ * novice 45 % and +2200 ms, average 65 % and +1400 ms, sharp 78 % and +880 ms; a skill of zeros changes nothing.
+ */
+export function fightAttention(s: Skill): FightAttention {
+    return { focus: Math.max(FIGHT_FOCUS_MIN, 1 - s.reactionMs / 1000), extraNoticeMs: FIGHT_NOTICE_PER_REACTION * s.reactionMs };
+}
+
 export function describeSkill(s: Skill | null): string {
     return s ? `reaction ${s.reactionMs} ms, switch ${s.switchMs} ms, mistakes ${+(s.mistakeRate * 100).toFixed(1)} %` : 'off';
 }

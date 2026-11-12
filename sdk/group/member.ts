@@ -15,11 +15,11 @@ import type { BotActions } from '../actions';
 import type { BotSDK } from '../index';
 import type { PlayerState } from '../types';
 import { abortable, executionContext } from '../execution-context';
-import { resolveVision, type NoticeClock, type VisionMode, type VisionOptions } from '../vision';
+import { fighting, inFightVision, resolveVision, type NoticeClock, type VisionMode, type VisionOptions } from '../vision';
 import { type Blackboard, observeState, SHADE_REFUSED, steppedInFront, UNATTACKABLE_MS } from './blackboard';
 import type { Character } from './character';
 import { petOrderedOn, petsAllowed } from './pets';
-import { abSlot, checkSkillSetting, describeSkill, HEAL_BEHAVIOR, resolveSkill, SkillLens, type SkillSetting } from './skill';
+import { abSlot, checkSkillSetting, describeSkill, fightAttention, HEAL_BEHAVIOR, resolveSkill, SkillLens, type SkillSetting } from './skill';
 import { Spellbook } from './spells';
 import { canWield } from './styles';
 import { dryMoveGuard } from './water';
@@ -276,6 +276,8 @@ export class MemberAgent<S = any> {
     private mezzed: { lastLine: number; until: number } | null = null;
 
     private readonly vision: VisionOptions | null;
+    /** Human vision while this member fights, by its skill (vision.ts inFightVision); null without both. */
+    private readonly fightVision: VisionOptions | null;
     /** When each enemy came into this member's view, for vision.noticeMs (observeState). */
     private readonly noticeClock: NoticeClock = new Map();
 
@@ -294,6 +296,7 @@ export class MemberAgent<S = any> {
         const slot = abSlot(setting, performance.timeOrigin);
         this.lens = skill ? new SkillLens(skill, options.skillRandom) : null;
         this.vision = resolveVision(options.vision);
+        this.fightVision = this.vision && this.lens ? inFightVision(this.vision, fightAttention(this.lens.skill)) : null;
         this.sideBehaviors = behaviors.filter(b => b.side);
         this.spells = new Spellbook(member.sdk, member.actions);
         this.ctx = new MemberContext(this, settings);
@@ -314,7 +317,8 @@ export class MemberAgent<S = any> {
         };
         const unguard = (settings as { stayDry?: unknown }).stayDry === undefined ? null : member.sdk.setMoveGuard?.(dryMoveGuard(fightingDry));
         if (unguard) this.unsubscribe.push(unguard);
-        if (this.lens) board.emit({ at: Date.now(), kind: 'note', member: this.ctx.name, text: `skill: ${describeSkill(this.lens.skill)}${slot ? ' (A/B slot on)' : ''}` });
+        const attention = this.fightVision && this.fightVision !== this.vision ? `; in a fight: cone ${this.fightVision.fovDegrees}°, aware ${this.fightVision.awareRadius}, notice ${this.fightVision.noticeMs} ms` : '';
+        if (this.lens) board.emit({ at: Date.now(), kind: 'note', member: this.ctx.name, text: `skill: ${describeSkill(this.lens.skill)}${attention}${slot ? ' (A/B slot on)' : ''}` });
         else if (slot === 'off' && resolveSkill(setting, member.bot, realm)) board.emit({ at: Date.now(), kind: 'note', member: this.ctx.name, text: 'skill: off (A/B slot off)' });
         this.publish();
     }
@@ -409,7 +413,7 @@ export class MemberAgent<S = any> {
         }
         this.lastMessageId = state.gameMessages.at(-1)?.id ?? this.lastMessageId;
         const petRecast = state.pet === null && this.capabilities.pet === 'main' && (this.spells.summon()?.spell.cooldownRemaining ?? 0) > 0;
-        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat, petRecast, petOrderedOn: petOrderedOn(this.ctx), observed: this.board.observedNames?.() }, this.options.sightRadius, this.vision, undefined, this.noticeClock);
+        const obs = observeState(state, { bot: this.member.bot, role: this.member.role, activity: this.activity, capabilities: this.capabilities, combat: this.combat, petRecast, petOrderedOn: petOrderedOn(this.ctx), observed: this.board.observedNames?.() }, this.options.sightRadius, this.fightVision && fighting(state.player) ? this.fightVision : this.vision, undefined, this.noticeClock);
         if (obs) this.board.publish(obs);
         if (this.lens) for (const s of this.lens.takeSlips()) this.board.emit({ at: Date.now(), kind: 'note', member: this.ctx.name, text: `skill: ${s.text}` });
     }

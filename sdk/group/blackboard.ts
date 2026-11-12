@@ -42,7 +42,7 @@ import type { BotWorldState, CombatEvent, PetLoss, PlayerState, Realm } from '..
 import { isKillable, PLAYER_AIM_MS } from '../actions-helpers';
 import { isAttackable } from '../index';
 import { mobRunInMs } from '../mob-speed';
-import { canSee, noticed, pruneNoticeClock, terrainGround, type GroundAt, type NoticeClock, type VisionOptions } from '../vision';
+import { canSee, NOTICE_MAX_MS, noticed, pruneNoticeClock, terrainGround, type GroundAt, type NoticeClock, type VisionOptions } from '../vision';
 import { addLook, newEvidence, readClass, type FoeEvidence, type FoeLook } from './class-read';
 import { CC_IMMUNE_MS, npcCcLanded, readCcEnds, serverNameKey, type CcEnd, type CcImmunity, type CcKind, type NpcCcRun } from './cc';
 import { groupmatesOf, ObservedMembers, type Groupmate, type ObservedEntry } from './observed';
@@ -125,8 +125,10 @@ export interface Observation {
     /**
      * With human vision (sdk/vision.ts): the way the member faced and its sight rules, so the board can
      * tell a contact it should see from one behind it or behind a hill. Absent with omniscient sight.
+     * `pending`: enemies in view it hasn't noticed yet, only with noticeMs past NOTICE_MAX_MS (a member in a fight,
+     * vision.ts inFightVision), so the forget rule spares them.
      */
-    sight?: { heading: number; vision: VisionOptions };
+    sight?: { heading: number; vision: VisionOptions; pending?: number[] };
     /** What this client knows of the group's observed members (MemberSelf.observed): window, position, aim, our concentration buffs on them. Absent with none asked for. */
     groupmates?: Groupmate[];
 }
@@ -304,11 +306,15 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         }
     }
     const viewer = { regionId: p.regionId, x: p.x, y: p.y, z: p.z, heading: p.heading };
+    const pending: number[] = [];
     const notices = (id: number, at: { x: number; y: number; z: number }) => {
         if (!vision || id === p.targetObjectId) return true;
         const on = aim.get(id)?.targetId;
         if (on !== undefined && (on === p.objectId || ownPets.has(on))) return true;
-        return canSee(viewer, at, vision, ground) && noticed(noticeClock, id, now, vision.noticeMs);
+        if (!canSee(viewer, at, vision, ground)) return false;
+        if (noticed(noticeClock, id, now, vision.noticeMs)) return true;
+        pending.push(id);
+        return false;
     };
     if (noticeClock) pruneNoticeClock(noticeClock, now);
     const sightings: Sighting[] = [];
@@ -379,7 +385,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     const intercepts = interceptsOf(state);
     const ccEnds = readCcEnds(state.gameMessages ?? [], state.timestamp - CC_END_MS);
     const groupmates = self.observed?.length ? groupmatesOf(state, self.observed, aim, (self.capabilities.buffSpells ?? []).map(b => b.name)) : null;
-    return { ...(groupmates ? { groupmates } : {}), report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(petHits.size ? { petHits: [...petHits] } : {}), ...(intercepts.length ? { intercepts } : {}), ...(ccEnds.length ? { ccEnds } : {}), ...(vision ? { sight: { heading: p.heading, vision } } : {}) };
+    return { ...(groupmates ? { groupmates } : {}), report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(petHits.size ? { petHits: [...petHits] } : {}), ...(intercepts.length ? { intercepts } : {}), ...(ccEnds.length ? { ccEnds } : {}), ...(vision ? { sight: { heading: p.heading, vision, ...(pending.length && vision.noticeMs > NOTICE_MAX_MS ? { pending } : {}) } } : {}) };
 }
 
 const isBlow = (e: CombatEvent) => e.kind === 'melee' || e.kind === 'spellEffect';
@@ -723,7 +729,8 @@ export class Blackboard {
         // Contacts this member should see but doesn't: gone (died out of our sight, despawned, left).
         // With human vision only where it looks and the ground lets it (observeState filters players and enemy pets so).
         const viewer = obs.sight && { regionId: r.regionId, x: r.x, y: r.y, z: r.z, heading: obs.sight.heading };
-        const shouldSee = (c: Contact) => !viewer || (c.kind !== 'player' && !c.isPet) || canSee(viewer, c, obs.sight!.vision, this.ground);
+        // One it has in view and is still noticing (a member in a fight, Observation.sight.pending) is no proof of absence.
+        const shouldSee = (c: Contact) => !viewer || (c.kind !== 'player' && !c.isPet) || (!obs.sight!.pending?.includes(c.objectId) && canSee(viewer, c, obs.sight!.vision, this.ground));
         for (const [key, c] of this.contacts) {
             if (seen.has(key) || c.regionId !== r.regionId) continue;
             const i = c.seenBy.indexOf(r.name);
