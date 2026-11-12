@@ -57,6 +57,11 @@ describe('reading the server', () => {
         expect(poisonOn(['Offensive Proc Ability:', '    - 1 Charges', 'Inflicts damage to the target repeatly over a given time period.'])).toBe('dot');
         expect(poisonOn(['    - 1 Charges', "Reduces the target's movement speed."])).toBe('snare');
         expect(poisonOn(['    - 1 Charges', "Decreases target's Str."])).toBe('debuff');
+        // The delves as the server sends them (Mordred's five weapons, 2026-11-12).
+        expect(poisonOn(['- 1 Charges', '- 1 Max', 'Inflicts 26 body damage every 4 seconds for 20 seconds.'])).toBe('dot');
+        expect(poisonOn(['- 1 Charges', "Decreases the target's strength by 44 for 1 minute."])).toBe('debuff');
+        expect(poisonOn(['- 1 Charges', 'The target is slowed by 40% for 1 minute 1 second.'])).toBe('snare');
+        expect(poisonOn(['- 1 Charges', 'Inflicts a wasting disease on the target that slows target by 15%, reduces its strength by 7.5% and inhibits healing by 50% for 1 minute 30 seconds.'])).toBe('disease');
         expect(poisonOn(['    - 0 Charges', 'Inflicts damage'])).toBeNull();
         expect(isPoisoned(['Damage Modifiers:', '- 8.4 Base DPS'])).toBe(false);
     });
@@ -77,12 +82,13 @@ describe('buying', () => {
         expect(needsRestock(plan, { ...none, dot: 5, debuff: 0 })).toBe(true);
         expect(needsRestock(plan, { dot: 5, debuff: 3, snare: 0, disease: 0 })).toBe(false);
     });
-    test('the list fills each to its carry, damage over time first, within the purse', () => {
+    test('the list buys packs of 20 to fill each to its carry, damage over time first, within the purse', () => {
+        // Mordred's first trip bought 10 packs of lethal (200) when the count was read as poisons.
         const list = shoppingList(plan, { dot: 2, debuff: 0, snare: 4, disease: 1 }, 100_000);
-        expect(list.map(l => [l.row.name, l.count])).toEqual([['greater lethal poison', 8], ['greater weakening poison', 6], ['lesser infectious serum', 3]]);
-        const poor = shoppingList(plan, none, 2000);
-        // 2 lethal (1540) leave 460: no weakening (492), one infectious serum (424).
-        expect(poor).toEqual([{ row: plan.dot!, count: 2 }, { row: plan.disease!, count: 1 }]);
+        expect(list.map(l => [l.row.name, l.count])).toEqual([['greater lethal poison', 1], ['greater weakening poison', 1], ['lesser infectious serum', 1]]);
+        const poor = shoppingList(plan, none, 1500);
+        // A pack of lethal (770) leaves 730: a pack of weakening (492) leaves 238, too little for the rest.
+        expect(poor).toEqual([{ row: plan.dot!, count: 1 }, { row: plan.debuff!, count: 1 }]);
     });
 });
 

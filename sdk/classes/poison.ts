@@ -30,7 +30,10 @@ import { EquipmentSlot, ObjectType, type GameMessage, type InventoryItem, type R
 
 export type PoisonRole = 'dot' | 'debuff' | 'snare' | 'disease';
 export interface PoisonRow { name: string; level: number; role: PoisonRole; price: number }
-/** Best first within each role (merchants.json prices, copper). The id is the name with underscores and a realm suffix. */
+/**
+ * Best first within each role (merchants.json prices, copper, for a pack of PACK: one buy gives PACK poisons, Mordred at Onyg
+ * 2026-11-12). The id is the name with underscores and a realm suffix.
+ */
 export const POISONS: readonly PoisonRow[] = [
     { name: 'greater lethal poison', level: 20, role: 'dot', price: 770 },
     { name: 'major lethal poison', level: 15, role: 'dot', price: 560 },
@@ -63,14 +66,19 @@ export const STOCK: Readonly<Record<PoisonRole, { carry: number; low: number }>>
 };
 /** Spare main-hand weapons in the bag: one with the snare, one with the disease, one with a second damage over time (it lasts 20 s). */
 export const SPARES = 3;
+/** One buy at a poison merchant gives this many. */
+export const PACK = 20;
 
 /** A delve's lines: the poison a weapon carries by its role, or null when clean (no charge left). */
 export function poisonOn(lines: readonly string[]): PoisonRole | null {
     const charged = lines.some(l => { const m = /^\s*-\s*(\d+)\s+Charges\b/i.exec(l); return !!m && Number(m[1]) > 0; });
     if (!charged) return null;
+    // The delve's spell lines, live (Mordred, 2026-11-12): "Inflicts 26 body damage every 4 seconds for 20 seconds.",
+    // "Decreases the target's strength by 44 ...", "The target is slowed by 40% ...", "Inflicts a wasting disease ...".
     const text = lines.join(' ');
-    if (/movement speed|speed decrease/i.test(text)) return 'snare';
-    if (/inflicts damage|damage over time/i.test(text)) return 'dot';
+    if (/wasting disease|inhibits healing/i.test(text)) return 'disease';
+    if (/is slowed by|movement speed|speed decrease/i.test(text)) return 'snare';
+    if (/damage every|inflicts damage|damage over time/i.test(text)) return 'dot';
     return 'debuff';
 }
 /** Poisoned at all. */
@@ -125,14 +133,14 @@ export function debuffFor(c: { classGuess?: { classes: string[]; basis: string[]
     return damageStatOf(c) === 'dex' ? 'disease' : 'debuff';
 }
 
-/** What to buy: up to STOCK.carry of each role's best, cheapest roles last if the purse runs short. */
+/** What to buy, in packs (a count of buys): enough packs for STOCK.carry of each role's best, cheapest roles last if the purse runs short. */
 export function shoppingList(plan: Record<PoisonRole, PoisonRow | null>, have: Record<PoisonRole, number>, copper: number): { row: PoisonRow; count: number }[] {
     const out: { row: PoisonRow; count: number }[] = [];
     let left = copper;
     for (const role of ['dot', 'debuff', 'disease', 'snare'] as const) {
         const row = plan[role];
         if (!row) continue;
-        const count = Math.min(Math.max(0, STOCK[role].carry - have[role]), Math.floor(left / row.price));
+        const count = Math.min(Math.ceil(Math.max(0, STOCK[role].carry - have[role]) / PACK), Math.floor(left / row.price));
         if (count > 0) { out.push({ row, count }); left -= count * row.price; }
     }
     return out;
