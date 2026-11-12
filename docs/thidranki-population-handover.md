@@ -13,6 +13,24 @@ Read these first:
 - `learnings/rvr.md`, including the class reads and human vision sections
 - the closing summary at the end of `groups/arena-ledger.md`, which is private and not in git
 
+## Where it stands (2026-11-12 evening)
+
+- **The phase 2 gate passed at rehearsal size.** 30 bots, 10 per realm, played 4 h unattended in field mode (`groups/field.ts`, private). Every realm fought as a group of 5, as a duo or trio, and as solos.
+- **The full record:** `groups/night-2026-11-11.md` (the stint's brief, report and the afternoon's runs) and `groups/day-2026-11-11.md` (field mode, group size, the trade fix, the observed member).
+- **New since this handover was written:**
+  - small squads (`sdk/group/squad.ts`, `learnings/squads.md`);
+  - six stealther and archer characters, with stealth in the client and SDK (`learnings/classes/`);
+  - a skill setting (`sdk/group/skill.ts`);
+  - human vision as the default for every group run, with in-fight attention;
+  - observer measures for fight quality, flapping and engages without a hit.
+- **The user's ideas for the next stint,** both on a per-realm director:
+  - a realm call for help;
+  - taking the Faste together (gather everyone, one raid).
+- **Open question raised on 2026-11-12: is 150 the right population for this map?**
+  - Thidranki is about 36k × 26k units, and the middle is about a minute's run from a keep.
+  - At 30 bots, groups already fight 12-14 times an hour, and most battles are three-way.
+  - The suggestion is to grow in steps (30, 45, 60) and stop where the small-man play gets crowded out, with zergs coming in as raid events. The user hasn't decided.
+
 ## Numbers, per realm
 
 Each realm has its own director, so the population numbers are per realm (proposed in the doc on 2026-11-10):
