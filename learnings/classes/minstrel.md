@@ -33,7 +33,10 @@ R6's bot plays **"Group thrust"**: Instruments 21, Thrust 20, Stealth 5 at 24 (`
 
 ## Verified
 
-Nothing yet: offline tests only (`sdk/classes/minstrel.test.ts`). The live check comes after 21:00 on 2026-11-12.
+**Verified, throwaway stack, 2026-11-12 (`sdk/test/live/kits-r7-live.ts`):** three realm groups at 24 in the Thidranki template, each with a healer, on the rvr-roam lists, four fights of 120-240 s. The probe `sdk/test/live/kit-probe-r7.ts` on R6's real character showed the same style details from the server as the tests' fixtures, and the same first picks.
+
+- Constraining Cadence (the support list's mezz) 7-10 a fight; 1-6 came back immune (mezzed within the last minute). Stunning Shout landed 0-5 a fight, resisted 1-2; Dischordant Wail interrupted 3-5 a fight. No deaths in four fights.
+- Live on Dagonet from 22:30: read the sortie logs.
 
 ## Open
 

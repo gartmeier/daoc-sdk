@@ -190,8 +190,9 @@ export const snareFocus = (): Behavior<TacticsSettings> => ({
         ctx.doing('snare', f.id, sp.spell.name);
         const c = await ctx.bot.castSpell(sp.spell, f.id, { approach: false });
         const missed = !c.success || c.resisted || c.effectImmune || c.effectLanded === false;
-        // Landed: until it runs out, less a margin. Missed: another try in 4 s.
-        snared.set(f.id, Date.now() + (missed ? 4000 : Math.max(5000, sp.duration * 1000 - 3000)));
+        // Landed: until it runs out, less a margin. Immune (a snare or root of anyone's is on it already; live, 3 of 5 on
+        // 2026-11-12): 15 s. Otherwise another try in 4 s.
+        snared.set(f.id, Date.now() + (c.effectImmune ? 15_000 : missed ? 4000 : Math.max(5000, sp.duration * 1000 - 3000)));
         ctx.result('snare', missed && c.success ? { ...c, success: false, reason: c.resisted ? 'resisted' : c.effectImmune ? 'immune' : 'no_effect' } : c, f.id);
         return true;
     },

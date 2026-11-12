@@ -10,7 +10,7 @@ import { rvrBehaviors } from '../group/rvr';
 import { STUN_IMMUNE_MS } from './hero';
 import { kitStyle } from './hybrid';
 import { reachOfBuild } from './reach';
-import { auraNow, reaver, REAVER_OPENER, reaverStyle } from './reaver';
+import { auraNow, auraStop, reaver, REAVER_OPENER, reaverStyle } from './reaver';
 import { FOE, KIT_WEAPONS, kitStyles, ME, seenBy, swing } from './style-fixtures';
 
 const build = reachOfBuild(getBuild('Reaver', 'Flex, shield and tap')!, 24);
@@ -63,6 +63,20 @@ describe('reaver kit', () => {
         expect((pick(landed) as string[])[0]).not.toBe('Disable');
         clock = now + 5000 + STUN_IMMUNE_MS + 1;
         expect((pick(landed) as string[])[0]).toBe('Disable');
+    });
+
+    test('Demolishing Aura is a pulse: one cast runs until the next, so the kit starts and stops it', () => {
+        const a = build.known.filter(k => k.info.type === 'DirectDamage' && (k.info.radius ?? 0) > 0).at(-1)!;
+        expect([a.name, (a.info.pulse ?? 0) > 0]).toEqual(['Demolishing Aura', true]);
+    });
+
+    test('a running aura stops out of an engage, near crowd control, or with nobody in its reach', () => {
+        const me = { x: 0, y: 0, regionId: 1 };
+        const at = (id: number, x: number, over = {}) => enemy(id, 'midgard', { x, y: 0, regionId: 1, ...over });
+        expect(auraStop(me, [at(1, 300)], true)).toBe(false);
+        expect(auraStop(me, [at(1, 300)], false)).toBe(true);
+        expect(auraStop(me, [at(1, 600)], true)).toBe(true);
+        expect(auraStop(me, [at(1, 300), at(2, 650, { cc: { by: 'x', kind: 'mezz', until: 9e12 } })], true)).toBe(true);
     });
 
     test('the aura only on two enemy players in reach, and never near crowd control', () => {

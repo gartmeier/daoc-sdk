@@ -49,7 +49,10 @@ Blast of Defiance (61 damage), Lumber (snare 40 %, 68 s), Enervation (str/con -4
 
 ## Verified
 
-Nothing yet: offline tests only (`sdk/classes/champion.test.ts`). The live check comes after 21:00 on 2026-11-12.
+**Verified, throwaway stack, 2026-11-12 (`sdk/test/live/kits-r7-live.ts`):** three realm groups at 24 in the Thidranki template, each with a healer, on the rvr-roam lists, four fights of 120-240 s. The probe `sdk/test/live/kit-probe-r7.ts` on R6's real character showed the same style details from the server as the tests' fixtures, and the same first picks.
+
+- Blast of Defiance interrupted 2-8 times a fight through `interrupt()`. Enervation landed 1-4 times, Lumber 1-2 (the rest immune or resisted); the Savage on the other side ended one fight wearing both. Frontal Assault landed in two fights, Celtic Fury 1-3 a fight. Damage 282-1234.
+- Live on Fergus from 22:30: read the sortie logs.
 
 ## Open
 

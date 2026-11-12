@@ -52,7 +52,10 @@ R6's bot plays **"Pure damage"**: Dual Wield 24, Slash 23, Parry 7 at 24 (`data/
 
 ## Verified
 
-Nothing yet: the kit is offline-tested only (`sdk/classes/mercenary.test.ts`, `hybrid.test.ts`). The live check on R6's character comes after 21:00 on 2026-11-12, then the sortie logs in field mode.
+**Verified, throwaway stack, 2026-11-12 (`sdk/test/live/kits-r7-live.ts`):** three realm groups at 24 in the Thidranki template, each with a healer, on the rvr-roam lists, four fights of 120-240 s. The probe `sdk/test/live/kit-probe-r7.ts` on R6's real character showed the same style details from the server as the tests' fixtures, and the same first picks.
+
+- Damage 922-2066 a fight, the Albion side's best in three of four; no deaths. Every styled swing was Enrage (5-7 a fight): no positional or reaction landed, since a player read as on him gets the reaction/taunt queue and he rarely stood behind one.
+- Live on Lancelot from 22:30 (field mode): read the sortie logs.
 
 ## Open
 

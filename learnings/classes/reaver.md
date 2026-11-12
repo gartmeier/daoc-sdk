@@ -50,7 +50,11 @@ R6's bot plays **"Flex, shield and tap"**: Flexible 21, Soulrending 22, Shields 
 
 ## Verified
 
-Nothing yet: offline tests only (`sdk/classes/reaver.test.ts`). The live check comes after 21:00 on 2026-11-12.
+**Verified, throwaway stack, 2026-11-12 (`sdk/test/live/kits-r7-live.ts`):** three realm groups at 24 in the Thidranki template, each with a healer, on the rvr-roam lists, four fights of 120-240 s. The probe `sdk/test/live/kit-probe-r7.ts` on R6's real character showed the same style details from the server as the tests' fixtures, and the same first picks.
+
+- Vitality Siphon interrupted 2-8 times a fight through `interruptWith`. Surge 1-2 times, each ok. Disable landed in three of four fights, Diamondback 1-3. Damage 565-1440.
+- **The aura is a pulse.** Runs 1-2 cast it as an 8 s instant, and a third of the casts came back `pulse_cancelled`: the second cast ended the first. It doesn't show among his effects either. From run 4 the kit keeps its own on/off (start on two players near, stop when the fight ends, cc comes near or nobody is in reach): 2 starts and 2 stops, none stray.
+- Live on Agravaine from 22:30: read the sortie logs.
 
 ## Open
 

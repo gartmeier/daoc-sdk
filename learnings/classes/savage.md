@@ -47,10 +47,14 @@ R6's bot plays **"Hand to Hand first"**: Hand to Hand 24, Savagery 16, Parry 2 a
 
 ## Verified
 
-Nothing yet: offline tests only (`sdk/classes/savage.test.ts`, `hybrid.test.ts`). The live check comes after 21:00 on 2026-11-12.
+**Verified, throwaway stack, 2026-11-12 (`sdk/test/live/kits-r7-live.ts`):** three realm groups at 24 in the Thidranki template, each with a healer, on the rvr-roam lists, four fights of 120-240 s. The probe `sdk/test/live/kit-probe-r7.ts` on R6's real character showed the same style details from the server as the tests' fixtures, and the same first picks.
+
+- The Kelgor buffs fired 2-13 times a fight, each ok; the effects show by name in `state.effects`, so the kit doesn't pay health twice. Damage 39-1304. Styles: Wild Call twice in one fight, none in the others, and no Clan's Call (it needs him behind the foe). Why so few styled swings is open: endurance (H2H swings fast, and the haste speeds it) is the first guess.
+- Live on Bjorn from 22:30: read the sortie logs.
 
 ## Open
 
-- Whether the effects show by name in `state.effects` (the kit reads them so): if not, it recasts every 2 s and pays health for nothing. First thing to read in the live check.
+- Settled: the effects show by name (above), so it never pays twice for one buff.
+- Why so few styled swings (above).
 - **Clan's Call needs his back to the foe's back.** On a player that is on him it never fires; the backup swings. A flank step of his own (the Blademaster's side) is not built.
 - The 60 % floor for the buffs is a first guess.

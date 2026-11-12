@@ -50,10 +50,13 @@ R6's bot plays **"Scythe first"**: Scythe 24, Arboreal Path 16 at 24 (`data/buil
 
 ## Verified
 
-Nothing yet: offline tests only (`sdk/classes/valewalker.test.ts`). The live check comes after 21:00 on 2026-11-12.
+**Verified, throwaway stack, 2026-11-12 (`sdk/test/live/kits-r7-live.ts`):** three realm groups at 24 in the Thidranki template, each with a healer, on the rvr-roam lists, four fights of 120-240 s. The probe `sdk/test/live/kit-probe-r7.ts` on R6's real character showed the same style details from the server as the tests' fixtures, and the same first picks.
+
+- Kudzu fired 1-2 times a fight, each ok. Conceal Path landed once a fight; the rest were immune (a snare already on), resisted or he was crowd-controlled. Damage 288-523, 0-1 deaths (cloth). Taunting Scythe 1-4 a fight; Stunning Blade never landed (it needs his side).
+- Live on Cathbad from 22:30: read the sortie logs.
 
 ## Open
 
 - **Parry 1** on "Scythe first": the parry chain is the line's best and opens on his parry. "Arboreal first" buys Parry 8.
-- Whether the procs show by name in `state.effects` (`keepProc` reads them so) and whether Kudzu's does.
+- Whether the procs show by name in `state.effects` (`keepProc` reads them so). Kudzu's does: 1-2 casts a fight, never a repeat.
 - Stunning Blade fires only from the side: no flank step of his own.
