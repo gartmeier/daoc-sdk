@@ -34,6 +34,14 @@ describe('necromancer kit', () => {
         expect(nukes.find(n => n.pick.spell.name === 'Vitality Theft')!.ownerCast).toBe(false);
     });
 
+    test("Sight and servant split (Morgause's): Vitality Theft, and under a melee a Cackle, whose servant half is instant", () => {
+        const nukes = nukesOf('Sight and servant split');
+        expect(servantNuke(nukes, { underMelee: false, servantHp: 100 })?.pick.spell.name).toBe('Vitality Theft');
+        const under = servantNuke(nukes, { underMelee: true, servantHp: 100 })!;
+        expect(under.ownerCast).toBe(true);
+        expect(under.pick.spell.name).toMatch(/Cackle/);
+    });
+
     test('no area spell unless asked: Channeled Savagery hits 108 around the servant', () => {
         const nukes = nukesOf('Servant with a healer');
         expect(servantNuke(nukes, { underMelee: false, servantHp: 100 })?.area).toBe(false);
