@@ -127,6 +127,8 @@ const ZONE_MS = 4 * 60_000;
 const ZONE_PAD = 2000, ZONE_MIN = 3000;
 /** A sighting within this of a zone moves that zone, not a new one. */
 const ZONE_MERGE = 3000;
+/** An enemy pet counts this much of a head in Lanchester's count (its worth is already 0.4 of a player's). */
+const PET_HEAD = 0.4;
 /** Per level of difference, a member or an enemy counts this much more or less (clamped). */
 const PER_LEVEL = 0.08;
 
@@ -164,8 +166,9 @@ export function foeWorth(c: Contact, ours: number): number {
 }
 
 /** A side's strength from its worths: the sum, backed by a healer, times how many (Lanchester's square law). */
-export function sideStrength(worths: readonly number[], healers: number): number {
-    const n = worths.filter(w => w > 0).length;
+export function sideStrength(worths: readonly number[], healers: number, heads?: readonly number[]): number {
+    // How many: a pet is part of a fighter, not one more (PET_HEAD). Run B 08:49: a Hunter and its pet read "1 vs 2" to Tristram.
+    const n = worths.reduce((a, w, i) => a + (w > 0 ? heads?.[i] ?? 1 : 0), 0);
     if (!n) return 0;
     const sum = worths.reduce((a, w) => a + w, 0);
     const backed = healers > 0 && n > 1 ? sum * HEALER_BACKING : sum;
@@ -210,10 +213,11 @@ export function sizeUp(members: readonly MemberReport[], enemies: readonly Conta
     const ourHealers = alive.filter(m => m.role === 'healer' || m.capabilities.heal).length;
     const theirWorth = foes.map(c => foeWorth(c, level) * (busy(c) ? BUSY : 1));
     const theirHealers = foes.filter(c => !c.isPet && foeRole(c) === 'healer').length;
-    const a = sideStrength(ourWorth, ourHealers), b = sideStrength(theirWorth, theirHealers);
+    const heads = foes.map(c => (c.isPet ? PET_HEAD : 1));
+    const a = sideStrength(ourWorth, ourHealers), b = sideStrength(theirWorth, theirHealers, heads);
     const opened = sideStrength(alive.map((m, i) => ourWorth[i]! * (STEALTHERS.has(m.className) && !m.inCombat ? OPENER : 1)), ourHealers);
     // To start a fight, those that beat us lately count more (GRUDGE).
-    const wary = sideStrength(foes.map((c, i) => theirWorth[i]! * (grudge.has(c.objectId) ? GRUDGE : 1)), theirHealers);
+    const wary = sideStrength(foes.map((c, i) => theirWorth[i]! * (grudge.has(c.objectId) ? GRUDGE : 1)), theirHealers, heads);
     return { foes, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: wary > 0 ? opened / wary : Infinity };
 }
 
@@ -434,9 +438,10 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     if ((engaged || hit) && up.foes.length && !sq.stand && up.ratio < r.leaveAt) {
         const focus = engaged && o.focus !== null ? up.foes.find(c => c.objectId === o.focus) : undefined;
         const finishing = !!focus && focus.hp < s.retreat.focusHp && up.ratio >= r.leaveAt / 2;
-        // A lone melee on us runs as fast as we do: only worth running from with safety near.
+        // One enemy player on us (with its pet, if any) runs as fast as we do, or shoots or casts at our back: only worth
+        // running from with safety near. Run B 08:49: Tristram ran from a Hunter for 45 s and died to its arrows.
         const lone = up.foes.filter(c => !c.isPet);
-        const melee = lone.length === 1 && onUs(lone[0]!) && dist(lone[0]!, centre) < 500 && !['caster', 'cc', 'healer'].includes(foeRole(lone[0]!) ?? '');
+        const melee = lone.length === 1 && up.foes.some(onUs);
         const safetyNear = (nearestFriend && dist(nearestFriend, centre) <= r.outrunMax) || (home && dist(centre, home.keep) <= r.outrunMax);
         if (!finishing && !(melee && !safetyNear) && !atFriends && !ourInKeepReach) {
             const t = fleeTarget();
