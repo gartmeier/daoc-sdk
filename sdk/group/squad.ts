@@ -869,13 +869,18 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     // In a friend's fight: the target of the nearest friend on one of these enemies, as our own bots see it (the region frame).
     // Two fighting one each, 1000 apart, is how both died (the user, 15:47 on 11-12).
     // Hidden: on the one the opener goes to (sizeUp openOn), soft or alone, which is what the odds were taken on.
+    // Only off a focus the kit would not open on (it lurks by that one): a low one, or a friend's soft target, stays. Run A on
+    // 11-12, 19:46 and 19:57: Scathach and Hodur were pulled off a Troll at 47 % and a Highlander at 5 % their friends were on.
     const opener = unseen && up.openOn !== null ? up.foes.find(c => c.objectId === up.openOn) : undefined;
-    if (u.phase === 'engage' && opener && u.focus !== opener.objectId && (u.focus === null || up.foes.some(c => c.objectId === u.focus))) {
+    const focusNow = u.focus === null ? undefined : up.foes.find(c => c.objectId === u.focus);
+    let opened = false;
+    if (u.phase === 'engage' && opener && u.focus !== opener.objectId && (u.focus === null || (focusNow && !openable(focusNow, up.foes)))) {
         u = { ...u, focus: opener.objectId, reason: `${u.reason ?? ''}; open on ${opener.name}#${opener.objectId}` };
+        opened = true;
     }
-    if (u.phase === 'engage' && up.beside.length && !opener) {
+    if (u.phase === 'engage' && up.beside.length && !opened) {
         const there = new Map(up.foes.filter(c => !c.isPet).map(c => [c.objectId, c]));
-        const on = up.beside.filter(f => f.targetId != null && there.has(f.targetId)).sort((a, b) => dist(a, centre) - dist(b, centre))[0];
+        const on = up.beside.filter(f => f.targetId != null && there.has(f.targetId) && (!unseen || openable(there.get(f.targetId)!, up.foes))).sort((a, b) => dist(a, centre) - dist(b, centre))[0];
         if (on && on.targetId !== u.focus) {
             const t = there.get(on.targetId!)!;
             u = { ...u, focus: t.objectId, reason: `${u.reason ?? ''}; on ${on.name ?? 'a friend'}'s target ${t.name}#${t.objectId}` };

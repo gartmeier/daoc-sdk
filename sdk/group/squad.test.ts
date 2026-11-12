@@ -124,14 +124,15 @@ describe('decideSquad: picking fights', () => {
         const apart = [foe(51, 1500), foe(52, 3000)];
         const d = decide(picture(assassin(), apart));
         expect(d.phase).toBe('engage');
-        // A caster with a fighter 1500 off, nearer us: the caster is the one, and the focus goes to it.
+        // A caster with a fighter 1500 off, nearer us: the caster gives the best odds. The fighter is alone (nobody within 1000),
+        // so the kit opens on it too, and the inner decide's focus on it stays.
         const casterApart = [foe(51, 1500), foe(52, 3000, guess('caster'))];
         const up = sizeUp(assassin(), casterApart, BASE, SQUAD_SETTINGS);
         expect(up.openOn).toBe(52);
         expect(up.opening).toBeGreaterThan(SQUAD_SETTINGS.squad.engageAt);
         const e = decide(picture(assassin(), casterApart));
         expect(e.phase).toBe('engage');
-        expect(e.focus).toBe(52);
+        expect(e.focus).toBe(51);
         // A player and its pet: the player opened on, the pet no match.
         expect(sizeUp(assassin(), [foe(51, 1500), foe(52, 1600, { isPet: true })], BASE, SQUAD_SETTINGS).opening).toBeGreaterThan(SQUAD_SETTINGS.squad.engageAt);
         // Two side by side, or three apart: still no.
@@ -143,6 +144,16 @@ describe('decideSquad: picking fights', () => {
         expect(seen.opening).toBeCloseTo(seen.ratio, 5);
         // Not on a target out of view.
         expect(sizeUp(assassin(), [foe(51, 1500, { stale: true, lastSeen: 0 })], BASE, SQUAD_SETTINGS).openOn).toBeNull();
+    });
+
+    test("a hidden stealther keeps a focus it can open on: a low one, or its friend's soft target", () => {
+        const assassin = () => [report('Hodur', { role: 'melee', className: 'Shadowblade', capabilities: caps(), objectId: 1, regionId: R, x: BASE.x, y: BASE.y, z: 0, level: 24 })];
+        // A fighter at 5 % beside a fresh caster: the inner decide's low one stays (run A, 19:57: Hodur went off a Highlander at 5 %).
+        const low = [foe(51, 1200, { hp: 5 }), foe(52, 1300, guess('caster'))];
+        const d = decide(picture(assassin(), low));
+        expect(d.phase).toBe('engage');
+        expect(d.focus).toBe(51);
+        expect(d.reason).not.toContain('open on');
     });
 
     test('a hidden squad that leaves a fight walks away hidden, never a retreat (which would show it)', () => {
