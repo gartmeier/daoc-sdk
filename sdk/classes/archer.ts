@@ -143,7 +143,37 @@ async function loose(ctx: MemberContext, targetId: number): Promise<boolean> {
     return report(done());
 }
 
-/** The kit: hide above flee, shoot ahead of the melee fight. */
+/** A monster this near, on us, with the focus at least SWAT_FAR away: hit it first. */
+const SWAT_NEAR = 250;
+const SWAT_FAR = 500;
+
+/**
+ * A pet or monster on us while the focus stands off: swing at it, melee weapon in hand. Run B (2026-11-12 09:27): a
+ * Hunter's pet bit Tristram while his melee fight swung at the far focus, "Skadi is too far away to attack!" nine times.
+ */
+export const swat = (): Behavior => ({
+    name: 'swat',
+    interruptible: false,
+    async run(ctx) {
+        // Not a keep guard (level 28 and up, keeps.ts): that one is for flee.
+        const pest = ctx.bot.getAttackers().find(n => n.distance <= SWAT_NEAR && n.level <= ctx.me().level + 3);
+        if (!pest) return false;
+        const o = ctx.orders();
+        const focus = typeof o.focus === 'number' ? foeInView(ctx, o.focus) : null;
+        if (focus && focus.objectId !== pest.objectId && focus.distance < SWAT_FAR) return false;
+        if (ctx.memory.get('bowOut')) {
+            ctx.memory.set('bowOut', false);
+            await ctx.sdk.sendAttack(false);
+            await ctx.bot.takeMeleeSlot();
+        }
+        ctx.doing('melee', pest.objectId, `swat ${pest.name}`);
+        const a = await ctx.bot.attack(pest.objectId, { timeout: 6000 });
+        if (!a.success && a.reason !== 'already_dead') ctx.result('swat', a, pest.objectId);
+        return true;
+    },
+});
+
+/** The kit: hide above flee, a monster on us swatted, then shoot ahead of the melee fight. */
 export function archer(): Character {
-    return { role: 'nuker', instant: [hide()], fight: [shoot(), meleeFight()] };
+    return { role: 'nuker', instant: [hide()], fight: [swat(), shoot(), meleeFight()] };
 }

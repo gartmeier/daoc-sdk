@@ -25,9 +25,9 @@ describe('shotPlan', () => {
     });
 });
 
-test('the kit: nuker, hide as an instant, the shot ahead of the melee fight', () => {
+test('the kit: nuker, hide as an instant, a monster on us swatted, the shot ahead of the melee fight', () => {
     const c = archer();
     expect(c.role).toBe('nuker');
     expect(c.instant!.map(b => b.name)).toEqual(['hide']);
-    expect(c.fight!.map(b => b.name)).toEqual(['shoot', 'assistMelee']);
+    expect(c.fight!.map(b => b.name)).toEqual(['swat', 'shoot', 'assistMelee']);
 });
