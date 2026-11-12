@@ -750,7 +750,16 @@ function contactOf(x: any): Contact | null {
         firstSeen: num(x.firstSeen), lastSeen: num(x.lastSeen), stale: bool(x.stale), threat: bool(x.threat),
         hostileSince: num(x.hostileSince),
         cc: isObj(x.cc) ? { by: str(x.cc.by, 64), kind: str(x.cc.kind, 16), until: num(x.cc.until) } : null,
+        ...(isObj(x.classGuess) ? { classGuess: classGuessOf(x.classGuess) } : {}),
     };
+}
+
+const FOE_ROLES = ['healer', 'caster', 'cc', 'tank', 'melee', 'support'] as const;
+/** An enemy's class read (sdk/group/class-read.ts ClassGuess), kept so the realm director's board sees roles. */
+function classGuessOf(x: any): NonNullable<Contact['classGuess']> {
+    const classes = strings(x.classes, 5, 32);
+    const p = (Array.isArray(x.p) ? x.p : []).slice(0, classes.length).map((v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0));
+    return { classes, p, ...(FOE_ROLES.includes(x.role) ? { role: x.role } : {}), basis: strings(x.basis, 8, 64) };
 }
 
 function ordersOf(x: unknown): Orders {
