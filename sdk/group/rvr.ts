@@ -44,6 +44,7 @@ import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
 import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, TRAIL_MS, trailGoal, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
+import { alliesNear, CALL_SETTINGS, flushAnswers, helpStep, noteArrival, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -105,6 +106,8 @@ export interface RvrSettings extends TacticsSettings, KeepSettings {
     stayDry?: boolean;
     /** Choose the focus as the pack does (pickPackFocus: near, soft, a known healer last) and give up one a healer is winning. Off: pickRvrFocus. */
     softFocus?: SoftFocus;
+    /** Realm calls (tactics/help.ts): answer a unit's call for help, or the muster, when free and the way is short. `--calls.enabled=false` off. */
+    calls?: CallSettings;
 }
 
 /**
@@ -177,6 +180,7 @@ export const RVR_SETTINGS: RvrSettings = {
     patrol: null,
     opponent: null,
     stayDry: true,
+    calls: CALL_SETTINGS,
 };
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -318,6 +322,31 @@ const FIGHT_DRIFT = 1500;
  * within 20 s 72 times in 136 turns, 39 of them the turn at maxMs and most of the rest the run again right after it.
  */
 const RETREAT_COMMIT_MS = 20_000;
+/**
+ * While retreating, those we ran from count as following for this long after they were last seen. With human vision the
+ * pursuers drop out of the members' cones behind them: the retreat ended early and the group turned on them, or walked
+ * back into them (field, human-vision hour 2026-11-12, N3's open point).
+ */
+export const FLED_SEEN_MS = 30_000;
+/**
+ * After a retreat ends, the group we ran from is left alone this long: counted whole (those mezzed and those out of sight
+ * too) when the hunt sizes it up, and no patrol leg walks back toward where it was. Squads leave a group they fled from
+ * alone as long (squad.ts, d1382ad).
+ */
+export const FLED_MS = 60_000;
+/** ... once we stand farther than huntRadius plus this from where it was, the patrol goes on whichever way it leads. */
+const FLED_CLEAR = 1500;
+
+/** The group we ran from: whom (ids), where it was last seen, until when it is left alone. */
+export interface Fled { ids: number[]; at: Point; until: number }
+
+/**
+ * Those we ran from that are out of view now: players among `ids`, alive, in the region, stale on the board and last seen
+ * within FLED_SEEN_MS. Pursuers in view are counted as they stand (following or not).
+ */
+export function unseenPursuers(contacts: readonly Contact[], ids: ReadonlySet<number>, regionId: number, now: number): Contact[] {
+    return contacts.filter(c => ids.has(c.objectId) && c.kind === 'player' && c.stale && isAlive(c) && c.regionId === regionId && now - c.lastSeen <= FLED_SEEN_MS);
+}
 /**
  * A focus beyond chaseLeash from the fight's anchor moves the anchor toward it, to leave it this share
  * of the leash away: with the default leash it runs 800 farther before the anchor moves again.
@@ -604,7 +633,12 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         return [...new Set(free.map(c => c.realm))].map(r => free.filter(c => c.realm === r || onUs(c))).sort((a, b) => b.length - a.length)[0] ?? [];
     };
     const margin = countFor(s.retreat.margin, groupSize(mem, p.members));
-    const outnumbered = (n: number) => s.retreat.enabled && n >= main.length + margin;
+    // A realm call we answer (tactics/help.ts): arrived once near it, and those of ours fighting there count on our side.
+    const calls = s.calls ?? CALL_SETTINGS;
+    noteArrival(mem, centre, now, calls);
+    const allies = alliesNear(mem, centre, s.huntRadius + calls.arrive, alive);
+    const outnumbered = (n: number) => s.retreat.enabled && n >= main.length + allies + margin;
+    const withAllies = allies ? ` + ${allies} of ours` : '';
     const counted = (big: readonly Contact[], all: readonly Contact[]) => (big.length === all.length ? enemiesText(all.length) : `${big.length} of ${enemiesText(all.length)}`);
     const homeAt = home?.arrival ?? null;
     const gone = missing.length ? `; missing ${missing.map(m => `${m.name} (region ${m.regionId})`).join(', ')}` : '';
@@ -648,12 +682,24 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         // (field 2026-11-12: "fight ... 0 of 3 enemies", the cc broken, and the rest on us again a few seconds later).
         const following = against(enemies.filter(inFight));
         const held = enemies.filter(c => inFight(c) && c.cc && !busy(c));
-        if ((following.length || held.length) && now - (mem.retreatStart ?? now) < s.retreat.maxMs) {
-            const to = dist(centre, o.retreatTo) < 600 ? spotAlong(trip, centre, runWay(centre, following.length ? following : held, homeAt), s.retreat.distance) : o.retreatTo;
+        // Those we ran from that dropped out of view behind us (seen within FLED_SEEN_MS) still follow: human vision loses them.
+        const ids = new Set<number>([...(mem.fledIds ?? []), ...following.map(c => c.objectId)]);
+        mem.fledIds = [...ids];
+        const unseen = unseenPursuers(contacts, ids, regionId, now);
+        const behind = [...following, ...held, ...unseen];
+        if (behind.length) mem.fledAt = centroid(behind);
+        if (behind.length && now - (mem.retreatStart ?? now) < s.retreat.maxMs) {
+            const to = dist(centre, o.retreatTo) < 600 ? spotAlong(trip, centre, runWay(centre, following.length ? following : held.length ? held : unseen, homeAt), s.retreat.distance) : o.retreatTo;
             return { phase: 'retreat', retreatTo: to, anchor: to, reason: o.reason };
         }
         mem.retreatEnded = now;
+        const fled: Fled = { ids: [...ids], at: mem.fledAt ?? centre, until: now + FLED_MS };
+        mem.fled = fled;
     }
+    // The group we last ran from, while it is left alone (FLED_MS).
+    const fled: Fled | null = mem.fled && mem.fled.until > now && mem.fled.ids.length ? mem.fled : null;
+    if (mem.fled && !fled) mem.fled = undefined;
+    const fledIds = new Set<number>(fled?.ids ?? []);
 
     // ── Fighting: enemy players near us or on us; monsters only when they attack us and no player is about ──
     const candidates = contacts.filter(inFight);
@@ -685,9 +731,11 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const caught = (mem.standUntil ?? 0) > now;
         if (outnumbered(big.length) && !caught && !(current && current.hp < s.retreat.focusHp)) {
             mem.retreatStart = now;
+            mem.fledIds = big.map(c => c.objectId);
+            mem.fledAt = centroid(big);
             const way = runWay(centre, big, homeAt);
             const to = spotAlong(trip, centre, way, s.retreat.distance);
-            return { ...calm, phase: 'retreat', retreatTo: to, anchor: to, objective: `get away from ${enemiesText(big.length)}${gone}`, reason: `retreat: ${counted(big, players)} vs ${main.length}${way.home ? ', toward our portal keep' : ''}` };
+            return { ...calm, phase: 'retreat', retreatTo: to, anchor: to, objective: `get away from ${enemiesText(big.length)}${gone}`, reason: `retreat: ${counted(big, players)} vs ${main.length}${withAllies}${way.home ? ', toward our portal keep' : ''}` };
         }
         // The fight's anchor: the centre when it starts, and again once the group drifted FIGHT_DRIFT from it.
         const was: Point = o.phase === 'engage' && mem.fightAnchor && dist(centre, mem.fightAnchor) <= FIGHT_DRIFT ? mem.fightAnchor : centre;
@@ -749,7 +797,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         return {
             phase: 'engage', focus: focus.objectId, puller: null, cc, retreatTo: null, waiting: [], anchor: mem.fightAnchor, facing: { x: focus.x, y: focus.y },
             objective: `fight ${players.length ? 'enemy players' : 'monsters'} at ${at(mem.fightAnchor)}${gone}`,
-            reason: `${caught && outnumbered(big.length) ? 'caught: ' : ''}fight ${label(focus)}: ${players.length ? `${counted(big, players)} vs ${main.length}` : `${pool.length} attacking`}`,
+            reason: `${caught && outnumbered(big.length) ? 'caught: ' : ''}fight ${label(focus)}: ${players.length ? `${counted(big, players)} vs ${main.length}${withAllies}` : `${pool.length} attacking`}`,
         };
     }
 
@@ -765,13 +813,20 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // ── Hunting: enemy players in sight beyond engageRadius. Too many: fall back (toward home unless they stand that way) ──
     const seen = enemies.filter(c => !inKeep(c) && dist(c, centre) <= s.huntRadius);
     if (seen.length) {
-        const big = against(seen);
+        // The group we just ran from is sized up whole: those of it we mezzed, and those out of view, still count (FLED_MS).
+        const recalled = fled ? [
+            ...seen.filter(c => fledIds.has(c.objectId) && c.cc).map(c => ({ ...c, cc: null })),
+            ...unseenPursuers(contacts, fledIds, regionId, now),
+        ] : [];
+        const big = against([...seen.filter(c => !recalled.some(r => r.objectId === c.objectId)), ...recalled]);
+        const more = big.filter(c => recalled.includes(c)).length;
         if (outnumbered(big.length)) {
             const d = Math.round(dist(centre, centroid(big)));
             const way = runWay(centre, big, homeAt);
             const goal = way.home && homeAt ? homeAt : spotAlong(trip, centre, way, s.huntRadius);
             stepLeg(trip, 'fall back', goal, { from: centre, movers: main, replan: way.home ? 1 : 2000 });
-            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `fall back ${way.home ? 'toward our portal keep' : 'away from them'}${gone}`, reason: `fall back: ${counted(big, seen)} ${d} away vs ${main.length}` };
+            const counts = more ? `${counted(big.filter(c => !recalled.includes(c)), seen)} and ${more} more we ran from (mezzed or out of view)` : counted(big, seen);
+            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `fall back ${way.home ? 'toward our portal keep' : 'away from them'}${gone}`, reason: `fall back: ${counts} ${d} away vs ${main.length}${withAllies}` };
         }
         // With stayDry, those swimming aren't hunted into the river: with only such in sight, the group waits on dry ground for them (waitAshore).
         const ashore = seen.filter(c => !swimming(c));
@@ -839,6 +894,18 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         stepLeg(trip, 'gather', them, { from: centre, movers: main, replan: Infinity, meet: goers.some(m => !m.observed) });
         return { ...calm, phase: 'gather', anchor: legAnchor(mem), facing: them, waiting: far.map(m => ({ name: m.name, why: 'away' })), objective: `regroup with ${names(far)}${gone}`, reason: `meeting ${names(far)}, ${Math.round(dist(centre, them))} away` };
     }
+    // ── A realm call (tactics/help.ts): a unit of ours asks for help, or the muster. Free: no fight, nobody in sight, nobody
+    // dead or away (all handled above), at most one short of ready. Legs wait for everyone, so the group arrives together. ──
+    const answer = helpStep(mem, { unit: mem.realmUnit ?? '', centre, now, settings: calls, free: low.length <= HUNT_UNREADY && !pairRing });
+    if (answer?.kind === 'go') {
+        stepLeg(trip, 'call', answer.goal, { from: centre, movers: main, replan: 1500 });
+        return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `${answer.objective}${gone}`, reason: answer.reason };
+    }
+    if (answer?.kind === 'hold') {
+        const spot = dry ? drySpot(regionId, answer.at, { toward: centre, ok: c => clearOf(c, keeps) }) : answer.at;
+        const there: Point3 = { x: Math.round(spot.x), y: Math.round(spot.y), z: zAt(spot) };
+        return { ...calm, phase: answer.call.kind === 'muster' ? 'recover' : 'travel', anchor: there, waiting: low, objective: `${answer.objective}${gone}`, reason: answer.reason };
+    }
     if (low.length && !onTheWay) {
         const rest = restAt();
         return { ...calm, phase: 'recover', anchor: rest.at, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)${rest.why}` };
@@ -887,6 +954,11 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     if (arrived) {
         mem.wp = (mem.wp + 1) % loop.length;
         wp = loop[mem.wp]!;
+    }
+    // The group we just ran from: no patrol leg back toward where it was (FLED_MS). Wait off the roads out until it is left behind.
+    if (fled && dist(centre, fled.at) <= s.huntRadius + FLED_CLEAR && dist(wp, fled.at) < dist(centre, fled.at)) {
+        const rest = restAt();
+        return { ...calm, phase: 'recover', anchor: rest.at, objective: `keep off the ${enemiesText(fled.ids.length)} we ran from${gone}`, reason: `keep off: the ${enemiesText(fled.ids.length)} we ran from were ${Math.round(dist(centre, fled.at))} away at ${at(fled.at)}, patrol on in ${Math.ceil((fled.until - now) / 1000)} s${rest.why}` };
     }
     stepLeg(trip, 'patrol', wp, { from: centre, movers: here, replan: Infinity, force: arrived });
     // The leg that ends at the waypoint goes on to the next one: the group walks through it, not to a stop at it.
@@ -983,3 +1055,38 @@ export const rvrRoaming: GroupStrategy<RvrSettings> = {
     board: { staleAfterMs: 4000, forgetAfterMs: 30_000, hostileMs: 6000 },
     agent: { sightRadius: 5000 },
 };
+
+/**
+ * `strategy` answering our realm's calls (tactics/help.ts): its decide gets the open calls (memory.realmCalls) and the
+ * unit's name, and the answers it queued go to the director after each tick. The calls come from director.ts callWatch
+ * (R2), loaded on the first tick when our realm is known; while that module or its file is missing there are none, and
+ * the group plays as before. `source` replaces it (tests). stop() ends the watch: call it when the run ends.
+ */
+export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?: CallSource | null): { strategy: GroupStrategy<S>; stop(): void } {
+    let src: CallSource | null | undefined = source;
+    let stopped = false;
+    const start = (realm: Realm) => {
+        // A variable path: the director lands in its own commit, and a missing module must not stop the group loading.
+        const path = './director';
+        import(path).then((m: { callWatch?: (unit: string, realm: string) => CallSource }) => {
+            if (stopped || !m.callWatch) { src = null; return; }
+            src = m.callWatch(unit, realm);
+        }).catch(() => { src = null; });
+    };
+    let asked = false;
+    const decide = (ctx: CoordinatorContext<S>): OrdersUpdate => {
+        const mem = ctx.memory;
+        mem.realmUnit = unit;
+        if (src === undefined && !asked) {
+            const realm = realmOfGroup(ctx.picture.members);
+            if (realm !== 'none') { asked = true; start(realm); }
+        }
+        let calls: readonly RealmCall[] = [];
+        try { calls = src?.calls() ?? []; } catch { calls = []; }
+        mem.realmCalls = calls;
+        const out = strategy.decide(ctx);
+        flushAnswers(mem, src);
+        return out;
+    };
+    return { strategy: { ...strategy, decide }, stop: () => { stopped = true; try { src?.stop?.(); } catch { /* already stopped */ } } };
+}

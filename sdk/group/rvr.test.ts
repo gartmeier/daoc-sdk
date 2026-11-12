@@ -5,7 +5,8 @@ import { Blackboard, observeState } from './blackboard';
 import { contact, enemy, picture, report } from './fixtures';
 import type { RunReport } from './observer';
 import { memoryView } from './publish';
-import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, holdObservedFar, homeOf, keepDangers, pickRvrFocus, RVR_SETTINGS, rvrFindings, rvrRoaming, stepLeg, type RvrSettings } from './rvr';
+import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, holdObservedFar, homeOf, keepDangers, pickRvrFocus, realmCalls, RVR_SETTINGS, rvrFindings, rvrRoaming, stepLeg, type RvrSettings } from './rvr';
+import type { RealmCall } from './tactics/help';
 import { countFor } from './size';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { aggroZones, safePath } from './terrain';
@@ -574,6 +575,111 @@ describe('decideRvr: retreat among three realms', () => {
         // retreat.maxMs on: the retreat ends there, and what is near is a fight we are committed to.
         d = step(21_000, left, retreating);
         expect(d.phase).toBe('engage');
+    });
+
+    // With human vision the pursuers drop out of the members' cones behind them (the human-vision hour, 2026-11-12).
+    test('a retreat runs on while those we ran from are out of view, seen within 30 s; not on those seen longer ago', () => {
+        const memory: Record<string, any> = {};
+        const step = (ms: number, contacts: Contact[], orders: Partial<Orders> = {}) => decideRvr(ctx(picture(team(), contacts, orders, now + ms), { memory, now: now + ms }));
+        let d = step(0, seven);
+        const retreating = { phase: 'retreat' as const, retreatTo: d.retreatTo!, reason: d.reason };
+        const unseen = (seenAt: number) => seven.map(c => ({ ...c, stale: true, lastSeen: now + seenAt }));
+        d = step(5000, unseen(1000), retreating);
+        expect(d.phase).toBe('retreat');
+        expect(d.reason).toBe('retreat: 7 enemies vs 5');
+        // Last seen 31 s ago: nobody follows any more.
+        d = step(8000, unseen(8000 - 31_000), retreating);
+        expect(d.phase).not.toBe('retreat');
+    });
+
+    test('after a retreat the group we ran from counts whole, mezzed and out of view, and no patrol leg walks back at it', () => {
+        const memory: Record<string, any> = {};
+        const step = (ms: number, contacts: Contact[], orders: Partial<Orders> = {}) => decideRvr(ctx(picture(team(), contacts, orders, now + ms), { memory, now: now + ms }));
+        let d = step(0, seven);
+        const retreating = { phase: 'retreat' as const, retreatTo: d.retreatTo!, reason: d.reason };
+        // Out of view behind us all the way: the retreat runs to maxMs and ends there with nobody to fight.
+        const unseen = seven.map(c => ({ ...c, stale: true, lastSeen: now + 19_000 }));
+        expect(step(19_000, unseen, retreating).phase).toBe('retreat');
+        d = step(21_000, unseen, retreating);
+        // The nearest waypoint (10000, 10000) lies toward where they were (11500, 10000): wait instead.
+        expect(d.phase).toBe('recover');
+        expect(d.reason).toContain('keep off: the 7 enemies we ran from');
+        // Four of them come into view 3300 off, three still out of view: seven, not four to hunt.
+        const four = seven.map(c => (c.objectId <= 13 ? { ...c, x: 13_000 } : { ...c, stale: true, lastSeen: now + 19_000 }));
+        d = step(25_000, four, { phase: 'recover', anchor: d.anchor });
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toContain('fall back: 4 enemies and 3 more we ran from (mezzed or out of view)');
+        // All seven in view, three of them mezzed: still seven.
+        const mezz = { by: 'Bard', kind: 'mezz', until: now + 120_000 };
+        const mezzed = seven.map(c => ({ ...c, x: 13_000, ...(c.objectId > 13 ? { cc: mezz } : {}) }));
+        d = step(30_000, mezzed, { phase: 'travel', anchor: d.anchor });
+        expect(d.reason).toContain('fall back: 4 of 7 enemies and 3 more we ran from');
+        // A minute after the retreat ended they are anyone again: four free of seven are hunted, and the patrol goes on.
+        d = step(82_000, mezzed, { phase: 'travel', anchor: d.anchor });
+        expect(d.reason).toContain('hunt 7 enemies');
+        expect(step(83_000, [], { phase: 'travel', anchor: d.anchor }).reason).toContain('patrol to waypoint');
+    });
+
+    test('a group we never ran from is hunted as before, mezzed ones left out', () => {
+        const memory: Record<string, any> = {};
+        const mezz = { by: 'Bard', kind: 'mezz', until: now + 120_000 };
+        const mezzed = seven.map(c => ({ ...c, x: 13_000, ...(c.objectId > 13 ? { cc: mezz } : {}) }));
+        const d = decideRvr(ctx(picture(team(), mezzed, {}, now), { memory, now }));
+        expect(d.reason).toContain('hunt 7 enemies');
+    });
+});
+
+describe('decideRvr: realm calls (tactics/help.ts)', () => {
+    const now = Date.now();
+    const help = (over: Partial<RealmCall> = {}): RealmCall => ({ id: 'hib-1', kind: 'help', from: 'hibernia-s1', why: 'outnumbered', at: { x: 14_680, y: 10_000, z: 0 }, foes: 4, ours: 2, want: 3, asked: ['hibernia'], coming: [], since: now, updatedAt: now, ...over });
+    const run = (memory: Record<string, any>, ms: number, members = team(), contacts: Contact[] = [], orders: Partial<Orders> = {}) =>
+        decideRvr(ctx(picture(members, contacts, orders, now + ms), { memory, now: now + ms }));
+
+    test('free, a call naming us 5000 off: the group walks there in legs, instead of its patrol', () => {
+        const memory: Record<string, any> = { realmUnit: 'hibernia', realmCalls: [help()] };
+        const d = run(memory, 0);
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toBe('call hib-1: hibernia-s1 (outnumbered, 4 vs 2), 5000 away');
+        expect(d.anchor).toMatchObject({ x: 11_180, y: 10_000 });
+        expect(memory.helpOut).toEqual([{ id: 'hib-1', answer: 'coming' }]);
+        // Without calls: the patrol, as before.
+        expect(run({}, 0).reason).toContain('patrol to waypoint');
+    });
+
+    test('not free: a member dead, or two short of ready, the call waits', () => {
+        const memory: Record<string, any> = { realmUnit: 'hibernia', realmCalls: [help()] };
+        expect(run(memory, 0, team({ Druid: { isDead: true } })).reason).toContain('waiting for Druid');
+        expect(run(memory, 0, team({ Druid: { mana: 10 }, Menta: { mana: 10 } })).reason).toContain('waiting for');
+        // One short goes.
+        expect(run(memory, 0, team({ Druid: { mana: 10 } })).reason).toContain('call hib-1');
+    });
+
+    test('near the call, those of ours fighting there count: seven against five and three is a fight, not a retreat', () => {
+        // The director counts our three within 2000 of the call in its `ours` (R2): six there is three of theirs.
+        const memory: Record<string, any> = { realmUnit: 'hibernia', realmCalls: [help({ ours: 6, at: { x: 11_500, y: 10_000, z: 0 } })] };
+        run(memory, 0);
+        const seven = [10, 11, 12, 13, 14, 15, 16].map(id => albion(id));
+        const d = run(memory, 1000, team(), seven);
+        expect(d.phase).toBe('engage');
+        expect(d.reason).toContain('7 enemies vs 5 + 3 of ours');
+        // The call closed: they are seven against five again.
+        memory.realmCalls = [];
+        expect(run(memory, 2000, team(), seven, { phase: 'engage', focus: d.focus!, anchor: d.anchor! }).phase).toBe('retreat');
+    });
+
+    test('realmCalls: the source feeds the calls and gets the answers, our own unit name in memory', () => {
+        const answers: string[] = [];
+        const source = { calls: () => [help()], answer: (id: string, a: string) => { answers.push(`${id}:${a}`); } };
+        const live = realmCalls(rvrRoaming, 'hibernia', source);
+        const memory: Record<string, any> = {};
+        const d = live.strategy.decide(ctx(picture(team(), [], {}, now), { memory, now }));
+        expect(d.reason).toContain('call hib-1');
+        expect(answers).toEqual(['hib-1:coming']);
+        expect(memory.realmUnit).toBe('hibernia');
+        live.stop();
+        // No director (the module missing or not started yet): no calls, the patrol.
+        const none = realmCalls(rvrRoaming, 'hibernia', null);
+        expect(none.strategy.decide(ctx(picture(team(), [], {}, now), { memory: {}, now })).reason).toContain('patrol to waypoint');
     });
 });
 

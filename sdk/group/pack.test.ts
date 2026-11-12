@@ -852,3 +852,17 @@ describe('options leave rvr-roam as it was', () => {
         expect(rvrPack.name).toBe('rvr-pack');
     });
 });
+
+describe('decidePack: realm calls (tactics/help.ts, through the calm side)', () => {
+    const help = { id: 'mid-1', kind: 'help' as const, from: 'midgard-s1', why: 'outnumbered', at: { x: 15_000, y: 10_000, z: 0 }, foes: 3, ours: 1, want: 3, asked: ['midgard'], coming: [], since: 0, updatedAt: 0 };
+
+    test('free, with nobody in sight: the pack walks to the call; with a foe in sight it hunts it as ever', () => {
+        const memory: Record<string, any> = { pack: 'stalk', realmUnit: 'midgard', realmCalls: [help] };
+        const d = decidePack(ctx(picture(team()), { memory }));
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toContain('call mid-1: midgard-s1 (outnumbered, 3 vs 1)');
+        expect(memory.helpOut).toEqual([{ id: 'mid-1', answer: 'coming' }]);
+        const near = decidePack(ctx(picture(team(), [foe(101, 13_000)]), { memory }));
+        expect(near.reason).toContain('hunt Norseman#101');
+    });
+});
