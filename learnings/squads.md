@@ -71,3 +71,8 @@ shares (`size.ts`, floor 5) do nothing for a squad.
 - **The same duo three times.** Camelot's Tuck and Galahad lost to Hibernia's Niamh and Cuchulainn (Bard and Hero) three times in five minutes. The odds read about 1.15 each time; the Bard's mezz on the Friar decided it.
   - Fix: enemies near one of ours when it died count 1.5× for ten minutes when deciding to start a fight.
 - **Solos on a healer.** Scathach and Diarmuid, solo, each held Kobold#469 at 38-40 % for minutes without a kill. Open.
+- **Walking while a group closed** (08:32): a Hibernian five walked Camelot's duo down from 3300 to 900 while it stepped away at a walk. It was caught 45 s into its flee and both died.
+  - Fix (a474c79): a group at odds below `leaveAt` within `squad.runAt` (2000) starts the flee at once, since a retreat sprints. A hidden stealther still walks.
+- **Back on the same line** (the user, 08:40): Hibernia's duo stepped clear of Albion's group, then patrolled straight back into it, again and again.
+  - Fix (c80b776): the spot where a group the squad avoided or fled was last seen is kept for four minutes. Its radius is the group's spread plus 2000, at least 3000.
+  - The patrol skips waypoints in that spot and goes round it (`safePath`, as round a keep). The reason says "round a group last seen at (x, y)".
