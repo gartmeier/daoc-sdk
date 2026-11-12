@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { enemy, picture, report } from './fixtures';
 import { BATTLEGROUND_LAYOUTS, homeOf, THIDRANKI } from './keeps';
 import { countFor } from './size';
-import { callOdds, decideSquad, edgePatrol, sideStrength, sizeUp, SQUAD_SETTINGS, squadRoaming, type Friend, type SquadSettings } from './squad';
+import { callOdds, withServants, decideSquad, edgePatrol, sideStrength, sizeUp, SQUAD_SETTINGS, squadRoaming, type Friend, type SquadSettings } from './squad';
 import type { AnswerState, RealmCall } from './director';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import type { Capabilities, Contact, GroupPicture, MemberReport, Orders, Point, Role } from './types';
@@ -598,6 +598,43 @@ describe('decideSquad: leaving a fight that turned', () => {
         }
         // What the shares give below five (size.ts): not used by a squad, whose retreat is its own.
         expect([1, 2, 3].map(n => countFor({ share: 0.6 }, n))).toEqual([1, 1, 2]);
+    });
+});
+
+describe('a Necromancer in shade: its servant is that enemy player', () => {
+    const shade = (id: number, dx: number, over: Partial<Contact> = {}) => foe(id, dx, { isShade: true, ...guess('caster'), ...over });
+    const servant = (id: number, dx: number, over: Partial<Contact> = {}) => foe(id, dx, { isPet: true, name: 'necroservant', hp: 80, ...over });
+
+    test("withServants: the pet nearest the shade, of its realm, stands in for it with the shade's read; none far off", () => {
+        const cs = withServants([shade(51, 1500), servant(61, 1700), servant(62, 4500)]);
+        const s61 = cs.find(c => c.objectId === 61)!;
+        expect(s61.kind).toBe('player');
+        expect(s61.isPet).toBe(false);
+        expect(s61.classGuess?.role).toBe('caster');
+        expect(s61.hp).toBe(80);
+        expect(cs.find(c => c.objectId === 62)!.isPet).toBe(true);
+        // A marked pet (R3's servantOf) wins over the nearer one.
+        const marked = withServants([shade(51, 1500), servant(61, 1600), servant(63, 1900, { servantOf: 51 } as any)]);
+        expect(marked.find(c => c.objectId === 63)!.kind).toBe('player');
+        expect(marked.find(c => c.objectId === 61)!.isPet).toBe(true);
+        // No pet within reach: nothing changes.
+        expect(withServants([shade(51, 1500), servant(62, 4500)]).every(c => c.objectId !== 62 || c.isPet)).toBe(true);
+    });
+
+    test('an idle Necromancer in shade is a head: a duo takes it, a solo fighter weighs it as a caster, a pair of them is left', () => {
+        // Before, it was nobody: the shade untouchable, the servant a pet with no threat. R1, 20:45: two Hibernians walked past Morgause.
+        const d = decide(picture(squad(['Merc', 'Cleric']), [shade(51, 1500), servant(61, 1600)]));
+        expect(d.phase).toBe('engage');
+        expect(d.focus).toBe(61);
+        expect(sizeUp(squad(['Merc']), withServants([shade(51, 1500), servant(61, 1600)]).filter(c => !c.isShade), BASE, SQUAD_SETTINGS).foes.map(c => c.objectId)).toEqual([61]);
+        const two = [shade(51, 1500), servant(61, 1600), shade(52, 1700), servant(62, 1800)];
+        expect(decide(picture(squad(['Merc']), two)).reason).toMatch(/^(avoid|flee):/);
+    });
+
+    test('a hidden stealther can open on the servant', () => {
+        const assassin = [report('Hodur', { role: 'melee', className: 'Shadowblade', capabilities: caps(), objectId: 1, regionId: R, x: BASE.x, y: BASE.y, z: 0, level: 24 })];
+        const up = sizeUp(assassin, withServants([shade(51, 1500), servant(61, 1600)]).filter(c => !c.isShade), BASE, SQUAD_SETTINGS);
+        expect(up.openOn).toBe(61);
     });
 });
 

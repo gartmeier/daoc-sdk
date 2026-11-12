@@ -301,6 +301,36 @@ export function callOdds(members: readonly MemberReport[], call: Pick<RealmCall,
     return b > 0 ? sideStrength(ours, alive.filter(m => m.role === 'healer' || m.capabilities.heal).length) / b : Infinity;
 }
 
+/**
+ * A Necromancer in shade can't be hit and its servant is its body: the servant is that enemy player (R1, 20:45 on 11-12: two
+ * Hibernians walked past Morgause idle in shade, a nobody to them, as a shade is untouchable and a pet counts only on us).
+ * The server never names a pet's owner, so the board marks the pet (`servantOf`, the shade's objectId, R3), or else the
+ * enemy pet of the shade's realm nearest it within SERVANT_REACH is taken (the bond breaks past 1500, NecromancerPetBrain.cs).
+ */
+const SERVANT_REACH = 2000;
+
+/**
+ * Contacts with each shade's servant standing in for the shade: a player with the shade's class read, level and name, and
+ * the servant's id, place and health (what can be fought). The shade itself stays as it is (untouchable, so counted nowhere).
+ */
+export function withServants(contacts: readonly Contact[]): Contact[] {
+    const shades = contacts.filter(c => c.kind === 'player' && c.isShade && c.hp > 0);
+    if (!shades.length) return contacts as Contact[];
+    const pets = contacts.filter(c => c.isPet && c.hp > 0);
+    const servantOf = new Map<number, Contact>();
+    for (const sh of shades) {
+        const marked = pets.find(c => (c as Contact & { servantOf?: number }).servantOf === sh.objectId);
+        const near = marked ?? pets.filter(c => c.realm === sh.realm && c.regionId === sh.regionId && !servantOf.has(c.objectId) && dist(c, sh) <= SERVANT_REACH).sort((a, b) => dist(a, sh) - dist(b, sh))[0];
+        if (near) servantOf.set(near.objectId, sh);
+    }
+    if (!servantOf.size) return contacts as Contact[];
+    return contacts.map(c => {
+        const sh = servantOf.get(c.objectId);
+        if (!sh) return c;
+        return { ...c, kind: 'player', isPet: false, name: c.name, classGuess: sh.classGuess ?? c.classGuess, level: sh.level || c.level, caster: sh.caster ?? c.caster, servantOf: sh.objectId } as Contact;
+    });
+}
+
 export interface SizeUp {
     /** The enemies the fight is with (or would be): players and pets. */
     foes: Contact[];
@@ -501,7 +531,9 @@ export function squadDecide(inner: (ctx: CoordinatorContext<any>) => OrdersUpdat
 }
 
 export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx: CoordinatorContext<any>) => OrdersUpdate = decideRvr, opts: SquadOptions = {}): OrdersUpdate {
-    const { picture: p, orders: o, memory: mem, now } = ctx;
+    const { picture: p0, orders: o, memory: mem, now } = ctx;
+    // A shade's servant is that enemy player (withServants): for the counts, the focus and the inner decide alike.
+    const p = { ...p0, contacts: withServants(p0.contacts) };
     const s: SquadSettings = { ...ctx.settings, squad: { ...SQUAD_RULES, ...ctx.settings.squad } };
     const r = s.squad;
     const sq: SquadMemory = mem.squad ??= { avoid: {}, shun: {}, grudge: {}, flee: null, stand: false, fled: 0, caught: 0, avoided: 0 };
