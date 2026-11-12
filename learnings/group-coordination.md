@@ -359,6 +359,16 @@ Phase 1's first piece (plan doc "Humans in groups"). A group member with no memb
       - Not run live yet.
   - **Invites:** a human still grouped from an earlier run gets no invite (the server sends none to a member). `formGroup` is fine with that.
   - **What the human did:** his first charge took him in alone from 1158, and he died in 6 s, before the group engaged. The group can't stop a human doing that. Whether it should follow him in is the human-led question.
+- **Third live run** (2026-11-11 20:12, Camelot 600 s against Midgard, with two rezzers: Nimue Cleric and Tuck Friar):
+  - **Seen:**
+    - Tuck healed him for 170.
+    - Guard ("you must stand closer") and speed were on him.
+    - Nimue rezzed Vivien twice.
+    - No gather flip-flop: no "meeting Galahad" line in 10 minutes.
+    - Camelot killed 4 players and was never wiped before reacting.
+  - **Still not seen:** a rez of him and kills left to him.
+    - He died once, while Nimue was dead too, and the coordinator waited for "a rez or a release" as it should.
+    - His targets reached 23 %, but the log has no "left to Galahad" line.
 - **Not built** (they wait for the plan's open question on which mode comes first): the group calling what it does in group chat (bot-led), and the human leading with `/assist` and chat commands (human-led). Neither is needed by the above.
 
 ## Group size (`sdk/group/size.ts`)
