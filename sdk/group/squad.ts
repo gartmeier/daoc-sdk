@@ -447,7 +447,9 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         // One enemy player on us (with its pet, if any) runs as fast as we do, or shoots or casts at our back: only worth
         // running from with safety near. Run B 08:49: Tristram ran from a Hunter for 45 s and died to its arrows.
         const lone = up.foes.filter(c => !c.isPet);
-        const melee = lone.length === 1 && up.foes.some(onUs);
+        // In a fight (engaged or attacked) one enemy player is that one, whether or not the board reads its target: an archer's
+        // arrows don't name one (run B 09:30: Tristram ran from a Hunter at "1 vs 1" and died 2 s later).
+        const melee = lone.length === 1;
         const safetyNear = (nearestFriend && dist(nearestFriend, centre) <= r.outrunMax) || (home && dist(centre, home.keep) <= r.outrunMax);
         if (!finishing && !(melee && !safetyNear) && !atFriends && !ourInKeepReach) {
             const t = fleeTarget();

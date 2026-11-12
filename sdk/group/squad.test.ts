@@ -263,6 +263,9 @@ describe('decideSquad: leaving a fight that turned', () => {
         // An archer or caster on us shoots at our back: fought out too (run B 08:49: Tristram ran from a Hunter and died), its pet with it.
         const f = decide(picture(us(), [foe(51, 1200, { ...guess('caster'), target: 'Wizard', threat: true }), foe(52, 300, { isPet: true, threat: true, target: 'Wizard' })], { phase: 'engage', focus: 51 }));
         expect(f.phase).toBe('engage');
+        // ... also with no target read for it (an archer's arrows name none).
+        const g = decide(picture(us(), [foe(51, 1200, { ...guess('caster'), threat: true })], { phase: 'engage', focus: 51 }));
+        expect(g.phase).toBe('engage');
     });
 
     test('a focus nearly dead is finished first', () => {
