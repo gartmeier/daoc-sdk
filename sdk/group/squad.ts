@@ -29,7 +29,7 @@ import type { Realm } from '../types';
 import { untouchable } from './blackboard';
 import type { AnswerState, RealmCall } from './director';
 import { roleOfClass, type FoeRole } from './class-read';
-import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, keepDangers, type PlayerRealm } from './keeps';
+import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, type PlayerRealm } from './keeps';
 import { decideRvr, legAnchor, mainBody, realmOfGroup, RVR_SETTINGS, runWay, rvrRoaming, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
 import { isLevel } from './slope';
 import { defineStrategy, type CoordinatorContext, type GroupStrategy } from './strategy';
@@ -93,8 +93,17 @@ export const SQUAD_RULES: SquadRules = {
     calls: true,
 };
 
+/**
+ * A squad keeps this far from a keep that isn't ours (the Faste), not 4500: the Faste's three bridges reach 4600-6000 out,
+ * and a walk that passes them takes the dry way over the island, under the guards. Run A on 11-12 (19:28-19:58): 11 times
+ * in half an hour, e.g. Hodur on a straight leg 5740 from the Faste, "attacked by something unseen 1751", dead in 6 s.
+ * The meeting point lies 6300 from the Faste: a squad answering a help call goes back to KEEP_CLEARANCE.
+ */
+const SQUAD_KEEP = 7000;
+
 export const SQUAD_SETTINGS: SquadSettings = {
     ...RVR_SETTINGS,
+    keepClearance: { portal: KEEP_CLEARANCE.portal, keep: SQUAD_KEEP },
     // A squad is no group to wait for: hunt and engage nearer, and set out again sooner.
     engageRadius: 2000,
     huntRadius: 4000,
@@ -768,6 +777,9 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     if (call && sq.call && (engaged || hit) && dist(centre, call.at) <= CALL_FIGHT) sq.call.lastFight = now;
     /** Enemies in the call's fight: not kept clear of, and shown to the inner decide. */
     const inCallFight = (c: Point) => !!call && call.kind === 'help' && dist(c, call.at) <= CALL_FIGHT;
+    // Answering a help call: keeps cleared as a group does (KEEP_CLEARANCE), so a fight by the meeting point is reachable.
+    const callClearance = { portal: s.keepClearance.portal, keep: Math.min(s.keepClearance.keep, KEEP_CLEARANCE.keep) };
+    if (call && call.kind === 'help') innerSettings.keepClearance = callClearance;
     if (!engaged && !hit && !sq.stand && !held) {
         const groups = enemyClusters(enemies, r.joinRadius).filter(cl => cl.some(c => dist(c, centre) <= s.huntRadius));
         const bad: Contact[] = [];
@@ -824,7 +836,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
             const what = call.kind === 'muster' ? (call.stage === 'go' ? 'the raid' : 'the rally') : `${call.from}'s fight (${call.why}, ${call.ours} vs ${call.foes})`;
             if (d > CALL_ARRIVE || (call.kind === 'muster' && call.stage !== 'go')) {
                 // A raid goes into the keep circle it is after; the others are gone round as ever.
-                const avoid = call.kind === 'muster' && call.target ? keeps.filter(k => dist(k, call!.target!) > k.r) : keeps;
+                const avoid = call.kind === 'muster' && call.target ? keeps.filter(k => dist(k, call!.target!) > k.r) : keepDangers(regionId, realm, { ...s, keepClearance: callClearance });
                 if (d > CALL_ARRIVE) stepLeg({ ...trip, avoid }, 'call', call.at, { from: centre, movers: here, replan: 1500 });
                 const odds = call.kind === 'help' ? `, odds there ${fmt(callOdds(here, call))}` : '';
                 return { phase: 'travel', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: d > CALL_ARRIVE ? legAnchor(mem) : { x: Math.round(call.at.x), y: Math.round(call.at.y), z: call.at.z }, facing: mem.legFacing, objective: `answer the call to ${what}`, reason: `call: ${d > CALL_ARRIVE ? `to ${what}, ${Math.round(d)} away` : `at ${what}, waiting for go`}${odds}` };

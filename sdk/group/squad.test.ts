@@ -719,6 +719,15 @@ describe('edgePatrol: the roads and banks, away from the meeting point', () => {
         });
     }
 
+    test("a squad's loop keeps 7000 from a keep that isn't ours, where the Faste's bridges don't draw a walk onto the island", () => {
+        const faste = BATTLEGROUND_LAYOUTS[THIDRANKI]!.keeps.find(k => k.name === 'Thidranki Faste')!;
+        for (const realm of ['midgard', 'hibernia'] as const) {
+            const loop = edgePatrol(THIDRANKI, realm, 24, SQUAD_SETTINGS, 0);
+            expect(loop.length).toBeGreaterThanOrEqual(5);
+            for (const p of loop) expect(Math.hypot(p.x - faste.x, p.y - faste.y)).toBeGreaterThanOrEqual(7000);
+        }
+    });
+
     test('the strategy patrols that loop in Thidranki', () => {
         const at = homeOf(THIDRANKI, 'albion')!.arrival;
         const memory: Record<string, any> = {};
