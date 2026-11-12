@@ -17,7 +17,8 @@ describe('levelCaps', () => {
 describe('templateFor', () => {
     const realms: Record<string, 'albion' | 'midgard' | 'hibernia'> = { Warrior: 'midgard', Skald: 'midgard', Healer: 'midgard', Shaman: 'midgard', Spiritmaster: 'midgard', Paladin: 'albion', Cleric: 'albion', Sorcerer: 'albion', Cabalist: 'albion', Theurgist: 'albion', Hero: 'hibernia', Druid: 'hibernia', Bard: 'hibernia', Mentalist: 'hibernia', Enchanter: 'hibernia',
         Armsman: 'albion', Friar: 'albion', Wizard: 'albion', Blademaster: 'hibernia', Warden: 'hibernia', Eldritch: 'hibernia', Berserker: 'midgard', Thane: 'midgard', Runemaster: 'midgard',
-        Infiltrator: 'albion', Scout: 'albion', Nightshade: 'hibernia', Ranger: 'hibernia', Shadowblade: 'midgard', Hunter: 'midgard' };
+        Infiltrator: 'albion', Scout: 'albion', Nightshade: 'hibernia', Ranger: 'hibernia', Shadowblade: 'midgard', Hunter: 'midgard',
+        Mercenary: 'albion', Minstrel: 'albion', Necromancer: 'albion', Reaver: 'albion', Animist: 'hibernia', Champion: 'hibernia', Valewalker: 'hibernia', Bonedancer: 'midgard', Savage: 'midgard' };
 
     test('every class fills the 14 slots and every row fits', () => {
         for (const className of Object.keys(CLASS_KITS)) {
@@ -47,6 +48,31 @@ describe('templateFor', () => {
             else expect(bow).toBe(-1);
             if (bow >= 0) expect(bow).toBeLessThan(melee);
         }
+    });
+
+    test('the nine new classes: their build lines take a skill bonus, each hand holds its kit', () => {
+        const builds: [string, Record<string, number>, Partial<Record<number, number>>][] = [
+            ['Mercenary', { 'Dual Wield': 24, Slash: 23, Parry: 7 }, { [EquipmentSlot.RightHand]: ObjectType.SlashingWeapon, [EquipmentSlot.LeftHand]: ObjectType.SlashingWeapon }],
+            ['Minstrel', { Instruments: 21, Thrust: 20, Stealth: 5 }, { [EquipmentSlot.RightHand]: ObjectType.ThrustWeapon, [EquipmentSlot.LeftHand]: ObjectType.Shield, [EquipmentSlot.TwoHand]: ObjectType.Instrument }],
+            ['Necromancer', { Deathsight: 18, 'Death Servant': 15, Painworking: 4 }, { [EquipmentSlot.TwoHand]: ObjectType.Staff }],
+            ['Reaver', { Flexible: 21, Soulrending: 22, Shields: 13, Parry: 6, Slash: 4 }, { [EquipmentSlot.RightHand]: ObjectType.Flexible, [EquipmentSlot.LeftHand]: ObjectType.Shield }],
+            ['Animist', { 'Arboreal Path': 24 }, { [EquipmentSlot.TwoHand]: ObjectType.Staff }],
+            ['Champion', { Valor: 24, 'Large Weapons': 23, Parry: 4 }, { [EquipmentSlot.TwoHand]: ObjectType.LargeWeapons }],
+            ['Valewalker', { Scythe: 24, 'Arboreal Path': 16 }, { [EquipmentSlot.TwoHand]: ObjectType.Scythe }],
+            ['Bonedancer', { Suppression: 18, Darkness: 15, 'Bone Army': 4 }, { [EquipmentSlot.TwoHand]: ObjectType.Staff }],
+            ['Savage', { 'Hand to Hand': 24, Savagery: 16, Parry: 2 }, { [EquipmentSlot.RightHand]: ObjectType.HandToHand, [EquipmentSlot.LeftHand]: ObjectType.HandToHand }],
+        ];
+        for (const [className, specs, hands] of builds) {
+            const pieces = templateFor(className, realms[className]!, 24, specs);
+            for (const p of pieces) expect(p.bonuses.length).toBeLessThanOrEqual(MAX_BONUSES);
+            const totals = templateTotals(pieces);
+            const trained = Object.values(specs).filter(v => v >= 2).length;
+            expect([...totals.entries()].filter(([k, v]) => k >= 20 && k <= 115 && v === 5).length).toBe(trained);
+            for (const [slot, type] of Object.entries(hands)) expect(pieces.find(p => p.slot === Number(slot))?.objectType).toBe(type);
+            expect(pieces.filter(p => p.slot === EquipmentSlot.TwoHand).length).toBeLessThanOrEqual(1);
+        }
+        // The lute is held last, so it is out for the songs.
+        expect(wearOrder(templateFor('Minstrel', 'albion', 24, { Instruments: 21, Thrust: 20 })).at(-1)!.objectType).toBe(ObjectType.Instrument);
     });
 
     test('adds up to the caps, exactly', () => {

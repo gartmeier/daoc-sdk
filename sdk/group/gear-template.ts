@@ -43,6 +43,10 @@ export const SKILL_PROPERTY: Record<string, number> = {
     // The stealthers and archers (2026-11-11).
     'Critical Strike': 23, Thrust: 50, Envenom: 31, Stealth: 49, 'Dual Wield': 28, Longbows: 36, Piercing: 74,
     Pathfinding: 97, 'Recurve Bow': 83, 'Composite Bow': 68, Spear: 56, Beastcraft: 64,
+    // The nine new classes (2026-11-12).
+    Instruments: 35, Deathsight: 27, 'Death Servant': 26, Painworking: 39, Flexible: 33, Soulrending: 46,
+    'Arboreal Path': 89, 'Creeping Path': 88, 'Verdant Path': 87, Valor: 84, 'Large Weapons': 75, Scythe: 90,
+    'Bone Army': 86, 'Hand to Hand': 92, Savagery: 95, Sword: 52,
 };
 /** A skill bonus is wasted on a line left at 1. */
 const TRAINED = 2;
@@ -80,6 +84,8 @@ interface ClassKit {
     focus?: false;
     /** A bow in the ranged slot. */
     ranged?: number;
+    /** An instrument in the two-hand slot, for a class whose songs need one and that starts without (the Minstrel). */
+    instrument?: true;
 }
 const { Chain, Plate, Scale, Reinforced, Studded, Leather, Cloth, Axe, Hammer, SlashingWeapon, CrushingWeapon, Blades, Blunt, Staff, PolearmWeapon, LeftAxe, ThrustWeapon, Piercing, Spear, Longbow, RecurvedBow, CompositeBow } = ObjectType;
 const MELEE = ['STR', 'DEX', 'CON', 'QUI'] as const;
@@ -123,6 +129,20 @@ export const CLASS_KITS: Record<string, ClassKit> = {
     Ranger: { armor: Reinforced, stats: MELEE, mainHand: Piercing, offHand: Piercing, ranged: RecurvedBow },
     Shadowblade: { armor: Leather, stats: MELEE, mainHand: Axe, offHand: LeftAxe },
     Hunter: { armor: Studded, stats: MELEE, twoHand: Spear, ranged: CompositeBow },
+    // The nine new classes (2026-11-12). Armour from the career abilities: Mercenary chain at 10, Minstrel chain at 20,
+    // Reaver chain at 10, Champion scale at 20 (HibArmor 4), Savage the Viking's studded; the Forester, Disciple and
+    // Mystic classes cloth. Each kit follows the build bots/<bot>/build.ts picked: Mercenary "Pure damage" (two swords),
+    // Minstrel "Group thrust" (dirk, small shield, a lute for the songs), Reaver "Flex, shield and tap" (large shield at 17),
+    // Champion "Valor and Large Weapons" (no shield), Valewalker "Scythe first", Savage "Hand to Hand first" (a claw each hand).
+    Mercenary: { armor: Chain, stats: MELEE, mainHand: SlashingWeapon, offHand: SlashingWeapon },
+    Minstrel: { armor: Chain, stats: [...MELEE, 'CHA'], mainHand: ThrustWeapon, shield: SMALL, instrument: true },
+    Necromancer: { armor: Cloth, stats: ['INT', 'DEX', 'CON'], twoHand: Staff },
+    Reaver: { armor: Chain, stats: [...MELEE, 'PIE'], mainHand: ObjectType.Flexible, shield: LARGE },
+    Animist: { armor: Cloth, stats: ['INT', 'DEX', 'CON'], twoHand: Staff },
+    Champion: { armor: Scale, stats: [...MELEE, 'INT'], twoHand: ObjectType.LargeWeapons },
+    Valewalker: { armor: Cloth, stats: [...MELEE, 'INT'], twoHand: ObjectType.Scythe },
+    Bonedancer: { armor: Cloth, stats: ['PIE', 'DEX', 'CON'], twoHand: Staff },
+    Savage: { armor: Studded, stats: MELEE, mainHand: ObjectType.HandToHand, offHand: ObjectType.HandToHand },
 };
 
 const ARMOR_SLOTS = [EquipmentSlot.Head, EquipmentSlot.Hands, EquipmentSlot.Feet, EquipmentSlot.Torso, EquipmentSlot.Legs, EquipmentSlot.Arms] as const;
@@ -159,12 +179,16 @@ const MAIN_HANDS: Record<number, WeaponLook> = {
     [Blunt]: { model: 461, speed: 35, weight: 30, damage: 1, name: 'Club' },
     [ThrustWeapon]: { model: 643, speed: 30, weight: 17, damage: 3, name: 'Dirk' },
     [Piercing]: { model: 455, speed: 27, weight: 15, damage: 3, name: 'Dagger' },
+    [ObjectType.Flexible]: { model: 859, speed: 37, weight: 22, damage: 2, name: 'Flail' },
+    [ObjectType.HandToHand]: { model: 960, speed: 31, weight: 18, damage: 3, name: 'Claw' },
 };
 const TWO_HANDS: Record<number, WeaponLook> = {
     [Axe]: { model: 9, speed: 52, weight: 45, damage: 2, name: 'Greataxe' },
     [Staff]: { model: 19, speed: 46, weight: 45, damage: 1, name: 'Staff' },
     [PolearmWeapon]: { model: 68, speed: 48, weight: 50, damage: 2, name: 'Halberd' },
     [Spear]: { model: 328, speed: 51, weight: 40, damage: 3, name: 'Spear' },
+    [ObjectType.LargeWeapons]: { model: 459, speed: 46, weight: 40, damage: 2, name: 'Greatsword' },
+    [ObjectType.Scythe]: { model: 930, speed: 47, weight: 40, damage: 2, name: 'Scythe' },
 };
 /** Bows, Item_Type 13, from the DB's most common looks and speeds. */
 const RANGED: Record<number, WeaponLook> = {
@@ -178,7 +202,11 @@ const OFF_HANDS: Record<number, WeaponLook> = {
     [Blades]: { model: 444, speed: 27, weight: 18, damage: 2, name: 'Offhand Blade' },
     [ThrustWeapon]: { model: 643, speed: 28, weight: 15, damage: 3, name: 'Offhand Dirk' },
     [Piercing]: { model: 455, speed: 26, weight: 12, damage: 3, name: 'Offhand Dagger' },
+    [SlashingWeapon]: { model: 3, speed: 28, weight: 18, damage: 2, name: 'Offhand Sword' },
+    [ObjectType.HandToHand]: { model: 961, speed: 31, weight: 18, damage: 3, name: 'Left Claw' },
 };
+/** A song's instrument, held in the two-hand slot like the Bard's lute; any instrument plays any song (SpellHandler.cs CheckInstrument). */
+const INSTRUMENT = { model: 227, weight: 10, name: 'Lute', type: 2 };
 interface WeaponLook { model: number; speed: number; weight: number; damage: number; name: string }
 const SHIELDS = {
     [SMALL]: { model: 59, speed: 28, weight: 20, name: 'Small Shield' },
@@ -284,6 +312,11 @@ export function templateFor(shownName: string, realm: Realm, level: number, spec
         // A focus at a spell's level gives the full discount (SpellHandler.cs:1204-1222), and no spell of a line goes above the character's level.
         const focus = kit.twoHand === Staff && kit.focus !== false ? [{ property: ALL_FOCUS_LEVELS, value: level }] : [];
         weapons.push({ ...base, id: id(EquipmentSlot.TwoHand), slot: EquipmentSlot.TwoHand, itemType: EquipmentSlot.TwoHand, objectType: kit.twoHand, name: `${label} ${w.name}`, dpsAf: caps.dpsAf, spdAbs: w.speed, hand: 1, damageType: w.damage, weight: w.weight, model: w.model, bonuses: focus });
+    }
+    if (kit.instrument) {
+        if (kit.twoHand) throw new Error(`${className}: an instrument and a two-hander share the two-hand slot`);
+        // DPS_AF is the instrument's kind on an instrument, not a damage figure.
+        weapons.push({ ...base, id: id(EquipmentSlot.TwoHand), slot: EquipmentSlot.TwoHand, itemType: EquipmentSlot.TwoHand, objectType: ObjectType.Instrument, name: `${label} ${INSTRUMENT.name}`, dpsAf: INSTRUMENT.type, hand: 1, weight: INSTRUMENT.weight, model: INSTRUMENT.model, bonuses: [] });
     }
     return [...armor, ...accessories, ...weapons];
 }
