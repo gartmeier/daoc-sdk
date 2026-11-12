@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { enemy, picture, report } from './fixtures';
 import { BATTLEGROUND_LAYOUTS, homeOf, THIDRANKI } from './keeps';
 import { countFor } from './size';
-import { callOdds, withServants, decideSquad, edgePatrol, sideStrength, sizeUp, SQUAD_SETTINGS, squadRoaming, type Friend, type SquadSettings } from './squad';
+import { aggroZones } from './terrain';
+import { callOdds, campBerth, withServants, decideSquad, edgePatrol, sideStrength, sizeUp, SQUAD_SETTINGS, squadRoaming, type Friend, type SquadSettings } from './squad';
 import type { AnswerState, RealmCall } from './director';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import type { Capabilities, Contact, GroupPicture, MemberReport, Orders, Point, Role } from './types';
@@ -848,6 +849,26 @@ describe('edgePatrol: the roads and banks, away from the meeting point', () => {
             expect(loop.length).toBeGreaterThanOrEqual(5);
             for (const p of loop) expect(Math.hypot(p.x - faste.x, p.y - faste.y)).toBeGreaterThanOrEqual(7000);
         }
+    });
+
+    test('a leg past the perturbed bwca camp goes round it with room (campBerth), not along its edge', () => {
+        // Run A on 11-12: midgard-s1 ran into 8 bwca at 20:08:21 on its way to (24852, 24436); the route passed 236-275 off the camp's edge.
+        const camps = aggroZones(THIDRANKI, 24);
+        const memory: Record<string, any> = { wp: 0 };
+        const from = { x: 33_000, y: 25_000 }, to = { x: 24_852, y: 24_436, z: 0 };
+        const us = squad(['Merc', 'Cleric', 'Wizard'], {}, from, THIDRANKI);
+        const p = picture(us, []);
+        const settings = mergeSettings(SQUAD_SETTINGS, { patrol: [to, { ...from, z: 0 }] } as any);
+        decideSquad({ picture: p, orders: p.orders, memory, now: p.at, windingDown: false, settings });
+        // A second tick: the inner decide keeps the route for the same leg.
+        decideSquad({ picture: p, orders: p.orders, memory, now: p.at + 1000, windingDown: false, settings });
+        const route: Point[] = [from, ...(memory.route ?? [])];
+        expect(route.length).toBeGreaterThan(1);
+        const seg = (c: Point, a: Point, b: Point) => { const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy; const k = l2 ? Math.max(0, Math.min(1, ((c.x - a.x) * dx + (c.y - a.y) * dy) / l2)) : 0; return Math.hypot(c.x - (a.x + k * dx), c.y - (a.y + k * dy)); };
+        let closest = Infinity;
+        for (let i = 1; i < route.length; i++) for (const c of camps) closest = Math.min(closest, seg(c, route[i - 1]!, route[i]!) - c.r);
+        expect(closest).toBeGreaterThanOrEqual(600);
+        expect(campBerth(THIDRANKI, 24).length).toBe(camps.length);
     });
 
     test('the strategy patrols that loop in Thidranki', () => {

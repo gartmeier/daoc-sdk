@@ -219,6 +219,20 @@ const LEG_JUMP = 6000;
  * 2009-2085 apart, Aine's heals out of range, then an engage at 20:01:25 still split, and Aine died alone at 20:01:34.
  */
 const TOGETHER = 700;
+/**
+ * A squad's legs keep this much more off a monster camp than safePath's own aggro zones (aggro range + AGGRO_PAD 300): those
+ * routes passed the perturbed bwca camp by 236-275 beyond its edge, and a squad walking spread out crossed it. Run A on 11-12:
+ * midgard-s1 ran into 8 bwca at 20:08:21 on its way to (24852, 24436), Aine died to one at (27287, 24534) at 19:33.
+ */
+const CAMP_BERTH = 700;
+const berths = new Map<string, Danger[]>();
+/** The monster camps that would aggro on us at `level`, each with CAMP_BERTH more: the circles a squad's legs go round. */
+export function campBerth(regionId: number, level: number): Danger[] {
+    const key = `${regionId}:${level}`;
+    let out = berths.get(key);
+    if (!out) berths.set(key, out = aggroZones(regionId, level).map(c => ({ ...c, r: c.r + CAMP_BERTH })));
+    return out;
+}
 /** A help call we were asked to is answered from at most this far (the director asks within 7000) ... */
 const CALL_REACH = 7000;
 /** ... one we were not asked to, from at most this far, and only at engageAt or better with the friends there. */
@@ -604,7 +618,8 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const home = homeOf(regionId, realm);
     const keeps = keepDangers(regionId, realm, s);
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, here[0]?.z ?? 0, { radius: 8000 });
-    const trip: Trip = { mem, now, regionId, level: Math.min(...here.map(m => m.level)), avoid: keeps, travelLeg: s.travelLeg, zAt, dry: staysDry(s) };
+    const tripLevel = Math.min(...here.map(m => m.level));
+    const trip: Trip = { mem, now, regionId, level: tripLevel, avoid: [...keeps, ...campBerth(regionId, tripLevel)], travelLeg: s.travelLeg, zAt, dry: staysDry(s) };
     const ourInKeepReach = !!home && dist(centre, home.keep) <= r.keepReach;
     // A friendly group is two or more of ours together: one passing by (a stealther, a solo) is no safety to stand by.
     // Run B 08:53: Midgard's trio turned to fight 1 s into its flee, by one friend, and all three died.
@@ -907,7 +922,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
             if (d > CALL_ARRIVE || (call.kind === 'muster' && call.stage !== 'go')) {
                 // A raid goes into the keep circle it is after; the others are gone round as ever.
                 const avoid = call.kind === 'muster' && call.target ? keeps.filter(k => dist(k, call!.target!) > k.r) : keepDangers(regionId, realm, { ...s, keepClearance: callClearance });
-                if (d > CALL_ARRIVE) stepLeg({ ...trip, avoid }, 'call', call.at, { from: centre, movers: here, replan: 1500 });
+                if (d > CALL_ARRIVE) stepLeg({ ...trip, avoid: [...avoid, ...campBerth(regionId, tripLevel)] }, 'call', call.at, { from: centre, movers: here, replan: 1500 });
                 const odds = call.kind === 'help' ? `, odds there ${fmt(callOdds(here, call))}` : '';
                 return { phase: 'travel', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: d > CALL_ARRIVE ? legAnchor(mem) : { x: Math.round(call.at.x), y: Math.round(call.at.y), z: call.at.z }, facing: mem.legFacing, objective: `answer the call to ${what}`, reason: `call: ${d > CALL_ARRIVE ? `to ${what}, ${Math.round(d)} away` : `at ${what}, waiting for go`}${odds}` };
             }
@@ -936,6 +951,24 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         if (k > 0 && k < loop.length) { mem.wp = (start + k) % loop.length; mem.legKind = null; }
     }
     let u = callInner(contacts);
+    // The inner decide plans its own legs (patrol, hunt, gather) round the keeps and safePath's aggro zones only: a route it
+    // planned that passes inside a camp's berth (campBerth) is planned again with ours, once per goal. The inner keeps a
+    // route for the same kind and goal.
+    if ((u.phase === 'travel' || u.phase === 'gather') && mem.route && mem.goal && mem.legKind) {
+        const key = `${mem.legKind}:${mem.goal.x},${mem.goal.y}`;
+        if (mem.berthKey !== key) {
+            mem.berthKey = key;
+            const pts: Point[] = [mem.leg ?? centre, ...mem.route];
+            const berth = campBerth(regionId, tripLevel);
+            const crosses = pts.slice(1).some((q, i) => berth.some(c => segmentDist(c, pts[i]!, q) < c.r && dist(c, centre) > c.r));
+            if (crosses) {
+                mem.leg = null;
+                mem.route = null;
+                stepLeg(trip, mem.legKind, mem.goal, { from: centre, movers: here, replan: Infinity });
+                if (mem.leg) u = { ...u, anchor: legAnchor(mem), facing: mem.legFacing, reason: `${u.reason ?? ''}; round a camp` };
+            }
+        }
+    }
     // A new engage (from no fight, through our own judgement of the group: the inner decide saw only what we would take).
     if (u.phase === 'engage' && !engaged && !hit && !sq.stand && !held && !atCall()) {
         // Only within reach. The inner decide holds a threat or its focus out to engageRadius + 1000, and the board keeps a
@@ -986,7 +1019,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         const across = zones.filter(z => dist(z, centre) > z.r && segmentDist(z, centre, wp) < z.r);
         if (across.length) {
             const round: Danger[] = across.map(z => ({ x: z.x, y: z.y, r: z.r, name: `${z.n} enemies last seen`, level: 0 }));
-            stepLeg({ ...trip, avoid: [...keeps, ...round] }, 'detour', wp, { from: centre, movers: here, replan: 1500, force: true });
+            stepLeg({ ...trip, avoid: [...trip.avoid, ...round] }, 'detour', wp, { from: centre, movers: here, replan: 1500, force: true });
             const at = across.map(z => `(${z.x}, ${z.y})`).join(', ');
             return { ...u, anchor: legAnchor(mem), facing: mem.legFacing, reason: `${u.reason}; round ${across.length === 1 ? 'a group' : `${across.length} groups`} last seen at ${at}` };
         }
