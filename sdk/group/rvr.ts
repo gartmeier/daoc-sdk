@@ -42,7 +42,7 @@ import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, pai
 import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
 import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
-import { AMBUSH_AFTER, AMBUSH_PASS, AMBUSH_WAIT_MS, ambushSpot, closestPass, lastAppearance, LOST_WITHIN_MS, loseQuarry, noteTracks, PASS_WITHIN_S, quarryLike, TRAIL_MS, trailGoal, velocity, type Quarry, type Tracks } from './tactics/ambush';
+import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, TRAIL_MS, trailGoal, type Quarry, type Tracks } from './tactics/ambush';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -327,7 +327,7 @@ const HUNT_UNREADY = 1;
 /** A hunt is re-planned from the group's centre once the enemies' centre moved this far. */
 const HUNT_REPLAN = 800;
 /** Members within this of a leg have reached it (casters stand ~700 behind the anchor). */
-const LEG_REACHED = 1200;
+export const LEG_REACHED = 1200;
 /** After this long, a leg counts as reached with one member still short of it (stuck or lagging). */
 const LEG_TIMEOUT_MS = 30_000;
 /**
@@ -767,22 +767,18 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
             if (s.ambush && quarryLike(ashore)) mem.hunted = { ids: ashore.map(c => c.objectId), at: now };
             // Lying in wait for a squad that came back: while it comes on toward a pass by us, hold; don't walk out at it.
             const q: Quarry | undefined = mem.quarry;
-            if (s.ambush && q?.spot && q.losses >= AMBUSH_AFTER && now - q.lostAt <= AMBUSH_WAIT_MS && dist(centre, q.spot) <= LEG_REACHED && ashore.every(c => q.ids.includes(c.objectId))) {
-                const tracks = (mem.ambushTracks ?? {}) as Tracks;
-                const vs = ashore.map(c => velocity(lastAppearance(tracks[c.objectId] ?? []))).filter((v): v is Point => !!v);
-                const vel = vs.length ? { x: vs.reduce((a, v) => a + v.x, 0) / vs.length, y: vs.reduce((a, v) => a + v.y, 0) / vs.length } : null;
-                const pass = closestPass(them, vel, centre);
-                if (pass && pass.d <= AMBUSH_PASS && pass.inS <= PASS_WITHIN_S) {
-                    return { ...calm, phase: 'travel', anchor: { x: q.spot.x, y: q.spot.y, z: zAt(q.spot) }, facing: { x: Math.round(them.x), y: Math.round(them.y) }, objective: `lie in wait for ${enemiesText(ashore.length)}${gone}`, reason: `lie in wait: ${enemiesText(ashore.length)} ${d} away, passing ${Math.round(pass.d)} from us in ${Math.round(pass.inS)} s: ${ashore.slice(0, 3).map(label).join(', ')}` };
-                }
+            const pass = s.ambush ? lieInWait(q, ashore, centre, (mem.ambushTracks ?? {}) as Tracks, now, LEG_REACHED) : null;
+            if (pass && q?.spot) {
+                return { ...calm, phase: 'travel', anchor: { x: q.spot.x, y: q.spot.y, z: zAt(q.spot) }, facing: { x: Math.round(them.x), y: Math.round(them.y) }, objective: `lie in wait for ${enemiesText(ashore.length)}${gone}`, reason: `lie in wait: ${enemiesText(ashore.length)} ${d} away, passing ${Math.round(pass.d)} from us in ${Math.round(pass.inS)} s: ${ashore.slice(0, 3).map(label).join(', ')}` };
             }
             stepLeg(trip, 'hunt', them, { from: centre, movers: main, replan: HUNT_REPLAN });
             return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: them, objective: `hunt ${enemiesText(ashore.length)} round ${at(them)}${gone}`, reason: `hunt ${enemiesText(ashore.length)} ${d} away: ${ashore.slice(0, 3).map(label).join(', ')}` };
         }
     } else waitAshore(mem, 0, now);
     // A hunt's squad gone from sight (out of our view, or into its keep): remember it as the quarry, counting its losses.
-    if (s.ambush && !seen.length && mem.hunted && o.phase === 'travel') {
-        if (now - mem.hunted.at <= LOST_WITHIN_MS) {
+    // Not after a fight (the last orders engaged): those are dead or fled from a fight, no squad walking off.
+    if (s.ambush && !seen.length && mem.hunted) {
+        if (o.phase === 'travel' && now - mem.hunted.at <= LOST_WITHIN_MS) {
             const q = loseQuarry(mem.quarry, mem.hunted.ids, regionId, (mem.ambushTracks ?? {}) as Tracks, now);
             if (q) mem.quarry = q;
         }

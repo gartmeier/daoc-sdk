@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { contact, enemy, picture, report } from '../fixtures';
 import { decideRvr, RVR_SETTINGS, type RvrSettings } from '../rvr';
+import { decidePack, PACK_SETTINGS, type PackSettings } from '../pack';
 import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { GroupPicture, MemberReport, Orders, Point } from '../types';
 import { AMBUSH_AFTER, ambushSpot, closestPass, entryOf, lastAppearance, loseQuarry, noteTracks, TRAIL_MAX, trailGoal, velocity, type Tracks } from './ambush';
@@ -130,6 +131,49 @@ describe('decideRvr with a quarry', () => {
     });
 
     test('ambush off: back to the patrol at once, as before', () => {
+        const { step } = play({ ambush: false });
+        for (let t = 0; t <= 3000; t += 1000) step(duo(14_000 + t / 5, 10_000, t), t);
+        expect(step([], 5000).reason).toContain('patrol');
+    });
+});
+
+// The same loop with Hibernia's pack and a Midgard squad (field run B, 07:43-07:44 UTC): the pack's prey hunt and the patrol in turn.
+describe('decidePack with a quarry', () => {
+    const BASE = { x: 10_000, y: 10_000 };
+    const team = (at: Point = BASE): MemberReport[] => ['Tank', 'Druid', 'Bard', 'Menta', 'Encha'].map((n, i) =>
+        report(n, { role: i === 0 ? 'tank' : i === 1 ? 'healer' : i === 2 ? 'support' : 'nuker', objectId: i + 1, regionId: R, x: at.x - (i ? 300 : 0), y: at.y + (i % 2 ? 150 : -150) * (i ? 1 : 0), level: 24 }));
+    const LOOP = [{ x: 10_000, y: 10_000, z: 0 }, { x: 4000, y: 10_000, z: 0 }];
+    const duo = (x: number, y: number, t: number) => [7, 8].map(id => enemy(id, 'midgard', { regionId: R, x, y: y + (id - 7) * 100, lastSeen: t, firstSeen: 0 }));
+    function play(settings: Record<string, unknown> = {}) {
+        const memory: Record<string, any> = {};
+        let orders: Partial<Orders> = { phase: 'travel' };
+        const step = (contacts: ReturnType<typeof duo>, t: number, at: Point = BASE) => {
+            const c: CoordinatorContext<PackSettings> = { picture: picture(team(at), contacts, {}, t), orders: { ...picture(team(at), contacts, {}, t).orders, ...orders }, memory, now: t, windingDown: false, settings: mergeSettings(PACK_SETTINGS, { patrol: LOOP, ...settings } as any) };
+            const d = decidePack(c);
+            orders = { phase: d.phase ?? orders.phase, anchor: d.anchor ?? null };
+            return d;
+        };
+        return { memory, step };
+    }
+
+    test('prey lost once: the trail, not the patrol; lost again: lie in wait beside its way in', () => {
+        const { memory, step } = play();
+        for (let t = 0; t <= 3000; t += 1000) expect(step(duo(14_000 + t / 5, 10_000, t), t).reason).toContain('hunt');
+        let d = step([], 5000);
+        expect(d.reason).toContain('trail');
+        expect(d.anchor!.x).toBeGreaterThan(BASE.x);
+        for (let t = 35_000; t <= 40_000; t += 1000) step(duo(14_500 - (t - 35_000) / 5, 10_300, t), t);
+        d = step([], 41_000);
+        expect(memory.quarry.losses).toBe(AMBUSH_AFTER);
+        expect(d.reason).toMatch(/ambush|lie in wait/);
+        const spot = memory.quarry.spot;
+        step(duo(17_000, 10_300, 60_000), 60_000, spot);
+        step(duo(16_800, 10_300, 61_000), 61_000, spot);
+        d = step(duo(16_600, 10_300, 62_000), 62_000, spot);
+        expect(d.reason).toContain('lie in wait');
+    });
+
+    test('ambush off: back to the patrol', () => {
         const { step } = play({ ambush: false });
         for (let t = 0; t <= 3000; t += 1000) step(duo(14_000 + t / 5, 10_000, t), t);
         expect(step([], 5000).reason).toContain('patrol');

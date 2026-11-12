@@ -153,6 +153,22 @@ export function ambushSpot(regionId: number, entry: { at: Point; dir: Point }, f
     return best ? { x: best.x, y: best.y, hidden: Math.round(best.hidden * 100) / 100 } : null;
 }
 
+/**
+ * Lying in wait (the quarry lost AMBUSH_AFTER times, its spot chosen, our centre within `reached` of it, the wait not
+ * over), with only quarry players in sight: their pass by us, when they come on toward one within AMBUSH_PASS in
+ * PASS_WITHIN_S. Hold then, instead of walking out at them. Null otherwise.
+ */
+export function lieInWait(q: Quarry | undefined, inSight: readonly Contact[], centre: Point, tracks: Tracks, now: number, reached: number): { d: number; inS: number } | null {
+    if (!q?.spot || q.losses < AMBUSH_AFTER || now - q.lostAt > AMBUSH_WAIT_MS || !inSight.length) return null;
+    if (Math.hypot(centre.x - q.spot.x, centre.y - q.spot.y) > reached || !inSight.every(c => q.ids.includes(c.objectId))) return null;
+    const vs = inSight.map(c => velocity(lastAppearance(tracks[c.objectId] ?? []))).filter((v): v is Point => !!v);
+    if (!vs.length) return null;
+    const vel = { x: vs.reduce((a, v) => a + v.x, 0) / vs.length, y: vs.reduce((a, v) => a + v.y, 0) / vs.length };
+    const them = { x: inSight.reduce((a, c) => a + c.x, 0) / inSight.length, y: inSight.reduce((a, c) => a + c.y, 0) / inSight.length };
+    const pass = closestPass(them, vel, centre);
+    return pass && pass.d <= AMBUSH_PASS && pass.inS <= PASS_WITHIN_S ? pass : null;
+}
+
 /** Its closest pass to `me` on its present walk: distance and seconds until then; null when it walks away or stands. */
 export function closestPass(at: Point, vel: Point | null, me: Point): { d: number; inS: number } | null {
     if (!vel) return null;

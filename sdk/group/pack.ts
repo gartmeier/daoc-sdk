@@ -24,7 +24,8 @@ import { isAlive, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
 import { aggroZones } from './terrain';
-import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, type Quarry, type Tracks } from './tactics/ambush';
+import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import { countFor, groupSize, type Count } from './size';
@@ -303,6 +304,8 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // Hibernia's bank, Midgard swam across and the pack hunted it in the river (us 10-43 % of fight time wet, them 60-100 %).
     const swimming = (c: Contact) => dry && !onUs(c) && isWet(regionId, c);
     const foes = p.contacts.filter(c => players(c) && !mem.phantoms[c.objectId] && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !inKeep(c)) && !swimming(c));
+    // Where each enemy player was seen, over time: a lost prey's trail and way in (tactics/ambush.ts; decideRvr follows it).
+    if (s.ambush) noteTracks((mem.ambushTracks ??= {}) as Tracks, p.contacts.filter(c => players(c) && !c.stale && c.regionId === regionId), now);
     const free = foes.filter(c => !c.cc).sort((a, b) => dist(a, centre) - dist(b, centre));
     const stay: Point3 = onLand(centre, centre);
     const facing = free[0] ? { x: free[0].x, y: free[0].y } : undefined;
@@ -536,6 +539,15 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const seen = free.filter(c => dist(c, centre) <= s.huntRadius);
     if (!seen.length) {
         mem.holdSince = undefined;
+        // Prey we hunted gone from sight (out of view, past huntRadius or into its keep): the quarry, whose trail or way in
+        // decideRvr (calm) then follows or waits beside, as roaming does. Not after a fight.
+        if (s.ambush && mem.hunted) {
+            if (o.phase === 'travel' && now - mem.hunted.at <= LOST_WITHIN_MS) {
+                const q = loseQuarry(mem.quarry, mem.hunted.ids, regionId, (mem.ambushTracks ?? {}) as Tracks, now);
+                if (q) mem.quarry = q;
+            }
+            mem.hunted = undefined;
+        }
         // Only enemies swimming in sight: wait for them on dry ground, facing them, instead of patrolling on (waitAshore).
         const wet = p.contacts.filter(c => players(c) && swimming(c) && !c.stale && isAlive(c) && c.regionId === regionId && !inKeep(c) && dist(c, centre) <= s.huntRadius);
         if (waitAshore(mem, wet.length, now, PACK_ASHORE)) {
@@ -582,8 +594,16 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             mem.pack = 'kill';
             mem.killAt = now;
             mem.pullLegs = 0;
+            mem.hunted = undefined;
             const focus = pickPackFocus(seen, centre, k.reach, k.focusSoft);
             return fight('kill', focus, packCc(seen, main, [], { centre, focus, areaRadius, roots: true, now }), onFocus(focus), `${inSight.length} in sight vs ${main.length}`);
+        }
+        if (s.ambush && quarryLike(inSight)) mem.hunted = { ids: inSight.map(c => c.objectId), at: now };
+        // Lying in wait for prey that came back: while it comes on toward a pass by us, hold; don't walk out at it.
+        const pass = s.ambush ? lieInWait(mem.quarry, inSight, centre, (mem.ambushTracks ?? {}) as Tracks, now, LEG_REACHED) : null;
+        const spot = (mem.quarry as Quarry | undefined)?.spot;
+        if (pass && spot) {
+            return say({ ...none, phase: 'travel', anchor: { x: spot.x, y: spot.y, z: zAt(spot) }, facing: { x: lead.x, y: lead.y }, objective: `lie in wait for ${inSight.length} stragglers`, reason: `lie in wait: ${tag(lead)}, ${Math.round(d)} away, passing ${Math.round(pass.d)} from us in ${Math.round(pass.inS)} s` });
         }
         stepLeg(trip, 'prey', lead, { from: centre, movers: main, replan: 500 });
         return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: { x: lead.x, y: lead.y }, objective: `hunt ${inSight.length} stragglers`, reason: `hunt ${tag(lead)}, ${Math.round(d)} away, ${inSight.length} in sight vs ${main.length}` });
