@@ -5,7 +5,7 @@ import { withCharacter } from '../group/character';
 import type { Behavior } from '../group/member';
 import { packBehaviors } from '../group/pack';
 import { rvrBehaviors } from '../group/rvr';
-import { necromancer, servantBuffPicks, servantHealPick, servantNuke, servantNukes, stepAway } from './necromancer';
+import { leashOrders, necromancer, servantBuffPicks, servantHealPick, servantNuke, servantNukes, stepAway } from './necromancer';
 import { knownThrough } from './summoner-fixtures';
 
 const nukesOf = (build: string) => servantNukes(knownThrough('Necromancer', build, 24, 'PetSpell'));
@@ -55,6 +55,18 @@ describe('necromancer kit', () => {
         expect(buffs).toContain('Vigor of the Dead');
         expect(buffs).toContain('Servant of the Grave');
         expect(buffs).not.toContain('Strength of the Dead');
+    });
+
+    test('the leash: off and following in a retreat, called off a far fight out of an engage, left alone in one', () => {
+        const fighting = { aggression: 'defensive', walk: 'follow', targetObjectId: 7 };
+        expect(leashOrders('retreat', fighting, 300, 3)).toEqual(['passive', 'follow']);
+        expect(leashOrders('retreat', { aggression: 'passive', walk: 'follow', targetObjectId: null }, 300, 3)).toEqual([]);
+        expect(leashOrders('travel', fighting, 1400, 2)).toEqual(['follow']);
+        expect(leashOrders('travel', fighting, 400, 2)).toEqual([]);
+        expect(leashOrders('travel', fighting, 400, 0)).toEqual(['follow']);
+        expect(leashOrders('engage', fighting, 1900, 2)).toEqual([]);
+        const list = withCharacter(rvrBehaviors().nuker, necromancer());
+        expect(list.find(b => b.name === 'servantLeash')?.side).toBe(true);
     });
 
     test('a step straight away from the nearest enemy', () => {

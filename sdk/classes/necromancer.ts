@@ -126,13 +126,19 @@ export const fallBack = (): Behavior<TacticsSettings> => ({
     },
 });
 
-/** In shade, within the servant's leash: past TETHER_FOLLOW a walk to within TETHER_CLOSE of it. */
+/** The server's warning: "Your servant is too far from you and will be lost in 10 seconds ..." (NecromancerPetBrain.cs TetherTimer). */
+const TETHER_WARNING = /servant is too far from you/i;
+/** A warning this recent still counts. */
+const WARNING_MS = 4000;
+
+/** In shade, within the servant's leash: past TETHER_FOLLOW (the server measures in 3D, as `distance` is), or with the server's warning just in, a walk to within TETHER_CLOSE of it. */
 export const keepTether = (): Behavior<TacticsSettings> => ({
     name: 'keepTether',
     async run(ctx) {
         if (!isShade(ctx)) return false;
         const pet = ctx.sdk.getPet();
-        if (!pet || pet.distance <= TETHER_FOLLOW) return false;
+        const warned = ctx.sdk.getGameMessages().some(m => Date.now() - m.receivedAt < WARNING_MS && TETHER_WARNING.test(m.text));
+        if (!pet || (pet.distance <= TETHER_FOLLOW && !(warned && pet.distance > TETHER_CLOSE))) return false;
         ctx.doing('move', pet.objectId, `after the servant (${Math.round(pet.distance)})`);
         const w = await ctx.bot.walkToObject(pet, { range: TETHER_CLOSE, timeout: 4000 });
         if (!w.success && w.reason !== 'timeout') ctx.result('walk', w);
@@ -140,17 +146,33 @@ export const keepTether = (): Behavior<TacticsSettings> => ({
     },
 });
 
-/** In a retreat the servant comes off and follows: passive, then follow (petControl's rule, which a shade isn't under). Never takes the turn. */
-export const servantRetreat = (): Behavior<TacticsSettings> => ({
-    name: 'servantRetreat',
+/** Out of an engage a servant still fighting this far from us is called off: it was left on Thorgrim in the water while the squad waited ashore, then cut as the squad fled (r8 sortie 1, 2026-11-12). */
+export const CALL_OFF_BEYOND = 1000;
+
+/** What servantLeash sends: in a retreat passive and follow; out of an engage and a pull a follow for a fight beyond CALL_OFF_BEYOND, or with no threat left; else nothing. */
+export function leashOrders(phase: string, pet: { aggression: string; walk: string; targetObjectId: number | null }, distance: number, threats: number): ('passive' | 'follow')[] {
+    if (phase === 'retreat') return [...(pet.aggression !== 'passive' ? ['passive' as const] : []), ...(pet.walk !== 'follow' || pet.targetObjectId !== null ? ['follow' as const] : [])];
+    if (phase === 'engage' || phase === 'pull' || pet.targetObjectId === null) return [];
+    return distance > CALL_OFF_BEYOND || threats === 0 ? ['follow'] : [];
+}
+
+/**
+ * The servant's leash on the side tick, as petControl does for other pets (it leaves a shade alone): leashOrders, 1.5 s apart. On the side tick because a retreat's
+ * walk takes every turn: as a turn behaviour below it this never ran, and the servant fighting on was cut as she fled (sortie 1). Only sends.
+ */
+export const servantLeash = (): Behavior<TacticsSettings> => ({
+    name: 'servantLeash',
+    side: true,
+    interruptible: false,
     async run(ctx) {
         const pet = ctx.sdk.getPetState();
-        if (!pet || ctx.orders().phase !== 'retreat') return false;
+        if (!pet || !isShade(ctx) || ctx.bot.isDead()) return false;
         const now = Date.now();
-        if (waiting(ctx.memory, 'servantRetreatAt', now - 1500)) return false;
-        ctx.memory.set('servantRetreatAt', now);
-        if (pet.aggression !== 'passive') await ctx.sdk.sendPetCommand('passive');
-        if (pet.walk !== 'follow' || pet.targetObjectId !== null) await ctx.sdk.sendPetCommand('follow');
+        if (waiting(ctx.memory, 'servantLeashAt', now - 1500)) return false;
+        const orders = leashOrders(ctx.orders().phase, pet, ctx.sdk.getPet()?.distance ?? Infinity, ctx.threats().length);
+        if (!orders.length) return false;
+        ctx.memory.set('servantLeashAt', now);
+        for (const o of orders) await ctx.sdk.sendPetCommand(o);
         return false;
     },
 });
@@ -252,7 +274,7 @@ export const servantBuffs = (): Behavior<TacticsSettings> => ({
 export function necromancer({ saveBelow = 0, aoe = false }: NecromancerOptions = {}): Character {
     return {
         role: 'nuker',
-        urgent: [keepTether(), servantRetreat(), fallBack(), raiseServant()],
+        urgent: [servantLeash(), keepTether(), fallBack(), raiseServant()],
         react: [servantHeal()],
         fight: [servantFight({ saveBelow, aoe })],
         chores: [servantBuffs()],

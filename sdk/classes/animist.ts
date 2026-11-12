@@ -77,13 +77,21 @@ export function bomberPick(known: readonly Through[]): Through | null {
     return known.filter(k => k.pick.target === 'Enemy' && hurtsOne(k.sub)).sort((a, b) => (b.sub!.damage - a.sub!.damage) || b.pick.spell.level - a.pick.spell.level)[0] ?? null;
 }
 
-/** Whether the focus stands beyond the turret's reach, kept in memory since when. */
-function turretLeftBehind(ctx: MemberContext, turret: Point | null, focus: Point, now: number): boolean {
-    const out = !turret || dist(turret, focus) > TURRET_REACH - REACH_MARGIN / 2;
-    if (!out) { ctx.memory.delete('turretOutSince'); return false; }
-    const since: number = ctx.memory.get('turretOutSince') ?? now;
-    ctx.memory.set('turretOutSince', since);
-    return !turret || now - since >= LEFT_BEHIND_MS;
+/**
+ * The turret against the focus: `reach` it can shoot it, `wait` it is out of its reach for less than LEFT_BEHIND_MS (no order, which the server
+ * refuses: "Briton is 1772 from it, beyond its 1000", 6 in sortie 2), `plant` none is up or the focus has been out of its reach that long.
+ */
+export function turretState(turret: Point | null, focus: Point, outSince: number | undefined, now: number): 'reach' | 'wait' | 'plant' {
+    if (!turret) return 'plant';
+    if (dist(turret, focus) <= TURRET_REACH - REACH_MARGIN / 2) return 'reach';
+    return now - (outSince ?? now) >= LEFT_BEHIND_MS ? 'plant' : 'wait';
+}
+
+function turretLeftBehind(ctx: MemberContext, turret: Point | null, focus: Point, now: number): 'reach' | 'wait' | 'plant' {
+    const state = turretState(turret, focus, ctx.memory.get('turretOutSince'), now);
+    if (state === 'reach' || !turret) ctx.memory.delete('turretOutSince');
+    else if (!ctx.memory.has('turretOutSince')) ctx.memory.set('turretOutSince', now);
+    return state;
 }
 
 /** The power a summon costs at worst: a flat cost, 1.2 x with no focus item (Spellbook.powerOf). */
@@ -108,7 +116,9 @@ export const plantTurret = (): Behavior<TacticsSettings> => ({
         if (!go) return false;
         const now = Date.now();
         const turret = petState ? ctx.sdk.getPet() : null;
-        if (!turretLeftBehind(ctx, turret ?? null, go.seen, now)) {
+        const state = turretLeftBehind(ctx, turret ?? null, go.seen, now);
+        if (state === 'wait') return false;
+        if (state === 'reach') {
             if (petState && petState.targetObjectId !== go.mob.objectId && !(ctx.memory.get('turretOrder') === go.mob.objectId && waiting(ctx.memory, 'turretOrderAt', now - ORDER_MS))) {
                 ctx.memory.set('turretOrder', go.mob.objectId);
                 ctx.memory.set('turretOrderAt', now);

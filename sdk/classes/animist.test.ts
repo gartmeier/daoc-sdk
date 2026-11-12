@@ -5,7 +5,7 @@ import { withCharacter } from '../group/character';
 import type { Behavior } from '../group/member';
 import { packBehaviors } from '../group/pack';
 import { rvrBehaviors } from '../group/rvr';
-import { animist, bomberPick, fnfPick, REACH_MARGIN, SUMMON_MARGIN, TURRET_REACH, turretPick, turretSpot } from './animist';
+import { animist, bomberPick, fnfPick, LEFT_BEHIND_MS, REACH_MARGIN, SUMMON_MARGIN, TURRET_REACH, turretPick, turretSpot, turretState } from './animist';
 import { knownThrough } from './summoner-fixtures';
 
 describe('animist kit', () => {
@@ -30,6 +30,15 @@ describe('animist kit', () => {
         expect(dist(far, me)).toBeLessThanOrEqual(TURRET_REACH - SUMMON_MARGIN);
         expect(turretSpot(me, { x: 0, y: 500 })).toEqual({ x: 0, y: 100 });
         expect(turretSpot(me, { x: 2000, y: 0 })).toBeNull();
+    });
+
+    test('the turret: shoot what it reaches, no order in the grace, planted again after it or with none up', () => {
+        const turret = { x: 0, y: 0 };
+        expect(turretState(turret, { x: 800, y: 0 }, undefined, 10_000)).toBe('reach');
+        expect(turretState(turret, { x: 1700, y: 0 }, undefined, 10_000)).toBe('wait');
+        expect(turretState(turret, { x: 1700, y: 0 }, 10_000 - LEFT_BEHIND_MS + 1, 10_000)).toBe('wait');
+        expect(turretState(turret, { x: 1700, y: 0 }, 10_000 - LEFT_BEHIND_MS, 10_000)).toBe('plant');
+        expect(turretState(null, { x: 100, y: 0 }, undefined, 10_000)).toBe('plant');
     });
 
     test("Arboreal: Forest's Sentry, the damage turret not the tangler, Spirit of Wrath", () => {
