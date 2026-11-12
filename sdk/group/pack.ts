@@ -309,7 +309,13 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const foes = p.contacts.filter(c => players(c) && !mem.phantoms[c.objectId] && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !inKeep(c)) && !swimming(c));
     // Where each enemy player was seen, over time: a lost prey's trail and way in (tactics/ambush.ts; decideRvr follows it).
     if (s.ambush) noteTracks((mem.ambushTracks ??= {}) as Tracks, p.contacts.filter(c => players(c) && !c.stale && c.regionId === regionId), now);
-    const free = foes.filter(c => !c.cc).sort((a, b) => dist(a, centre) - dist(b, centre));
+    // A runner (an enemy that ran out of reach of our engage RUNNER_OUTS times lately) is let go: no hunt, stalk, raid or focus on it
+    // for RUNNER_DROP_MS, unless it comes on us. Live (Midgard, 2026-11-12 19:54-19:55): a healer kiting at 1500-2800 had the pack
+    // flip between engage and stalk about 12 times in 50 s.
+    const runnerNote = noteRunners(mem, o.phase === 'engage' && o.focus != null ? foes.find(c => c.objectId === o.focus) : undefined, centre, now, k.reach, onUs);
+    const runner = (c: Contact) => (mem.runners?.[c.objectId]?.until ?? 0) > now && !onUs(c) && dist(c, centre) > k.closeIn;
+    if (runnerNote && mem.hunted?.ids?.includes(runnerNote.id)) mem.hunted = undefined;
+    const free = foes.filter(c => !c.cc && !runner(c)).sort((a, b) => dist(a, centre) - dist(b, centre));
     const stay: Point3 = onLand(centre, centre);
     // Where the pack sits to rest or regroup: off every enemy's way out of its portal keep (tactics/roads.ts), as decideRvr.
     let restMemo: { at: Point3; why: string } | undefined;
@@ -336,7 +342,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         return c && { ...c, gap: k.columnGap, speed: k.columnSpeed };
     };
     // spread: an enemy player is known, so casters take their wider slots (spreadOnSight) from the first sight on.
-    const say = (u: OrdersUpdate): OrdersUpdate => ({ ...u, column: column(u), spread: foes.length > 0, waiting: [...(u.waiting ?? []).filter(w => w.why !== 'pickup'), ...pickupWait] });
+    const say = (u: OrdersUpdate): OrdersUpdate => ({ ...u, ...(runnerNote ? { reason: `${u.reason}; ${runnerNote.text}` } : {}), column: column(u), spread: foes.length > 0, waiting: [...(u.waiting ?? []).filter(w => w.why !== 'pickup'), ...pickupWait] });
     const areaRadius = 350;
 
     // Chasers are the Hero's: the anchor stands on the focus, so his leash lets him at it (never into a keep's circle).
@@ -502,9 +508,13 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
 
     if (mem.pack === 'home') {
         const pressed = free.some(c => dist(c, centre) <= k.reach && (onUs(c) || dist(c, centre) <= k.closeIn));
+        if (pressed) mem.homeRunAt = now;
+        // A run goes on HOME_RUN_HOLD_MS after the last press while they are still near: at the press's edge it flipped with the
+        // regroup every 1-3 s, 9 times in 40 s (Midgard, 2026-11-12 19:55:46-19:56:26, "broken pack: running" / "regrouping: 2 together of 2").
+        const stillRunning = !pressed && now - (mem.homeRunAt ?? -Infinity) < HOME_RUN_HOLD_MS && free.some(c => dist(c, centre) <= k.reach + HOME_RUN_NEAR);
         // On a pickup trip with enough of us: fight what comes, and go on after it.
         if (pressed && main.length >= k.minTogether) mem.pack = 'stalk';
-        else if (pressed) {
+        else if (pressed || stillRunning) {
             const to = spotAlong(trip, centre, runWay(centre, free, homeSpot), k.pullBack);
             return say({ ...none, phase: 'retreat', retreatTo: to, anchor: to, objective: 'go home to regroup', reason: 'broken pack: running' });
         }
@@ -668,6 +678,42 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     }
     stepLeg(trip, 'stalk', goal, { from: centre, movers: main, replan: 800 });
     return say({ ...none, phase: 'travel', anchor: legAnchor(mem), ...(facing ? { facing } : {}), objective: `stalk ${seen.length} round (${Math.round(lead.x)}, ${Math.round(lead.y)})`, reason: `stalk ${tag(lead)}, ${Math.round(d)} away, ${crowd} together` });
+}
+
+/** A broken pack's run goes on this long after the last enemy pressed it ... */
+export const HOME_RUN_HOLD_MS = 6000;
+/** ... while one is still within reach + this. */
+const HOME_RUN_NEAR = 500;
+/** An engage's focus this far past reach has run out of it ... */
+const RUNNER_SLACK = 200;
+/** ... and one that does so this many times within RUNNER_WINDOW_MS is let go for RUNNER_DROP_MS. */
+export const RUNNER_OUTS = 2;
+export const RUNNER_WINDOW_MS = 60_000;
+export const RUNNER_DROP_MS = 60_000;
+
+/**
+ * Counts the engage's focus running out of reach (once per time it does: it has to come back into reach for the next), and lets
+ * go of it at RUNNER_OUTS within RUNNER_WINDOW_MS (memory.runners[id].until). One on us is never out of reach. Returns a note the
+ * tick it is let go.
+ */
+export function noteRunners(mem: Record<string, any>, focus: Contact | undefined, centre: Point, now: number, reach: number, onUs: (c: Contact) => boolean): { id: number; text: string } | null {
+    const runners: Record<string, { outs: number[]; until: number }> = (mem.runners ??= {});
+    for (const [id, r] of Object.entries(runners)) {
+        r.outs = r.outs.filter(t => now - t <= RUNNER_WINDOW_MS);
+        if (r.until <= now && !r.outs.length) delete runners[id];
+    }
+    // Out of an engage, the next one starts the count of that focus afresh.
+    if (!focus) { mem.runOutOf = undefined; return null; }
+    const out = !onUs(focus) && dist(focus, centre) > reach + RUNNER_SLACK;
+    if (!out) { if (mem.runOutOf === focus.objectId) mem.runOutOf = undefined; return null; }
+    if (mem.runOutOf === focus.objectId) return null;
+    mem.runOutOf = focus.objectId;
+    const r = (runners[focus.objectId] ??= { outs: [], until: 0 });
+    r.outs.push(now);
+    if (r.outs.length < RUNNER_OUTS) return null;
+    r.outs = [];
+    r.until = now + RUNNER_DROP_MS;
+    return { id: focus.objectId, text: `let go of ${tag(focus)}: ran out of reach ${RUNNER_OUTS} times, left alone ${RUNNER_DROP_MS / 1000} s unless it comes on us` };
 }
 
 /** A stalk this near the stand-off (rvr.ts LEG_REACHED) ... */

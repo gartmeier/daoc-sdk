@@ -3,7 +3,7 @@ import { areaMezzCatch, backupHealWanted, confuse, interrupt, interruptRank, res
 import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
 import { contact, enemy, obs, picture, report, sighting } from './fixtures';
-import { decidePack, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, rvrPack, type PackSettings, noticePhantom, shouldBolt } from './pack';
+import { decidePack, HOME_RUN_HOLD_MS, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, RUNNER_DROP_MS, rvrPack, type PackSettings, noticePhantom, shouldBolt } from './pack';
 import { RVR_SETTINGS, rvrBehaviors, rvrRoaming } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { pickNuke, type SpellPick } from './spells';
@@ -876,5 +876,49 @@ describe('decidePack: a Necromancer in shade is its servant (blackboard.ts shade
         for (let i = 0; i < 4 && u.focus == null; i++) u = decidePack(ctx(picture(team(), [shade, servant], { phase: u.phase, focus: u.focus ?? null }), { memory, now: Date.now() + (i + 1) * 1000 }));
         expect(u.focus).toBe(52);
         expect(u.focus).not.toBe(51);
+    });
+});
+
+describe('decidePack: one state held (R1, Midgard 2026-11-12 19:54-19:56)', () => {
+    test('a broken pack runs on for HOME_RUN_HOLD_MS after the last press while they are near, then regroups', () => {
+        const two = team({ Bard: { isDead: true }, Menta: { isDead: true }, Encha: { isDead: true } });
+        const memory: any = { pack: 'home' };
+        const t0 = Date.now();
+        const at = (x: number, now: number, over: Partial<Contact> = {}) => decidePack(ctx(picture(two, [foe(101, x, 10_000, over)]), { memory, now }));
+        // Centre (9950, 10000): 600 away presses, 1300 doesn't.
+        expect(at(10_550, t0)).toMatchObject({ phase: 'retreat', reason: 'broken pack: running' });
+        expect(at(11_250, t0 + 1000)).toMatchObject({ phase: 'retreat', reason: 'broken pack: running' });
+        expect(at(11_250, t0 + HOME_RUN_HOLD_MS - 500).phase).toBe('retreat');
+        expect(at(11_250, t0 + HOME_RUN_HOLD_MS + 100).phase).not.toBe('retreat');
+        // Pressed again: it runs at once.
+        expect(at(10_550, t0 + HOME_RUN_HOLD_MS + 1000).phase).toBe('retreat');
+        // Nobody near any more: no hold.
+        expect(at(14_000, t0 + HOME_RUN_HOLD_MS + 2000).phase).not.toBe('retreat');
+    });
+
+    test('a straggler that runs out of reach of our engage twice is let go, unless it comes on us', () => {
+        const memory: any = {};
+        const t0 = Date.now();
+        let orders: Partial<Orders> = {};
+        const tick = (x: number, s: number, over: Partial<Contact> = {}) => {
+            const u = decidePack(ctx(picture(team(), [foe(456, x, 10_000, { healer: true, ...over })], orders), { memory, now: t0 + s * 1000 }));
+            orders = { ...orders, ...u } as Partial<Orders>;
+            return u;
+        };
+        // Centre (9880, 10000): in reach at 11_200, out at 11_700.
+        expect(tick(11_200, 0)).toMatchObject({ phase: 'engage', focus: 456 });
+        expect(tick(11_700, 2).phase).toBe('travel');
+        expect(tick(11_200, 4)).toMatchObject({ phase: 'engage', focus: 456 });
+        const u = tick(11_700, 6);
+        expect(u.phase).toBe('travel');
+        expect(u.reason).toContain('let go of Briton#456'.replace('Briton', 'Norseman'));
+        // In reach again: no engage, no hunt.
+        expect(tick(11_200, 8).phase).not.toBe('engage');
+        expect(tick(11_200, 9).reason).not.toContain('Norseman#456');
+        // On us: fought.
+        expect(tick(11_200, 10, { target: 'Tank', threat: true })).toMatchObject({ phase: 'engage', focus: 456 });
+        // Past RUNNER_DROP_MS: a straggler again.
+        orders = {}; memory.pack = 'stalk';
+        expect(tick(11_200, 7 + RUNNER_DROP_MS / 1000)).toMatchObject({ phase: 'engage', focus: 456 });
     });
 });
