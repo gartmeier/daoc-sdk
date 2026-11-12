@@ -73,6 +73,15 @@ export function openers(styles: readonly Style[]): { front: Style | null; back: 
     return { front: byName('Perforate Artery'), back: byName('Backstab II') ?? byName('Backstab') };
 }
 
+/**
+ * Still a target to stab, in our own client's view: there, and not hidden. A stealther that saw us hides, and the opener's
+ * style then waits for a swing that never comes ("opener: failed (used skill Perforate Artery)"): Scathach on a Norseman at
+ * 13:08 and Hodur on a Briton at 20:18 (log clock) on 11-12, each target gone from view 2 s before the click.
+ */
+export function stabbable(t: { kind: string; stealthed?: boolean } | null | undefined): boolean {
+    return !!t && !(t.kind === 'player' && t.stealthed);
+}
+
 /** The opener for where we stand, or null when we must walk round first. */
 export function openerFor(styles: readonly Style[], side: Side): Style | null {
     const o = openers(styles);
@@ -223,6 +232,11 @@ async function open(ctx: MemberContext, target: NearbyNpc | NearbyPlayer): Promi
         const to = standPoint(target, style ? side as 'front' | 'back' : want);
         ctx.doing('move', target.objectId, `hidden, to its ${style ? side : want}`);
         await ctx.bot.walkTo(to.x, to.y, { tolerance: 30, timeout: 2500 });
+        return true;
+    }
+    if (!stabbable(foeInView(ctx, target.objectId))) {
+        ctx.doing('lurk', target.objectId, 'it hid, or is gone from view');
+        await Bun.sleep(500);
         return true;
     }
     ctx.doing('opener', target.objectId, style.name);

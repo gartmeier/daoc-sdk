@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Contact } from '../group/types';
 import type { Style } from '../types';
-import { allCanHide, HOTSPOT_HIDE, hotspotsOf, SHOW_AFTER_MS, wantHidden, angleFrom, openerFor, sideOf, sideToTake, softTarget, standPoint, stealther } from './stealther';
+import { allCanHide, HOTSPOT_HIDE, hotspotsOf, SHOW_AFTER_MS, wantHidden, angleFrom, openerFor, sideOf, sideToTake, softTarget, stabbable, standPoint, stealther } from './stealther';
 
 const style = (name: string): Style => ({ name, internalId: 1, specLevel: 1, specName: 'Critical Strike', skillIndex: 3 } as Style);
 const contact = (over: Partial<Contact>): Contact => ({
@@ -105,4 +105,13 @@ test('the kit: melee, hide and the poison swap as instants, the ambush ahead of 
     expect(c.instant!.map(b => b.name)).toEqual(['hide', 'swapPoison']);
     expect(c.fight!.map(b => b.name)).toEqual(['ambush', 'assistMelee']);
     expect(c.chores!.map(b => b.name)).toEqual(['restock', 'envenom']);
+});
+
+describe('stabbable: no opener on a target gone from view or hidden', () => {
+    test('a player in view is; one that hid, or gone, is not; a monster is', () => {
+        expect(stabbable({ kind: 'player' })).toBe(true);
+        expect(stabbable({ kind: 'player', stealthed: true })).toBe(false);
+        expect(stabbable(null)).toBe(false);
+        expect(stabbable({ kind: 'npc', stealthed: true })).toBe(true);
+    });
 });
