@@ -866,3 +866,15 @@ describe('decidePack: realm calls (tactics/help.ts, through the calm side)', () 
         expect(near.reason).toContain('hunt Norseman#101');
     });
 });
+
+describe('decidePack: a Necromancer in shade is its servant (blackboard.ts shadeBodies)', () => {
+    test('a shade with its servant, on nobody, is prey: hunted, the servant the focus', () => {
+        const shade = foe(51, 11_000, 10_000, { name: 'Briton', realm: 'albion', isShade: true });
+        const servant = enemy(52, 'albion', { kind: 'npc', name: 'necroservant', level: 20, isPet: true, regionId: R, x: 11_200, y: 10_000 });
+        const memory: any = {};
+        let u = decidePack(ctx(picture(team(), [shade, servant]), { memory }));
+        for (let i = 0; i < 4 && u.focus == null; i++) u = decidePack(ctx(picture(team(), [shade, servant], { phase: u.phase, focus: u.focus ?? null }), { memory, now: Date.now() + (i + 1) * 1000 }));
+        expect(u.focus).toBe(52);
+        expect(u.focus).not.toBe(51);
+    });
+});

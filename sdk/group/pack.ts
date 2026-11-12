@@ -20,7 +20,7 @@ import { estimateZ } from '../../data/index';
 import type { Realm } from '../types';
 import type { Behavior } from './member';
 import { backupHeal, confuse, crowdControl, fightSit, flee, interrupt, rest, rez, release, retreat, SAVING_POWER, shedLoad, song, sprint, holdFormation, buff } from './behaviors';
-import { isAlive, untouchable } from './blackboard';
+import { isAlive, shadeBodies, untouchable } from './blackboard';
 import { immuneKinds } from './cc';
 import { assignCc } from './pve';
 import { aggroZones } from './terrain';
@@ -268,7 +268,9 @@ export function noticePhantom(mem: Record<string, any>, contacts: readonly Conta
 }
 
 export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
-    const { picture: p, orders: o, memory: mem, settings: s, now } = ctx;
+    const { orders: o, memory: mem, settings: s, now } = ctx;
+    // A shade's servant is that Necromancer here: counted, sized up and focused as the player (shadeBodies).
+    const p = { ...ctx.picture, contacts: shadeBodies(ctx.picture.contacts) };
     // The counts as numbers for this group's size (size.ts): at five, today's 3s.
     const k = sizedPack(s.pack, groupSize(mem, p.members));
     const players = (c: Contact) => c.kind === 'player';

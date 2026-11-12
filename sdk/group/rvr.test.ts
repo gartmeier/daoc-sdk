@@ -1390,3 +1390,28 @@ describe('decideRvr: attacked by keep guards it cannot see', () => {
         expect(from(u.anchor!)).toBeGreaterThanOrEqual(4500);
     });
 });
+
+describe('decideRvr: a Necromancer in shade is its servant (blackboard.ts shadeBodies)', () => {
+    const shade = (x: number) => albion(51, { x, isShade: true });
+    const servant = (x: number, over: Partial<Contact> = {}) => albion(52, { kind: 'npc', name: 'necroservant', isPet: true, x, ...over });
+
+    test('a shade and its servant out there, on nobody: hunted as one enemy, as the user would have', () => {
+        const d = decideRvr(ctx(picture(team(), [shade(13_680), servant(13_900)])));
+        expect(d.phase).toBe('travel');
+        expect(d.objective).toContain('hunt 1 enemy');
+        // The shade alone: nobody to hunt.
+        expect(decideRvr(ctx(picture(team(), [shade(13_680)]))).objective).not.toContain('hunt');
+    });
+
+    test('close: the servant is the focus, never the shade', () => {
+        const d = decideRvr(ctx(picture(team(), [shade(10_400), servant(10_600)])));
+        expect(d).toMatchObject({ phase: 'engage', focus: 52 });
+    });
+
+    test('it counts as a head: six and a shade are seven, a fall-back at margin 2', () => {
+        const six = [60, 61, 62, 63, 64, 65].map(id => albion(id, { x: 13_680 }));
+        expect(decideRvr(ctx(picture(team(), six))).objective).toContain('hunt 6 enemies');
+        const d = decideRvr(ctx(picture(team(), [...six, shade(13_680), servant(13_800)])));
+        expect(d.objective).toContain('fall back');
+    });
+});

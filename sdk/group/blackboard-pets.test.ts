@@ -3,10 +3,10 @@
 import { describe, expect, test } from 'bun:test';
 import { makeMessage, makeNpc, makePlayer, makePlayerObj, makeState } from '../test/fixtures';
 import type { BotWorldState, CombatEvent, NearbyNpc, PetState } from '../types';
-import { Blackboard, diedLately, isAlive, observeState, untouchable, type Killer, type MemberSelf } from './blackboard';
-import { obs, report, sighting } from './fixtures';
+import { Blackboard, diedLately, isAlive, observeState, servantsOf, shadeBodies, untouchable, type Killer, type MemberSelf } from './blackboard';
+import { contact, obs, report, sighting } from './fixtures';
 import { GroupObserver } from './observer';
-import type { GroupEvent, MemberReport, PetReport, Sighting } from './types';
+import type { Contact, GroupEvent, MemberReport, PetReport, Sighting } from './types';
 
 const T = 1_800_000_000_000;
 const self: MemberSelf = { bot: 'testbot', role: 'nuker', activity: { kind: 'idle', targetId: null, detail: '', since: 0 }, capabilities: { heal: false, cc: false, nuke: true, buffs: [], buffSpells: [] } };
@@ -615,6 +615,39 @@ describe('RvR on the board', () => {
             expect(contactOf(b, T + 1000, 427)).not.toHaveProperty('isShade');
             expect(contactOf(b, T + 1000, 427)!.threat).toBe(true);
             expect(untouchable(contactOf(b, T + 1000, 427)!, T + 1000)).toBe(false);
+        });
+
+        test('its servant is marked on the board (servantOf), and shadeBodies reads it as that player: one head, a focus', () => {
+            const b = new Blackboard();
+            const servant = sighting(428, { name: 'necroservant', realm: 'albion', level: 20, isPet: true, x: 2200 });
+            // An Albion pet farther than the leash, and a monster beside the shade: neither is its servant.
+            const far = sighting(429, { name: 'necroservant', realm: 'albion', level: 20, isPet: true, x: 1500 + 2100 });
+            b.publish(obs(petbon(T), [shade(), servant, far, sighting(430, { x: 1600 })]), T);
+            const contacts = b.picture(T).contacts;
+            expect(contacts.find(c => c.objectId === 428)).toMatchObject({ isPet: true, servantOf: 427 });
+            expect(contacts.find(c => c.objectId === 429)).not.toHaveProperty('servantOf');
+            expect(contacts.find(c => c.objectId === 430)).not.toHaveProperty('servantOf');
+            const read = shadeBodies(contacts);
+            expect(read.find(c => c.objectId === 428)).toMatchObject({ kind: 'player', servantOf: 427, realm: 'albion' });
+            expect(read.find(c => c.objectId === 428)).not.toHaveProperty('isPet');
+            // The shade stays a shade (untouchable): the Necromancer counts once, as its servant.
+            const heads = read.filter(c => c.kind === 'player' && !untouchable(c, T));
+            expect(heads.map(c => c.objectId)).toEqual([428]);
+            // Out of shade (the servant died): no servant, the player again.
+            b.publish(obs(petbon(T + 1000), [sighting(427, { kind: 'player', name: 'Briton', realm: 'albion', level: 20 })]), T + 1000);
+            expect(servantsOf(b.picture(T + 1000).contacts).size).toBe(0);
+        });
+
+        test('servantsOf: a servant\'s name before a nearer pet, one per shade, of the shade\'s realm only', () => {
+            const pet = (id: number, x: number, over: Partial<Contact> = {}) => contact(id, { name: 'simulacrum', realm: 'albion', isPet: true, x, ...over });
+            const sh = contact(427, { kind: 'player', name: 'Briton', realm: 'albion', isShade: true, x: 1000, classGuess: { classes: ['Necromancer'], role: 'nuker' } as any, caster: true });
+            const of = servantsOf([sh, pet(1, 1100), pet(2, 1800, { name: 'greater necroservant' }), pet(3, 1050, { realm: 'midgard' })]);
+            expect([...of.keys()]).toEqual([2]);
+            const read = shadeBodies([sh, pet(2, 1800, { name: 'necroservant' })]);
+            expect(read[1]).toMatchObject({ kind: 'player', servantOf: 427, caster: true, classGuess: { role: 'nuker' } });
+            // No shade: the same array back.
+            const none = [pet(1, 1100)];
+            expect(shadeBodies(none)).toBe(none);
         });
 
         test('with no model to go by (an older client) the refusal marks it for 30 s, whatever the sightings say', () => {

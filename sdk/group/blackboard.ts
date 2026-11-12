@@ -434,6 +434,58 @@ export const isAlive = (c: Pick<Contact, 'kind' | 'hp'>) => c.kind === 'player' 
 /** Nothing we do can reach it now: a shade, or marked by a refusal (markUnattackable). No focus, no crowd control, no enemy to count; its servant is what's left to fight. */
 export const untouchable = (c: Pick<Contact, 'isShade' | 'unattackableUntil'>, now: number) => !!c.isShade || (c.unattackableUntil ?? 0) > now;
 
+/** A shade's servant stays within this of it: the server cuts the bond past 1500 for 10 s and at 2000 at once, in 3D (NecromancerPetBrain.cs CheckTether), so 2D is within it too. */
+export const SERVANT_LEASH = 2000;
+/** What the Necromancer's servants are called (Call ... Zombie Servant, Necroservant, Abomination): a pet so named goes before any other pet of the shade's realm near it. */
+const SERVANT_NAME = /servant|zombie|abomination/i;
+
+/**
+ * Each enemy shade's servant, by the pet's object id. The server names no pet's owner (PacketLib1124.cs:186-187), so it is
+ * read as a human reads it: a living enemy pet of the shade's realm, in its region, within SERVANT_LEASH of it, one per shade
+ * and one shade per pet, a servant's name first, then the nearest. A Necromancer in shade is its servant: nothing else of it
+ * can be fought, and the servant's death ends the shade at 10 % health (ClassDisciple.cs:60-83, ShadeECSEffect.cs:149).
+ */
+export function servantsOf(contacts: readonly Contact[]): Map<number, Contact> {
+    const out = new Map<number, Contact>();
+    const shades = contacts.filter(c => c.kind === 'player' && c.isShade);
+    if (!shades.length) return out;
+    const pets = contacts.filter(c => c.kind === 'npc' && c.isPet && c.hp > 0);
+    const pairs: { shade: Contact; pet: Contact; d: number; named: number }[] = [];
+    for (const shade of shades) for (const pet of pets) {
+        if (pet.realm !== shade.realm || pet.regionId !== shade.regionId) continue;
+        const d = Math.hypot(pet.x - shade.x, pet.y - shade.y);
+        if (d <= SERVANT_LEASH) pairs.push({ shade, pet, d, named: SERVANT_NAME.test(pet.name) ? 1 : 0 });
+    }
+    pairs.sort((a, b) => b.named - a.named || a.d - b.d);
+    const served = new Set<number>();
+    for (const { shade, pet } of pairs) {
+        if (out.has(pet.objectId) || served.has(shade.objectId)) continue;
+        out.set(pet.objectId, shade);
+        served.add(shade.objectId);
+    }
+    return out;
+}
+
+/**
+ * The contacts with each shade's servant (servantsOf) read as that enemy player, for a strategy that counts, sizes up and
+ * focuses players: kind 'player', no pet flag, the shade's classGuess, caster and healer, and servantOf. The shade itself
+ * stays as it is (untouchable drops it), so the Necromancer counts once, as its servant. The member that gets the servant as
+ * focus finds the pet on the board and fights it as one (behaviors.ts attack). Contacts with no shade come back unchanged.
+ */
+export function shadeBodies(contacts: readonly Contact[]): Contact[] {
+    const of = servantsOf(contacts);
+    if (!of.size) return contacts as Contact[];
+    return contacts.map(c => {
+        const shade = of.get(c.objectId);
+        if (!shade) return c;
+        const { isPet: _pet, ...rest } = c;
+        return {
+            ...rest, kind: 'player' as const, servantOf: shade.objectId,
+            ...(shade.classGuess ? { classGuess: shade.classGuess } : {}), ...(shade.caster ? { caster: true } : {}), ...(shade.healer ? { healer: true } : {}),
+        };
+    });
+}
+
 export function emptyOrders(now = Date.now()): Orders {
     return { seq: 0, phase: 'idle', objective: '', anchor: null, facing: null, focus: null, puller: null, cc: [], retreatTo: null, waiting: [], reason: 'start', issuedAt: now };
 }
@@ -902,6 +954,11 @@ export class Blackboard {
             const stale = now - c.lastSeen > this.staleAfterMs;
             const threat = this.isThreat(c, now);
             contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null, ...(c.ccImmune ? { ccImmune: { ...c.ccImmune } } : {}) });
+        }
+        // A shade's servant, marked for everyone who reads the board (shadeBodies reads it as the player).
+        for (const [petId, shade] of servantsOf(contacts)) {
+            const pet = contacts.find(c => c.objectId === petId && c.regionId === shade.regionId);
+            if (pet) pet.servantOf = shade.objectId;
         }
         return { at: now, members: this.everyone(now).map(m => ({ ...m })), contacts, orders: this.getOrders() };
     }

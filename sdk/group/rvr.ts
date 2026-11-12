@@ -34,7 +34,7 @@ import type { Realm } from '../types';
 import { assist, buff, crowdControl, fightSit, flee, guard, hand, heal, holdFormation, meleeFight, position, rejoinFight, release, rest, retreat, rez, SAVING_POWER, shedLoad, song, spareNuke, sprint, tank, type TacticsSettings } from './behaviors';
 import type { Behavior } from './member';
 import type { Finding, RunReport } from './observer';
-import { isAlive, untouchable } from './blackboard';
+import { isAlive, shadeBodies, untouchable } from './blackboard';
 import { PET_SETTINGS, waitsForPet } from './pets';
 import { assignCc } from './pve';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
@@ -591,9 +591,11 @@ export function rvrPhantom(mem: Record<string, any>, contacts: readonly Contact[
 }
 
 export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
-    const { picture: p, orders: o, memory: mem, settings: s, now } = ctx;
+    const { orders: o, memory: mem, settings: s, now } = ctx;
+    // A shade's servant is that Necromancer here: counted, sized up and focused as the player (shadeBodies).
+    const p = { ...ctx.picture, contacts: shadeBodies(ctx.picture.contacts) };
     if (!p.members.length) return { phase: 'idle', reason: 'no member reports yet' };
-    // A shade is nobody here: no focus, no cc, no enemy to count or hunt (AbstractServerRules.cs:449-455). Its servant is a candidate like any enemy pet, and a focus that turns out to be one moves at once.
+    // A shade is nobody here: no focus, no cc, no enemy to count or hunt (AbstractServerRules.cs:449-455). Its servant counts as it (shadeBodies, above), and a focus that turns out to be a shade moves at once.
     // A focus whose health stands still that long is a phantom, left alone a while (rvrPhantom), as the pack does.
     rvrPhantom(mem, p.contacts, o.phase === 'engage' ? o.focus : null, now);
     const contacts = p.contacts.filter(c => !untouchable(c, now) && !((mem.rvrPhantoms?.[c.objectId] ?? 0) > now));

@@ -242,6 +242,8 @@ export interface Contact extends Sighting {
     serverName?: string;
     /** A member's attack on it was answered `You can't attack a shadowed necromancer!`, so it can't be attacked before this (ms epoch): for a client with no models to go by, or anything isShade misses. */
     unattackableUntil?: number;
+    /** An enemy pet read as the servant of a shade of its realm within the server's leash (blackboard.ts servantsOf): that shade's object id. The servant is the Necromancer's body, the only thing of it to fight; shadeBodies counts it as that player. */
+    servantOf?: number;
     /** Players: seen helping its own realm (Sighting.helped) since the group first saw it. Sticky: a healer to focus first. */
     healer?: boolean;
     /** Players: seen casting (Sighting.casting) since the group first saw it. Sticky: a caster, not a melee fighter. */
