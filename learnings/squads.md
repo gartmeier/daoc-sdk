@@ -29,6 +29,9 @@ square law), so two against one is four to one.
   - The log shows them as `1+5 vs 5`, and a taken fight's reason ends `; beside N friends`.
   - The cause (N5, 2026-11-12 09:53): Diarmuid, a solo Ranger, read "1 vs 3", then "1 vs 5", and patrolled away from Hibernia's own group fighting those five 3-4k off. A human archer would have joined.
   - Only a friend in combat counts; once counted, it stays counted for 15 s and out to 3500, so a group passing by doesn't switch the fight on and off.
+  - A single friend counts too, when it is in combat in the same fight. The cause (the user, 2026-11-12 15:47): Scathach and Diarmuid, two solos, fought the same three Albions about 1000 apart. Each read "1 vs 3", fled at 0.10, and both were caught.
+  - In such a fight the squad takes the target of the nearest friend already on one of these enemies (from the region frame's `targetObjectId`). The reason ends `; on <name>'s target ...`.
+  - With a friend in the fight, the squad leaves only below `leaveAt` × 0.6 (0.33), not at `leaveAt`.
 - **Commitment** (the user, 2026-11-12 14:43: Aine and Fionn engaged, fled at 0.50, came back, engaged, fled again; both Albions stayed at 100 %, and Fionn was at 5 % endurance):
   - A fight we chose (taken at `engageAt` or better) is held for 20 s from its start. Inside the hold it is left only below `leaveAt` × 0.6 (0.33). The log reads `; held N s of 20`.
   - A flee turns on those following only after 10 s, unless the odds are twice `engageAt`.

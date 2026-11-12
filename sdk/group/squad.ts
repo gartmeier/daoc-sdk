@@ -200,7 +200,7 @@ export function sideStrength(worths: readonly number[], healers: number, heads?:
 }
 
 /** A friendly player of our realm outside the squad (squad-run.ts friendsIn): where it stands, and what the region frame tells. */
-export type Friend = Point & { name?: string; hp?: number; level?: number; className?: string; inCombat?: boolean };
+export type Friend = Point & { name?: string; hp?: number; level?: number; className?: string; inCombat?: boolean; targetId?: number | null };
 
 /** A friend's worth against a side of level `ours`: its class's role, health and level, at ALLY. */
 export function allyWorth(f: Friend, ours: number): number {
@@ -216,6 +216,8 @@ export interface SizeUp {
     allies: number;
     /** Their names, where known (to keep them counted: ALLY_KEEP_MS). */
     allyNames: string[];
+    /** The friends counted. */
+    beside: Friend[];
     ours: number;
     theirs: number;
     /** ours / theirs; Infinity with nobody against us. */
@@ -260,7 +262,7 @@ export function sizeUp(members: readonly MemberReport[], enemies: readonly Conta
     const opened = sideStrength(ourWorth.map((w, i) => w * (i < alive.length && STEALTHERS.has(alive[i]!.className) && !alive[i]!.inCombat ? OPENER : 1)), ourHealers);
     // To start a fight, those that beat us lately count more (GRUDGE).
     const wary = sideStrength(foes.map((c, i) => theirWorth[i]! * (grudge.has(c.objectId) ? GRUDGE : 1)), theirHealers, heads);
-    return { foes, allies: helping.length, allyNames: helping.flatMap(f => (f.name ? [f.name] : [])), ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: wary > 0 ? opened / wary : Infinity };
+    return { foes, allies: helping.length, allyNames: helping.flatMap(f => (f.name ? [f.name] : [])), beside: helping, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: wary > 0 ? opened / wary : Infinity };
 }
 
 /**
@@ -422,10 +424,13 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const nearestFriend = friends.reduce<Point | null>((best, f) => (!best || dist(f, centre) < dist(best, centre) ? f : best), null);
     const atFriends = !!nearestFriend && dist(nearestFriend, centre) <= r.friendReach;
 
-    // A friendly group's fight near us is ours too: its players count on our side (ASSIST).
+    // A friend's fight near us is ours too: its players count on our side (ASSIST), a lone one as well, in combat there.
+    // The user, 15:47 on 11-12: Scathach and Diarmuid, two solos, fought the same three Albions 1000 apart, each reading
+    // "1 vs 3" (the other one alone was no "group"), fled at 0.10 and were caught one by one.
+    const allyPool = known.filter(f => dist(f, centre) <= r.friendMax);
     sq.allies = Object.fromEntries(Object.entries(sq.allies ?? {}).filter(([, until]) => until > now));
     const keep = new Set(Object.keys(sq.allies));
-    const up = sizeUp(here, enemies, centre, s, grudge, friends, keep);
+    const up = sizeUp(here, enemies, centre, s, grudge, allyPool, keep);
     for (const n of up.allyNames) sq.allies[n] = now + ALLY_KEEP_MS;
     // Attacked: one on us near (the board keeps a runner's last target, so not at any range), or in combat with one beside us.
     const hit = up.foes.some(nearOnUs) || here.some(m => m.inCombat && up.foes.some(c => dist(c, m) < 400));
@@ -515,7 +520,9 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     // ── In a fight that turned: leave it ──
     // A fight we chose is held for FIGHT_HOLD_MS unless the odds fall far past leaveAt (held, above).
     const holding = held && up.foes.length > 0 && up.ratio < r.leaveAt;
-    if ((engaged || hit) && up.foes.length && !sq.stand && !held && up.ratio < r.leaveAt) {
+    // A friend staying in the fight is not left to it: with one beside us we leave only far past the line (HOLD_FAR).
+    const leaveLine = up.allies ? r.leaveAt * HOLD_FAR : r.leaveAt;
+    if ((engaged || hit) && up.foes.length && !sq.stand && !held && up.ratio < leaveLine) {
         const focus = engaged && o.focus !== null ? up.foes.find(c => c.objectId === o.focus) : undefined;
         const finishing = !!focus && focus.hp < s.retreat.focusHp && up.ratio >= r.leaveAt / 2;
         // One enemy player on us (with its pet, if any) runs as fast as we do, or shoots or casts at our back: only worth
@@ -545,7 +552,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         let worst = Infinity;
         for (const cl of groups) {
             // The group as a whole is what we would walk into, whichever realms are in it.
-            const su = sizeUp(here, cl.map(c => ({ ...c, realm: cl[0]!.realm })), centre, whole, grudge, friends, keep);
+            const su = sizeUp(here, cl.map(c => ({ ...c, realm: cl[0]!.realm })), centre, whole, grudge, allyPool, keep);
             const odds = su.opening;
             if (odds >= r.engageAt) {
                 for (const c of cl) delete sq.shun[c.objectId];
@@ -604,7 +611,17 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         if (k === loop.length) { k = 0; while (k < loop.length && kept(loop[(start + k) % loop.length]!)) k++; }
         if (k > 0 && k < loop.length) { mem.wp = (start + k) % loop.length; mem.legKind = null; }
     }
-    const u = callInner(contacts);
+    let u = callInner(contacts);
+    // In a friend's fight: the target of the nearest friend on one of these enemies, as our own bots see it (the region frame).
+    // Two fighting one each, 1000 apart, is how both died (the user, 15:47 on 11-12).
+    if (u.phase === 'engage' && up.beside.length) {
+        const there = new Map(up.foes.filter(c => !c.isPet).map(c => [c.objectId, c]));
+        const on = up.beside.filter(f => f.targetId != null && there.has(f.targetId)).sort((a, b) => dist(a, centre) - dist(b, centre))[0];
+        if (on && on.targetId !== u.focus) {
+            const t = there.get(on.targetId!)!;
+            u = { ...u, focus: t.objectId, reason: `${u.reason ?? ''}; on ${on.name ?? 'a friend'}'s target ${t.name}#${t.objectId}` };
+        }
+    }
     if (sq.stand && u.phase === 'engage') return { ...u, reason: `caught: ${u.reason ?? ''}` };
     // On patrol, a zone across the way to the waypoint is gone round (safePath round it as round a keep), not through.
     if (!showAll && u.phase === 'travel' && u.reason?.startsWith('patrol') && loop?.length && typeof mem.wp === 'number' && zones.length) {
@@ -619,7 +636,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     }
     // Fighting beside a friendly group: say so, for the log and the ledger.
     if (u.phase === 'engage' && up.foes.length && (up.allies || holding)) {
-        const why = [up.allies ? `beside ${up.allies} friends` : '', holding ? `held ${Math.round((now - sq.fight!.start) / 1000)} s of ${FIGHT_HOLD_MS / 1000}` : ''].filter(Boolean).join(', ');
+        const why = [up.allies ? `beside ${up.allies} friend${up.allies === 1 ? '' : 's'}` : '', holding ? `held ${Math.round((now - sq.fight!.start) / 1000)} s of ${FIGHT_HOLD_MS / 1000}` : ''].filter(Boolean).join(', ');
         return { ...u, reason: `${u.reason ?? ''}; ${why}, odds ${odds}` };
     }
     // Say who we keep clear of, for the log: the orders alone show only a patrol.

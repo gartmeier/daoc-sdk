@@ -25,11 +25,11 @@ export function squadVariant(name: string): number {
 }
 
 /** From a region frame's bots: where our realm's bots outside this squad stand, alive, with their class, level and health. Our realm is that of our own bots in it. */
-export function friendsIn(bots: readonly { realm: Realm; x: number; y: number; isDead: boolean; group: { id: string } | null; name: string; hp?: number; level?: number; className?: string; inCombat?: boolean }[], squad: string, ownNames: ReadonlySet<string> = new Set()): Friend[] {
+export function friendsIn(bots: readonly { realm: Realm; x: number; y: number; isDead: boolean; group: { id: string } | null; name: string; hp?: number; level?: number; className?: string; inCombat?: boolean; targetObjectId?: number | null }[], squad: string, ownNames: ReadonlySet<string> = new Set()): Friend[] {
     const mine = bots.filter(b => b.group?.id === squad || ownNames.has(b.name));
     const realm = mine[0]?.realm;
     if (!realm || realm === 'none') return [];
-    return bots.filter(b => b.realm === realm && !b.isDead && !mine.includes(b)).map(b => ({ x: b.x, y: b.y, name: b.name, hp: b.hp, level: b.level, className: b.className, inCombat: b.inCombat }));
+    return bots.filter(b => b.realm === realm && !b.isDead && !mine.includes(b)).map(b => ({ x: b.x, y: b.y, name: b.name, hp: b.hp, level: b.level, className: b.className, inCombat: b.inCombat, targetId: b.targetObjectId ?? null }));
 }
 
 /** Polls the region frame for friends until stopped; `friends()` is the latest answer (none until the first). */

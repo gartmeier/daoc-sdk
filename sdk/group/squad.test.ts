@@ -334,6 +334,26 @@ describe('decideSquad: leaving a fight that turned', () => {
         expect(sizeUp(squad(['Merc']), five, BASE, SQUAD_SETTINGS, new Set(), after).allies).toBe(0);
     });
 
+    test('two solos in one fight: each counts the other, takes its target, and does not leave it at 2 vs 3', () => {
+        // The user, 15:47 on 11-12: Scathach and Diarmuid fought the same three Albions 1000 apart, each "1 vs 3", and both died.
+        const three = [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 500), foe(53, 600)];
+        const other = { name: 'Scathach', x: BASE.x + 700, y: BASE.y + 300, hp: 90, level: 24, className: 'Nightshade', inCombat: true, targetId: 52 };
+        const us = () => squad(['Merc'], { Merc: { inCombat: true } });
+        // Alone: gone (1 vs 3).
+        expect(decide(picture(us(), three, { phase: 'engage', focus: 51 }), { friends: [] }).phase).toBe('retreat');
+        // With the other solo in it: 1+1 vs 3, stays, and on its target.
+        const d = decide(picture(us(), three, { phase: 'engage', focus: 51 }), { friends: [other] });
+        expect(d.phase).toBe('engage');
+        expect(d.focus).toBe(52);
+        expect(d.reason).toContain("on Scathach's target");
+        expect(d.reason).toContain('1+1 vs 3');
+        // Hopeless even with it (five): gone.
+        const five = [...three, foe(54, 650), foe(55, 700)];
+        expect(decide(picture(us(), five, { phase: 'engage', focus: 51 }), { friends: [other] }).phase).toBe('retreat');
+        // One passing by out of combat is in no fight.
+        expect(decide(picture(us(), three, { phase: 'engage', focus: 51 }), { friends: [{ ...other, inCombat: false }] }).phase).toBe('retreat');
+    });
+
     test("a stealther's opener: a lone melee on a hurt solo is fought out, unless friends are near to run to", () => {
         const opener = [foe(51, 100, { ...guess('melee'), target: 'Wizard', threat: true })];
         const us = () => squad(['Wizard'], { Wizard: { hp: 45, inCombat: true } });
@@ -471,7 +491,7 @@ describe('squad-run: lanes and friends', () => {
         const bot = (name: string, realm: any, group: string | null, over: object = {}) => ({ name, realm, x: 1, y: 2, isDead: false, group: group ? { id: group } : null, ...over });
         const bots = [bot('Mordred', 'albion', 'camelot-s1'), bot('Gawain', 'albion', 'camelot'), bot('Tuck', 'albion', 'camelot', { isDead: true }), bot('Sigrid', 'midgard', 'midgard'), bot('Lone', 'albion', null)];
         expect(friendsIn(bots, 'camelot-s1')).toHaveLength(2);
-        expect(friendsIn([...bots, bot('Lancelot', 'albion', 'camelot', { hp: 60, level: 23, className: 'Paladin', inCombat: true })], 'camelot-s1')[2]).toMatchObject({ name: 'Lancelot', hp: 60, level: 23, className: 'Paladin', inCombat: true });
+        expect(friendsIn([...bots, bot('Lancelot', 'albion', 'camelot', { hp: 60, level: 23, className: 'Paladin', inCombat: true, targetObjectId: 77 })], 'camelot-s1')[2]).toMatchObject({ name: 'Lancelot', hp: 60, level: 23, className: 'Paladin', inCombat: true, targetId: 77 });
         expect(friendsIn(bots, 'nobody')).toEqual([]);
     });
 });
