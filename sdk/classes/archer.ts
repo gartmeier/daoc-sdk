@@ -39,7 +39,7 @@ const SETTLE_MS = 600;
 const NO_ARROWS_MS = 300_000;
 
 const SHOT_LINE = /^You (shoot|miss)|evades your attack|blocks your attack/i;
-const SHOT_REFUSAL = /not in view|can't see your target|too far away|must select a quiver|can't use the quiver|too tired|interrupt your shot|must select a target/i;
+const SHOT_REFUSAL = /not in view|can't see your target|too far away|must select a quiver|can't use the quiver|too tired|interrupt your shot|your shot is interrupted|must select a target/i;
 
 /** The bow worn in the ranged slot, and how far it reaches. */
 export function bowOf(equipment: readonly { slot: number; objectType: number }[]): { objectType: number; reach: number } | null {
@@ -68,9 +68,20 @@ export const shoot = (): Behavior => ({
         if (!focus || !isAlive(focus)) return false;
         const seen = foeInView(ctx, focus.objectId);
         if (!seen) return false;
-        const nearest = Math.min(Infinity, ...ctx.sdk.getNearbyPlayers().filter(p => p.realm !== ctx.me().realm && !p.isDead).map(p => p.distance));
+        // Anyone on us, a pet too: "The hunter's protector is attacking you and your shot is interrupted!" (run B, 2026-11-12).
+        const enemies = ctx.sdk.getNearbyPlayers().filter(p => p.realm !== ctx.me().realm && !p.isDead).map(p => p.distance);
+        const onUs = [...ctx.bot.getAttackers(), ...ctx.bot.getPlayerAttackers(4000)].map(a => a.distance);
+        const nearest = Math.min(Infinity, ...enemies, ...onUs);
         const plan = shotPlan(seen.distance, bow.reach, nearest, arrowsOf(ctx));
-        if (plan === 'melee') return false;
+        if (plan === 'melee') {
+            // With the bow in hand the melee fight's attack request draws it (and its walk interrupts the draw): the melee weapon first.
+            if (ctx.memory.get('bowOut')) {
+                ctx.memory.set('bowOut', false);
+                await ctx.sdk.sendAttack(false);
+                ctx.result('melee weapon', await ctx.bot.takeMeleeSlot());
+            }
+            return false;
+        }
         if (plan === 'close') {
             const me = ctx.me();
             const f = (seen.distance - bow.reach * 0.85) / seen.distance;
@@ -105,8 +116,10 @@ async function loose(ctx: MemberContext, targetId: number): Promise<boolean> {
     const since = ctx.sdk.getGameMessages().at(-1)?.id ?? 0;
     const said = () => ctx.sdk.getGameMessages().filter(m => m.id > since);
     const done = () => said().find(m => SHOT_LINE.test(m.text) || SHOT_REFUSAL.test(m.text))?.text;
-    const report = (line: string | undefined) => {
+    const report = async (line: string | undefined) => {
         if (line && /quiver/i.test(line)) ctx.memory.set('noArrowsUntil', Date.now() + NO_ARROWS_MS);
+        // No shot: lower the bow. A draw held 15 s tires ("You're too tired to use your ... Bow!", RangeAttackComponent.cs:23, :92).
+        if (!line || !SHOT_LINE.test(line)) await ctx.sdk.sendAttack(false);
         ctx.result('shoot', { success: !!line && SHOT_LINE.test(line), message: line ?? 'no shot line' }, targetId);
         return true;
     };
@@ -119,6 +132,7 @@ async function loose(ctx: MemberContext, targetId: number): Promise<boolean> {
     // The first use only took the bow in hand.
     if (use.success && /^You wield/i.test(use.message)) use = await ctx.bot.useItem(EquipmentSlot.Ranged);
     if (!use.success) { ctx.result('shoot', use, targetId); return true; }
+    ctx.memory.set('bowOut', true);
     // A draw left ready by an earlier turn fires at once.
     if (done()) return report(done());
     const ready = () => said().some(m => /ready to fire/i.test(m.text));
