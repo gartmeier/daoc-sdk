@@ -365,12 +365,15 @@ export class MemberAgent<S = any> {
         });
     }
 
-    /** The member's SDK, with a style sent by hand (assist's queue) through the skill's slips. */
+    /**
+     * The member's SDK, with a style sent by hand (assist's queue) through the skill's slips. Not a stealth opener: hidden,
+     * the swing is the one deliberate click a player makes, and a slip there cost Hodur his Backstab II (14:16, 11-12).
+     */
     slipSdk(): BotSDK {
         const sdk = this.member.sdk;
         return overriding(sdk, {
             sendUseSkill: ((index: number, ...rest: unknown[]) => {
-                const style = sdk.getSkills().styles.find(s => s.skillIndex === index);
+                const style = sdk.isStealthed() ? undefined : sdk.getSkills().styles.find(s => s.skillIndex === index);
                 if (style) {
                     const positional = this.positionalStyles();
                     const slipped = this.lens!.styleSlip(style.name, positional.map(s => s.name));
