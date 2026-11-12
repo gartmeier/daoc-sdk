@@ -356,7 +356,63 @@ Camelot's casters landed 0.7 nukes a minute each, first nuke about 44 s into a r
 - **Pets** ([pets.md](pets.md#rvr), [above](#pets-in-the-rounds)): none of them has fought in the rounds of the tables above; the rehearsal is what there is. Ours follow the focus (`sdk/group/pets.ts`), and in the wolf pack they come off a fight when the pack walks off or rests (`pet.strayFightsOff`), as its orders don't turn a threat into a fight. An enemy pet is a board contact with `isPet`, its owner unknown (`PacketLib1124.cs:186-187`); it is a focus only with no free enemy player in the fight, a threat near the main body is in the fight whoever it aims at (a caster pet's target shows only on its victim's client and for moments, so every client reads it from the combat events), and its death is no kill. The death packet names a pet's owner, never the pet, also for a turret with its owner 5900 away (`GameLiving.cs:1299-1300`; live `<victim> was just killed by <owner> in Thidranki.`): `killedBy` says `pet:<realm>` when the newest blow before the death is that pet's and the named player has no blow of its own in the window, else `player:<realm>`, and `guard:<realm>` for a keep guard. Up to round 11, and in the wolf pack's rounds, the reports had only `pet:<realm>`, for both, so "their pets" in the table above may be guards.
 - **A Necromancer in shade** can't be attacked, and no pet can be ordered at it: `You can't attack a shadowed necromancer!` (`AbstractServerRules.cs:449-455`). Its servant can be. `NearbyPlayer.isShade` reads model 822, from its create and from 0xDB (`GamePlayer.cs:12345-12346`, `:2021`); `decideRvr` leaves it out of the focus, crowd control and the enemy count, and the line from any member marks the contact for 30 s for a client that has no model to go by. A shade's end when its servant dies was seen against players too: `You are no longer a shade!`, 0xDB from 822 to its own model, health 100 and then 10 within about 0.75 s, dead 8 s on ([pets.md](pets.md#shade)). Not with the focus moving onto it in an intact group: that main body was walking back from a release. `decidePack` leaves it out of its foes the same way, and its servant reaches the pack through the patrol's `decideRvr`.
 - **Stealth:** none of the 15 bots stealths; a stealthed enemy appears only within detection range.
-- **Keep ownership:** Thidranki Faste is Albion's in the dump. If someone takes it, set `keepOwners` (the strategy doesn't watch the lord).
+- **Keep ownership:** Thidranki Faste is Albion's in the dump. `KeepOwnerRead` reads who holds it now ([The Faste](#the-faste-sdkgroupsiegets-2026-11-12)); feed `owners()` to `keepOwners`.
+
+
+## The Faste (`sdk/group/siege.ts`, 2026-11-12)
+
+Surveyed from the server source, the DB and the navmesh, then walked and captured on a throwaway stack. The night brief `groups/stint-realm-calls.md` ("R5: The Faste") has the details.
+
+**What stands there.**
+- **An island in a moat.** There are three bridges, one into each realm's half, 4600-6000 from the centre (33089, 38271) and outside every guard's reach:
+  - Hibernia's north-west, from about (29600, 34000) to (31200, 35500);
+  - Midgard's east, from (39500, 35800) to (37700, 36450);
+  - Albion's south-west, from (28200, 41800) to (30200, 40200).
+  - Elsewhere the moat is swum.
+- **One gateway, on the east side,** with its gate door at (34333, 38275). An outer wall runs 900-1100 out, with wall-walks at z ~3976. The keep building is on the courtyard's west side, with its door at (32654, 38180).
+- **The lord** stands on the building's roof at (32296, 38267), z 4592, 870 above the courtyard. A spiral stair at x 32144-32285, y 38202-38342 climbs to it. Our navmesh has all of it: a walk to the roof spot with its z takes the stair.
+- **No keep components** (`keepcomponent` is empty). The walls are zone fixtures: a human's client draws them, and the server neither collides with them nor blocks line of sight through them.
+- **The doors are real.** They come from the `door` table, and the server makes them `GameKeepDoor`s because they stand in the keep's area (`DoorMgr.LoadDoor`).
+  - **Two can be attacked:** the outer gate and the building's door. Only melee hurts them (pets only with `doors_allowpetattack`).
+  - **Health:** BaseLevel 26 x 200 x the keep level, so 5200 at level 1 and 20800 at level 4. Damage is cut by 5 % per keep level.
+  - **At 0 they open,** and to the players within 512 the server says `The Keep Door is broken!`. They close again once repaired over 15 %, 5 % a tick out of combat.
+  - **Four Postern Doors** on the building can't be attacked. The owner's realm goes through any door by interacting (a teleport through it).
+  - **Nothing stops a player walking through a closed door.** An enemy bot did, live. Only a real client's collision stops a human, and our navmesh ignores doors. So the raid plan breaks them by default (`breakDoors`).
+  - Our client shows a door as an object with `doorId`, but its realm never updates after a capture, and there's no health or open state (0x99 isn't decoded).
+- **The guards.** These are mob rows `DOL.GS.Keeps.*` in the keep's area: 8 fighters (Armsman/Armswoman), 6 static casters on the walls (Wizard), 3 static archers on the roof (Scout), a Hastener (L1, harmless), and the lord.
+  - **Aggro:** fighters 1000, casters 1850, archers 2100.
+  - **Realm:** all take the keep's realm on spawn.
+  - **Level:** BaseLevel+1 + keep level x 1.6 for guards, BaseLevel+6 + keep level x 1.6 for the lord. That's L28 and L33 at keep level 1.
+  - **Lord names, seen live:** Lady Thidranki (Albion), Jarl Thidranki (Midgard). Hibernia's is unseen.
+
+**Taking it.**
+- **The lord takes damage only from attackers within 400, in 3D** (`GuardLord.TakeDamage`, "is immune to damage from this range"). That counts pets by their owner too. So the raid climbs to the roof.
+- **His death gives the keep to the killer's realm.** Every client on the server gets `The forces of <Realm> have captured Thidranki Faste!`, as `important` and `screenCenter`.
+  - The lord is back 1 s later, same object id, in the new realm.
+  - Every other guard dies and comes back 5-25 min later in the new realm (`guard_respawn` 15, variance 10). The Hastener comes back at once.
+- **A capture sets the keep level to `starting_keep_level` (4 by default).** From then on the guards are L33 and the lord L38, and the DB keeps it. Live: the first capture brought the Jarl back at L38. With `starting_keep_level=1` a retake brought him back at L33 and left the level at 1.
+- A guild can't claim it (`allow_bg_claim` False), and nothing depends on guilds.
+
+**The raid plan** (`raidPlan(realm)`, `raidOrders(plan, view)`):
+1. Rally on the realm's own bank before its bridge.
+2. Walk the route over the bridge to the stage (36300, 38300) on the island. It stays outside every guard's aggro by 500. Go in once 75 % are there.
+3. **Rank 1:** the five outer fighters, at (35500, 38250).
+4. **Rank 2:** the gate-side wall casters (ranged, from (34650, 38250)), while melee break the gate.
+5. **Rank 3:** the courtyard pair.
+6. **Rank 4:** the far wall casters, from the courtyard.
+7. **Rank 5:** the roof archers, from the courtyard: about 1000-1300 away in 3D.
+8. **Rank 6:** melee break the building's door; the floor-3 fighter.
+9. **Rank 7:** the lord, with everyone on the roof.
+- A guard on a member, or a fighter off its post, goes first.
+- **Routes:** each was checked on the navmesh without swimming, dry except the bridges, and at least 100 clear of every guard's aggro. Hibernia's leaves its bridge about 350 off a wall caster's circle.
+- **Keep circle:** a raiding unit sets `settings.raid = 'Thidranki Faste'`, which lifts the keep's circle in `keepDangers`. It is off by default.
+
+**Who owns it** (`KeepOwnerRead` in `keeps.ts`, live in `bun sdk/group/siege-watch.ts [--watch=600]`):
+- **The signals:** the capture broadcast, plus the realm of any living non-pet NPC in the keep's area (3000).
+- **Restarts:** the server keeps the owner across a restart, so a reader that starts later learns it only by seeing a guard. `--state=<file>` keeps the reading between runs.
+- **First live read, 19:21:** 58 bots on the shared server read the Faste as Albion's, by its guards.
+
+**Not seen yet:** a real raid of level-24 players. Open questions: how much the nine ranged guards hurt, whether the stage holds when a fighter wanders, how long ten melee take on a gate, and Hibernia's lord's name.
 
 ## The wolf pack (`sdk/group/pack.ts`, `rvrPack`)
 
