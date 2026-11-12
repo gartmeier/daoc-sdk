@@ -39,9 +39,11 @@ From [pets.md](../pets.md), at L20: the commander takes about 59 s on a L17, 25 
 
 ## Live check
 
-None yet: the character comes from the night's thirty (R6). What to read in the sortie logs: `summonMinion` results (a `summon` of Bonemage or Bone Arrow between fights, no `already has as many followers` loop), the commander's order lag (`petAttack`), and `nuke` lines naming Crunch Skeleton under fire.
+**2026-11-12, 19:11-19:29, three solo sorties in Thidranki** (Grimhild, L24, Split Darkness and Suppression, a one-member squad `groups/r8-grimhild`): one fight in three, against the Necromancer's servant, lost in 27 s: 5 casts interrupted, one Quickcast, her commander 266 damage. Solo she has no haven for `giveGround`, so she stood and cast into the servant's swings.
+- **`summonMinion` works:** a Bonemage (Darkness 15) after every Chieftan, between fights, with no "as many followers" loop.
+- Once the commander was released and raised again while travelling: "You release control of your controlled target", then a new Chieftan. That is `pets.ts`'s re-summon of a pet left behind (`leftBehind`, 3500 or out of view), not the kit.
 
 ## Not seen live
 
-- The minion in RvR: whether a caster minion pulls aggro from where it stands, whether a healer minion keeps the commander up.
+- A fight against players in a group, and the minion in it: whether a caster minion draws them, whether a healer minion keeps the commander up.
 - `giveGroundUnlessInstant`: it gives ground only while the drain recasts, 4 s.

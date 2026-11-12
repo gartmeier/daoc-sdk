@@ -12,8 +12,8 @@ Albion's pet caster. Its summon puts it in shade: nobody can attack it, it can't
 
 - **`raiseServant`** (urgent): the top Call ... Servant, a 20 s cast, only with nothing hostile and no enemy player within 2500, not in a retreat.
 - **`fallBack`** (urgent): no servant, not a shade, an enemy within 2500: a 1500 step straight away from the nearest, so `raiseServant` can go. Out of shade the Necromancer is cloth, and after a servant's death at 10 % of its health ([pets.md](../pets.md#shade)).
-- **`keepTether`** (urgent, above `position`): a shade with its servant past 1200 walks to within 700 of it. The server cuts the bond past 1500 for 10 s, at once past 2000 (`NecromancerPetBrain.cs:300-326`).
-- **`servantRetreat`** (urgent, never takes the turn): in a retreat, passive and follow, as `petControl` does for other pets.
+- **`keepTether`** (urgent, above `position`): a shade with its servant past 1200, or with the server's tether warning in the last 4 s, walks to within 700 of it. The server cuts the bond past 1500 for 10 s, at once past 2000, both in 3D (`NecromancerPetBrain.cs` `CheckTether`, `IsWithinRadius`). **Verified:** on a plain walk of 2500 out and back the servant stayed within 181 (`bots/morgause/tether-test.ts`), running at 165-230.
+- **`servantLeash`** (on the side tick, only sends): in a retreat, passive and follow, as `petControl` does for other pets; out of an engage or pull, a follow for a servant fighting more than 1000 from us, or with no threat left. **Why the side tick (sortie 1):** as a turn behaviour it sat below `retreat`, whose walk takes every turn, and never ran: the servant fought on in the water, "Your servant is too far from you and will be lost in 10 seconds", and was cut as she fled.
 - **`servantFight`** (in place of `assist`): the servant at the focus (an attack order per new focus, 3 s apart), then the PetSpell `servantNuke` picks, at the focus, the owner walking into its range if need be (a shade can't be hit). An NPC focus waits for the tank's hold, a player none.
 - **`servantHeal`** (react): its heal over time (Regenerate Muscle at 24: 27 every 3 s for 15 s) below 60 % in a fight, below 85 % between fights with 40 % power, not while its icon shows on the servant.
 - **`servantBuffs`** (chores): between fights with 40 % power, the top rank of each kind of servant buff (Vigor of the Dead, Servant of the Grave, Instructing the Servant, ...) whose icon the window doesn't show.
@@ -53,9 +53,10 @@ From [pets.md](../pets.md#shade): leaving shade sets health to min(current, max 
 
 ## Live check
 
-None yet: the character comes from the night's thirty (R6). What to read in the sortie logs: `summon` (raiseServant) only between fights, `petAttack` per focus, `nuke` naming Vitality Theft and Pain of the Dead, `petHeal` with Regenerate Muscle, `walk`/`move` for the tether, and how often the owner leaves shade (a `fallBack` line, a `pet-down`).
+**2026-11-12, 19:11-19:29, three solo sorties in Thidranki** (Morgause, L24, Sight and servant split, as a one-member squad `groups/r8-morgause`, beside the Animist and Bonedancer solos and other sessions' units): 3 player kills (a Shadowblade, a Kobold, the Animist Etain), 0 deaths, 37 realm points, one retreat from three. She also killed the Bonedancer Grimhild with her servant: casters lose to it, the servant interrupting every cast with a cast time. The servant was lost twice in sortie 1 (the leash above), none after the fix: up 100 % of sorties 2 and 3, through a retreat. Her actions: `nuke` 3-5 a sortie, first at 1.6-4.9 s, `petAttack` once per focus, `petHeal` once. Idle 14-40 % of fight time as "the servant is casting": its 3 s half, with nothing else to cast. Damage: hers (the owner-cast Cackles and the drains) 132-293 a sortie, the servant's 250-350.
 
 ## Not seen live
 
-- Every behaviour above. The owner's walk into 500 for Pain of the Dead, which a shade can make safely by the server code; whether the server measures that range from the owner or the servant wasn't read.
-- What enemies do about a servant whose owner they can't touch.
+- The owner's walk into 500 for a Cackle, which a shade can make safely by the server code; whether the server measures that range from the owner or the servant wasn't read.
+- `fallBack` and `raiseServant` with enemies near: the servant never died in these sorties.
+- In a group: the group's heals, positions and death counts with a shade in it (above). Field mode from 22:30 is the first.

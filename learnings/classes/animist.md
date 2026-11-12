@@ -40,9 +40,13 @@ From [pets.md](../pets.md#turrets): a ground target first; a spot off the mesh i
 
 ## Live check
 
-None yet: the character comes from the night's thirty (R6). What to read in the sortie logs: `summon` results of the main turret (`no_ground_target`, `out_of_range` and `refused` say the spot is wrong), `petAttack` after it, and `nuke` lines for the bomber.
+**2026-11-12, 19:11-19:29, three solo sorties in Thidranki** (Etain, L24, Arboreal group, a one-member squad `groups/r8-etain`): 8 player kills, 3 deaths, 131 realm points. Sortie 2 had two long fights against 8 and 5 Albion players (5 kills, 2 deaths), and her Forest's Sentry dealt 3131 there, three times her own 1011. Sortie 3: 3 kills one by one, the turret 1404 and on the focus 87 % of the time it was up; she died to the Necromancer's servant. Every turret summon landed on its spot: no `no_ground_target`, `refused` or `out_of_range` from `summonPet`.
+- **Fixed after sortie 2:** in the 3 s before a re-plant, `plantTurret` still sent the turret at the focus, which the server refused, "Briton is 1772 from it, beyond its 1000", 6 times. Now `turretState` waits then (`wait`), and sortie 3 had none.
+- Her first damage came 36 s into sortie 2's first fight, as the plant and the fire-and-forget turret went first; 1-11 s in sortie 3.
+- Casts with a cast time get interrupted under a melee (4-5 a sortie). Solo she has no haven for `giveGround`.
 
 ## Not seen live
 
-- A turret in a moving RvR fight: how often the focus leaves its reach, and whether 3 s is the right wait.
-- Whether enemy players kill the turret first (a Sentry's health at L21 is a pet's), and what that costs in power.
+- In a group, with a haven for `giveGround`.
+- `fnfTurret`: the reports don't tell its summons from the main turret's.
+- Whether enemy players go for the turret: none died in these sorties.
