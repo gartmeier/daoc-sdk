@@ -2,6 +2,9 @@
 // mode starts it as any group (`bun groups/<squad>/rvr.ts Infinity [--flags]`). group.json lists the 1 to 3 members; a
 // line-up is written there before the run (lineup.ts writeLineup), as for the groups.
 //
+// Help calls: the realm director's calls file (director.ts callWatch), read once our realm is known; the squad answers
+// them (squad.ts). None while the director is off or absent.
+//
 // Friends to run to: every few seconds the gateway's region frame (/regions/<id>/live) gives where our realm's other bots
 // stand, as a guild's chat would. Only our own realm's bots are read from it, never an enemy.
 
@@ -10,7 +13,8 @@ import { basename } from 'path';
 import type { Realm } from '../types';
 import { findBotEnv, parseEnvFile } from '../index';
 import type { ScriptContext } from '../runner';
-import { THIDRANKI } from './keeps';
+import { callWatch, type CallWatch } from './director';
+import { THIDRANKI, type PlayerRealm } from './keeps';
 import { loadGroup } from './roster';
 import { groupArgs, runGroup, runGroupScript } from './runner';
 import { squadStrategy, type Friend } from './squad';
@@ -56,12 +60,16 @@ export function squadMain(dir: string) {
         const env = findBotEnv(def.leader ?? def.members[0]!.bot);
         const password = env ? parseEnvFile(readFileSync(env, 'utf-8')).PASSWORD : undefined;
         const watch = friendWatch(def.name, password);
+        let cw: CallWatch | null = null;
         try {
-            const strategy = squadStrategy({ name: `${def.name}-squad`, friends: watch.friends });
+            const calls = (realm: Realm) => (realm === 'none' ? [] : (cw ??= callWatch(def.name, realm as PlayerRealm)).calls());
+            const answer = (id: string, state: Parameters<CallWatch['answer']>[1], why: string) => cw?.answer(id, state, why);
+            const strategy = squadStrategy({ name: `${def.name}-squad`, friends: watch.friends, unit: def.name, calls, answer });
             const variant = (settings as any)['squad.variant'] ?? squadVariant(basename(dir));
             return await runGroup({ dir, strategy, seconds: Number(seconds), have: { bot, sdk }, settings: { 'squad.variant': variant, ...settings } });
         } finally {
             watch.stop();
+            (cw as CallWatch | null)?.stop();
         }
     };
 }

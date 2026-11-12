@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { enemy, picture, report } from './fixtures';
 import { BATTLEGROUND_LAYOUTS, homeOf, THIDRANKI } from './keeps';
 import { countFor } from './size';
-import { decideSquad, edgePatrol, sideStrength, sizeUp, SQUAD_SETTINGS, squadRoaming, type Friend, type SquadSettings } from './squad';
+import { callOdds, decideSquad, edgePatrol, sideStrength, sizeUp, SQUAD_SETTINGS, squadRoaming, type Friend, type SquadSettings } from './squad';
+import type { AnswerState, RealmCall } from './director';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import type { Capabilities, Contact, GroupPicture, MemberReport, Orders, Point, Role } from './types';
 import { isDry } from './water';
@@ -309,6 +310,11 @@ describe('decideSquad: leaving a fight that turned', () => {
         const fight = decide(picture(squad(['Merc'], { Merc: { inCombat: true } }, there), five.map((c, i) => (i ? c : { ...c, target: 'Merc', threat: true })), { phase: 'engage', focus: 51 }), { friends: ours });
         expect(fight.phase).toBe('engage');
         expect(fight.reason).toContain('beside 5 friends');
+        // The first tick of it, nobody on us yet and no fight begun: engaged beside them (run A on 11-12, camelot-s3 17:58:
+        // the coordinator threw on sq.fight.start 38 times).
+        const first = decide(picture(squad(['Merc'], {}, there), five), { friends: ours });
+        expect(first.phase).toBe('engage');
+        expect(first.reason).toContain('beside 5 friends');
         // Friends far from those enemies are in no fight of theirs: still avoided.
         const far = ours.map(f => ({ ...f, y: f.y + 6000 }));
         expect(decide(picture(squad(['Merc']), five), { friends: far }).reason).toStartWith('avoid:');
@@ -571,6 +577,117 @@ describe('decideSquad: leaving a fight that turned', () => {
         }
         // What the shares give below five (size.ts): not used by a squad, whose retreat is its own.
         expect([1, 2, 3].map(n => countFor({ share: 0.6 }, n))).toEqual([1, 1, 2]);
+    });
+});
+
+describe('decideSquad: help calls (director.ts)', () => {
+    const call = (over: Partial<RealmCall> = {}): RealmCall => ({
+        id: 'albion-1', kind: 'help', from: 'camelot', why: 'outnumbered', at: { x: BASE.x + 4000, y: BASE.y, z: 0 },
+        foes: 3, ours: 2, foeRoles: {}, want: 2, asked: ['me'], coming: [], since: 0, updatedAt: 0, ...over,
+    });
+    type Said = [string, AnswerState, string];
+    const run = (p: GroupPicture, calls: RealmCall[], said: Said[], o: Parameters<typeof ctx>[1] = {}) =>
+        decideSquad(ctx(p, o), undefined, { friends: () => [], unit: 'me', calls: () => calls, answer: (id, st, why) => said.push([id, st, why]) });
+
+    test('callOdds: us and the realm\'s own there against the foes by role', () => {
+        expect(callOdds(squad(['Merc']), { foes: 1, ours: 0, foeRoles: {} })).toBeCloseTo(1, 5);
+        // A duo with a healer and two friends there against three: about 1.9.
+        expect(callOdds(squad(['Merc', 'Cleric']), call())).toBeGreaterThan(1.5);
+        // A solo and one friend against six: hopeless.
+        expect(callOdds(squad(['Merc']), call({ foes: 6, ours: 1 }))).toBeLessThan(0.2);
+    });
+
+    test('asked, free and the odds there good: it goes, and says so', () => {
+        const said: Said[] = [];
+        const memory: Record<string, any> = {};
+        const d = run(picture(squad(['Merc', 'Cleric']), []), [call()], said, { memory });
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toStartWith("call: to camelot's fight (outnumbered, 2 vs 3), 4050 away");
+        expect(said.map(x => x[1])).toEqual(['coming']);
+        expect(memory.squad.answered).toBe(1);
+        // The next tick: still on its way, no second answer.
+        expect(run(picture(squad(['Merc', 'Cleric']), []), [call()], said, { memory }).reason).toStartWith('call:');
+        expect(said.length).toBe(1);
+    });
+
+    test('asked, and the odds there stay bad even with us, or we are hurt, or it is far: declined, and it patrols on', () => {
+        const said: Said[] = [];
+        expect(run(picture(squad(['Merc']), []), [call({ foes: 6, ours: 1 })], said).reason).toContain('patrol');
+        expect(said[0]![1]).toBe('declined');
+        expect(said[0]![2]).toContain('odds there');
+        const hurt: Said[] = [];
+        expect(run(picture(squad(['Merc', 'Cleric'], { Merc: { hp: 30 } }), []), [call()], hurt).reason).not.toStartWith('call:');
+        expect(hurt[0]![2]).toContain('not ready');
+        const far: Said[] = [];
+        run(picture(squad(['Merc', 'Cleric']), []), [call({ at: { x: BASE.x + 9000, y: BASE.y, z: 0 } })], far);
+        expect(far[0]![1]).toBe('declined');
+        // Declined once, not again every tick.
+        const memory: Record<string, any> = {};
+        const again: Said[] = [];
+        for (let i = 0; i < 3; i++) run(picture(squad(['Merc']), []), [call({ foes: 6, ours: 1 })], again, { memory });
+        expect(again.length).toBe(1);
+    });
+
+    test('unasked: it comes only from near, when the call still wants bodies and the odds there favour us', () => {
+        const said: Said[] = [];
+        expect(run(picture(squad(['Merc', 'Cleric']), []), [call({ asked: [] })], said).reason).toStartWith('call:');
+        expect(said[0]![2]).toStartWith('unasked');
+        const none: Said[] = [];
+        expect(run(picture(squad(['Merc', 'Cleric']), []), [call({ asked: [], at: { x: BASE.x + 6000, y: BASE.y, z: 0 } })], none).reason).not.toStartWith('call:');
+        expect(run(picture(squad(['Merc', 'Cleric']), []), [call({ asked: [], want: 0 })], none).reason).not.toStartWith('call:');
+        expect(run(picture(squad(['Merc']), []), [call({ asked: [], foes: 3, ours: 1 })], none).reason).not.toStartWith('call:');
+        expect(none).toEqual([]);
+    });
+
+    test('there: arrived, and the fight it would have kept clear of is fought as one it chose', () => {
+        const t0 = 1_000_000;
+        const at = { x: BASE.x + 1000, y: BASE.y, z: 0 };
+        const three = [foe(51, 1200), foe(52, 1300), foe(53, 1400)];
+        // Without the call a duo keeps clear of three.
+        expect(decide(picture(squad(['Merc', 'Cleric']), three, {}, t0), { now: t0 }).reason).toMatch(/^(avoid|flee):/);
+        const said: Said[] = [];
+        const memory: Record<string, any> = {};
+        const d = run(picture(squad(['Merc', 'Cleric']), three, {}, t0), [call({ at })], said, { memory, now: t0 });
+        expect(said.map(x => x[1])).toEqual(['coming', 'arrived']);
+        expect(d.phase).toBe('engage');
+        expect(d.reason).toContain("at camelot's call");
+        const e = run(picture(squad(['Merc', 'Cleric'], { Merc: { inCombat: true } }), three, { phase: 'engage', focus: d.focus }, t0 + 1000), [call({ at })], said, { memory, now: t0 + 1000 });
+        expect(e.phase).toBe('engage');
+        expect(memory.squad.fight.chosen).toBe(true);
+    });
+
+    test('a call that closes, or the director going off, ends it: back on patrol', () => {
+        const said: Said[] = [];
+        const memory: Record<string, any> = {};
+        run(picture(squad(['Merc', 'Cleric']), []), [call()], said, { memory });
+        expect(run(picture(squad(['Merc', 'Cleric']), []), [], said, { memory }).reason).toContain('patrol');
+        expect(memory.squad.call).toBeUndefined();
+    });
+
+    test('given up when the odds there collapse on the way', () => {
+        const said: Said[] = [];
+        const memory: Record<string, any> = {};
+        run(picture(squad(['Merc', 'Cleric']), []), [call()], said, { memory });
+        expect(run(picture(squad(['Merc', 'Cleric']), []), [call({ foes: 9, ours: 0 })], said, { memory }).reason).not.toStartWith('call:');
+        expect(said.at(-1)![1]).toBe('left');
+    });
+
+    test('a muster: to the rally however far, held there until go, then on to the target', () => {
+        const said: Said[] = [];
+        const memory: Record<string, any> = {};
+        const rally = { x: BASE.x + 12_000, y: BASE.y, z: 0 }, target = { x: BASE.x + 16_000, y: BASE.y, z: 0 };
+        const muster = (over: Partial<RealmCall> = {}) => call({ id: 'albion-2', kind: 'muster', from: 'director', why: 'raid', at: rally, stage: 'rally', target, foes: 0, ours: 0, ...over });
+        expect(run(picture(squad(['Merc']), []), [muster()], said, { memory }).reason).toStartWith('call: to the rally, 12000 away');
+        const there = squad(['Merc'], {}, { x: rally.x + 200, y: rally.y });
+        expect(run(picture(there, []), [muster()], said, { memory }).reason).toStartWith('call: at the rally, waiting for go');
+        expect(run(picture(there, []), [muster({ stage: 'go', at: target })], said, { memory }).reason).toStartWith('call: to the raid, 3800 away');
+        expect(said.map(x => x[1])).toEqual(['coming', 'arrived']);
+    });
+
+    test('off (squad.calls false): no call is answered', () => {
+        const said: Said[] = [];
+        expect(run(picture(squad(['Merc', 'Cleric']), []), [call()], said, { settings: { squad: { ...SQUAD_SETTINGS.squad, calls: false } } }).reason).not.toStartWith('call:');
+        expect(said).toEqual([]);
     });
 });
 

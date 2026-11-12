@@ -13,6 +13,10 @@
 //  - Roaming the edges (edgePatrol): the roads to the enemy portal keeps, where their released walk back alone, and the
 //    banks where two realms meet (BattlegroundLayout.pairs), away from the groups' meeting point.
 //
+// Help calls (director.ts): a free squad goes to a friend's fight its realm's director asks it to, unless the odds there
+// with our friends counted stay below leaveAt; unasked, it comes only from near and at engageAt or better. A muster (a
+// raid) it joins when asked: the rally, then the target. Orders on the way read "call: ...".
+//
 // Enemies we would not fight are hidden from the inner decide (no hunt, no engage) unless they attack us, and the squad
 // steps away from them when they come near. The inner decide never sees a retreat: retreat.enabled is off for it, so
 // every retreat is this file's flee.
@@ -23,6 +27,7 @@
 import { estimateZ } from '../../data/index';
 import type { Realm } from '../types';
 import { untouchable } from './blackboard';
+import type { AnswerState, RealmCall } from './director';
 import { roleOfClass, type FoeRole } from './class-read';
 import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, keepDangers, type PlayerRealm } from './keeps';
 import { decideRvr, legAnchor, mainBody, realmOfGroup, RVR_SETTINGS, runWay, rvrRoaming, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
@@ -61,6 +66,8 @@ export interface SquadRules {
     edge: boolean;
     /** Which lane first (edgePatrol): squads of one realm with different variants start on different enemies' sides. */
     variant: number;
+    /** Answer the realm director's calls (help, muster) when free; off: never. */
+    calls: boolean;
 }
 
 export interface SquadSettings extends RvrSettings {
@@ -83,6 +90,7 @@ export const SQUAD_RULES: SquadRules = {
     outrunMax: 5000,
     edge: true,
     variant: 0,
+    calls: true,
 };
 
 export const SQUAD_SETTINGS: SquadSettings = {
@@ -188,6 +196,20 @@ const COMMIT_LOSS = 40;
  * "4 following, odds 0.61", turned back, saw them, and fled again (N1, hibernia-s1 15:55 on 11-12).
  */
 const REMEMBER_MS = 30_000;
+/** A help call we were asked to is answered from at most this far (the director asks within 7000) ... */
+const CALL_REACH = 7000;
+/** ... one we were not asked to, from at most this far, and only at engageAt or better with the friends there. */
+const CALL_UNASKED = 5000;
+/** Within this of the call's spot we are there: 'arrived', and the fight there is one we chose. */
+const CALL_ARRIVE = 1500;
+/** Enemies within this of the call's spot are its fight: not kept clear of on the way, and fought as chosen. */
+const CALL_FIGHT = 3000;
+/** Still not there after this long: given up ('left'). */
+const CALL_MAX_MS = 90_000;
+/** There, and no fight of ours for this long: done with it. */
+const CALL_DONE_MS = 20_000;
+/** A call we declined or are done with is not looked at again for this long. */
+const CALL_AGAIN_MS = 60_000;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -240,6 +262,27 @@ export function allyWorth(f: Friend, ours: number): number {
     const role = f.className ? roleOfClass(f.className) : undefined;
     const lv = clamp(1 + PER_LEVEL * ((f.level || ours) - ours), 0.6, 1.5);
     return (role ? FOE_ROLE[role] : 1) * health(f.hp ?? 100) * lv * ALLY;
+}
+
+/**
+ * The odds at a friend's fight if we come: us (a hidden stealther with its opener, OPENER) and the realm's own there
+ * (`ours`, each a fighter at ALLY) against `foes` by their read roles (unknown: a fighter). Lanchester as sizeUp.
+ */
+export function callOdds(members: readonly MemberReport[], call: Pick<RealmCall, 'foes' | 'ours' | 'foeRoles'>): number {
+    const alive = members.filter(m => !m.isDead);
+    const ours = [...alive.map(m => memberWorth(m) * (STEALTHERS.has(m.className) && !m.inCombat ? OPENER : 1)), ...Array.from({ length: Math.max(0, call.ours) }, () => ALLY)];
+    const theirs: number[] = [];
+    let healers = 0;
+    for (const [role, n] of Object.entries(call.foeRoles ?? {})) {
+        for (let i = 0; i < (n ?? 0); i++) {
+            theirs.push(role in FOE_ROLE ? FOE_ROLE[role as FoeRole] : 1);
+            if (role === 'healer') healers++;
+        }
+    }
+    while (theirs.length < call.foes) theirs.push(1);
+    if (call.foes > 0) theirs.length = Math.min(theirs.length, call.foes);
+    const b = sideStrength(theirs, Math.min(healers, theirs.length));
+    return b > 0 ? sideStrength(ours, alive.filter(m => m.role === 'healer' || m.capabilities.heal).length) / b : Infinity;
 }
 
 export interface SizeUp {
@@ -417,11 +460,23 @@ interface SquadMemory {
     caught: number;
     avoided: number;
     patrolKey?: string;
+    /** The call we answer: 'coming' on the way, 'arrived' there (director.ts). */
+    call?: { id: string; kind: RealmCall['kind']; from: string; state: 'coming' | 'arrived'; since: number; arrivedAt?: number; lastFight?: number };
+    /** Calls declined or done, by id, not looked at again until (ms epoch). */
+    callsSeen?: Record<string, number>;
+    /** Calls answered 'coming', for the report. */
+    answered?: number;
 }
 
 export interface SquadOptions {
     /** Where friendly players of our realm stand (not this squad): groups to run to, and to fight beside. Read each tick; none by default. */
     friends?: () => readonly Friend[];
+    /** This unit's name, as the director knows it (its folder). Calls are answered only with it. */
+    unit?: string;
+    /** The realm's open help calls and musters (director.ts callWatch), not this unit's own; none by default. */
+    calls?: (realm: Realm) => readonly RealmCall[];
+    /** Tell the director: coming, declined, arrived, left. */
+    answer?: (callId: string, state: AnswerState, why: string) => void;
 }
 
 /** The squad's decide around `inner` (decideRvr by default, or a realm's own wrapper of it). */
@@ -503,13 +558,22 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     // Attacked: one on us near (the board keeps a runner's last target, so not at any range), or in combat with one beside us.
     const hit = up.foes.some(nearOnUs) || here.some(m => m.inCombat && up.foes.some(c => inView(c) && dist(c, m) < 400));
     const engaged = o.phase === 'engage';
+    // ── Help calls (director.ts) ──
+    const sqCallsSeen = (sq.callsSeen ??= {});
+    for (const [id, until] of Object.entries(sqCallsSeen)) if (until <= now) delete sqCallsSeen[id];
+    const say = (id: string, state: AnswerState, why: string) => { try { opts.answer?.(id, state, why); } catch { /* the director sees us arrive anyway */ } };
+    const openCalls = r.calls && opts.unit && opts.calls && realm !== 'none' ? opts.calls(realm).filter(c => c.kind === 'help' || c.kind === 'muster') : [];
+    let call: RealmCall | null = sq.call ? openCalls.find(c => c.id === sq.call!.id) ?? null : null;
+    if (sq.call && !call) sq.call = undefined; // closed
+    /** Our fight is the call's: we came to it and stand there. */
+    const atCall = () => !!call && sq.call?.state === 'arrived' && dist(centre, call.at) <= CALL_FIGHT;
     const meanHp = () => (alive.length ? alive.reduce((a, m) => a + m.hp, 0) / alive.length : 0);
     const startFight = (chosen: boolean): NonNullable<SquadMemory['fight']> =>
         ({ start: now, last: now, chosen, players: up.foes.some(c => !c.isPet), hp0: meanHp(), dead0: p.members.filter(m => m.isDead).map(m => m.name) });
     // The fight's start, and whether we chose it (taken at engageAt or better): a fight we chose is held (FIGHT_HOLD_MS),
     // against players committed (COMMIT_LOSS).
     if (engaged || hit) {
-        if (!sq.fight || now - sq.fight.last > FIGHT_GAP_MS) sq.fight = startFight(engaged && (up.ratio >= r.engageAt || (unseen && up.opening >= r.engageAt)));
+        if (!sq.fight || now - sq.fight.last > FIGHT_GAP_MS) sq.fight = startFight(engaged && (up.ratio >= r.engageAt || (unseen && up.opening >= r.engageAt) || atCall()));
         sq.fight.last = now;
     }
     const fight = sq.fight;
@@ -645,6 +709,52 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     // realm by another realm's group neither (23:13: hunt and avoid flipped every second).
     let worstText = '';
     if (!engaged && !hit && !sq.stand && !held) {
+        // The call we are on: on, given up, or done.
+        if (call && sq.call) {
+            const c = sq.call;
+            const odds = call.kind === 'help' ? callOdds(here, call) : Infinity;
+            const why = c.state === 'coming' && call.kind === 'help' && now - c.since > CALL_MAX_MS ? `not there after ${Math.round((now - c.since) / 1000)} s`
+                : c.state === 'coming' && odds < r.leaveAt * HOLD_FAR ? `odds there ${fmt(odds)} (${here.length}+${call.ours} vs ${call.foes})`
+                : c.state === 'arrived' && call.kind === 'help' && now - Math.max(c.arrivedAt ?? now, c.lastFight ?? 0) > CALL_DONE_MS ? 'done' : '';
+            if (why) {
+                if (why !== 'done') say(call.id, 'left', why);
+                sqCallsSeen[call.id] = now + CALL_AGAIN_MS;
+                sq.call = undefined;
+                call = null;
+            }
+        }
+        // A new one: asked, free, near, and the odds there with our friends counted; unasked, nearer and better.
+        if (!call && openCalls.length) {
+            const free = p.members.every(m => !m.isDead) && here.length === alive.length && meanHp() >= s.ready.hp && alive.every(m => !usesMana(m) || m.mana >= s.ready.mana);
+            for (const c of [...openCalls].sort((a, b) => dist(a.at, centre) - dist(b.at, centre))) {
+                if (sqCallsSeen[c.id]) continue;
+                const d = dist(c.at, centre);
+                const asked = c.asked.includes(opts.unit!);
+                const odds = c.kind === 'help' ? callOdds(here, c) : Infinity;
+                const no = !free ? `not ready (${Math.round(meanHp())} % health)` : d > CALL_REACH && c.kind === 'help' ? `${Math.round(d)} away` : odds < r.leaveAt ? `odds there ${fmt(odds)} (${here.length}+${c.ours} vs ${c.foes})` : '';
+                if (asked && no) {
+                    say(c.id, 'declined', no);
+                    sqCallsSeen[c.id] = now + CALL_AGAIN_MS;
+                    continue;
+                }
+                if (!asked && (no || c.kind === 'muster' || d > CALL_UNASKED || c.want <= 0 || odds < r.engageAt)) continue;
+                sq.call = { id: c.id, kind: c.kind, from: c.from, state: 'coming', since: now };
+                sq.answered = (sq.answered ?? 0) + 1;
+                say(c.id, 'coming', `${asked ? 'asked' : 'unasked'}, ${Number.isFinite(odds) ? `odds there ${fmt(odds)}, ` : ''}${Math.round(d)} away`);
+                call = c;
+                break;
+            }
+        }
+        if (call && sq.call && dist(centre, call.at) <= CALL_ARRIVE && sq.call.state === 'coming') {
+            sq.call.state = 'arrived';
+            sq.call.arrivedAt = now;
+            say(call.id, 'arrived', `${up.foes.length} enemies in view`);
+        }
+    }
+    if (call && sq.call && (engaged || hit) && dist(centre, call.at) <= CALL_FIGHT) sq.call.lastFight = now;
+    /** Enemies in the call's fight: not kept clear of, and shown to the inner decide. */
+    const inCallFight = (c: Point) => !!call && call.kind === 'help' && dist(c, call.at) <= CALL_FIGHT;
+    if (!engaged && !hit && !sq.stand && !held) {
         const groups = enemyClusters(enemies, r.joinRadius).filter(cl => cl.some(c => dist(c, centre) <= s.huntRadius));
         const bad: Contact[] = [];
         let worst = Infinity;
@@ -652,6 +762,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
             // One we ran from, or one of their realm where they were, brings its group with it: all left alone while we
             // remember them (avoidMs). N1 on 11-12: squads re-engaged the group they had just fled.
             const mid = centroid(cl);
+            if (cl.some(inCallFight)) continue;
             const fledUntil = Math.max(0, ...cl.map(c => sq.avoid[c.objectId] ?? 0), ...(sq.zones ?? []).filter(z => (z.fled ?? 0) > now && z.realm === cl[0]!.realm && dist(z, mid) <= z.r).map(z => z.fled!));
             if (fledUntil > now) for (const c of cl) sq.avoid[c.objectId] = Math.max(sq.avoid[c.objectId] ?? 0, fledUntil);
             // The group as a whole is what we would walk into, whichever realms are in it.
@@ -693,11 +804,23 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
             stepLeg(trip, 'avoid', goal, { from: centre, movers: here, replan: 1500 });
             return { phase: 'travel', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: legAnchor(mem), facing: mem.legFacing, objective: `keep clear of ${bad.length} enemies`, reason: `avoid: odds ${worstText} below ${r.engageAt}, nearest ${Math.round(nearest)} away` };
         }
+        // On the way to a call; a muster's rally is held until it says go.
+        if (call && sq.call) {
+            const d = dist(centre, call.at);
+            const what = call.kind === 'muster' ? (call.stage === 'go' ? 'the raid' : 'the rally') : `${call.from}'s fight (${call.why}, ${call.ours} vs ${call.foes})`;
+            if (d > CALL_ARRIVE || (call.kind === 'muster' && call.stage !== 'go')) {
+                // A raid goes into the keep circle it is after; the others are gone round as ever.
+                const avoid = call.kind === 'muster' && call.target ? keeps.filter(k => dist(k, call!.target!) > k.r) : keeps;
+                if (d > CALL_ARRIVE) stepLeg({ ...trip, avoid }, 'call', call.at, { from: centre, movers: here, replan: 1500 });
+                const odds = call.kind === 'help' ? `, odds there ${fmt(callOdds(here, call))}` : '';
+                return { phase: 'travel', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: d > CALL_ARRIVE ? legAnchor(mem) : { x: Math.round(call.at.x), y: Math.round(call.at.y), z: call.at.z }, facing: mem.legFacing, objective: `answer the call to ${what}`, reason: `call: ${d > CALL_ARRIVE ? `to ${what}, ${Math.round(d)} away` : `at ${what}, waiting for go`}${odds}` };
+            }
+        }
     } else sq.clearing = false;
     const hidden = new Set([...Object.keys(sq.avoid), ...Object.keys(sq.shun)].map(Number));
     // A fight we are in (taken, held, caught, or they attack us) shows everyone: the avoided ones too.
     const showAll = sq.stand || hit || engaged || held;
-    const contacts = showAll ? p.contacts : p.contacts.filter(c => !hidden.has(c.objectId) || nearOnUs(c));
+    const contacts = showAll ? p.contacts : p.contacts.filter(c => !hidden.has(c.objectId) || nearOnUs(c) || inCallFight(c));
     // The patrol's next waypoint by enemies we keep clear of is skipped (at most the whole loop once): else the loop walks
     // us back to them as soon as we stepped away.
     const loop: Point3[] | null = innerSettings.patrol ?? mem.patrol ?? null;
@@ -733,6 +856,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         }
     }
     if (sq.stand && u.phase === 'engage') return { ...u, reason: `caught: ${u.reason ?? ''}` };
+    if (u.phase === 'engage' && atCall()) u = { ...u, reason: `${u.reason ?? ''}; at ${call!.from}'s call` };
     // On patrol, a zone across the way to the waypoint is gone round (safePath round it as round a keep), not through.
     if (!showAll && u.phase === 'travel' && u.reason?.startsWith('patrol') && loop?.length && typeof mem.wp === 'number' && zones.length) {
         const wp = loop[mem.wp % loop.length]!;
@@ -746,7 +870,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     }
     // Fighting beside a friendly group: say so, for the log and the ledger.
     if (u.phase === 'engage' && up.foes.length && (up.allies || holding)) {
-        const secs = Math.round((now - sq.fight!.start) / 1000);
+        const secs = Math.round((now - (sq.fight?.start ?? now)) / 1000);
         const why = [up.allies ? `beside ${up.allies} friend${up.allies === 1 ? '' : 's'}` : '', holding ? (committed ? `committed ${secs} s, no losses` : `held ${secs} s of ${FIGHT_HOLD_MS / 1000}`) : ''].filter(Boolean).join(', ');
         return { ...u, reason: `${u.reason ?? ''}; ${why}, odds ${odds}` };
     }
