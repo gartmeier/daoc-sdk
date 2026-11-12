@@ -57,6 +57,8 @@ From [pets.md](../pets.md#shade): leaving shade sets health to min(current, max 
 
 **Field run B, 22:28-23:07, in camelot's group (two sorties, 15 and 23 min):** the servant up 95 % and 89 %, but on the focus only 28 % and 51 %; 94 and 35 attack orders refused, "Your target is too far away to attack with your pet!"; idle 50 % and 26 % of fight time on "nothing to cast"; first nuke 32-34 s after the engage. **Why (server code):** an attack order needs the owner within 2000 of the target (`GamePlayer.cs` CommandNpcAttack), and a PetSpell's owner half checks its own range from the owner (`SpellHandler.CheckBeginCast`, "That target is too far away!"). Morgause stood back with the casters, past both. **Fixed:** `servantFight` walks the shade to within 1300 of the focus (past 1450), and into a nuke's own range when that is shorter, before it orders or casts; a shade can't be hit. Her 3 deaths came out of shade after the servant's, one while casting Regenerate Muscle on it as it died.
 
+**With the fix (camelot's 23:35 sortie, 22 min):** no refused attack order (90 in the sortie before), the servant on the focus 70 % (28-51 %), first nuke 6.1 s after the engage (32-34 s), 3278 damage, her best; idle 26 %, now all "the servant is casting". One death, out of shade: the servant died at 20:47 and she died at 20:49 still walking in. So the walk in now lasts 1.5 s a turn, and with the servant below 40 % she walks in for no short-range nuke (the 500 ones).
+
 ## Not seen live
 
 - The owner's walk into 500 for a Cackle, which a shade can make safely by the server code; whether the server measures that range from the owner or the servant wasn't read.

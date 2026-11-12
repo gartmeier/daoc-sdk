@@ -195,10 +195,18 @@ export const OWNER_STAND = 1300;
 /** ... walking in only once past it by this much, so a focus that moves a little doesn't start a walk every turn. */
 const OWNER_SLACK = 150;
 
-/** A shade's step toward the focus (nobody can hit it), a few seconds at a time so the turn comes back. */
+/**
+ * A walk in lasts at most this, so a servant's death mid-walk (out of shade at 10 %) stops it soon: field run B, 20:47 the servant died and
+ * at 20:49 Morgause died still on "Cannot reach Dwarf".
+ */
+const WALK_IN_MS = 1500;
+/** With the servant below this %, no walk into a short-range nuke (Pain of the Dead, the Cackles at 500): its death would leave us there. */
+export const NO_WALK_IN_BELOW = 40;
+
+/** A shade's step toward the focus (nobody can hit it), briefly so the turn comes back. */
 async function closeOn(ctx: MemberContext, mob: { objectId: number; name: string }, range: number): Promise<boolean> {
     ctx.doing('move', mob.objectId, `in to ${Math.round(range)} of ${mob.name}`);
-    const w = await ctx.bot.walkToObject(mob.objectId, { range, timeout: 3000 });
+    const w = await ctx.bot.walkToObject(mob.objectId, { range, timeout: WALK_IN_MS });
     if (!w.success && w.reason !== 'timeout') ctx.result('walk', w, mob.objectId);
     return true;
 }
@@ -230,7 +238,8 @@ export const servantFight = (opts: { saveBelow?: number; aoe?: boolean } = {}): 
         const servantBusy = waiting(ctx.memory, 'servantCastUntil', now);
         const pick = servantNuke(servantNukes(through(ctx, 'PetSpell')), {
             underMelee: servantUnderMelee(ctx), servantHp: pet?.healthPercent ?? 100, aoe: opts.aoe,
-            ready: n => ready(ctx, n) && (n.ownerCast || !servantBusy) && (!pet || dist(pet, go.seen) <= n.range),
+            ready: n => ready(ctx, n) && (n.ownerCast || !servantBusy) && (!pet || dist(pet, go.seen) <= n.range)
+                && (go.seen.distance <= n.range || (pet?.healthPercent ?? 100) >= NO_WALK_IN_BELOW),
         });
         if (!pick) return ctx.skip(servantBusy ? 'servantFight: the servant is casting' : 'servantFight: nothing to cast');
         if (pick.range > 0 && go.seen.distance > pick.range) return closeOn(ctx, go.mob, Math.max(pick.range - 50, 100));
