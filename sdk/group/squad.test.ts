@@ -278,31 +278,116 @@ describe('decideSquad: leaving a fight that turned', () => {
         expect(sizeUp(squad(['Merc']), five, BASE, SQUAD_SETTINGS, new Set(), hurt).ratio).toBeLessThan(SQUAD_SETTINGS.squad.engageAt);
     });
 
-    test('a fight we chose is held: no flee at 0.50 thirteen seconds in, but at once far past the line, and after the hold', () => {
+    test('a fight we chose against players is fought out: adds seen later do not end it, our losses do', () => {
         // The user, 14:43 on 11-12: Aine and Fionn engaged two Albions, fled 13 s later at 0.50 when a third came near.
-        const memory: Record<string, any> = {};
+        // N1, the human-vision hour on 11-12: a trio took "3 vs 1", five more came into view, it fled at "0.26 (3 vs 6)".
         const t0 = 1_000_000;
-        const us = () => squad(['Merc', 'Cleric'], { Merc: { inCombat: true } });
+        const us = (over: Parameters<typeof squad>[1] = {}) => squad(['Merc', 'Cleric'], { Merc: { inCombat: true }, ...over });
         const two = [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 500)];
-        let d = decide(picture(us(), two, { phase: 'engage', focus: 51 }, t0), { memory, now: t0 });
-        expect(d.phase).toBe('engage');
-        expect(memory.squad.fight.chosen).toBe(true);
-        for (const t of [5000, 10_000]) decide(picture(us(), two, { phase: 'engage', focus: 51 }, t0 + t), { memory, now: t0 + t });
         const three = [...two, foe(53, 700)];
-        d = decide(picture(us(), three, { phase: 'engage', focus: 51 }, t0 + 13_000), { memory, now: t0 + 13_000 });
-        expect(d.phase).toBe('engage');
-        expect(d.reason).toContain('held 13 s of 20');
-        // After the hold: left.
-        d = decide(picture(us(), three, { phase: 'engage', focus: 51 }, t0 + 21_000), { memory, now: t0 + 21_000 });
-        expect(d.phase).toBe('retreat');
-        // Far past the line (five against two): left at once, hold or not.
-        const m2: Record<string, any> = {};
-        decide(picture(us(), two, { phase: 'engage', focus: 51 }, t0), { memory: m2, now: t0 });
         const five = [...three, foe(54, 800), foe(55, 900)];
-        expect(decide(picture(us(), five, { phase: 'engage', focus: 51 }, t0 + 5000), { memory: m2, now: t0 + 5000 }).phase).toBe('retreat');
+        const run = (memory: Record<string, any>, steps: [number, Contact[], Parameters<typeof squad>[1]?][]) =>
+            steps.map(([t, cs, over]) => decide(picture(us(over), cs, { phase: 'engage', focus: 51 }, t0 + t), { memory, now: t0 + t }));
+        const memory: Record<string, any> = {};
+        let [d] = run(memory, [[0, two]]);
+        expect(d!.phase).toBe('engage');
+        expect(memory.squad.fight.chosen).toBe(true);
+        // A third at 13 s, five at 21 s and 40 s: still in it.
+        const ds = run(memory, [[5000, two], [10_000, two], [13_000, three], [21_000, five], [30_000, five], [40_000, five]]);
+        for (const x of ds) expect(x.phase).toBe('engage');
+        expect(ds.at(-1)!.reason).toContain('committed 40 s, no losses');
+        // Our mean health 45 points down: lost, and by the odds gone.
+        [d] = run(memory, [[42_000, five, { Merc: { inCombat: true, hp: 30 }, Cleric: { hp: 80 } }]]);
+        expect(d!.phase).toBe('retreat');
+        expect(d!.reason).toContain('health 100 to 55 %');
+        // A member dead: lost too.
+        const m2: Record<string, any> = {};
+        run(m2, [[0, two]]);
+        expect(run(m2, [[5000, five]])[0]!.phase).toBe('engage');
+        [d] = run(m2, [[8000, five, { Cleric: { isDead: true, hp: 0 } }]]);
+        expect(d!.phase).toBe('retreat');
+        expect(d!.reason).toContain('Cleric died');
         // A fight we did not choose (caught at 0.50 from the start) is not held.
         const m3: Record<string, any> = {};
-        expect(decide(picture(us(), three, { phase: 'engage', focus: 51 }, t0), { memory: m3, now: t0 }).phase).toBe('retreat');
+        expect(run(m3, [[0, three]])[0]!.phase).toBe('retreat');
+    });
+
+    test('a fight we chose against a pet alone is held 20 s, and left at once far past the line', () => {
+        const t0 = 1_000_000;
+        const us = () => squad(['Merc'], { Merc: { inCombat: true } });
+        const pet = (id: number, dx: number, over: Partial<Contact> = {}) => foe(id, dx, { isPet: true, threat: true, ...over });
+        const memory: Record<string, any> = {};
+        expect(decide(picture(us(), [pet(51, 300, { target: 'Merc' })], { phase: 'engage', focus: 51 }, t0), { memory, now: t0 }).phase).toBe('engage');
+        expect(memory.squad.fight.players).toBe(false);
+        // Many pets later: far past the line, gone.
+        const pets = [51, 52, 53, 54, 55, 56, 57, 58].map((id, i) => pet(id, 300 + 50 * i, i ? {} : { target: 'Merc' }));
+        expect(decide(picture(us(), pets, { phase: 'engage', focus: 51 }, t0 + 5000), { memory, now: t0 + 5000 }).phase).toBe('retreat');
+    });
+
+    test('human vision: pursuers out of view still count in a flee, until forgotten (REMEMBER_MS)', () => {
+        // N1, hibernia-s1 15:55 on 11-12: fleeing, those behind left the cone, "4 following, odds 0.61", it turned back, saw them, fled.
+        const t0 = 1_000_000;
+        const us = () => squad(['Merc', 'Cleric']);
+        const memory: Record<string, any> = {};
+        const four = [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 400), foe(53, 500), foe(54, 600)];
+        decide(picture(us(), four, { phase: 'engage', focus: 51 }, t0), { memory, now: t0 });
+        expect(memory.squad.flee).toBeTruthy();
+        const o = { phase: 'retreat' as const };
+        // 12 s on: one in view at 600, three behind out of view since 8 s, last seen 3700-3900 back.
+        const behind = (seen: number) => [52, 53, 54].map((id, i) => foe(id, 3700 + 100 * i, { stale: true, lastSeen: t0 + seen }));
+        const one = foe(51, 600, { target: 'Merc', threat: true });
+        let d = decide(picture(us(), [one, ...behind(8000)], o, t0 + 12_000), { memory, now: t0 + 12_000 });
+        expect(d.phase).toBe('retreat');
+        expect(d.reason).toContain('4 we ran from');
+        // Without them on the board (as omniscient sight had it when they left range): it turns on the one.
+        const m2: Record<string, any> = {};
+        decide(picture(us(), four, { phase: 'engage', focus: 51 }, t0), { memory: m2, now: t0 });
+        expect(decide(picture(us(), [one], o, t0 + 12_000), { memory: m2, now: t0 + 12_000 }).phase).toBe('engage');
+        // Last seen 31 s ago: forgotten, and it turns on the one still following.
+        d = decide(picture(us(), [one, ...behind(8000)], o, t0 + 39_500), { memory, now: t0 + 39_500 });
+        expect(d.phase).toBe('engage');
+    });
+
+    test('human vision: a lone enemy in view with its group out of view is no lone enemy', () => {
+        const t0 = 1_000_000;
+        const trio = () => squad(['Merc', 'Cleric', 'Wizard']);
+        const one = foe(51, 1500);
+        // Five of its realm seen 10 s ago 1000 beyond it.
+        const rest = [52, 53, 54, 55, 56].map((id, i) => foe(id, 2500 + 100 * i, { stale: true, lastSeen: t0 - 10_000 }));
+        expect(decide(picture(trio(), [one], {}, t0), { now: t0 }).phase).toBe('engage');
+        const d = decide(picture(trio(), [one, ...rest], {}, t0), { now: t0 });
+        expect(d.phase).not.toBe('engage');
+        expect(d.reason).toContain('5 out of view');
+        // Seen 40 s ago: forgotten, the one is taken.
+        const old = rest.map(c => ({ ...c, lastSeen: t0 - 40_000 }));
+        expect(decide(picture(trio(), [one, ...old], {}, t0), { now: t0 }).phase).toBe('engage');
+        // Out of view is no one closing: no run (sprint) from last known places within runAt.
+        const close = [52, 53, 54, 55, 56].map((id, i) => foe(id, 1000 + 100 * i, { stale: true, lastSeen: t0 - 10_000 }));
+        expect(decide(picture(trio(), close, {}, t0), { now: t0 }).phase).not.toBe('retreat');
+    });
+
+    test('after a flee, its group is not engaged again while remembered: one of them, or one of their realm where they were', () => {
+        const t0 = 1_000_000;
+        const us = () => squad(['Merc', 'Cleric']);
+        const memory: Record<string, any> = {};
+        decide(picture(us(), [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 400), foe(53, 500), foe(54, 600)], { phase: 'engage', focus: 51 }, t0), { memory, now: t0 });
+        const o = { phase: 'retreat' as const };
+        decide(picture(us(), [], o, t0 + 3000), { memory, now: t0 + 3000 });
+        decide(picture(us(), [], o, t0 + 10_000), { memory, now: t0 + 10_000 });
+        expect(memory.squad.flee).toBeNull();
+        // One never seen, of their realm, where they were: left alone.
+        let d = decide(picture(us(), [foe(61, 900)], {}, t0 + 15_000), { memory, now: t0 + 15_000 });
+        expect(d.phase).not.toBe('engage');
+        // One we ran from with a new one beside it: both left alone.
+        d = decide(picture(us(), [foe(52, 900), foe(62, 1000)], {}, t0 + 16_000), { memory, now: t0 + 16_000 });
+        expect(d.phase).not.toBe('engage');
+        expect(memory.squad.avoid[62]).toBeGreaterThan(t0 + 16_000);
+        // Another realm there is no part of it.
+        d = decide(picture(us(), [enemy(70, 'hibernia', { regionId: R, x: BASE.x + 900, y: BASE.y, level: 24, hp: 100 })], {}, t0 + 17_000), { memory, now: t0 + 17_000 });
+        expect(d.phase).toBe('engage');
+        // Once the flee's avoidMs has passed: taken again.
+        d = decide(picture(us(), [foe(63, 900)], {}, t0 + 75_000), { memory, now: t0 + 75_000 });
+        expect(d.phase).toBe('engage');
     });
 
     test('after a flee, all it ran from are left alone: the two that come back into view are not hunted', () => {
