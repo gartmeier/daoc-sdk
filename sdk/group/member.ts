@@ -211,9 +211,11 @@ export interface MemberAgentOptions {
     /** Report monsters and enemy players within this distance (default 3000). */
     sightRadius?: number;
     /**
-     * How members see enemy players and their pets (sdk/vision.ts): 'omniscient' (default) reports all the
-     * server sends, 'human' only what a player would notice: near, or ahead and not behind a hill.
-     * A run takes `--vision=human` (or `--vision.fovDegrees=120`) as a flag too (runGroup).
+     * How members see enemy players and their pets (sdk/vision.ts): 'omniscient' reports all the server sends,
+     * 'human' only what a player would notice: near, or ahead and not behind a hill. Unset, a bare MemberAgent is
+     * omniscient, while a group run (runGroup, runVision) is human unless its strategy or `--vision=omniscient` says
+     * otherwise; `--vision.fovDegrees=120` tunes it. With a skill as well, a member that fights narrows its sight
+     * (vision.ts inFightVision, skill.ts fightAttention).
      */
     vision?: VisionMode | Partial<VisionOptions>;
     /** Pause when no behaviour acts (default 300 ms). */
