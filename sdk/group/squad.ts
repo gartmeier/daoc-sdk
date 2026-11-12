@@ -53,6 +53,8 @@ export interface SquadRules {
     friendReach: number;
     /** Our portal keep's guards (2000 round it) are safety within this of its centre. */
     keepReach: number;
+    /** A group we would not take, and would leave if in it (odds below leaveAt), that comes this near runs us off (a flee, which sprints), not a walk away. */
+    runAt: number;
     /** A lone melee on us is outrun only when safety is at most this far. */
     outrunMax: number;
     /** Patrol the edges (edgePatrol); off: the groups' ring round the meeting point. */
@@ -76,6 +78,7 @@ export const SQUAD_RULES: SquadRules = {
     friendMax: 9000,
     friendReach: 1200,
     keepReach: 2500,
+    runAt: 2000,
     outrunMax: 5000,
     edge: true,
     variant: 0,
@@ -354,8 +357,8 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const odds = `${fmt(up.ratio)} (${here.length} vs ${up.foes.length})`;
 
     /** Where to run: toward friends near and not behind the enemy, else home (or straight away when they stand that way). */
-    const fleeTarget = (): { way: Point; toward: 'friends' | 'home' | 'away'; target: Point | null } => {
-        const them = centroid(up.foes.length ? up.foes : enemies);
+    const fleeTarget = (from: readonly Contact[] = up.foes): { way: Point; toward: 'friends' | 'home' | 'away'; target: Point | null } => {
+        const them = centroid(from.length ? from : enemies);
         if (nearestFriend) {
             const toF = unit(centre, nearestFriend), toE = unit(centre, them);
             // Not when the enemy stands within 60° of that way (they are between us and them).
@@ -433,6 +436,17 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         }
         const nearest = bad.length ? Math.min(...bad.map(c => dist(c, centre))) : Infinity;
         sq.clearing = nearest <= r.sizeUp || (!!sq.clearing && nearest <= r.sizeUp + CLEAR_SLACK);
+        // Closing on us: run (retreat sprints). Run B, 08:32: a group of five walked Camelot's duo down from 3300 to 900 while it
+        // stepped away at a walk, then caught it 45 s into the flee and killed both.
+        // A hidden stealther (alone or with others hidden) is unseen: it walks away.
+        const unseen = here.every(m => STEALTHERS.has(m.className) && !m.inCombat);
+        if (nearest <= r.runAt && worst < r.leaveAt && !unseen && !atFriends && !ourInKeepReach) {
+            const t = fleeTarget(bad);
+            sq.flee = { start: now, lastFollowed: now, to: { x: Math.round(centre.x), y: Math.round(centre.y), z: zAt(centre) }, toward: t.toward, target: t.target };
+            sq.fled++;
+            sq.clearing = false;
+            return fleeOrder(`${bad.length} closing ${Math.round(nearest)} away, odds ${worstText}`);
+        }
         if (sq.clearing) {
             const way = runWay(centre, bad, home?.arrival ?? null);
             const goal = spotAlong(trip, centre, way, r.sizeUp);

@@ -126,8 +126,7 @@ describe('decideSquad: what run B showed (2026-11-11 23:10-23:27)', () => {
         // 23:11: Camelot's duo engaged a Kobold "1 vs 1" and fled 13 s later from six.
         const road = [foe(51, 1500), ...[2700, 3900, 5100, 5200, 5300].map((dx, i) => foe(52 + i, dx))];
         const d = decide(picture(squad(['Merc', 'Cleric']), road));
-        expect(d.phase).toBe('travel');
-        expect(d.reason).toStartWith('avoid:');
+        expect(d.phase).toBe('retreat');   // 1500 off and far stronger: run (runAt)
         expect(d.reason).toContain('2 vs 6');
     });
 
@@ -146,6 +145,18 @@ describe('decideSquad: what run B showed (2026-11-11 23:10-23:27)', () => {
         // ... and beyond it the hunt goes on.
         d = decide(picture(squad(['Merc', 'Cleric']), [caster, ...group(-4700)], {}, t + 3000), { memory, now: t + 3000 });
         expect(d.reason).toContain('hunt 1 enemy');
+    });
+
+    test('a group we would not take that closes within runAt runs us off at once (a retreat, which sprints)', () => {
+        // 08:32: a group of five walked Camelot's duo down from 3300 to 900 while it stepped away at a walk.
+        const five = (dx: number) => [0, 100, 200, 300, 400].map((d, i) => foe(51 + i, dx + d));
+        const memory: Record<string, any> = {};
+        expect(decide(picture(squad(['Merc', 'Cleric']), five(3000)), { memory }).reason).toStartWith('avoid:');
+        const d = decide(picture(squad(['Merc', 'Cleric']), five(1900)), { memory });
+        expect(d.phase).toBe('retreat');
+        expect(d.reason).toStartWith('flee: 5 closing');
+        expect(d.retreatTo!.x).toBeLessThan(BASE.x);
+        expect(memory.squad.fled).toBe(1);
     });
 
     test('a member walking back from a release is not on our side: a lone healer does not take a fighter', () => {
