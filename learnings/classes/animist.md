@@ -45,6 +45,8 @@ From [pets.md](../pets.md#turrets): a ground target first; a spot off the mesh i
 - Her first damage came 36 s into sortie 2's first fight, as the plant and the fire-and-forget turret went first; 1-11 s in sortie 3.
 - Casts with a cast time get interrupted under a melee (4-5 a sortie). Solo she has no haven for `giveGround`.
 
+**Field run B, hibernia's main group (three sorties, 22:28-00:00):** her Forest's Sentry dealt 6565, 7695 and 7700, two to seven times her own (3041, 1036, 2170), up 58-70 %, 10-21 plants a sortie; 3, 3 and 2 deaths. It broke crowd control 2, 5 and 2 times: only a turret on the focus was called off, and a turret takes its own next target when its target dies. **Fixed:** whatever the turret shoots, mezzed or assigned a mezz, sends it passive.
+
 ## Not seen live
 
 - In a group, with a haven for `giveGround`.

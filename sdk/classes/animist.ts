@@ -107,8 +107,10 @@ export const plantTurret = (): Behavior<TacticsSettings> => ({
     interruptible: false,
     async run(ctx) {
         const petState = ctx.sdk.getPetState();
-        const focus = ctx.focus();
-        if (petState && focus && ccHolds(ctx, focus) && petState.targetObjectId === focus.objectId && petState.aggression !== 'passive') {
+        // Off whatever it shoots once that is mezzed or about to be, the focus or not: a turret takes its own next target when one dies,
+        // and broke crowd control 5 and 2 times in hibernia's first field sorties (run B) with only the focus checked.
+        const onIt = ctx.contact(petState?.targetObjectId);
+        if (petState && onIt && petState.aggression !== 'passive' && (ccHolds(ctx, onIt) || ctx.orders().cc.some(a => a.targetId === onIt.objectId))) {
             await ctx.sdk.sendPetCommand('passive');
             return false;
         }
