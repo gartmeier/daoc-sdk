@@ -24,7 +24,7 @@
 //   (Riber) at Druim Ligen, by the portal keeps; Midgard's nearest (Gwaell) at Audliten, a port from Svasud Faste.
 
 import { getClass } from '../../data/index';
-import { enterBattleground, leaveBattleground } from '../group/battleground';
+import { enterBattleground, leaveBattleground, townTeleporter, type EnterResult } from '../group/battleground';
 import type { Behavior, Member, MemberContext } from '../group/member';
 import { EquipmentSlot, ObjectType, type GameMessage, type InventoryItem, type Realm } from '../types';
 
@@ -332,6 +332,29 @@ export const POISON_SHOPS: Readonly<Record<string, { merchant: string; regionId:
 };
 /** A trip costs about this; with less in the purse it doesn't go. */
 const TRIP_MIN_COPPER = 3000;
+/**
+ * How far the way back looks for a town teleporter of the realm. enterBattleground looks within 4000 only, and Audliten's
+ * (Stor Gothi Annark, a LiveTeleporter) stands 5,100 from Gwaell: Hodur bought there at 15:44 on 2026-11-12 and stayed.
+ */
+const BACK_RANGE = 60_000;
+/** Out of Thidranki after a trip that didn't come back: another try this often, while the run lasts. */
+const BACK_RETRY_MS = 3 * 60_000;
+
+/**
+ * Into Thidranki from wherever a trip ended: by way of the nearest town teleporter of the realm (within 60,000) when
+ * none stands within enterBattleground's 4000. Two tries; the last result says why it failed.
+ */
+export async function backIn(member: Member, log: (line: string) => void): Promise<EnterResult> {
+    let last: EnterResult | null = null;
+    for (let attempt = 1; attempt <= 2; attempt++) {
+        const tp = townTeleporter(member) ? undefined : townTeleporter(member, BACK_RANGE);
+        if (tp) log(`by ${tp.name} at (${tp.x}, ${tp.y}), ${Math.round(tp.distance ?? 0)} off`);
+        last = await enterBattleground([member], { log, via: tp ? { x: tp.x, y: tp.y, z: tp.z } : undefined });
+        if (last.success) return last;
+        log(`back in, try ${attempt}: ${last.message}`);
+    }
+    return last!;
+}
 
 /**
  * Low on poisons, out of combat, alone (a solo squad: nobody waits for us): out of the battleground, to the realm's
@@ -343,9 +366,20 @@ export const restock = (): Behavior => ({
     interruptible: false,
     async run(ctx) {
         const me = ctx.me();
+        const now = Date.now();
+        // A trip that ended out of Thidranki: back in, again every 3 minutes, and the failure said each time.
+        if (!me.isDead && me.regionId !== 252 && ctx.memory.get('restockAway')) {
+            if (now < (ctx.memory.get('restockBackAt') ?? 0) || me.inCombat) return false;
+            ctx.memory.set('restockBackAt', now + BACK_RETRY_MS);
+            const member: Member = { bot: me.name.toLowerCase(), role: ctx.role, sdk: ctx.sdk, actions: ctx.bot };
+            ctx.doing('restock', null, 'back into Thidranki');
+            const back = await backIn(member, line => ctx.note(`restock: ${line}`));
+            if (back.success) ctx.memory.delete('restockAway');
+            ctx.result('restock', { success: back.success, message: `back: ${back.message}${back.success ? '' : ` (stranded out of Thidranki; next try in ${BACK_RETRY_MS / 60_000} min)`}` });
+            return true;
+        }
         if (me.isDead || me.regionId !== 252 || ctx.members().filter(m => !m.isDead).length > 1) return false;
         if (!outOfCombat(ctx, 'restockFightAt', 12_000)) return false;
-        const now = Date.now();
         if (now < (ctx.memory.get('restockRetryAt') ?? 0)) return false;
         const plan = poisonPlan(envenomOf(ctx));
         if (!needsRestock(plan, countByRole(ctx, plan))) return false;
@@ -356,6 +390,7 @@ export const restock = (): Behavior => ({
         const log = (line: string) => ctx.note(`restock: ${line}`);
         ctx.doing('restock', null, `to ${shop.merchant}`);
         const out = await leaveBattleground([member], { log });
+        if (ctx.me().regionId !== 252) ctx.memory.set('restockAway', true);
         if (!out.success) { ctx.result('restock', { success: false, message: `out: ${out.message}` }); return true; }
         if (shop.port) {
             await ctx.bot.walkToObject(shop.port.teleporter, { range: 200 });
@@ -370,8 +405,10 @@ export const restock = (): Behavior => ({
             bought.push(`${row.name} x${b.count}${b.success ? '' : ` (${b.reason})`}`);
         }
         log(`bought ${bought.join(', ') || 'nothing'}`);
-        const back = await enterBattleground([member], { log });
-        ctx.result('restock', { success: back.success, message: `${bought.join(', ')}; back: ${back.message}` });
+        const back = await backIn(member, log);
+        if (back.success) ctx.memory.delete('restockAway');
+        else ctx.memory.set('restockBackAt', Date.now() + BACK_RETRY_MS);
+        ctx.result('restock', { success: back.success, message: `${bought.join(', ')}; back: ${back.message}${back.success ? '' : ' (stranded out of Thidranki; tries again)'}` });
         return true;
     },
 });
