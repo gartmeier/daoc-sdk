@@ -5,8 +5,12 @@
 // Keep guards take the realm of the keep whose area they stand in and attack enemy players
 // within 2000 (portal keeps, level 255) or 1000 (other keeps), with the LoS check sent to the
 // target's own client, which always answers clear (GameKeepGuard.cs:88-95, 454-482, 803-806;
-// KeepGuardBrain.cs:47). Keeps load without walls here (keepcomponent is empty), so nothing
-// gives cover.
+// KeepGuardBrain.cs:47). Keeps load without components here (keepcomponent is empty): the walls
+// are static zone fixtures, drawn by a real client and in our navmesh, but they block no line of
+// sight, so nothing gives cover. Their doors are real (the `door` table, GameKeepDoor), see siege.ts.
+//
+// Who owns a keep is read from what our clients see (KeepOwnerRead): the capture broadcast every
+// player gets, and the realm of the keep's guards and lord. siege.ts has the raid on the Faste.
 
 import type { Realm } from '../types';
 import type { Danger } from './terrain';
@@ -55,7 +59,8 @@ export const BATTLEGROUND_LAYOUTS: Record<number, BattlegroundLayout> = {
     [THIDRANKI]: {
         name: 'Thidranki', levels: [20, 24],
         keeps: [
-            // OriginalRealm 0, Albion's in the dump. Guards L28, lord L33 (AbstractGameKeep.cs:837-886), up to ~1700 from the centre.
+            // OriginalRealm 0, Albion's in the dump. Guards L28, lord L33 (AbstractGameKeep.cs:837-886), up to ~1700 from the centre;
+            // after a capture the keep level goes 1 -> 4 and they come back L33 and L38 (siege.ts FASTE).
             { name: 'Thidranki Faste', x: 33089, y: 38271, z: 3720, owner: 'albion', portal: false, guardLevel: 28 },
             { name: 'Hibernia Portal Keep', x: 18362, y: 18257, z: 4320, owner: 'hibernia', portal: true, guardLevel: 255 },
             { name: 'Midgard Portal Keep', x: 54053, y: 24680, z: 4320, owner: 'midgard', portal: true, guardLevel: 255 },
@@ -88,6 +93,11 @@ export interface KeepSettings {
     keepClearance: { portal: number; keep: number };
     /** Owner by keep name over the DB's, for a keep that changed hands: { 'Thidranki Faste': 'midgard' }. */
     keepOwners: Record<string, Realm>;
+    /**
+     * The keep a raid of this unit goes for (siege.ts): its circle is lifted, so routes and the behaviours let the
+     * unit in. Off (absent or null) by default; only a raid sets it, and only for its own keep, never a portal keep.
+     */
+    raid?: string | null;
 }
 
 /**
@@ -109,7 +119,8 @@ export function homeOf(regionId: number, realm: Realm): { keep: Keep; arrival: P
 /**
  * Circles round every keep whose guards attack us: enemy portal keeps at keepClearance.portal, other
  * keeps not ours at keepClearance.keep. Empty outside a known battleground. Settings missing either
- * field (strategies other than RvR) use KEEP_CLEARANCE and the DB's owners.
+ * field (strategies other than RvR) use KEEP_CLEARANCE and the DB's owners. The keep named by
+ * settings.raid has no circle (a portal keep keeps its own).
  */
 export function keepDangers(regionId: number, realm: Realm, settings: Partial<KeepSettings> = {}): Danger[] {
     const bg = BATTLEGROUND_LAYOUTS[regionId];
@@ -117,8 +128,134 @@ export function keepDangers(regionId: number, realm: Realm, settings: Partial<Ke
     const clearance = settings.keepClearance ?? KEEP_CLEARANCE;
     const owners = settings.keepOwners ?? {};
     return bg.keeps
-        .filter(k => (owners[k.name] ?? k.owner) !== realm)
+        .filter(k => (owners[k.name] ?? k.owner) !== realm && !(settings.raid && settings.raid === k.name && !k.portal))
         .map(k => ({ x: k.x, y: k.y, r: k.portal ? clearance.portal : clearance.keep, name: k.name, level: k.guardLevel }));
+}
+
+// ── Who owns a keep, from what our clients see ───────────────────────────────
+
+/** A keep's area: its guards, lord and doors stand inside it and take its realm (KeepArea.cs KEEP_RADIUS, PK_RADIUS). */
+export const KEEP_AREA = { keep: 3000, portal: 4000 } as const;
+
+const REALM_NAMES: Record<string, PlayerRealm> = { Albion: 'albion', Midgard: 'midgard', Hibernia: 'hibernia' };
+
+/**
+ * The capture broadcast every player on the server gets, twice (`important` and `screenCenter`), the moment a lord dies
+ * (PlayerManager.BroadcastCapture, language/EN/Keeps/Keeps.txt). Seen live on 2026-11-12 for a Midgard capture of the Faste.
+ */
+export const CAPTURE_RE = /^The forces of (Albion|Midgard|Hibernia) have captured (.+)!$/;
+
+/** The keep and its new owner from a capture broadcast; null for any other text. */
+export function parseCapture(text: string): { keep: string; realm: PlayerRealm } | null {
+    const m = CAPTURE_RE.exec(text.trim());
+    return m ? { realm: REALM_NAMES[m[1]!]!, keep: m[2]! } : null;
+}
+
+/** The keep whose area holds `p`, or null: within KEEP_AREA of its centre, the nearest when two overlap. */
+export function keepAt(regionId: number, p: { x: number; y: number }): Keep | null {
+    const bg = BATTLEGROUND_LAYOUTS[regionId];
+    if (!bg) return null;
+    let best: Keep | null = null, bestD = Infinity;
+    for (const k of bg.keeps) {
+        const d = Math.hypot(k.x - p.x, k.y - p.y);
+        if (d <= (k.portal ? KEEP_AREA.portal : KEEP_AREA.keep) && d < bestD) { best = k; bestD = d; }
+    }
+    return best;
+}
+
+/** How long after a capture broadcast a guard of another realm in that keep's area is taken for one of the dying old guards. */
+export const CAPTURE_GRACE_MS = 10_000;
+
+/** One reading of a keep's owner: by the capture broadcast, or by its guards' realm (any NPC of a realm in its area). */
+export interface OwnerReading { realm: PlayerRealm; at: number; how: 'capture' | 'guard' }
+
+/** A chat line as our clients keep it (GameMessage; only text is needed). */
+export interface SeenMessage { id?: number; type?: string; text: string; receivedAt?: number }
+/** An NPC as a client (NearbyNpc) or a group frame (WorldContact) has it. */
+export interface SeenNpc { realm: string; x: number; y: number; isPet?: boolean; isDead?: boolean; kind?: string; regionId?: number }
+
+/**
+ * Who owns each keep that can change hands, as our clients see it. Pure: feed it chat and NPC sightings, read
+ * owners(); persist toJSON() if the reading should outlive the process (the DB keeps the owner across a server
+ * restart, and a client that missed the broadcast learns it only by seeing a guard).
+ *
+ * - A capture broadcast names the keep and the realm (every client gets it, wherever it stands).
+ * - Any living non-pet NPC of a player realm standing in a keep's area is that keep's (GameKeepGuard.SetRealm): its
+ *   realm is the keep's. After a capture only the lord (and the Hastener) stand there until the guards respawn
+ *   5-25 min later, all in the new realm. Doors are no use: a door object's realm on our client never updates.
+ * - Portal keeps never change hands and are not read.
+ * - The newest reading wins, except that guards of another realm are ignored for CAPTURE_GRACE_MS after a capture.
+ */
+export class KeepOwnerRead {
+    private readonly readings = new Map<string, OwnerReading>();
+    private lastMessageId = -1;
+
+    constructor(readonly regionId: number, known: Record<string, OwnerReading> = {}) {
+        for (const [k, r] of Object.entries(known)) this.readings.set(k, r);
+    }
+
+    /** Take capture broadcasts from chat (ids already read are skipped); the keeps whose owner changed. */
+    seeMessages(messages: readonly SeenMessage[], now = Date.now()): string[] {
+        const changed: string[] = [];
+        for (const m of messages) {
+            if (m.id !== undefined) {
+                if (m.id <= this.lastMessageId) continue;
+                this.lastMessageId = m.id;
+            }
+            const c = parseCapture(m.text);
+            if (!c) continue;
+            const bg = BATTLEGROUND_LAYOUTS[this.regionId];
+            if (bg && !bg.keeps.some(k => k.name === c.keep && !k.portal)) continue;
+            if (this.set(c.keep, { realm: c.realm, at: m.receivedAt ?? now, how: 'capture' })) changed.push(c.keep);
+        }
+        return changed;
+    }
+
+    /** Take the realm of NPCs standing in a keep's area; the keeps whose owner changed. */
+    seeNpcs(npcs: readonly SeenNpc[], now = Date.now()): string[] {
+        const changed: string[] = [];
+        for (const n of npcs) {
+            if (n.isPet || n.isDead || (n.kind && n.kind !== 'npc') || (n.regionId !== undefined && n.regionId !== this.regionId)) continue;
+            const realm = REALM_NAMES[n.realm.charAt(0).toUpperCase() + n.realm.slice(1)];
+            if (!realm) continue;
+            const k = keepAt(this.regionId, n);
+            if (!k || k.portal) continue;
+            const prev = this.readings.get(k.name);
+            if (prev && prev.realm === realm) { prev.at = Math.max(prev.at, now); continue; }
+            // The old realm's guards die at the capture, but a snapshot from that tick can still hold them.
+            if (prev && prev.how === 'capture' && now < prev.at + CAPTURE_GRACE_MS) continue;
+            if (this.set(k.name, { realm, at: now, how: 'guard' }) && !changed.includes(k.name)) changed.push(k.name);
+        }
+        return changed;
+    }
+
+    /** The owner of a keep: the newest reading, else the DB's (BATTLEGROUND_LAYOUTS). */
+    owner(keep: string): Realm {
+        const r = this.readings.get(keep);
+        if (r) return r.realm;
+        return BATTLEGROUND_LAYOUTS[this.regionId]?.keeps.find(k => k.name === keep)?.owner ?? 'none';
+    }
+
+    /** The reading behind owner(), or null while it is still the DB's. */
+    reading(keep: string): OwnerReading | null {
+        const r = this.readings.get(keep);
+        return r ? { ...r } : null;
+    }
+
+    /** Every keep read so far, for settings.keepOwners. */
+    owners(): Record<string, Realm> {
+        return Object.fromEntries([...this.readings].map(([k, r]) => [k, r.realm]));
+    }
+
+    toJSON(): Record<string, OwnerReading> {
+        return Object.fromEntries([...this.readings].map(([k, r]) => [k, { ...r }]));
+    }
+
+    private set(keep: string, r: OwnerReading): boolean {
+        const prev = this.readings.get(keep);
+        this.readings.set(keep, r);
+        return !prev || prev.realm !== r.realm;
+    }
 }
 
 /** Outside every circle (by `margin` more). */
