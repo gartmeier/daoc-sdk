@@ -195,6 +195,14 @@ describe('decideSquad: what run B showed (2026-11-11 23:10-23:27)', () => {
         expect(memory.squad.zones).toHaveLength(0);
     });
 
+    test('a tank chasing to its leash is still with its healer: an even duo fight goes on', () => {
+        // Run B 09:17: both duos read "1 vs 2" with their tank 2500 out after its focus, and both fled an even fight.
+        const us = squad(['Merc', 'Cleric'], { Merc: { x: BASE.x + 2500 }, Cleric: { x: BASE.x } });
+        const two = [foe(51, 2700, { target: 'Merc', threat: true }), foe(52, 2900, { target: 'Merc', threat: true })];
+        const d = decide(picture(us, two, { phase: 'engage', focus: 51 }));
+        expect(d.phase).toBe('engage');
+    });
+
     test('a member walking back from a release is not on our side: a lone healer does not take a fighter', () => {
         // 23:25: Tuck alone took a Celt at "2 vs 1" with Galahad 9000 off, and died.
         const us = squad(['Cleric', 'Merc'], { Merc: { x: BASE.x - 9000 } });

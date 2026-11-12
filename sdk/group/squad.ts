@@ -353,7 +353,9 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const inRegion = alive.filter(m => m.regionId === regionId);
     const scratch: Record<string, any> = { gatherLead: mem.squadLead };
     const attacked = new Set(enemies.map(onWhom).filter((n): n is string => n !== null && ours.has(n)));
-    const here = mainBody(inRegion, s.gatherRadius, scratch, attacked).main;
+    // Twice the gather radius: a tank chasing its focus to the leash (2000) is still with its healer. Run B 09:17: Camelot's and
+    // Hibernia's duos each read "1 vs 2" that way, mid-chase, and both fled from an even fight.
+    const here = mainBody(inRegion, 2 * s.gatherRadius, scratch, attacked).main;
     mem.squadLead = scratch.gatherLead;
     const centre = centroid(here);
     const nearOnUs = (c: Contact) => onUs(c) && dist(c, centre) <= s.engageRadius + 1000;
