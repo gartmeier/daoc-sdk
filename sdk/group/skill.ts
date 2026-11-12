@@ -16,7 +16,8 @@
 // Set per run or per member, in a strategy's settings or by flag (runGroup puts unknown flags into the settings):
 //   --skill=average                          every member
 //   --skill.reactionMs=300                   average with this changed (a set without preset starts from average)
-//   --skill.realms.midgard=sharp             the members of one realm (field mode passes its flags to every realm)
+//   --skill.realms.midgard=sharp             the members of one realm (field mode passes its flags to every realm);
+//                                            a realm by its name (albion) or its group's (camelot)
 //   --skill.members.Thorgrim=novice          one member, by bot folder name
 //   --skill=off                              none (also: no skill at all)
 //   --skill.ab=20                            an A/B in one run: on only in every other 20-minute slot, by when the
@@ -56,6 +57,9 @@ export type SkillSetting = SkillValue | (Partial<Skill> & {
     ab?: number;
 });
 
+/** A realms key: the realm's name or its group's (groups/camelot is Albion's). */
+const REALM_KEYS: Record<string, Realm> = { albion: 'albion', camelot: 'albion', midgard: 'midgard', hibernia: 'hibernia' };
+
 const LIMITS: Record<keyof Skill, number> = { reactionMs: 3000, switchMs: 5000, mistakeRate: 1 };
 
 function presetOf(name: unknown, where: string): Skill | null {
@@ -94,7 +98,8 @@ export function resolveSkill(setting: unknown, bot: string, realm?: Realm | null
     const { realms, members, ab: _ab, ...rest } = setting as { realms?: Record<string, unknown>; members?: Record<string, unknown>; ab?: unknown };
     const own = members && Object.entries(members).find(([name]) => name.toLowerCase() === bot.toLowerCase());
     if (own) return resolveValue(own[1], `--skill.members.${own[0]}`);
-    if (realm && realms && realms[realm] !== undefined) return resolveValue(realms[realm], `--skill.realms.${realm}`);
+    const mine = realm && realms ? Object.entries(realms).find(([key]) => REALM_KEYS[key.toLowerCase()] === realm) : undefined;
+    if (mine) return resolveValue(mine[1], `--skill.realms.${mine[0]}`);
     return Object.keys(rest).length ? resolveValue(rest, '--skill') : null;
 }
 
@@ -113,7 +118,10 @@ export function checkSkillSetting(setting: unknown): void {
     if (setting === undefined || setting === null || typeof setting !== 'object') { resolveValue(setting, '--skill'); return; }
     const { realms, members, ab, ...rest } = setting as { realms?: Record<string, unknown>; members?: Record<string, unknown>; ab?: unknown };
     if (ab !== undefined && !(Number(ab) > 0)) throw new Error(`--skill.ab: expected minutes > 0, got ${String(ab)}`);
-    for (const [r, v] of Object.entries(realms ?? {})) resolveValue(v, `--skill.realms.${r}`);
+    for (const [r, v] of Object.entries(realms ?? {})) {
+        if (!REALM_KEYS[r.toLowerCase()]) throw new Error(`--skill.realms.${r}: expected albion (camelot), midgard or hibernia`);
+        resolveValue(v, `--skill.realms.${r}`);
+    }
     for (const [m, v] of Object.entries(members ?? {})) resolveValue(v, `--skill.members.${m}`);
     if (Object.keys(rest).length) resolveValue(rest, '--skill');
 }

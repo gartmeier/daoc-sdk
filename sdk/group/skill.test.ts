@@ -44,6 +44,14 @@ describe('resolveSkill', () => {
         expect(() => checkSkillSetting({ realms: { midgard: 'average' } })).not.toThrow();
     });
 
+    test('a realm by the name of its group: camelot is Albion; an unknown realm stops the run', () => {
+        expect(resolveSkill({ realms: { camelot: 'average' } }, 'merlin', 'albion')).toEqual(SKILL_PRESETS.average);
+        expect(resolveSkill({ realms: { camelot: 'average' } }, 'sigrid', 'midgard')).toBeNull();
+        expect(resolveSkill({ realms: { Albion: 'sharp' } }, 'merlin', 'albion')).toEqual(SKILL_PRESETS.sharp);
+        expect(() => checkSkillSetting({ realms: { camelot: 'average' } })).not.toThrow();
+        expect(() => checkSkillSetting({ realms: { avalon: 'average' } })).toThrow(/realms\.avalon/);
+    });
+
     test('a typo in a key stops the run too', () => {
         expect(() => checkSkillSetting({ reactionms: 300 })).toThrow(/unknown reactionms/);
         expect(() => checkSkillSetting({ realms: { midgard: { switchMS: 1 } } })).toThrow(/realms\.midgard: unknown switchMS/);
