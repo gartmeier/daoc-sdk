@@ -140,6 +140,21 @@ const PER_LEVEL = 0.08;
 const ASSIST = 2000;
 /** A friend's worth beside ours: not under our orders, and gone when its group moves on. */
 const ALLY = 0.8;
+/**
+ * Only a friend in combat joins the count; once counted it stays counted this long, out to ASSIST + ALLY_SLACK. The user,
+ * 14:43 on 11-12: Hibernia's duo engaged "beside 5 friends" as a group passed, and fled once it had passed.
+ */
+const ALLY_KEEP_MS = 15_000, ALLY_SLACK = 1500;
+/**
+ * A fight we chose (taken at engageAt or better) is held this long from its start: left inside it only below
+ * leaveAt × HOLD_FAR. The user, 14:43 on 11-12: Aine and Fionn engaged two Albions at even odds, fled 13 s later at 0.50
+ * when a third came near, came back, engaged, fled again; both Albions stayed at 100 %.
+ */
+const FIGHT_HOLD_MS = 20_000, HOLD_FAR = 0.6;
+/** Engaged or attacked again within this of the last time is the same fight. */
+const FIGHT_GAP_MS = 10_000;
+/** A flee is held this long before it turns on those following, unless the odds reach engageAt × TURN_FAR. */
+const FLEE_HOLD_MS = 10_000, TURN_FAR = 2;
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -185,7 +200,7 @@ export function sideStrength(worths: readonly number[], healers: number, heads?:
 }
 
 /** A friendly player of our realm outside the squad (squad-run.ts friendsIn): where it stands, and what the region frame tells. */
-export type Friend = Point & { hp?: number; level?: number; className?: string };
+export type Friend = Point & { name?: string; hp?: number; level?: number; className?: string; inCombat?: boolean };
 
 /** A friend's worth against a side of level `ours`: its class's role, health and level, at ALLY. */
 export function allyWorth(f: Friend, ours: number): number {
@@ -199,6 +214,8 @@ export interface SizeUp {
     foes: Contact[];
     /** Friends in the fight (ASSIST): counted on our side. */
     allies: number;
+    /** Their names, where known (to keep them counted: ALLY_KEEP_MS). */
+    allyNames: string[];
     ours: number;
     theirs: number;
     /** ours / theirs; Infinity with nobody against us. */
@@ -210,9 +227,10 @@ export interface SizeUp {
 /**
  * The fight in front of us: the enemies against us near the centre (within sizeUp, else within huntRadius), the
  * largest realm among them plus any on us, and those within joinRadius of them; and both sides' strength. Friends
- * (`allies`) within ASSIST of those enemies, or of us, fight on our side.
+ * (`allies`) in combat within ASSIST of those enemies, or of us, fight on our side; those named in `keep` (counted lately)
+ * out to ASSIST + ALLY_SLACK, in combat or not.
  */
-export function sizeUp(members: readonly MemberReport[], enemies: readonly Contact[], centre: Point, s: Pick<SquadSettings, 'huntRadius' | 'squad'>, grudge: ReadonlySet<number> = new Set(), allies: readonly Friend[] = []): SizeUp {
+export function sizeUp(members: readonly MemberReport[], enemies: readonly Contact[], centre: Point, s: Pick<SquadSettings, 'huntRadius' | 'squad'>, grudge: ReadonlySet<number> = new Set(), allies: readonly Friend[] = [], keep: ReadonlySet<string> = new Set()): SizeUp {
     const ours = new Set(members.map(m => m.name));
     const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
     const byId = new Map(enemies.map(c => [c.objectId, c]));
@@ -231,7 +249,8 @@ export function sizeUp(members: readonly MemberReport[], enemies: readonly Conta
     }
     const alive = members.filter(m => !m.isDead);
     const level = alive.length ? alive.reduce((a, m) => a + m.level, 0) / alive.length : 1;
-    const helping = allies.filter(f => dist(f, centre) <= ASSIST || foes.some(c => !c.isPet && dist(c, f) <= ASSIST));
+    const within = (f: Friend, reach: number) => dist(f, centre) <= reach || foes.some(c => !c.isPet && dist(c, f) <= reach);
+    const helping = allies.filter(f => (f.name && keep.has(f.name) ? within(f, ASSIST + ALLY_SLACK) : f.inCombat !== false && within(f, ASSIST)));
     const ourWorth = [...alive.map(m => memberWorth(m) * clamp(1 + PER_LEVEL * (m.level - level), 0.6, 1.5)), ...helping.map(f => allyWorth(f, level))];
     const ourHealers = alive.filter(m => m.role === 'healer' || m.capabilities.heal).length + helping.filter(f => f.className && roleOfClass(f.className) === 'healer').length;
     const theirWorth = foes.map(c => foeWorth(c, level) * (busy(c) ? BUSY : 1));
@@ -241,7 +260,7 @@ export function sizeUp(members: readonly MemberReport[], enemies: readonly Conta
     const opened = sideStrength(ourWorth.map((w, i) => w * (i < alive.length && STEALTHERS.has(alive[i]!.className) && !alive[i]!.inCombat ? OPENER : 1)), ourHealers);
     // To start a fight, those that beat us lately count more (GRUDGE).
     const wary = sideStrength(foes.map((c, i) => theirWorth[i]! * (grudge.has(c.objectId) ? GRUDGE : 1)), theirHealers, heads);
-    return { foes, allies: helping.length, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: wary > 0 ? opened / wary : Infinity };
+    return { foes, allies: helping.length, allyNames: helping.flatMap(f => (f.name ? [f.name] : [])), ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: wary > 0 ? opened / wary : Infinity };
 }
 
 /**
@@ -311,7 +330,11 @@ export function edgePatrol(regionId: number, realm: Realm, level: number, settin
 interface SquadMemory {
     /** Enemy ids left alone until (ms epoch). */
     avoid: Record<number, number>;
-    flee: { start: number; lastFollowed: number; to: Point3; toward: 'friends' | 'home' | 'away'; target: Point | null } | null;
+    flee: { start: number; lastFollowed: number; to: Point3; toward: 'friends' | 'home' | 'away'; target: Point | null; ids?: number[] } | null;
+    /** Friends counted in our fight lately, by name, until (ms epoch): ALLY_KEEP_MS. */
+    allies?: Record<string, number>;
+    /** The fight we are in: when it started, when we were last in it, and whether we chose it (held: FIGHT_HOLD_MS). */
+    fight?: { start: number; last: number; chosen: boolean };
     /** Caught: fight it out until nobody is against us. */
     stand: boolean;
     /** Enemies in a group we would not take now, hidden until (ms epoch): SHUN_MS after last judged so. */
@@ -400,10 +423,21 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const atFriends = !!nearestFriend && dist(nearestFriend, centre) <= r.friendReach;
 
     // A friendly group's fight near us is ours too: its players count on our side (ASSIST).
-    const up = sizeUp(here, enemies, centre, s, grudge, friends);
+    sq.allies = Object.fromEntries(Object.entries(sq.allies ?? {}).filter(([, until]) => until > now));
+    const keep = new Set(Object.keys(sq.allies));
+    const up = sizeUp(here, enemies, centre, s, grudge, friends, keep);
+    for (const n of up.allyNames) sq.allies[n] = now + ALLY_KEEP_MS;
     // Attacked: one on us near (the board keeps a runner's last target, so not at any range), or in combat with one beside us.
     const hit = up.foes.some(nearOnUs) || here.some(m => m.inCombat && up.foes.some(c => dist(c, m) < 400));
     const engaged = o.phase === 'engage';
+    // The fight's start, and whether we chose it (taken at engageAt or better): a fight we chose is held (FIGHT_HOLD_MS).
+    if (engaged || hit) {
+        if (!sq.fight || now - sq.fight.last > FIGHT_GAP_MS) sq.fight = { start: now, last: now, chosen: engaged && up.ratio >= r.engageAt };
+        sq.fight.last = now;
+    }
+    let held = !!sq.fight?.chosen && now - sq.fight.start < FIGHT_HOLD_MS && now - sq.fight.last <= FIGHT_GAP_MS && !sq.flee;
+    // Far past the line: the hold ends.
+    if (held && up.foes.length && up.ratio < r.leaveAt * HOLD_FAR) { sq.fight!.chosen = false; held = false; }
     const fmt = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : '∞');
     const side = (n: number) => `${here.length}${n ? `+${n}` : ''}`;
     const odds = `${fmt(up.ratio)} (${side(up.allies)} vs ${up.foes.length})`;
@@ -425,10 +459,13 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         const left = f.target ? dist(centre, f.target) : s.retreat.distance;
         return spotAlong(trip, centre, way, Math.min(s.retreat.distance, Math.max(600, left)));
     };
-    const fleeOrder = (why: string): OrdersUpdate => {
+    const fleeOrder = (why: string, walk = false): OrdersUpdate => {
         const f = sq.flee!;
         if (dist(centre, f.to) < 600) f.to = nextSpot(f);
         const where = f.toward === 'friends' ? 'friends' : f.toward === 'home' ? 'our portal keep' : 'open ground';
+        // Nobody following within engageRadius: on at a walk (travel), so sprint (retreat only) is off and endurance is kept for
+        // the next fight. The user, 14:44 on 11-12: Fionn, a Blademaster, at 5 % endurance from sprinting every flee.
+        if (walk) return { phase: 'travel', focus: null, puller: null, cc: [], waiting: [], retreatTo: null, anchor: f.to, objective: `walk on away from ${up.foes.length || 'the'} enemies toward ${where}`, reason: `flee: ${why}, none within ${s.engageRadius}: walking` };
         return { phase: 'retreat', focus: null, puller: null, cc: [], waiting: [], retreatTo: f.to, anchor: f.to, objective: `get away from ${up.foes.length || 'the'} enemies toward ${where}`, reason: `flee: ${why}` };
     };
 
@@ -449,12 +486,20 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         // One that still has us as its last target counts only within the focus slack: the board keeps a runner's target.
         const following = up.foes.filter(c => dist(c, centre) <= s.engageRadius || (onUs(c) && dist(c, centre) <= s.engageRadius + 1000));
         if (following.length) sq.flee.lastFollowed = now;
+        const ids = sq.flee.ids ??= [];
+        for (const c of up.foes) if (!ids.includes(c.objectId)) ids.push(c.objectId);
         const safe = atFriends || ourInKeepReach;
         // Only those we can take still following: turn on them (run B 09:42: Hibernia's duo ran 45 s from one Troll at
-        // odds 1.18, was caught and lost Aine). The fight logic below takes it from here.
-        if (following.length && up.ratio >= r.engageAt) sq.flee = null;
-        else if (safe || now - sq.flee.lastFollowed >= r.shakenMs) {
-            for (const c of up.foes) sq.avoid[c.objectId] = now + r.avoidMs;
+        // odds 1.18, was caught and lost Aine), once the flee has held FLEE_HOLD_MS, or at once when the odds are far past
+        // engageAt. The fight logic below takes it from here, and holds it as a fight we chose.
+        if (following.length && up.ratio >= r.engageAt && (now - sq.flee.start >= FLEE_HOLD_MS || up.ratio >= r.engageAt * TURN_FAR)) {
+            sq.flee = null;
+            sq.fight = { start: now, last: now, chosen: true };
+            held = true;
+        } else if (safe || now - sq.flee.lastFollowed >= r.shakenMs) {
+            // All we ran from are left alone (avoidMs), not only those still in view: else the next tick hunts the two of
+            // the three that came back into view (the user, 14:43 on 11-12).
+            for (const id of ids) sq.avoid[id] = now + r.avoidMs;
             noteZone(up.foes);
             sq.flee = null;
             // At safety with them on us: fight there, beside our friends or under our guards.
@@ -463,12 +508,14 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
             sq.flee = null;
             sq.stand = true;
             sq.caught++;
-        } else return fleeOrder(`${following.length} following, odds ${odds}`);
+        } else return fleeOrder(`${following.length} following, odds ${odds}`, !following.length);
     }
     if (sq.stand && !up.foes.some(c => onUs(c) || dist(c, centre) <= s.engageRadius)) sq.stand = false;
 
     // ── In a fight that turned: leave it ──
-    if ((engaged || hit) && up.foes.length && !sq.stand && up.ratio < r.leaveAt) {
+    // A fight we chose is held for FIGHT_HOLD_MS unless the odds fall far past leaveAt (held, above).
+    const holding = held && up.foes.length > 0 && up.ratio < r.leaveAt;
+    if ((engaged || hit) && up.foes.length && !sq.stand && !held && up.ratio < r.leaveAt) {
         const focus = engaged && o.focus !== null ? up.foes.find(c => c.objectId === o.focus) : undefined;
         const finishing = !!focus && focus.hp < s.retreat.focusHp && up.ratio >= r.leaveAt / 2;
         // One enemy player on us (with its pet, if any) runs as fast as we do, or shoots or casts at our back: only worth
@@ -480,7 +527,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         const safetyNear = (nearestFriend && dist(nearestFriend, centre) <= r.outrunMax) || (home && dist(centre, home.keep) <= r.outrunMax);
         if (!finishing && !(melee && !safetyNear) && !atFriends && !ourInKeepReach) {
             const t = fleeTarget();
-            sq.flee = { start: now, lastFollowed: now, to: { x: Math.round(centre.x), y: Math.round(centre.y), z: zAt(centre) }, toward: t.toward, target: t.target };
+            sq.flee = { start: now, lastFollowed: now, to: { x: Math.round(centre.x), y: Math.round(centre.y), z: zAt(centre) }, toward: t.toward, target: t.target, ids: up.foes.map(c => c.objectId) };
             sq.fled++;
             return fleeOrder(`odds ${odds} below ${r.leaveAt}`);
         }
@@ -491,16 +538,21 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     // enemy (run B, 23:11: Camelot's duo engaged a Kobold "1 vs 1" and fled 13 s later from six), and a lone caster of one
     // realm by another realm's group neither (23:13: hunt and avoid flipped every second).
     let worstText = '';
-    if (!engaged && !hit && !sq.stand) {
+    if (!engaged && !hit && !sq.stand && !held) {
         const whole = { ...s, squad: { ...r, sizeUp: Infinity } };
         const groups = enemyClusters(enemies, r.joinRadius).filter(cl => cl.some(c => dist(c, centre) <= s.huntRadius));
         const bad: Contact[] = [];
         let worst = Infinity;
         for (const cl of groups) {
             // The group as a whole is what we would walk into, whichever realms are in it.
-            const su = sizeUp(here, cl.map(c => ({ ...c, realm: cl[0]!.realm })), centre, whole, grudge, friends);
+            const su = sizeUp(here, cl.map(c => ({ ...c, realm: cl[0]!.realm })), centre, whole, grudge, friends, keep);
             const odds = su.opening;
-            if (odds >= r.engageAt) { for (const c of cl) delete sq.shun[c.objectId]; continue; }
+            if (odds >= r.engageAt) {
+                for (const c of cl) delete sq.shun[c.objectId];
+                // Those we ran from stay left alone, unless a friendly group's fight with them makes it far better than even.
+                if (su.allies && odds >= r.engageAt * TURN_FAR) for (const c of cl) delete sq.avoid[c.objectId];
+                continue;
+            }
             if (!cl.every(c => (sq.shun[c.objectId] ?? 0) > now || (sq.avoid[c.objectId] ?? 0) > now)) sq.avoided++;
             for (const c of cl) sq.shun[c.objectId] = now + SHUN_MS;
             noteZone(cl);
@@ -518,7 +570,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         const players = bad.filter(c => !c.isPet).length;
         if (nearest <= r.runAt && worst < r.leaveAt && players >= 2 && !unseen && !atFriends && !ourInKeepReach) {
             const t = fleeTarget(bad);
-            sq.flee = { start: now, lastFollowed: now, to: { x: Math.round(centre.x), y: Math.round(centre.y), z: zAt(centre) }, toward: t.toward, target: t.target };
+            sq.flee = { start: now, lastFollowed: now, to: { x: Math.round(centre.x), y: Math.round(centre.y), z: zAt(centre) }, toward: t.toward, target: t.target, ids: bad.map(c => c.objectId) };
             sq.fled++;
             sq.clearing = false;
             return fleeOrder(`${bad.length} closing ${Math.round(nearest)} away, odds ${worstText}`);
@@ -531,8 +583,8 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         }
     } else sq.clearing = false;
     const hidden = new Set([...Object.keys(sq.avoid), ...Object.keys(sq.shun)].map(Number));
-    // A fight we are in (taken, caught, or they attack us) shows everyone: the avoided ones too.
-    const showAll = sq.stand || hit || engaged;
+    // A fight we are in (taken, held, caught, or they attack us) shows everyone: the avoided ones too.
+    const showAll = sq.stand || hit || engaged || held;
     const contacts = showAll ? p.contacts : p.contacts.filter(c => !hidden.has(c.objectId) || nearOnUs(c));
     // The patrol's next waypoint by enemies we keep clear of is skipped (at most the whole loop once): else the loop walks
     // us back to them as soon as we stepped away.
@@ -566,7 +618,10 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         }
     }
     // Fighting beside a friendly group: say so, for the log and the ledger.
-    if (up.allies && u.phase === 'engage' && up.foes.length) return { ...u, reason: `${u.reason ?? ''}; beside ${up.allies} friends, odds ${odds}` };
+    if (u.phase === 'engage' && up.foes.length && (up.allies || holding)) {
+        const why = [up.allies ? `beside ${up.allies} friends` : '', holding ? `held ${Math.round((now - sq.fight!.start) / 1000)} s of ${FIGHT_HOLD_MS / 1000}` : ''].filter(Boolean).join(', ');
+        return { ...u, reason: `${u.reason ?? ''}; ${why}, odds ${odds}` };
+    }
     // Say who we keep clear of, for the log: the orders alone show only a patrol.
     if (shunned.length && !showAll && u.phase !== 'engage') return { ...u, reason: `${u.reason ?? ''}; clear of ${shunned.length}${worstText ? ` at odds ${worstText}` : ''}` };
     return u;

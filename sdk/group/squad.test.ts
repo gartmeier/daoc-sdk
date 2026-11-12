@@ -278,6 +278,62 @@ describe('decideSquad: leaving a fight that turned', () => {
         expect(sizeUp(squad(['Merc']), five, BASE, SQUAD_SETTINGS, new Set(), hurt).ratio).toBeLessThan(SQUAD_SETTINGS.squad.engageAt);
     });
 
+    test('a fight we chose is held: no flee at 0.50 thirteen seconds in, but at once far past the line, and after the hold', () => {
+        // The user, 14:43 on 11-12: Aine and Fionn engaged two Albions, fled 13 s later at 0.50 when a third came near.
+        const memory: Record<string, any> = {};
+        const t0 = 1_000_000;
+        const us = () => squad(['Merc', 'Cleric'], { Merc: { inCombat: true } });
+        const two = [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 500)];
+        let d = decide(picture(us(), two, { phase: 'engage', focus: 51 }, t0), { memory, now: t0 });
+        expect(d.phase).toBe('engage');
+        expect(memory.squad.fight.chosen).toBe(true);
+        for (const t of [5000, 10_000]) decide(picture(us(), two, { phase: 'engage', focus: 51 }, t0 + t), { memory, now: t0 + t });
+        const three = [...two, foe(53, 700)];
+        d = decide(picture(us(), three, { phase: 'engage', focus: 51 }, t0 + 13_000), { memory, now: t0 + 13_000 });
+        expect(d.phase).toBe('engage');
+        expect(d.reason).toContain('held 13 s of 20');
+        // After the hold: left.
+        d = decide(picture(us(), three, { phase: 'engage', focus: 51 }, t0 + 21_000), { memory, now: t0 + 21_000 });
+        expect(d.phase).toBe('retreat');
+        // Far past the line (five against two): left at once, hold or not.
+        const m2: Record<string, any> = {};
+        decide(picture(us(), two, { phase: 'engage', focus: 51 }, t0), { memory: m2, now: t0 });
+        const five = [...three, foe(54, 800), foe(55, 900)];
+        expect(decide(picture(us(), five, { phase: 'engage', focus: 51 }, t0 + 5000), { memory: m2, now: t0 + 5000 }).phase).toBe('retreat');
+        // A fight we did not choose (caught at 0.50 from the start) is not held.
+        const m3: Record<string, any> = {};
+        expect(decide(picture(us(), three, { phase: 'engage', focus: 51 }, t0), { memory: m3, now: t0 }).phase).toBe('retreat');
+    });
+
+    test('after a flee, all it ran from are left alone: the two that come back into view are not hunted', () => {
+        const memory: Record<string, any> = {};
+        const t0 = 1_000_000;
+        const us = () => squad(['Merc', 'Cleric']);
+        const o = { phase: 'retreat' as const };
+        decide(picture(us(), [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 400), foe(53, 500), foe(54, 600)], { phase: 'engage', focus: 51 }, t0), { memory, now: t0 });
+        expect(memory.squad.flee).toBeTruthy();
+        // Shaken off, then the two that were in front of it come back into view 3000 off, alone.
+        decide(picture(us(), [], o, t0 + 3000), { memory, now: t0 + 3000 });
+        let d = decide(picture(us(), [], o, t0 + 10_000), { memory, now: t0 + 10_000 });
+        expect(memory.squad.flee).toBeNull();
+        d = decide(picture(us(), [foe(51, 3000), foe(52, 3100)], d as any, t0 + 11_000), { memory, now: t0 + 11_000 });
+        expect(d.reason ?? '').not.toContain('hunt');
+        expect(d.phase).not.toBe('engage');
+    });
+
+    test('friends passing by out of combat are not counted; friends counted in our fight stay counted for a while', () => {
+        const five = [0, 150, 300, 450, 600].map((d, i) => foe(51 + i, 3400 + d));
+        const passing = [3100, 3200, 3300, 3400, 3500].map((dx, i) => ({ name: `F${i}`, x: BASE.x + dx, y: BASE.y + 600, inCombat: false }));
+        expect(sizeUp(squad(['Merc']), five, BASE, SQUAD_SETTINGS, new Set(), passing).allies).toBe(0);
+        const fighting = passing.map(f => ({ ...f, inCombat: true }));
+        const up = sizeUp(squad(['Merc']), five, BASE, SQUAD_SETTINGS, new Set(), fighting);
+        expect(up.allyNames).toEqual(['F0', 'F1', 'F2', 'F3', 'F4']);
+        // Out of combat a moment and 1000 further off: still counted while kept.
+        const after = fighting.map(f => ({ ...f, inCombat: false, y: f.y + 1000 }));
+        expect(sizeUp(squad(['Merc']), five, BASE, SQUAD_SETTINGS, new Set(), after, new Set(up.allyNames)).allies).toBe(5);
+        expect(sizeUp(squad(['Merc']), five, BASE, SQUAD_SETTINGS, new Set(), after).allies).toBe(0);
+    });
+
     test("a stealther's opener: a lone melee on a hurt solo is fought out, unless friends are near to run to", () => {
         const opener = [foe(51, 100, { ...guess('melee'), target: 'Wizard', threat: true })];
         const us = () => squad(['Wizard'], { Wizard: { hp: 45, inCombat: true } });
@@ -309,9 +365,11 @@ describe('decideSquad: leaving a fight that turned', () => {
         const o = { phase: 'retreat' as const, retreatTo: d.retreatTo, anchor: d.anchor };
         d = decide(picture(squad(['Merc']), chasers(300), o, t0 + 5000), { memory, now: t0 + 5000 });
         expect(d.phase).toBe('retreat');
-        // Out of sight beyond engageRadius for shakenMs: done, and those two are not hunted.
+        // Out of sight beyond engageRadius: on at a walk (no sprint); for shakenMs: done, and those two are not hunted.
         d = decide(picture(squad(['Merc']), chasers(3800), o, t0 + 8000), { memory, now: t0 + 8000 });
-        expect(d.phase).toBe('retreat');
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toStartWith('flee:');
+        expect(d.reason).toContain('walking');
         d = decide(picture(squad(['Merc']), chasers(3800), o, t0 + 12_000), { memory, now: t0 + 12_000 });
         expect(d.phase).toBe('travel');
         expect(d.reason).toContain('patrol');
@@ -413,7 +471,7 @@ describe('squad-run: lanes and friends', () => {
         const bot = (name: string, realm: any, group: string | null, over: object = {}) => ({ name, realm, x: 1, y: 2, isDead: false, group: group ? { id: group } : null, ...over });
         const bots = [bot('Mordred', 'albion', 'camelot-s1'), bot('Gawain', 'albion', 'camelot'), bot('Tuck', 'albion', 'camelot', { isDead: true }), bot('Sigrid', 'midgard', 'midgard'), bot('Lone', 'albion', null)];
         expect(friendsIn(bots, 'camelot-s1')).toHaveLength(2);
-        expect(friendsIn([...bots, bot('Lancelot', 'albion', 'camelot', { hp: 60, level: 23, className: 'Paladin' })], 'camelot-s1')[2]).toMatchObject({ hp: 60, level: 23, className: 'Paladin' });
+        expect(friendsIn([...bots, bot('Lancelot', 'albion', 'camelot', { hp: 60, level: 23, className: 'Paladin', inCombat: true })], 'camelot-s1')[2]).toMatchObject({ name: 'Lancelot', hp: 60, level: 23, className: 'Paladin', inCombat: true });
         expect(friendsIn(bots, 'nobody')).toEqual([]);
     });
 });

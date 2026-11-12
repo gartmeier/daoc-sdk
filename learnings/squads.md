@@ -28,6 +28,12 @@ square law), so two against one is four to one.
 - A friendly group's fight counts as ours. Players of our realm outside the squad, two or more together, within 2000 (`ASSIST`) of the enemies or of us, count on our side. Each one's worth is its class's role, health and level from the gateway's region frame, times 0.8 (`ALLY`).
   - The log shows them as `1+5 vs 5`, and a taken fight's reason ends `; beside N friends`.
   - The cause (N5, 2026-11-12 09:53): Diarmuid, a solo Ranger, read "1 vs 3", then "1 vs 5", and patrolled away from Hibernia's own group fighting those five 3-4k off. A human archer would have joined.
+  - Only a friend in combat counts; once counted, it stays counted for 15 s and out to 3500, so a group passing by doesn't switch the fight on and off.
+- **Commitment** (the user, 2026-11-12 14:43: Aine and Fionn engaged, fled at 0.50, came back, engaged, fled again; both Albions stayed at 100 %, and Fionn was at 5 % endurance):
+  - A fight we chose (taken at `engageAt` or better) is held for 20 s from its start. Inside the hold it is left only below `leaveAt` × 0.6 (0.33). The log reads `; held N s of 20`.
+  - A flee turns on those following only after 10 s, unless the odds are twice `engageAt`.
+  - When a flee ends, everyone it ran from is avoided for `avoidMs`, not only those still in view.
+  - With nobody following within `engageRadius`, a flee walks on as a travel order, so sprint is off and endurance is kept. Its reason ends `: walking`.
 - A stealther (Infiltrator, Nightshade, Shadowblade) out of combat counts 1.4 when starting a fight, not once in it. It is hidden then, and its opener does about 200 damage plus a stun or bleed (N5). So a hidden solo opens on a lone mezzer, but not on two.
 - A patrol that passes a group it keeps clear of says so in its reason (`; clear of N at odds ...`). That came from N5's solo run (2026-11-11 21:00): Mordred skipped a waypoint near four Midgarders, and the log showed only the patrol.
 
