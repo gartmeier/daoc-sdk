@@ -601,6 +601,60 @@ describe('decideSquad: leaving a fight that turned', () => {
     });
 });
 
+describe('run A on 11-12, 19:48-19:52: what the user watched (camelot-s1 against hibernia-s1)', () => {
+    const t0 = 1_000_000;
+
+    test('no engage on a focus beyond engageRadius: closed on as a hunt, engaged once within reach', () => {
+        // camelot-s1 19:49-19:50: engage and hunt flipped 25 times in 100 s on a duo walking off 2400-3900 away.
+        const duo = () => squad(['Arms', 'Cleric']);
+        const far = [foe(51, 2600, { threat: true })];
+        const d = decide(picture(duo(), far, {}, t0), { now: t0 });
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toStartWith('hunt');
+        const near = [foe(51, 1800, { threat: true })];
+        expect(decide(picture(duo(), near, {}, t0), { now: t0 }).phase).toBe('engage');
+    });
+
+    test('a fight we start is chosen from its first tick: the group seen whole a tick later does not make it flee', () => {
+        // hibernia-s1 19:50:02 engaged "1 vs 2", fled 3 s later at "0.36 (2 vs 3)" with no losses.
+        const memory: Record<string, any> = {};
+        const duo = (over: Parameters<typeof squad>[1] = {}) => squad(['Merc', 'Cleric'], over);
+        const d = decide(picture(duo(), [foe(51, 1500)], {}, t0), { memory, now: t0 });
+        expect(d.phase).toBe('engage');
+        expect(memory.squad.fight.chosen).toBe(true);
+        const three = [foe(51, 1200, { target: 'Merc', threat: true }), foe(52, 1400), foe(53, 1500)];
+        const e = decide(picture(duo({ Merc: { inCombat: true } }), three, { phase: 'engage', focus: 51 }, t0 + 3000), { memory, now: t0 + 3000 });
+        expect(e.phase).toBe('engage');
+        expect(e.reason).toContain('committed');
+    });
+
+    test('a caught fight is re-judged on our own losses: a member dead ends "caught"', () => {
+        // hibernia-s1 19:50:50-19:52:14: Fionn died at 19:51:25 and the order stayed "caught: fight".
+        const memory: Record<string, any> = { squad: { avoid: {}, shun: {}, grudge: {}, flee: null, stand: true, standFrom: { hp0: 100, dead0: [] }, fled: 1, caught: 1, avoided: 0 } };
+        const hl = [foe(51, 300, { target: 'Cleric', threat: true })];
+        const d = decide(picture(squad(['Merc', 'Cleric'], { Merc: { isDead: true, hp: 0 }, Cleric: { hp: 67, inCombat: true } }), hl, { phase: 'engage', focus: 51 }, t0), { memory, now: t0 });
+        expect(memory.squad.stand).toBe(false);
+        expect(d.reason ?? '').not.toStartWith('caught:');
+        // Without a loss it stays caught.
+        const m2: Record<string, any> = { squad: { avoid: {}, shun: {}, grudge: {}, flee: null, stand: true, standFrom: { hp0: 100, dead0: [] }, fled: 1, caught: 1, avoided: 0 } };
+        const e = decide(picture(squad(['Merc', 'Cleric'], { Merc: { inCombat: true } }), hl, { phase: 'engage', focus: 51 }, t0), { memory: m2, now: t0 });
+        expect(e.reason).toStartWith('caught:');
+    });
+
+    test("the focus is held while a friend is still on it, not moved to the nearest friend's target", () => {
+        // camelot-s1 19:49-19:50: Celt#464 and Celt#471 by turns, "on Mordred's target", "on Tristram's target".
+        const us = () => squad(['Merc'], { Merc: { inCombat: true } });
+        const two = [foe(51, 900, { target: 'Merc', threat: true }), foe(52, 1100)];
+        const friends: Friend[] = [
+            { x: BASE.x + 1600, y: BASE.y, name: 'Mordred', className: 'Infiltrator', hp: 90, level: 24, inCombat: true, targetId: 51 },
+            { x: BASE.x + 300, y: BASE.y, name: 'Tristram', className: 'Scout', hp: 90, level: 24, inCombat: true, targetId: 52 },
+        ];
+        const d = decide(picture(us(), two, { phase: 'engage', focus: 51 }, t0), { now: t0, friends });
+        expect(d.phase).toBe('engage');
+        expect(d.focus).toBe(51);
+    });
+});
+
 describe('a Necromancer in shade: its servant is that enemy player', () => {
     const shade = (id: number, dx: number, over: Partial<Contact> = {}) => foe(id, dx, { isShade: true, ...guess('caster'), ...over });
     const servant = (id: number, dx: number, over: Partial<Contact> = {}) => foe(id, dx, { isPet: true, name: 'necroservant', hp: 80, ...over });

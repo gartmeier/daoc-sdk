@@ -489,8 +489,10 @@ interface SquadMemory {
      * we lost there (a death or health), which ends the commit.
      */
     fight?: { start: number; last: number; chosen: boolean; players?: boolean; hp0?: number; dead0?: string[]; lost?: string };
-    /** Caught: fight it out until nobody is against us. */
+    /** Caught: fight it out until nobody is against us, or until our own losses (standFrom) re-judge it. */
     stand: boolean;
+    /** When caught: our mean health and our dead then. A new death or COMMIT_LOSS of health since ends the stand. */
+    standFrom?: { hp0: number; dead0: string[] };
     /** Enemies in a group we would not take now, hidden until (ms epoch): SHUN_MS after last judged so. */
     shun: Record<number, number>;
     /** Enemies that killed one of ours, until (ms epoch). */
@@ -623,6 +625,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     /** Our fight is the call's: we came to it and stand there. */
     const atCall = () => !!call && sq.call?.state === 'arrived' && dist(centre, call.at) <= CALL_FIGHT;
     const meanHp = () => (alive.length ? alive.reduce((a, m) => a + m.hp, 0) / alive.length : 0);
+    const standNow = () => ({ hp0: meanHp(), dead0: p.members.filter(m => m.isDead).map(m => m.name) });
     const startFight = (chosen: boolean): NonNullable<SquadMemory['fight']> =>
         ({ start: now, last: now, chosen, players: up.foes.some(c => !c.isPet), hp0: meanHp(), dead0: p.members.filter(m => m.isDead).map(m => m.name) });
     // The fight's start, and whether we chose it (taken at engageAt or better): a fight we chose is held (FIGHT_HOLD_MS),
@@ -726,14 +729,30 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
             if (sq.flee.seen) putZone(sq.flee.seen, now + r.avoidMs);
             sq.flee = null;
             // At safety with them on us: fight there, beside our friends or under our guards.
-            if (safe && following.length) sq.stand = true;
+            if (safe && following.length) { sq.stand = true; sq.standFrom = standNow(); }
         } else if (now - sq.flee.start >= r.fleeMaxMs) {
             sq.flee = null;
             sq.stand = true;
+            sq.standFrom = standNow();
             sq.caught++;
         } else return fleeOrder(`${following.length} following, odds ${odds}${chasing.length > up.foes.length ? `, ${chasing.length} we ran from` : ''}`, !following.length);
     }
     if (sq.stand && !up.foes.some(c => onUs(c) || dist(c, centre) <= s.engageRadius)) sq.stand = false;
+    // A caught fight is re-judged on our own losses, as a chosen one is (COMMIT_LOSS): then the odds say flee or fight. Run A
+    // on 11-12, hibernia-s1 19:50:50-19:52:14: caught by a Highlander, Fionn died at 19:51:25, and the order stayed "caught:
+    // fight" while Aine's own behaviour kited away at 67 %.
+    if (sq.stand && sq.standFrom) {
+        const died = p.members.find(m => m.isDead && !sq.standFrom!.dead0.includes(m.name));
+        const down = sq.standFrom.hp0 - meanHp();
+        if (died || down >= COMMIT_LOSS) {
+            const why = died ? `${died.name} died` : `health ${Math.round(sq.standFrom.hp0)} to ${Math.round(meanHp())} %`;
+            sq.stand = false;
+            sq.standFrom = undefined;
+            if (sq.fight) { sq.fight.chosen = false; sq.fight.lost ??= why; }
+            held = false;
+        }
+    }
+    if (!sq.stand) sq.standFrom = undefined;
 
     // ── In a fight that turned: leave it ──
     // A fight we chose is held for FIGHT_HOLD_MS unless the odds fall far past leaveAt (held, above).
@@ -898,6 +917,22 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         if (k > 0 && k < loop.length) { mem.wp = (start + k) % loop.length; mem.legKind = null; }
     }
     let u = callInner(contacts);
+    // A new engage (from no fight, through our own judgement of the group: the inner decide saw only what we would take).
+    if (u.phase === 'engage' && !engaged && !hit && !sq.stand && !held && !atCall()) {
+        // Only within reach. The inner decide holds a threat or its focus out to engageRadius + 1000, and the board keeps a
+        // runner's last target on us: run A on 11-12, camelot-s1 19:49:12-19:50:51, engage and hunt flipped 25 times in 100 s
+        // on a Hibernian duo walking off 2400-3900 away, and the Armsman chased while the Friar stayed 2000 behind.
+        const f = u.focus === null ? undefined : enemies.find(c => c.objectId === u.focus);
+        if (f && !f.isPet && dist(f, centre) > s.engageRadius) {
+            stepLeg(trip, 'close', f, { from: centre, movers: here, replan: 1500 });
+            return { phase: 'travel', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: legAnchor(mem), facing: mem.legFacing, objective: `close on ${f.name}`, reason: `hunt: close on ${f.name}#${f.objectId}, ${Math.round(dist(f, centre))} away, engage within ${s.engageRadius}` };
+        }
+        // A fight we start is one we chose, from its first tick: judged a tick later it read the group as a whole (those
+        // remembered nearby too) and fled at once. Run A on 11-12, hibernia-s1 19:50:02 engaged "1 vs 2", fled 19:50:05 at
+        // "0.36 (2 vs 3)", no losses.
+        if (!sq.fight || now - sq.fight.last > FIGHT_GAP_MS) sq.fight = startFight(true);
+        sq.fight.last = now;
+    }
     // In a friend's fight: the target of the nearest friend on one of these enemies, as our own bots see it (the region frame).
     // Two fighting one each, 1000 apart, is how both died (the user, 15:47 on 11-12).
     // Hidden: on the one the opener goes to (sizeUp openOn), soft or alone, which is what the odds were taken on.
@@ -913,7 +948,13 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     if (u.phase === 'engage' && up.beside.length && !opened) {
         const there = new Map(up.foes.filter(c => !c.isPet).map(c => [c.objectId, c]));
         const on = up.beside.filter(f => f.targetId != null && there.has(f.targetId) && (!unseen || openable(there.get(f.targetId)!, up.foes))).sort((a, b) => dist(a, centre) - dist(b, centre))[0];
-        if (on && on.targetId !== u.focus) {
+        // The focus we are on stays while a friend is on it too: the nearest friend changes as everyone moves. Run A on 11-12,
+        // camelot-s1 19:49-19:50: Celt#464 and Celt#471 by turns, "on Mordred's target", "on Tristram's target".
+        const keep = engaged && o.focus !== null && there.has(o.focus) && up.beside.some(f => f.targetId === o.focus);
+        if (keep && u.focus !== o.focus) {
+            const t = there.get(o.focus!)!;
+            u = { ...u, focus: t.objectId, reason: `${u.reason ?? ''}; on ${t.name}#${t.objectId}, a friend's target, held` };
+        } else if (!keep && on && on.targetId !== u.focus) {
             const t = there.get(on.targetId!)!;
             u = { ...u, focus: t.objectId, reason: `${u.reason ?? ''}; on ${on.name ?? 'a friend'}'s target ${t.name}#${t.objectId}` };
         }
