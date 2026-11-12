@@ -156,6 +156,16 @@ describe('decideSquad: picking fights', () => {
         expect(d.phase).not.toBe('retreat');
     });
 
+    test('after a jump (a release home) the old leg is dropped and the patrol starts at the nearest waypoint', () => {
+        // 11-12: Diarmuid and Scathach walked ~30000 straight to their pre-death leg after each release, over the Faste's island.
+        const at = { x: 13_000, y: 11_000 };
+        const memory: Record<string, any> = { wp: 2, legKind: 'patrol', leg: { x: 33_000, y: 30_000, z: 0 }, legAt: 0, goal: LOOP[2], route: [{ x: 33_000, y: 30_000 }] };
+        const d = decide(picture(squad(['Merc'], {}, at), []), { memory });
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toContain('waypoint 2/3');
+        expect(Math.hypot(memory.leg.x - at.x, memory.leg.y - at.y)).toBeLessThan(3000);
+    });
+
     test('a hurt solo does not start a fight it would start at full health', () => {
         expect(decide(picture(squad(['Merc'], { Merc: { hp: 60 } }), [foe(51, 1500)])).reason).toStartWith('avoid:');
     });

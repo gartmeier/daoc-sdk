@@ -196,6 +196,13 @@ const COMMIT_LOSS = 40;
  * "4 following, odds 0.61", turned back, saw them, and fled again (N1, hibernia-s1 15:55 on 11-12).
  */
 const REMEMBER_MS = 30_000;
+/**
+ * The leg we walk to this far off is from before a jump (a release to our portal keep): it is dropped, and the patrol starts
+ * again at its nearest waypoint. Kept, a solo walked ~30000 straight across the map to it after each release, and the
+ * navmesh's shortest way crossed the Faste's island under its guards: Diarmuid 8 deaths 10:41-11:42 and Scathach 6 on 11-12,
+ * "attacked by something unseen 1859 from Thidranki Faste", 4-8 min apart. Legs lie travelLeg apart; a crossing's far bank ~3000.
+ */
+const LEG_JUMP = 6000;
 /** A help call we were asked to is answered from at most this far (the director asks within 7000) ... */
 const CALL_REACH = 7000;
 /** ... one we were not asked to, from at most this far, and only at engageAt or better with the friends there. */
@@ -528,6 +535,13 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const centre = centroid(here);
     // All of us hidden stealthers, out of combat: unseen. Such a squad opens (sizeUp opening) and walks away hidden, never sprints.
     const unseen = here.length > 0 && here.every(m => STEALTHERS.has(m.className) && !m.inCombat);
+    if (here.length && mem.leg && dist(centre, mem.leg) > LEG_JUMP) {
+        mem.leg = null;
+        mem.legKind = null;
+        mem.route = null;
+        mem.legOnward = null;
+        mem.wp = undefined;
+    }
     const nearOnUs = (c: Contact) => inView(c) && onUs(c) && dist(c, centre) <= s.engageRadius + 1000;
     // A new death of ours: those near it killed it, and are remembered (GRUDGE).
     for (const m of p.members.filter(x => x.isDead && !(sq.dead ?? []).includes(x.name))) {
