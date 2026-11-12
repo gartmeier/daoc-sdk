@@ -95,9 +95,10 @@ test('only a solo or a squad of stealthers hides: the rest would be trailed at 1
     expect(allCanHide([m('Scout'), m('Cleric', true)])).toBe(true);
 });
 
-test('the kit: melee, hide as an instant, the ambush ahead of the melee fight', () => {
+test('the kit: melee, hide and the poison swap as instants, the ambush ahead of the melee fight, poisons as chores', () => {
     const c = stealther();
     expect(c.role).toBe('melee');
-    expect(c.instant!.map(b => b.name)).toEqual(['hide']);
+    expect(c.instant!.map(b => b.name)).toEqual(['hide', 'swapPoison']);
     expect(c.fight!.map(b => b.name)).toEqual(['ambush', 'assistMelee']);
+    expect(c.chores!.map(b => b.name)).toEqual(['restock', 'envenom']);
 });

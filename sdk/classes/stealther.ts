@@ -31,6 +31,8 @@ import { roleOf } from '../group/tactics/focus-role';
 import type { Contact } from '../group/types';
 import { headingBetween } from '../index';
 import type { NearbyNpc, NearbyPlayer, Style } from '../types';
+import { approachPlan, trackFix, velocityOf } from './intercept';
+import { envenom, restock, swapPoison } from './poison';
 
 /** An enemy player within this of the focus makes it no lone target. */
 export const LONE_RADIUS = 1000;
@@ -189,8 +191,28 @@ async function open(ctx: MemberContext, target: NearbyNpc | NearbyPlayer): Promi
     const me = ctx.me();
     const side = sideOf(angleFrom(target, me));
     const style = openerFor(styles, side);
-    if (!style || target.distance > OPENER_REACH) {
-        // A target that moves turns its front with it: one short leg a turn, re-aimed.
+    // A moving target: get in its path and let it walk into the stab (sdk/classes/intercept.ts); hidden we can't catch it.
+    const plan = approachPlan(target, velocityOf(trackFix(ctx.memory, target.objectId, target)), me);
+    const reach = plan.kind === 'hold' ? OPENER_REACH + 60 : OPENER_REACH;
+    if (!style || target.distance > reach) {
+        if (plan.kind === 'hold') {
+            ctx.doing('wait', target.objectId, 'hidden in its path');
+            if (me.speed) await ctx.sdk.sendStop();
+            await ctx.sdk.sendFaceObject(target.objectId);
+            await Bun.sleep(200);
+            return true;
+        }
+        if (plan.kind === 'go') {
+            ctx.doing('move', target.objectId, 'hidden, into its path');
+            await ctx.bot.walkTo(plan.to.x, plan.to.y, { tolerance: 40, timeout: 2500 });
+            return true;
+        }
+        if (plan.kind === 'leave') {
+            ctx.doing('lurk', target.objectId, 'it runs off faster than we walk hidden');
+            await Bun.sleep(500);
+            return true;
+        }
+        // Standing: one short leg a turn to its front (or back), re-aimed.
         const to = standPoint(target, style ? side as 'front' | 'back' : want);
         ctx.doing('move', target.objectId, `hidden, to its ${style ? side : want}`);
         await ctx.bot.walkTo(to.x, to.y, { tolerance: 30, timeout: 2500 });
@@ -213,5 +235,5 @@ async function open(ctx: MemberContext, target: NearbyNpc | NearbyPlayer): Promi
 
 /** The kit: hide above flee, the ambush ahead of the role's assist. */
 export function stealther(): Character {
-    return { role: 'melee', instant: [hide()], fight: [ambush(), meleeFight()] };
+    return { role: 'melee', instant: [hide(), swapPoison()], fight: [ambush(), meleeFight()], chores: [restock(), envenom()] };
 }
