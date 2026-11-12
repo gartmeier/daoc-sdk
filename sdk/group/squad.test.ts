@@ -99,6 +99,19 @@ describe('decideSquad: picking fights', () => {
         expect(decide(picture(squad(['Merc', 'Cleric', 'Wizard']), [foe(51, 1500), foe(52, 1600), foe(53, 1700)])).phase).toBe('engage');
     });
 
+    test('the skip past blocked waypoints never picks the one we stand at (no flip between it and the next)', () => {
+        // midgard-s2 20:45:30-20:46:59 (log clock): "patrol to waypoint 7" and "waypoint 8, round 2 groups" every second for 90 s.
+        // The ways to both other waypoints cross a zone, and neither lies in one: the patrol goes round to the next, and stays on it.
+        const t = 1_000_000;
+        const at = { x: 10_000, y: 10_200 };
+        const zones = [{ x: 11_500, y: 10_000, r: 800, until: t + 200_000, n: 3 }, { x: 11_500, y: 11_500, r: 800, until: t + 200_000, n: 2 }];
+        const memory: Record<string, any> = { wp: 1, squad: { avoid: {}, shun: {}, grudge: {}, flee: null, stand: false, fled: 0, caught: 0, avoided: 0, zones } };
+        const reasons: string[] = [];
+        for (let i = 0; i < 6; i++) reasons.push(decide(picture(squad(['Merc'], {}, at), [], {}, t + i * 1000), { memory, now: t + i * 1000 }).reason ?? '');
+        for (const r of reasons) expect(r).not.toContain('waypoint 1/3');
+        expect(new Set(reasons.map(r => r.match(/waypoint (\d)/)?.[1])).size).toBe(1);
+    });
+
     test('the patrol skips waypoints by a group it keeps clear of', () => {
         const t = 1_000_000;
         const memory: Record<string, any> = { wp: 1, squad: { avoid: { 51: t + 30_000, 52: t + 30_000, 53: t + 30_000 }, flee: null, stand: false, fled: 0, caught: 0, avoided: 1 } };

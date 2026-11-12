@@ -219,6 +219,8 @@ const LEG_JUMP = 6000;
  * 2009-2085 apart, Aine's heals out of range, then an engage at 20:01:25 still split, and Aine died alone at 20:01:34.
  */
 const TOGETHER = 700;
+/** A waypoint this near us is where we are, not one to go on to (the patrol's skip past blocked ones). */
+const WP_HERE = 1500;
 /**
  * A squad's legs keep this much more off a monster camp than safePath's own aggro zones (aggro range + AGGRO_PAD 300): those
  * routes passed the perturbed bwca camp by 236-275 beyond its edge, and a squad walking spread out crossed it. Run A on 11-12:
@@ -944,8 +946,12 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const blocked = (q: Point) => kept(q) || zones.some(z => dist(z, centre) > z.r && segmentDist(z, centre, q) < z.r);
     if (!showAll && loop?.length && (shunned.length || zones.length) && typeof mem.wp === 'number') {
         const start = mem.wp % loop.length;
+        // Another waypoint we stand at is no way on: run A on 11-12, midgard-s2 20:45:30-20:46:59 (log clock), the skip picked
+        // waypoint 7 where Hodur stood, the inner decide counted it reached and went on to 8, the skip sent him back, every
+        // second for 90 s.
+        const here = (q: Point, k: number) => k > 0 && dist(q, centre) < WP_HERE;
         let k = 0;
-        while (k < loop.length && blocked(loop[(start + k) % loop.length]!)) k++;
+        while (k < loop.length && (blocked(loop[(start + k) % loop.length]!) || here(loop[(start + k) % loop.length]!, k))) k++;
         // All blocked: the first one not in a spot itself, to go round to.
         if (k === loop.length) { k = 0; while (k < loop.length && kept(loop[(start + k) % loop.length]!)) k++; }
         if (k > 0 && k < loop.length) { mem.wp = (start + k) % loop.length; mem.legKind = null; }
