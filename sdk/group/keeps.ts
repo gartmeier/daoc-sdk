@@ -188,19 +188,22 @@ export interface SeenNpc { realm: string; x: number; y: number; isPet?: boolean;
  */
 export class KeepOwnerRead {
     private readonly readings = new Map<string, OwnerReading>();
-    private lastMessageId = -1;
+    private readonly lastMessageId = new Map<string, number>();
 
     constructor(readonly regionId: number, known: Record<string, OwnerReading> = {}) {
         for (const [k, r] of Object.entries(known)) this.readings.set(k, r);
     }
 
-    /** Take capture broadcasts from chat (ids already read are skipped); the keeps whose owner changed. */
-    seeMessages(messages: readonly SeenMessage[], now = Date.now()): string[] {
+    /**
+     * Take capture broadcasts from chat; the keeps whose owner changed. Ids already read are skipped, per `source`:
+     * each client numbers its own messages, so pass the bot's name when feeding several clients into one reader.
+     */
+    seeMessages(messages: readonly SeenMessage[], now = Date.now(), source = ''): string[] {
         const changed: string[] = [];
         for (const m of messages) {
             if (m.id !== undefined) {
-                if (m.id <= this.lastMessageId) continue;
-                this.lastMessageId = m.id;
+                if (m.id <= (this.lastMessageId.get(source) ?? -1)) continue;
+                this.lastMessageId.set(source, m.id);
             }
             const c = parseCapture(m.text);
             if (!c) continue;
@@ -221,7 +224,8 @@ export class KeepOwnerRead {
             const k = keepAt(this.regionId, n);
             if (!k || k.portal) continue;
             const prev = this.readings.get(k.name);
-            if (prev && prev.realm === realm) { prev.at = Math.max(prev.at, now); continue; }
+            // The same realm again: a guard reading takes the newer time; a capture keeps its own, which the grace runs from.
+            if (prev && prev.realm === realm) { if (prev.how === 'guard') prev.at = Math.max(prev.at, now); continue; }
             // The old realm's guards die at the capture, but a snapshot from that tick can still hold them.
             if (prev && prev.how === 'capture' && now < prev.at + CAPTURE_GRACE_MS) continue;
             if (this.set(k.name, { realm, at: now, how: 'guard' }) && !changed.includes(k.name)) changed.push(k.name);

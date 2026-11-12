@@ -70,6 +70,14 @@ describe('KeepOwnerRead', () => {
         expect(r.owner('Thidranki Faste')).toBe('midgard');
     });
 
+    test('message ids are per source: two clients number their chat apart', () => {
+        const r = new KeepOwnerRead(THIDRANKI);
+        r.seeMessages([{ id: 50, text: 'hello' }], 1, 'galahad');
+        expect(r.seeMessages([{ id: 3, text: 'The forces of Hibernia have captured Thidranki Faste!' }], 2, 'sigurd')).toEqual(['Thidranki Faste']);
+        expect(r.seeMessages([{ id: 3, text: 'The forces of Midgard have captured Thidranki Faste!' }], 3, 'sigurd')).toEqual([]);
+        expect(r.owner('Thidranki Faste')).toBe('hibernia');
+    });
+
     test('a broadcast for a keep not in this region is left alone', () => {
         const r = new KeepOwnerRead(THIDRANKI);
         expect(r.seeMessages([{ text: 'The forces of Midgard have captured Caer Benowyc!' }])).toEqual([]);
@@ -100,6 +108,14 @@ describe('KeepOwnerRead', () => {
         // Long after, a guard of another realm means it changed hands again (a capture we missed).
         expect(r.seeNpcs([lord('albion')], 10_000 + CAPTURE_GRACE_MS + 1)).toEqual(['Thidranki Faste']);
         expect(r.owner('Thidranki Faste')).toBe('albion');
+    });
+
+    test('the new realm\'s lord seen after a capture does not move the grace on', () => {
+        const r = new KeepOwnerRead(THIDRANKI);
+        r.seeMessages([{ text: 'The forces of Midgard have captured Thidranki Faste!', receivedAt: 10_000 }]);
+        r.seeNpcs([lord('midgard')], 10_000 + CAPTURE_GRACE_MS - 5);
+        expect(r.reading('Thidranki Faste')).toEqual({ realm: 'midgard', at: 10_000, how: 'capture' });
+        expect(r.seeNpcs([lord('hibernia')], 10_000 + CAPTURE_GRACE_MS + 1)).toEqual(['Thidranki Faste']);
     });
 
     test('toJSON round-trips', () => {
