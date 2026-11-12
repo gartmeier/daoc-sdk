@@ -3,7 +3,7 @@ import { makeNpc, makePlayer, makePlayerObj, makeState } from '../test/fixtures'
 import type { CombatEvent, NearbyNpc, NearbyPlayer } from '../types';
 import { HUMAN_VISION, type GroundAt, type NoticeClock } from '../vision';
 import { Blackboard, observeState, type MemberSelf } from './blackboard';
-import { withVisionFlag } from './runner';
+import { runVision, withVisionFlag } from './runner';
 
 // We are Testbot (100, albion) at (560000, 511000, z 2500), heading 0: facing +Y.
 const X = 560000, Y = 511000, Z = 2500;
@@ -126,5 +126,19 @@ describe('withVisionFlag', () => {
         expect(withVisionFlag(undefined, { fovDegrees: 120 })).toEqual({ mode: 'human', fovDegrees: 120 });
         expect(withVisionFlag('omniscient', { awareRadius: 300 })).toEqual({ mode: 'human', awareRadius: 300 });
         expect(withVisionFlag(undefined, { mode: 'omniscient' })).toEqual({ mode: 'omniscient' });
+    });
+});
+
+describe('a group run sees as a player does unless told otherwise (runVision)', () => {
+    test('no strategy vision and no flag: human', () => {
+        expect(runVision(undefined, undefined)).toBe('human');
+    });
+    test('--vision=omniscient, or a strategy that says so, keeps all-seeing sight', () => {
+        expect(runVision(undefined, 'omniscient')).toEqual({ mode: 'omniscient' });
+        expect(runVision('omniscient', undefined)).toBe('omniscient');
+    });
+    test('a strategy with its own human options keeps them, and a flag tunes them', () => {
+        expect(runVision({ mode: 'human', fovDegrees: 90 }, undefined)).toEqual({ mode: 'human', fovDegrees: 90 });
+        expect(runVision(undefined, { fovDegrees: 120 })).toEqual({ mode: 'human', fovDegrees: 120 });
     });
 });

@@ -125,7 +125,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
     // `vision` is no strategy setting: a flag for the members' sight (MemberAgentOptions.vision).
     const { vision: visionFlag, ...flagSettings } = unflatten(opts.settings ?? {});
     const settings = mergeSettings(strategy.settings, flagSettings as any) as S;
-    const agentOptions: MemberAgentOptions = { ...strategy.agent, vision: withVisionFlag(strategy.agent?.vision, visionFlag) };
+    const agentOptions: MemberAgentOptions = { ...strategy.agent, vision: runVision(strategy.agent?.vision, visionFlag) };
     const vision = resolveVision(agentOptions.vision);
     const { members, opened } = await connectGroup(def, opts.have, strategy.roleOf, bot => !strategy.memberBehaviors?.[bot]);
     // Observed members (a human, observed.ts) only when group.json names some: else the board as ever.
@@ -323,6 +323,16 @@ function groupPublisher<S>(opts: GroupRunOptions<S>, def: GroupDefinition, membe
         deps.log(`group publish off: ${errorText(e)}`);
         return null;
     }
+}
+
+/**
+ * A group run's vision: human unless the strategy (agent.vision) or the run's flag (`--vision=omniscient`) says
+ * otherwise. Bots see as a player does, the user's call on 2026-11-12: all-seeing members swung a squad's odds on
+ * every enemy that came or went within ~3500, and flipped between fighting and fleeing as no player would.
+ */
+export const RUN_VISION_DEFAULT: VisionMode = 'human';
+export function runVision(strategyVision: MemberAgentOptions['vision'], flag: unknown): MemberAgentOptions['vision'] {
+    return withVisionFlag(strategyVision ?? RUN_VISION_DEFAULT, flag);
 }
 
 /**
