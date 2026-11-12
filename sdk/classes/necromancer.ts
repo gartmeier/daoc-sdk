@@ -190,6 +190,19 @@ function servantUnderMelee(ctx: MemberContext): boolean {
  * walking the owner into its range if need be (a shade can't be hit). A servant-cast spell waits for the last one's 3 s: the server
  * queues one behind the current cast, and the last sent wins, every one paid (learnings/pets.md "Shade").
  */
+/** In a fight the shade stands within this of the focus: inside the server's 2000 for an attack order, and Vitality Theft's 1500 from the owner. */
+export const OWNER_STAND = 1300;
+/** ... walking in only once past it by this much, so a focus that moves a little doesn't start a walk every turn. */
+const OWNER_SLACK = 150;
+
+/** A shade's step toward the focus (nobody can hit it), a few seconds at a time so the turn comes back. */
+async function closeOn(ctx: MemberContext, mob: { objectId: number; name: string }, range: number): Promise<boolean> {
+    ctx.doing('move', mob.objectId, `in to ${Math.round(range)} of ${mob.name}`);
+    const w = await ctx.bot.walkToObject(mob.objectId, { range, timeout: 3000 });
+    if (!w.success && w.reason !== 'timeout') ctx.result('walk', w, mob.objectId);
+    return true;
+}
+
 export const servantFight = (opts: { saveBelow?: number; aoe?: boolean } = {}): Behavior<TacticsSettings> => ({
     name: 'servantFight',
     interruptible: false,
@@ -199,6 +212,10 @@ export const servantFight = (opts: { saveBelow?: number; aoe?: boolean } = {}): 
         const go = focusToHit(ctx);
         if (!petState || !go) return false;
         const now = Date.now();
+        // The owner's own distance counts twice on the server: an attack order needs it within 2000 of the target
+        // (GamePlayer.CommandNpcAttack), and a PetSpell's owner half checks its range from the owner (SpellHandler.CheckBeginCast).
+        // Standing back as a caster does, Morgause had 94 orders refused in field run B's first sortie. A shade can't be hit: walk in.
+        if (go.seen.distance > OWNER_STAND + OWNER_SLACK) return closeOn(ctx, go.mob, OWNER_STAND);
         if (petState.targetObjectId !== go.mob.objectId && !(ctx.memory.get('servantOrder') === go.mob.objectId && waiting(ctx.memory, 'servantOrderAt', now - ORDER_MS))) {
             ctx.memory.set('servantOrder', go.mob.objectId);
             ctx.memory.set('servantOrderAt', now);
@@ -213,9 +230,10 @@ export const servantFight = (opts: { saveBelow?: number; aoe?: boolean } = {}): 
         const servantBusy = waiting(ctx.memory, 'servantCastUntil', now);
         const pick = servantNuke(servantNukes(through(ctx, 'PetSpell')), {
             underMelee: servantUnderMelee(ctx), servantHp: pet?.healthPercent ?? 100, aoe: opts.aoe,
-            ready: n => ready(ctx, n) && (n.ownerCast || !servantBusy) && (!pet || dist(pet, go.seen) <= n.range + 100),
+            ready: n => ready(ctx, n) && (n.ownerCast || !servantBusy) && (!pet || dist(pet, go.seen) <= n.range),
         });
         if (!pick) return ctx.skip(servantBusy ? 'servantFight: the servant is casting' : 'servantFight: nothing to cast');
+        if (pick.range > 0 && go.seen.distance > pick.range) return closeOn(ctx, go.mob, Math.max(pick.range - 50, 100));
         ctx.doing('nuke', go.mob.objectId, pick.pick.spell.name);
         const c = await ctx.bot.castSpell(pick.pick.spell, go.mob.objectId);
         ctx.result('nuke', c, go.mob.objectId);

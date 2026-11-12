@@ -5,7 +5,7 @@ import { withCharacter } from '../group/character';
 import type { Behavior } from '../group/member';
 import { packBehaviors } from '../group/pack';
 import { rvrBehaviors } from '../group/rvr';
-import { leashOrders, necromancer, servantBuffPicks, servantHealPick, servantNuke, servantNukes, stepAway } from './necromancer';
+import { leashOrders, necromancer, OWNER_STAND, servantBuffPicks, servantHealPick, servantNuke, servantNukes, stepAway } from './necromancer';
 import { knownThrough } from './summoner-fixtures';
 
 const nukesOf = (build: string) => servantNukes(knownThrough('Necromancer', build, 24, 'PetSpell'));
@@ -73,5 +73,10 @@ describe('necromancer kit', () => {
         const to = stepAway({ x: 0, y: 0 }, { x: 1000, y: 0 });
         expect(to.x).toBeCloseTo(-1500);
         expect(dist(to, { x: 0, y: 0 })).toBeCloseTo(1500);
+    });
+    test('in a fight the shade stands where an attack order (2000 from the owner) and Vitality Theft (from the owner) both reach', () => {
+        const vt = nukesOf('Sight and servant split').find(n => n.pick.spell.name === 'Vitality Theft')!;
+        expect(OWNER_STAND + 150).toBeLessThan(2000);
+        expect(OWNER_STAND).toBeLessThanOrEqual(vt.range);
     });
 });
