@@ -26,6 +26,7 @@ import { assignCc } from './pve';
 import { aggroZones } from './terrain';
 import { lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, roadsOut } from './tactics/roads';
+import { withHasten } from './tactics/hasten';
 import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
@@ -823,7 +824,7 @@ export const fanOut = (): Behavior<PackSettings> => ({
 export function packBehaviors(): Record<Role, Behavior<RvrSettings>[]> {
     const lists = rvrBehaviors() as Record<Role, Behavior<RvrSettings>[]>;
     const out = Object.fromEntries(Object.entries(lists).map(([role, list]) => [role, list.filter(b => b.name !== 'position')])) as Record<Role, Behavior<RvrSettings>[]>;
-    out.support = [release(), sprint(), retreat(), flee(), rez(), interrupt(), crowdControl(), backupHeal(), confuse(), song(), shedLoad(), holdFormation(), buff(), fightSit(), rest()] as Behavior<RvrSettings>[];
+    out.support = withHasten([release(), sprint(), retreat(), flee(), rez(), interrupt(), crowdControl(), backupHeal(), confuse(), song(), shedLoad(), holdFormation(), buff(), fightSit(), rest()] as Behavior<RvrSettings>[]);
     const before = (list: Behavior<RvrSettings>[], name: string) => { const i = list.findIndex(b => b.name === name); return i < 0 ? list : [...list.slice(0, i), fanOut() as unknown as Behavior<RvrSettings>, ...list.slice(i)]; };
     out.nuker = before(out.nuker, 'assist');
     out.healer = before(out.healer, 'crowdControl');

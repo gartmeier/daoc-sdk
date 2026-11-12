@@ -45,6 +45,7 @@ import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
 import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, TRAIL_MS, trailGoal, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
 import { alliesNear, CALL_SETTINGS, flushAnswers, helpStep, noteArrival, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
+import { withHasten, withHastener } from './tactics/hasten';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -978,13 +979,15 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 
 /** Behaviour lists by role. No healer() visit: battlegrounds have no town healer, and RvR deaths cost no constitution. */
 export function rvrBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
-    return {
+    // hasten (tactics/hasten.ts): Speed of the Realm from a hastener in reach before going out, in every list.
+    const lists: Record<Role, Behavior<TacticsSettings>[]> = {
         tank: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
         healer: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), spareNuke(), shedLoad(), holdFormation(), buff(), fightSit(), rest()],
         support: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), fightSit(), rest()],
         nuker: [release(), sprint(), retreat(), rejoinFight(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), fightSit(), rest()],
         melee: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
     };
+    return Object.fromEntries(Object.entries(lists).map(([role, list]) => [role, withHasten(list)])) as Record<Role, Behavior<TacticsSettings>[]>;
 }
 
 /** Observer rules for RvR runs, from the report's optional RvR totals (absent: 0). */
@@ -1063,6 +1066,7 @@ export const rvrRoaming: GroupStrategy<RvrSettings> = {
  * unit's name, and the answers it queued go to the director after each tick. The calls come from director.ts callWatch
  * (R2), loaded on the first tick when our realm is known; while that module or its file is missing there are none, and
  * the group plays as before. `source` replaces it (tests). stop() ends the watch: call it when the run ends.
+ * Every role's and member's list also gets hasten (tactics/hasten.ts withHastener): Speed of the Realm before going out.
  */
 export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?: CallSource | null): { strategy: GroupStrategy<S>; stop(): void } {
     let src: CallSource | null | undefined = source;
@@ -1090,5 +1094,6 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         flushAnswers(mem, src);
         return out;
     };
-    return { strategy: { ...strategy, decide }, stop: () => { stopped = true; try { src?.stop?.(); } catch { /* already stopped */ } } };
+    // The main groups' own lists (by role and by member) get hasten too (tactics/hasten.ts withHastener).
+    return { strategy: { ...withHastener(strategy), decide }, stop: () => { stopped = true; try { src?.stop?.(); } catch { /* already stopped */ } } };
 }
