@@ -159,6 +159,32 @@ describe('decideSquad: what run B showed (2026-11-11 23:10-23:27)', () => {
         expect(memory.squad.fled).toBe(1);
     });
 
+    test('where it last saw a group it kept clear of, the patrol does not go back on the same line: it skips and goes round', () => {
+        // The user, run B 08:40: Hibernia's duo stepped clear of Albion's group, then patrolled straight back into it, again and again.
+        const memory: Record<string, any> = {};
+        const t = 1_000_000;
+        const LINE = [{ x: 10_000, y: 10_000, z: 0 }, { x: 22_000, y: 10_000, z: 0 }, { x: 22_000, y: 20_000, z: 0 }];
+        const five = [0, 100, 200, 300, 400].map((d, i) => foe(51 + i, 3200 + d));
+        // Seen at 3200 east: stepping away, and their spot is remembered.
+        let d = decide(picture(squad(['Merc', 'Cleric']), five, {}, t), { memory, now: t, settings: { patrol: LINE } });
+        expect(d.reason).toStartWith('avoid:');
+        expect(memory.squad.zones).toHaveLength(1);
+        // Out of sight a minute later, the patrol to (22000, 10000) would pass their spot: it goes round it.
+        memory.wp = 1;
+        d = decide(picture(squad(['Merc', 'Cleric']), [], {}, t + 60_000), { memory, now: t + 60_000, settings: { patrol: LINE } });
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toContain('round a group last seen at');
+        expect(Math.abs(d.anchor!.y - BASE.y)).toBeGreaterThan(300);
+        // A waypoint inside their spot is skipped.
+        const NEAR = [{ x: 10_000, y: 10_000, z: 0 }, { x: 13_500, y: 10_000, z: 0 }, { x: 10_000, y: 16_000, z: 0 }];
+        memory.wp = 1;
+        d = decide(picture(squad(['Merc', 'Cleric']), [], {}, t + 61_000), { memory, now: t + 61_000, settings: { patrol: NEAR } });
+        expect(d.reason).toContain('waypoint 3/3');
+        // Four minutes on, forgotten.
+        decide(picture(squad(['Merc', 'Cleric']), [], {}, t + 300_000), { memory, now: t + 300_000, settings: { patrol: LINE } });
+        expect(memory.squad.zones).toHaveLength(0);
+    });
+
     test('a member walking back from a release is not on our side: a lone healer does not take a fighter', () => {
         // 23:25: Tuck alone took a Celt at "2 vs 1" with Galahad 9000 off, and died.
         const us = squad(['Cleric', 'Merc'], { Merc: { x: BASE.x - 9000 } });

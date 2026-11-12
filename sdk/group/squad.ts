@@ -28,7 +28,7 @@ import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, keepDangers, type PlayerRealm } 
 import { decideRvr, legAnchor, mainBody, realmOfGroup, RVR_SETTINGS, runWay, rvrRoaming, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
 import { isLevel } from './slope';
 import { defineStrategy, type CoordinatorContext, type GroupStrategy } from './strategy';
-import { aggroZones } from './terrain';
+import { aggroZones, type Danger } from './terrain';
 import { isDry, staysDry } from './water';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
@@ -117,6 +117,16 @@ const GRUDGE_MS = 10 * 60_000;
 const SHUN_MS = 10_000;
 /** Once stepping away, on until the nearest of them is this much beyond sizeUp. */
 const CLEAR_SLACK = 1000;
+/**
+ * Where we last saw a group we would not take, or ran from, is kept clear of this long: the patrol skips waypoints in it and
+ * goes round it, rather than back on the same line (the user, run B 08:40: Hibernia's duo stepped clear of Albion's group,
+ * patrolled straight back into it, again and again).
+ */
+const ZONE_MS = 4 * 60_000;
+/** A zone's radius: the group's spread plus this, at least ZONE_MIN. */
+const ZONE_PAD = 2000, ZONE_MIN = 3000;
+/** A sighting within this of a zone moves that zone, not a new one. */
+const ZONE_MERGE = 3000;
 /** Per level of difference, a member or an enemy counts this much more or less (clamped). */
 const PER_LEVEL = 0.08;
 
@@ -126,6 +136,12 @@ const centroid = (ps: readonly Point[]): Point => ({ x: ps.reduce((a, p) => a + 
 const usesMana = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc || !!m.capabilities.pet;
 const onWhom = (c: Contact): string | null => c.target ?? c.targetPet ?? null;
 const unit = (a: Point, b: Point): Point => { const d = Math.max(1, dist(a, b)); return { x: (b.x - a.x) / d, y: (b.y - a.y) / d }; };
+/** Distance from `p` to the segment a-b. */
+const segmentDist = (p: Point, a: Point, b: Point): number => {
+    const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy;
+    const t = l2 ? clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / l2, 0, 1) : 0;
+    return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+};
 const health = (hp: number) => Math.max(0.1, clamp(hp, 0, 100) / 100);
 
 /** One member's worth: its role, health, and power for those that cast. */
@@ -279,6 +295,8 @@ interface SquadMemory {
     dead?: string[];
     /** Stepping away from a group we would not take (until it is CLEAR_SLACK beyond sizeUp). */
     clearing?: boolean;
+    /** Where groups we keep clear of were last seen (ZONE_MS). */
+    zones?: { x: number; y: number; r: number; until: number; n: number }[];
     /** Counts for the run's report: fights left, fights fought out after being caught, groups stepped away from. */
     fled: number;
     caught: number;
@@ -380,6 +398,18 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         return { phase: 'retreat', focus: null, puller: null, cc: [], waiting: [], retreatTo: f.to, anchor: f.to, objective: `get away from ${up.foes.length || 'the'} enemies toward ${where}`, reason: `flee: ${why}` };
     };
 
+    /** Note where a group we keep clear of stands (sq.zones). */
+    const noteZone = (cl: readonly Contact[]) => {
+        if (!cl.length) return;
+        const c = centroid(cl);
+        const r0 = Math.max(ZONE_MIN, Math.max(...cl.map(e => dist(e, c))) + ZONE_PAD);
+        const zones = sq.zones ??= [];
+        const z = zones.find(q => dist(q, c) <= ZONE_MERGE);
+        if (z) Object.assign(z, { x: Math.round(c.x), y: Math.round(c.y), r: Math.round(r0), until: now + ZONE_MS, n: cl.length });
+        else zones.push({ x: Math.round(c.x), y: Math.round(c.y), r: Math.round(r0), until: now + ZONE_MS, n: cl.length });
+    };
+    sq.zones = (sq.zones ?? []).filter(z => z.until > now);
+
     // ── Fleeing: on toward safety while they follow ──
     if (sq.flee) {
         // One that still has us as its last target counts only within the focus slack: the board keeps a runner's target.
@@ -388,6 +418,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         const safe = atFriends || ourInKeepReach;
         if (safe || now - sq.flee.lastFollowed >= r.shakenMs) {
             for (const c of up.foes) sq.avoid[c.objectId] = now + r.avoidMs;
+            noteZone(up.foes);
             sq.flee = null;
             // At safety with them on us: fight there, beside our friends or under our guards.
             if (safe && following.length) sq.stand = true;
@@ -431,6 +462,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
             if (odds >= r.engageAt) { for (const c of cl) delete sq.shun[c.objectId]; continue; }
             if (!cl.every(c => (sq.shun[c.objectId] ?? 0) > now || (sq.avoid[c.objectId] ?? 0) > now)) sq.avoided++;
             for (const c of cl) sq.shun[c.objectId] = now + SHUN_MS;
+            noteZone(cl);
             bad.push(...cl);
             if (odds < worst) { worst = odds; worstText = `${fmt(odds)} (${here.length} vs ${cl.length}${here.some(m => STEALTHERS.has(m.className) && !m.inCombat) ? ', from stealth' : ''})`; }
         }
@@ -462,14 +494,27 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     // us back to them as soon as we stepped away.
     const loop: Point3[] | null = innerSettings.patrol ?? mem.patrol ?? null;
     const shunned = enemies.filter(c => hidden.has(c.objectId) && !nearOnUs(c));
-    if (!showAll && loop?.length && shunned.length && typeof mem.wp === 'number') {
-        for (let k = 0; k < loop.length && shunned.some(c => dist(c, loop[mem.wp % loop.length]!) <= r.sizeUp + 1000); k++) {
+    const zones = sq.zones ?? [];
+    const kept = (q: Point) => shunned.some(c => dist(c, q) <= r.sizeUp + 1000) || zones.some(z => dist(z, q) <= z.r + 500);
+    if (!showAll && loop?.length && (shunned.length || zones.length) && typeof mem.wp === 'number') {
+        for (let k = 0; k < loop.length && kept(loop[mem.wp % loop.length]!); k++) {
             mem.wp = (mem.wp + 1) % loop.length;
             mem.legKind = null;
         }
     }
     const u = callInner(contacts);
     if (sq.stand && u.phase === 'engage') return { ...u, reason: `caught: ${u.reason ?? ''}` };
+    // On patrol, a zone across the way to the waypoint is gone round (safePath round it as round a keep), not through.
+    if (!showAll && u.phase === 'travel' && u.reason?.startsWith('patrol') && loop?.length && typeof mem.wp === 'number' && zones.length) {
+        const wp = loop[mem.wp % loop.length]!;
+        const across = zones.filter(z => dist(z, centre) > z.r && segmentDist(z, centre, wp) < z.r);
+        if (across.length) {
+            const round: Danger[] = across.map(z => ({ x: z.x, y: z.y, r: z.r, name: `${z.n} enemies last seen`, level: 0 }));
+            stepLeg({ ...trip, avoid: [...keeps, ...round] }, 'detour', wp, { from: centre, movers: here, replan: 1500, force: true });
+            const at = across.map(z => `(${z.x}, ${z.y})`).join(', ');
+            return { ...u, anchor: legAnchor(mem), facing: mem.legFacing, reason: `${u.reason}; round ${across.length === 1 ? 'a group' : `${across.length} groups`} last seen at ${at}` };
+        }
+    }
     // Say who we keep clear of, for the log: the orders alone show only a patrol.
     if (shunned.length && !showAll && u.phase !== 'engage') return { ...u, reason: `${u.reason ?? ''}; clear of ${shunned.length}${worstText ? ` at odds ${worstText}` : ''}` };
     return u;
