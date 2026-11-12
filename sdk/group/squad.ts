@@ -71,7 +71,8 @@ export const SQUAD_RULES: SquadRules = {
     engageAt: 0.9,
     leaveAt: 0.55,
     sizeUp: 3500,
-    joinRadius: 1500,
+    // 1500 until run B 09:10: a duo standing 2000 apart (gatherRadius) read as two lone enemies, and Mordred took each in turn and fled from both.
+    joinRadius: 2500,
     fleeMaxMs: 45_000,
     shakenMs: 6000,
     avoidMs: 60_000,
