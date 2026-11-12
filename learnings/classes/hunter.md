@@ -1,6 +1,6 @@
 # Hunter
 
-Midgard's archer, on the Scout's kit ([scout.md](scout.md) has the bow detail). Beastcraft brings a pet (Hunter's Companion); the group's pet behaviours handle it, the kit adds nothing of its own. For every style and level on this server run `bun data/class-sheet.ts Hunter`. This file holds what that doesn't say.
+Midgard's archer, on the Scout's kit ([scout.md](scout.md) has the bow detail). Beastcraft brings a pet (Hunter's Companion line): the kit keeps it in until the Hunter is seen (below), and the group's `petControl` sends it at the focus. For every style and level on this server run `bun data/class-sheet.ts Hunter`. This file holds what that doesn't say.
 
 - **Verified:** measured live on this server.
 - **Server code:** read from the server source or data.
@@ -19,6 +19,11 @@ export default hunter();
 - **`hide`** (an instant, above flee): the assassins' hide. The first arrow comes from stealth. Only a solo or a squad of stealthers hides (`allCanHide`): hidden it moves at 115, and anyone who can't hide would leave it behind at 191. In a mixed group it fights in the open.
 - **`swat`** (fight, first): a monster or pet attacking us within 250 (not a keep guard) while the focus stands 500 or more off: melee weapon in hand, hit it.
 - **`shoot`** (fight, ahead of the melee fight): on the focus in view, within the bow's reach less 300, with no enemy player and nothing attacking us within 350, and arrows in the backpack: stop and stand still 0.6 s, target, face once, take the bow, draw, send nothing until "You are ready to fire!", then release. A draw that ends without a shot lowers the bow (attack off). Beyond reach it steps in to 85 % of it. Close, or out of arrows: it takes the melee weapon (with the bow in hand the melee fight's attack request would draw the bow) and `meleeFight` swings.
+- **The pet, as a hidden Hunter plays it** (2026-11-12 21:00, the user via R1: a pet beside a hidden Hunter gives it away; live at 20:55 Skadi was "Hidden" with her hunter's protector 118 off, fighting a bwca):
+  - **`stowPet`** (instant, after `hide`): hidden with a pet up, release it.
+  - **`summonPet`** (instant, the kit's own, which withPets keeps in place of `pets.ts`'s): out of stealth and in a fight (orders `engage`, we are in combat, or a threat within 1500), no pet up, the summon ready: cast it. Once the first arrow shows us, or someone finds us. The line casts in 0 s, costs 25 % of power, and recasts in 120 s, which survives a relog ([pets.md](../pets.md)). **Server code:** `bun data/class-sheet.ts Hunter`.
+  - No summon in a quiet turn, and none walking back from a release (`summonOnTheWayBack` is replaced by a no-op): the next hide would release it, and the 120 s recast would miss the fight.
+  - Not seen live yet: whether a release while hidden keeps the stealth, and the first summon in a fight.
 - **Arrows:** Thidranki has no fletcher. `bun bots/gmlevel/give-arrows.ts <bot> ...` (gmlevel at PrivLevel 3) trades 3 stacks of 200 barbed footed flight broadhead arrows; each archer got 600 on 2026-11-11.
 
 ## Builds
