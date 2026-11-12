@@ -1,9 +1,12 @@
 // The assassin kit, shared by the Infiltrator, the Nightshade and the Shadowblade (learnings/classes/infiltrator.md,
 // nightshade.md, shadowblade.md). roleForClass makes them melee; what is theirs:
 //
-// - hide: out of a fight they stay hidden (bot.stealth, a click on the Stealth spec). The server refuses for 10 s after
-//   combat ("You've been in combat recently"), within 1024 - 896 x stealth / level of an enemy (about 128 at 24 with
-//   Stealth 19 + 5 from gear), and 2 s after the last toggle (StealthSpecHandler.cs). Hidden they move at 115 of 191.
+// - hide: as a player does in Thidranki (the user, who played a Nightshade there): open while travelling, at full speed
+//   (191; hidden it is 115), and hidden as soon as an enemy player shows in our own view, near a hotspot (the groups'
+//   meeting point and the pair rounds' spots, where fights come), or with an engage order. Shown again once nobody has
+//   been in view for 30 s and we are well clear of every hotspot. A click on the Stealth spec (bot.stealth); the server
+//   refuses for 10 s after combat ("You've been in combat recently"), within 1024 - 896 x stealth / level of an enemy
+//   (about 128 at 24 with Stealth 19 + 5 from gear), and 2 s after the last toggle (StealthSpecHandler.cs).
 // - ambush: on the squad's focus, from stealth, only a soft or lone target: a healer, caster or crowd controller by the
 //   class read (or its deeds), one with no other enemy player within LONE_RADIUS of it, or one already under half health.
 //   Anything else they leave to the rest and stay hidden near the fight (lurk), as the stealthers in Thidranki do.
@@ -23,6 +26,7 @@ import { foeInView, meleeFight } from '../group/behaviors';
 import { isAlive } from '../group/blackboard';
 import type { Character } from '../group/character';
 import type { Behavior, MemberContext } from '../group/member';
+import { BATTLEGROUND_LAYOUTS } from '../group/keeps';
 import { roleOf } from '../group/tactics/focus-role';
 import type { Contact } from '../group/types';
 import { headingBetween } from '../index';
@@ -36,6 +40,11 @@ export const SOFT_HP = 50;
 export const OPENER_REACH = 110;
 /** Where the walk aims, in front of or behind the target. */
 const STAND_OFF = 70;
+/** Within this of a hotspot we hide; shown again only beyond HOTSPOT_LEAVE (no flicker at the edge). */
+export const HOTSPOT_HIDE = 4000;
+const HOTSPOT_LEAVE = 5000;
+/** Shown again this long after the last enemy player in our view. */
+export const SHOW_AFTER_MS = 30_000;
 /** After a refusal for combat, the next try no sooner. */
 const HIDE_RETRY_MS = 3000;
 /** The client's inCombat ends 8 s after the last blow, the server's 10 s (GameLiving.cs:31): wait the difference too. */
@@ -89,6 +98,19 @@ export function softTarget(focus: Contact, contacts: readonly Contact[]): boolea
     return !contacts.some(c => c.objectId !== focus.objectId && c.kind === 'player' && isAlive(c) && !c.stale && c.regionId === focus.regionId && Math.hypot(c.x - focus.x, c.y - focus.y) <= LONE_RADIUS);
 }
 
+/** Where fights come in a region: the groups' meeting point and the pair rounds' spots (BattlegroundLayout). */
+export function hotspotsOf(regionId: number): { x: number; y: number }[] {
+    const bg = BATTLEGROUND_LAYOUTS[regionId];
+    return bg ? [bg.meet, ...Object.values(bg.pairs ?? {})] : [];
+}
+
+/** Whether to be hidden now. `hidden` is where we are: hysteresis on the hotspot ring and a 30 s memory of the last enemy seen. */
+export function wantHidden(o: { hidden: boolean; engaged: boolean; enemyInView: boolean; sinceEnemyMs: number; hotspotDist: number }): boolean {
+    if (o.engaged || o.enemyInView || o.hotspotDist <= HOTSPOT_HIDE) return true;
+    if (!o.hidden) return false;
+    return o.sinceEnemyMs < SHOW_AFTER_MS || o.hotspotDist <= HOTSPOT_LEAVE;
+}
+
 /** The classes with Stealth: the four Rogue lines' stealthers and the Minstrel (female names too). */
 export const STEALTH_CLASSES = /^(Infiltrator|Scout|Minstrel|Nightshade|Ranger|Shadowblade|Hunter|Huntress)$/;
 
@@ -100,16 +122,32 @@ export function allCanHide(members: readonly { className: string; isDead: boolea
     return members.filter(m => !m.isDead).every(m => STEALTH_CLASSES.test(m.className));
 }
 
-/** Hide when out of a fight. An instant: one click, false at once when there is nothing to do. */
+/** Hide when wantHidden says so, show again when it no longer does. An instant: one click, false at once when there is nothing to do. */
 export const hide = (): Behavior => ({
     name: 'hide',
     interruptible: false,
     async run(ctx) {
         const me = ctx.me();
-        if (me.isDead || ctx.sdk.isStealthed() || !ctx.sdk.findSpecialization('Stealth')) return false;
+        if (me.isDead || !ctx.sdk.findSpecialization('Stealth')) return false;
         if (!allCanHide(ctx.members())) return false;
         const now = Date.now();
-        if (me.inCombat || me.attacking) { ctx.memory.set('hideCombatAt', now); return false; }
+        if (me.inCombat || me.attacking) ctx.memory.set('hideCombatAt', now);
+        // What we see ourselves, as a player would: enemy players in our own view (a stealther we don't detect isn't there).
+        if (ctx.sdk.getNearbyPlayers().some(p => p.realm !== me.realm && !p.isDead)) ctx.memory.set('hideEnemyAt', now);
+        const sinceEnemyMs = now - (ctx.memory.get('hideEnemyAt') ?? 0);
+        const hotspotDist = Math.min(Infinity, ...hotspotsOf(me.regionId).map(h => Math.hypot(h.x - me.x, h.y - me.y)));
+        const hidden = ctx.sdk.isStealthed();
+        const want = wantHidden({ hidden, engaged: ctx.orders().phase === 'engage', enemyInView: sinceEnemyMs === 0, sinceEnemyMs, hotspotDist });
+        if (hidden === want) return false;
+        if (hidden) {
+            if (now < (ctx.memory.get('hideRetryAt') ?? 0)) return false;
+            ctx.doing('show', null, 'nobody in view, clear of the hotspots');
+            const r = await ctx.bot.unstealth();
+            ctx.result('show', r);
+            if (!r.success) ctx.memory.set('hideRetryAt', Date.now() + (r.retryAfterMs ?? HIDE_RETRY_MS));
+            return true;
+        }
+        if (me.inCombat || me.attacking) return false;
         if (now - (ctx.memory.get('hideCombatAt') ?? 0) < AFTER_COMBAT_MS) return false;
         if (now < (ctx.memory.get('hideRetryAt') ?? 0)) return false;
         ctx.doing('hide');

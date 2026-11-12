@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import type { Contact } from '../group/types';
 import type { Style } from '../types';
-import { allCanHide, angleFrom, openerFor, sideOf, sideToTake, softTarget, standPoint, stealther } from './stealther';
+import { allCanHide, HOTSPOT_HIDE, hotspotsOf, SHOW_AFTER_MS, wantHidden, angleFrom, openerFor, sideOf, sideToTake, softTarget, standPoint, stealther } from './stealther';
 
 const style = (name: string): Style => ({ name, internalId: 1, specLevel: 1, specName: 'Critical Strike', skillIndex: 3 } as Style);
 const contact = (over: Partial<Contact>): Contact => ({
@@ -61,6 +61,28 @@ describe('softTarget', () => {
         // A stale friend doesn't count, nor a monster.
         expect(softTarget(tank, [tank, { ...friend, stale: true }])).toBe(true);
         expect(softTarget(tank, [tank, { ...friend, kind: 'npc' }])).toBe(true);
+    });
+});
+
+describe('wantHidden: open on the road, hidden by an enemy or a hotspot', () => {
+    const far = { hidden: false, engaged: false, enemyInView: false, sinceEnemyMs: Infinity, hotspotDist: 9000 };
+    test('travelling with nobody in view, far from the hotspots: open, at full speed', () => {
+        expect(wantHidden(far)).toBe(false);
+    });
+    test('an enemy in view, a hotspot near, or an engage: hidden', () => {
+        expect(wantHidden({ ...far, enemyInView: true, sinceEnemyMs: 0 })).toBe(true);
+        expect(wantHidden({ ...far, hotspotDist: HOTSPOT_HIDE })).toBe(true);
+        expect(wantHidden({ ...far, engaged: true })).toBe(true);
+    });
+    test('hidden stays hidden 30 s after the last enemy, and inside 5000 of a hotspot', () => {
+        expect(wantHidden({ ...far, hidden: true, sinceEnemyMs: SHOW_AFTER_MS - 1 })).toBe(true);
+        expect(wantHidden({ ...far, hidden: true, sinceEnemyMs: SHOW_AFTER_MS })).toBe(false);
+        expect(wantHidden({ ...far, hidden: true, hotspotDist: 4800 })).toBe(true);
+        expect(wantHidden({ ...far, hidden: false, hotspotDist: 4800 })).toBe(false);
+    });
+    test("Thidranki's hotspots: the meeting point and the three pair spots", () => {
+        expect(hotspotsOf(252)).toHaveLength(4);
+        expect(hotspotsOf(1)).toEqual([]);
     });
 });
 
