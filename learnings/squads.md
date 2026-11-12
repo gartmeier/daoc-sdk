@@ -33,10 +33,17 @@ square law), so two against one is four to one.
   - In such a fight the squad takes the target of the nearest friend already on one of these enemies (from the region frame's `targetObjectId`). The reason ends `; on <name>'s target ...`.
   - With a friend in the fight, the squad leaves only below `leaveAt` × 0.6 (0.33), not at `leaveAt`.
 - **Commitment** (the user, 2026-11-12 14:43: Aine and Fionn engaged, fled at 0.50, came back, engaged, fled again; both Albions stayed at 100 %, and Fionn was at 5 % endurance):
-  - A fight we chose (taken at `engageAt` or better) is held for 20 s from its start. Inside the hold it is left only below `leaveAt` × 0.6 (0.33). The log reads `; held N s of 20`.
+  - A fight we chose (taken at `engageAt` or better) against players is fought out. It is left only on our own losses: a member dead, or our mean health 40 points below where it was at the engage (`COMMIT_LOSS`). Then the odds decide as usual, and the flee's reason names the loss (`, Cleric died`, `, health 100 to 55 %`). Enemies noticed after the engage don't end it. The log reads `; committed N s, no losses`. The cause (N1, the human-vision hour on 2026-11-12, midgard-s1 15:54-16:05): a trio took "3 vs 1", five more came into view seconds later, and it fled at "0.26 (3 vs 6)". The user: in a fight you notice the add late, and fight on.
+  - A fight we chose against pets alone is held for 20 s from its start, and left inside that only below `leaveAt` × 0.6 (0.33). The log reads `; held N s of 20`.
   - A flee turns on those following only after 10 s, unless the odds are twice `engageAt`.
   - When a flee ends, everyone it ran from is avoided for `avoidMs`, not only those still in view.
   - With nobody following within `engageRadius`, a flee walks on as a travel order, so sprint is off and endurance is kept. Its reason ends `: walking`.
+  - After a flee, the group it ran from is not engaged again for `avoidMs`: an enemy with one of them is avoided too, and so is one of their realm where they were (a `fled` zone).
+- **Out of view is not gone** (human vision, N1 on 2026-11-12, hibernia-s1 15:55: fleeing, the pursuers behind left the cone, it read "4 following, odds 0.61", turned back, saw them and fled again):
+  - An enemy player out of view (stale on the board) counts at its last known place for 30 s (`REMEMBER_MS`): in the odds, in the groups we would walk into, and in a flee.
+  - A flee turns back only if the odds hold against everyone it ran from that we still know of, however far their last known place. Its reason ends `, N we ran from`.
+  - A lone enemy in view with its group out of view behind it is no lone enemy. Odds show it: `(3 vs 6, 5 out of view)`.
+  - Only those in view can close on us: last known places within `runAt` start no run (sprint), only a step away.
 - A stealther (Infiltrator, Nightshade, Shadowblade) out of combat counts 1.4 when starting a fight, not once in it. It is hidden then, and its opener does about 200 damage plus a stun or bleed (N5). So a hidden solo opens on a lone mezzer, but not on two.
 - A patrol that passes a group it keeps clear of says so in its reason (`; clear of N at odds ...`). That came from N5's solo run (2026-11-11 21:00): Mordred skipped a waypoint near four Midgarders, and the log showed only the patrol.
 
