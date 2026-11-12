@@ -412,3 +412,29 @@ describe('Nearsight on us: every spell range as the server judges it (arena roun
         expect(book.nuke({ dotted: new Set() })!.range).toBe(Math.floor(full * 0.65));
     });
 });
+
+describe("Spellbook.buffs: a fight's buffs are not kept up", () => {
+    const book = (lines: Record<string, number>) => {
+        const spells = known(lines).map(s => s.spell);
+        const sdk = { getSkills: () => ({ spells }), getPlayer: () => ({ mana: 500, maxHealth: 400 }) } as unknown as BotSDK;
+        const bot = { getSpellInfo: (s: Spell) => getSpell(s.internalId) ?? null } as unknown as BotActions;
+        return new Spellbook(sdk, bot);
+    };
+    const names = (b: Spellbook) => b.buffs().map(s => s.spell.name);
+
+    test("a self buff on a timer longer than it lasts is left to the kit: the Valewalker's haste, the Reaver's Surge", () => {
+        const vale = names(book({ 'Valewalker Arboreal Path Base': 24, 'Arboreal Path': 16 }));
+        expect(vale).toContain("Grove's Armor");
+        expect(vale.some(n => /Kudzu/.test(n))).toBe(false);
+        const reaver = names(book({ Soulrending: 22 }));
+        expect(reaver.some(n => /^Surge of/.test(n))).toBe(false);
+    });
+
+    test("a Savage's buffs cost health and last 15 s: none is kept up", () => {
+        expect(names(book({ Savagery: 16 }))).toEqual([]);
+    });
+
+    test("a long self buff stays: the Champion's strength and constitution", () => {
+        expect(names(book({ Valor: 24 }))).toContain('Focus of the Champion');
+    });
+});

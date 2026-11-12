@@ -292,6 +292,10 @@ export class Spellbook {
             // Songs are played one at a time by situation (songs.ts), not kept up like buffs.
             if (!slot || s.pulse || s.target === 'Enemy' || s.target === 'Pet') continue;
             if (s.duration <= 0 && s.concentration <= 0) continue;
+            // A fight's buffs, not a trip's: a self buff on a timer longer than it lasts (a Valewalker's haste, 30 s with 120 s to
+            // reuse; a Reaver's Surge, 150 s) can't be kept up, and a Savage's cost health every 15 s (SavageBuff.cs:9-24). Their kits
+            // cast them in the engage (sdk/classes/hybrid.ts combatBuff); cast here they were gone, and on their timer, when the fight came.
+            if ((s.target === 'Self' && s.recast > s.duration) || /^Savage/.test(s.type)) continue;
             const k = `${slot}:${s.target}`;
             if (!top.has(k) || top.get(k)!.spell.level < s.spell.level) top.set(k, { ...s, slot });
         }
