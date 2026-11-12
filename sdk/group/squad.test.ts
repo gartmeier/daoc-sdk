@@ -121,6 +121,56 @@ describe('decideSquad: picking fights', () => {
     });
 });
 
+describe('decideSquad: what run B showed (2026-11-11 23:10-23:27)', () => {
+    test('a stray at the edge of a group strung out along a road is no lone enemy: no engage, no hunt', () => {
+        // 23:11: Camelot's duo engaged a Kobold "1 vs 1" and fled 13 s later from six.
+        const road = [foe(51, 1500), ...[2700, 3900, 5100, 5200, 5300].map((dx, i) => foe(52 + i, dx))];
+        const d = decide(picture(squad(['Merc', 'Cleric']), road));
+        expect(d.phase).toBe('travel');
+        expect(d.reason).toStartWith('avoid:');
+        expect(d.reason).toContain('2 vs 6');
+    });
+
+    test('a lone caster of one realm is hunted while another realm\'s group is far off; once near, keep clear until well beyond', () => {
+        const caster = enemy(70, 'hibernia', { regionId: R, x: BASE.x, y: BASE.y + 3000, level: 24, hp: 100, ...guess('caster') });
+        const group = (dx: number) => [foe(51, dx), foe(52, dx + 100), foe(53, dx + 200), foe(54, dx + 300)];
+        const memory: Record<string, any> = {};
+        const t = 1_000_000;
+        let d = decide(picture(squad(['Merc', 'Cleric']), [caster, ...group(-6000)], {}, t), { memory, now: t });
+        expect(d.reason).toContain('hunt 1 enemy');
+        d = decide(picture(squad(['Merc', 'Cleric']), [caster, ...group(-3300)], {}, t + 1000), { memory, now: t + 1000 });
+        expect(d.reason).toStartWith('avoid:');
+        // 3800 off: inside the slack, still stepping away (no flip back to the hunt) ...
+        d = decide(picture(squad(['Merc', 'Cleric']), [caster, ...group(-3800)], {}, t + 2000), { memory, now: t + 2000 });
+        expect(d.reason).toStartWith('avoid:');
+        // ... and beyond it the hunt goes on.
+        d = decide(picture(squad(['Merc', 'Cleric']), [caster, ...group(-4700)], {}, t + 3000), { memory, now: t + 3000 });
+        expect(d.reason).toContain('hunt 1 enemy');
+    });
+
+    test('a member walking back from a release is not on our side: a lone healer does not take a fighter', () => {
+        // 23:25: Tuck alone took a Celt at "2 vs 1" with Galahad 9000 off, and died.
+        const us = squad(['Cleric', 'Merc'], { Merc: { x: BASE.x - 9000 } });
+        const d = decide(picture(us, [foe(51, 1500)]));
+        expect(d.phase).not.toBe('engage');
+        expect(d.reason).not.toContain('hunt');
+    });
+
+    test('those that killed one of ours count more next time: the same even duo is not taken again', () => {
+        const duo = (dx: number) => [foe(51, dx), foe(52, dx + 100)];
+        const memory: Record<string, any> = {};
+        const t = 1_000_000;
+        expect(decide(picture(squad(['Merc', 'Wizard']), duo(1500), {}, t), { memory, now: t }).phase).toBe('engage');
+        // Merc dies with them beside him; Wizard runs; later Merc is back and they meet the same two.
+        decide(picture(squad(['Merc', 'Wizard'], { Merc: { isDead: true, hp: 0 } }), duo(300), { phase: 'engage', focus: 51 }, t + 20_000), { memory, now: t + 20_000 });
+        decide(picture(squad(['Merc', 'Wizard'], { Merc: { isDead: true, hp: 0 } }), [], { phase: 'retreat' }, t + 30_000), { memory, now: t + 30_000 });
+        const d = decide(picture(squad(['Merc', 'Wizard']), duo(1500), {}, t + 300_000), { memory, now: t + 300_000 });
+        expect(d.reason).toStartWith('avoid:');
+        // Ten minutes on, forgiven.
+        expect(decide(picture(squad(['Merc', 'Wizard']), duo(1500), {}, t + 700_000), { memory, now: t + 700_000 }).phase).toBe('engage');
+    });
+});
+
 describe('decideSquad: leaving a fight that turned', () => {
     test('a solo attacked by two runs (retreat), straight away from them with no home here', () => {
         const two = [foe(51, 300, { target: 'Merc', threat: true }), foe(52, 1200, { ...guess('caster'), caster: true })];

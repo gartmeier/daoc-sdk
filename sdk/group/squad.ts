@@ -25,7 +25,7 @@ import type { Realm } from '../types';
 import { untouchable } from './blackboard';
 import type { FoeRole } from './class-read';
 import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, keepDangers, type PlayerRealm } from './keeps';
-import { decideRvr, legAnchor, realmOfGroup, RVR_SETTINGS, runWay, rvrRoaming, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { decideRvr, legAnchor, mainBody, realmOfGroup, RVR_SETTINGS, runWay, rvrRoaming, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
 import { isLevel } from './slope';
 import { defineStrategy, type CoordinatorContext, type GroupStrategy } from './strategy';
 import { aggroZones } from './terrain';
@@ -107,6 +107,13 @@ const BUSY = 0.6;
  */
 const OPENER = 1.4;
 const STEALTHERS = new Set(['Infiltrator', 'Nightshade', 'Shadowblade']);
+/** An enemy that killed one of ours in the last GRUDGE_MS counts this much more when deciding to start a fight with it: the duo that beat us twice is no even fight the third time. */
+const GRUDGE = 1.5;
+const GRUDGE_MS = 10 * 60_000;
+/** Enemies in a group we would not take stay hidden this long after it is last judged so: the judgement flickers as they move. */
+const SHUN_MS = 10_000;
+/** Once stepping away, on until the nearest of them is this much beyond sizeUp. */
+const CLEAR_SLACK = 1000;
 /** Per level of difference, a member or an enemy counts this much more or less (clamped). */
 const PER_LEVEL = 0.08;
 
@@ -161,7 +168,7 @@ export interface SizeUp {
  * The fight in front of us: the enemies against us near the centre (within sizeUp, else within huntRadius), the
  * largest realm among them plus any on us, and those within joinRadius of them; and both sides' strength.
  */
-export function sizeUp(members: readonly MemberReport[], enemies: readonly Contact[], centre: Point, s: Pick<SquadSettings, 'huntRadius' | 'squad'>): SizeUp {
+export function sizeUp(members: readonly MemberReport[], enemies: readonly Contact[], centre: Point, s: Pick<SquadSettings, 'huntRadius' | 'squad'>, grudge: ReadonlySet<number> = new Set()): SizeUp {
     const ours = new Set(members.map(m => m.name));
     const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
     const byId = new Map(enemies.map(c => [c.objectId, c]));
@@ -173,7 +180,11 @@ export function sizeUp(members: readonly MemberReport[], enemies: readonly Conta
     const near = enemies.filter(c => dist(c, centre) <= s.squad.sizeUp || onUs(c));
     const core = against(near.length ? near : enemies.filter(c => dist(c, centre) <= s.huntRadius));
     const foes = [...core];
-    for (const c of enemies) if (!foes.includes(c) && c.realm === core[0]?.realm && foes.some(f => dist(f, c) <= s.squad.joinRadius)) foes.push(c);
+    // Those within joinRadius of a counted one, and theirs in turn: a group strung out along a road is one group.
+    for (let grew = true; grew;) {
+        grew = false;
+        for (const c of enemies) if (!foes.includes(c) && c.realm === core[0]?.realm && foes.some(f => dist(f, c) <= s.squad.joinRadius)) { foes.push(c); grew = true; }
+    }
     const alive = members.filter(m => !m.isDead);
     const level = alive.length ? alive.reduce((a, m) => a + m.level, 0) / alive.length : 1;
     const ourWorth = alive.map(m => memberWorth(m) * clamp(1 + PER_LEVEL * (m.level - level), 0.6, 1.5));
@@ -182,7 +193,27 @@ export function sizeUp(members: readonly MemberReport[], enemies: readonly Conta
     const theirHealers = foes.filter(c => !c.isPet && foeRole(c) === 'healer').length;
     const a = sideStrength(ourWorth, ourHealers), b = sideStrength(theirWorth, theirHealers);
     const opened = sideStrength(alive.map((m, i) => ourWorth[i]! * (STEALTHERS.has(m.className) && !m.inCombat ? OPENER : 1)), ourHealers);
-    return { foes, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: b > 0 ? opened / b : Infinity };
+    // To start a fight, those that beat us lately count more (GRUDGE).
+    const wary = sideStrength(foes.map((c, i) => theirWorth[i]! * (grudge.has(c.objectId) ? GRUDGE : 1)), theirHealers);
+    return { foes, ours: a, theirs: b, ratio: b > 0 ? a / b : Infinity, opening: wary > 0 ? opened / wary : Infinity };
+}
+
+/**
+ * The enemies within reach as groups: any realm, linked through joinRadius (a member of one within it of a member of
+ * another is the same group). Two realms fighting each other near us are one fight we would walk into.
+ */
+export function enemyClusters(enemies: readonly Contact[], joinRadius: number): Contact[][] {
+    const left = [...enemies];
+    const out: Contact[][] = [];
+    while (left.length) {
+        const cl = [left.shift()!];
+        for (let grew = true; grew;) {
+            grew = false;
+            for (let i = left.length - 1; i >= 0; i--) if (cl.some(c => dist(c, left[i]!) <= joinRadius)) { cl.push(...left.splice(i, 1)); grew = true; }
+        }
+        out.push(cl);
+    }
+    return out;
 }
 
 // ── Roaming the edges ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -237,6 +268,14 @@ interface SquadMemory {
     flee: { start: number; lastFollowed: number; to: Point3; toward: 'friends' | 'home' | 'away'; target: Point | null } | null;
     /** Caught: fight it out until nobody is against us. */
     stand: boolean;
+    /** Enemies in a group we would not take now, hidden until (ms epoch): SHUN_MS after last judged so. */
+    shun: Record<number, number>;
+    /** Enemies that killed one of ours, until (ms epoch). */
+    grudge: Record<number, number>;
+    /** Our dead last tick (to see a new death). */
+    dead?: string[];
+    /** Stepping away from a group we would not take (until it is CLEAR_SLACK beyond sizeUp). */
+    clearing?: boolean;
     /** Counts for the run's report: fights left, fights fought out after being caught, groups stepped away from. */
     fled: number;
     caught: number;
@@ -258,8 +297,10 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const { picture: p, orders: o, memory: mem, now } = ctx;
     const s: SquadSettings = { ...ctx.settings, squad: { ...SQUAD_RULES, ...ctx.settings.squad } };
     const r = s.squad;
-    const sq: SquadMemory = mem.squad ??= { avoid: {}, flee: null, stand: false, fled: 0, caught: 0, avoided: 0 };
-    for (const [id, until] of Object.entries(sq.avoid)) if (until <= now) delete sq.avoid[+id];
+    const sq: SquadMemory = mem.squad ??= { avoid: {}, shun: {}, grudge: {}, flee: null, stand: false, fled: 0, caught: 0, avoided: 0 };
+    sq.shun ??= {};
+    sq.grudge ??= {};
+    for (const map of [sq.avoid, sq.shun, sq.grudge]) for (const [id, until] of Object.entries(map)) if (until <= now) delete map[+id];
 
     const alive = p.members.filter(m => !m.isDead);
     // The inner decide never sees a retreat: every retreat is ours (retreat.enabled is off for it).
@@ -278,12 +319,24 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const callInner = (contacts: Contact[]) => inner({ ...ctx, picture: { ...p, contacts }, orders: innerOrders, settings: innerSettings });
     if (!alive.length || ctx.windingDown && o.phase !== 'retreat') { sq.flee = null; return callInner(p.contacts); }
 
-    const here = alive.filter(m => m.regionId === regionId);
-    const centre = centroid(here);
     const ours = new Set(p.members.map(m => m.name));
     const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
-    const nearOnUs = (c: Contact) => onUs(c) && dist(c, centre) <= s.engageRadius + 1000;
     const enemies = p.contacts.filter(c => (c.kind === 'player' || (c.isPet && c.threat)) && !c.stale && c.hp > 0 && c.regionId === regionId && !untouchable(c, now));
+    // Our side is the main body (rvr.ts mainBody): one walking back from a release 9000 off is in no fight here.
+    // Run B, 23:25: Tuck alone took a Celt at "2 vs 1" with Galahad walking back from the portal keep, and died.
+    const inRegion = alive.filter(m => m.regionId === regionId);
+    const scratch: Record<string, any> = { gatherLead: mem.squadLead };
+    const attacked = new Set(enemies.map(onWhom).filter((n): n is string => n !== null && ours.has(n)));
+    const here = mainBody(inRegion, s.gatherRadius, scratch, attacked).main;
+    mem.squadLead = scratch.gatherLead;
+    const centre = centroid(here);
+    const nearOnUs = (c: Contact) => onUs(c) && dist(c, centre) <= s.engageRadius + 1000;
+    // A new death of ours: those near it killed it, and are remembered (GRUDGE).
+    for (const m of p.members.filter(x => x.isDead && !(sq.dead ?? []).includes(x.name))) {
+        for (const c of enemies) if (c.kind === 'player' && dist(c, m) <= s.engageRadius) sq.grudge[c.objectId] = now + GRUDGE_MS;
+    }
+    sq.dead = p.members.filter(m => m.isDead).map(m => m.name);
+    const grudge = new Set(Object.keys(sq.grudge).map(Number));
     const home = homeOf(regionId, realm);
     const keeps = keepDangers(regionId, realm, s);
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, here[0]?.z ?? 0, { radius: 8000 });
@@ -293,13 +346,12 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const nearestFriend = friends.reduce<Point | null>((best, f) => (!best || dist(f, centre) < dist(best, centre) ? f : best), null);
     const atFriends = !!nearestFriend && dist(nearestFriend, centre) <= r.friendReach;
 
-    const up = sizeUp(here, enemies, centre, s);
+    const up = sizeUp(here, enemies, centre, s, grudge);
     // Attacked: one on us near (the board keeps a runner's last target, so not at any range), or in combat with one beside us.
     const hit = up.foes.some(nearOnUs) || here.some(m => m.inCombat && up.foes.some(c => dist(c, m) < 400));
     const engaged = o.phase === 'engage';
     const fmt = (x: number) => (Number.isFinite(x) ? x.toFixed(2) : '∞');
     const odds = `${fmt(up.ratio)} (${here.length} vs ${up.foes.length})`;
-    const openOdds = `${fmt(up.opening)} (${here.length} vs ${up.foes.length}${up.opening > up.ratio ? ', from stealth' : ''})`;
 
     /** Where to run: toward friends near and not behind the enemy, else home (or straight away when they stand that way). */
     const fleeTarget = (): { way: Point; toward: 'friends' | 'home' | 'away'; target: Point | null } => {
@@ -360,19 +412,35 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         }
     }
 
-    // ── Not fighting: enemies we would not take are left alone, and stepped away from when near ──
-    if (!engaged && !hit && !sq.stand && up.foes.length && up.opening < r.engageAt) {
-        if (!up.foes.every(c => (sq.avoid[c.objectId] ?? 0) > now)) sq.avoided++;
-        for (const c of up.foes) sq.avoid[c.objectId] = now + r.avoidMs;
-        const nearest = Math.min(...up.foes.map(c => dist(c, centre)));
-        if (nearest <= r.sizeUp) {
-            const way = runWay(centre, up.foes, home?.arrival ?? null);
+    // ── Not fighting: groups we would not take are left alone, and stepped away from when near ──
+    // Each group within reach is judged by itself (enemyClusters): one stray at the edge of a group of eight is no lone
+    // enemy (run B, 23:11: Camelot's duo engaged a Kobold "1 vs 1" and fled 13 s later from six), and a lone caster of one
+    // realm by another realm's group neither (23:13: hunt and avoid flipped every second).
+    let worstText = '';
+    if (!engaged && !hit && !sq.stand) {
+        const whole = { ...s, squad: { ...r, sizeUp: Infinity } };
+        const groups = enemyClusters(enemies, r.joinRadius).filter(cl => cl.some(c => dist(c, centre) <= s.huntRadius));
+        const bad: Contact[] = [];
+        let worst = Infinity;
+        for (const cl of groups) {
+            // The group as a whole is what we would walk into, whichever realms are in it.
+            const odds = sizeUp(here, cl.map(c => ({ ...c, realm: cl[0]!.realm })), centre, whole, grudge).opening;
+            if (odds >= r.engageAt) { for (const c of cl) delete sq.shun[c.objectId]; continue; }
+            if (!cl.every(c => (sq.shun[c.objectId] ?? 0) > now || (sq.avoid[c.objectId] ?? 0) > now)) sq.avoided++;
+            for (const c of cl) sq.shun[c.objectId] = now + SHUN_MS;
+            bad.push(...cl);
+            if (odds < worst) { worst = odds; worstText = `${fmt(odds)} (${here.length} vs ${cl.length}${here.some(m => STEALTHERS.has(m.className) && !m.inCombat) ? ', from stealth' : ''})`; }
+        }
+        const nearest = bad.length ? Math.min(...bad.map(c => dist(c, centre))) : Infinity;
+        sq.clearing = nearest <= r.sizeUp || (!!sq.clearing && nearest <= r.sizeUp + CLEAR_SLACK);
+        if (sq.clearing) {
+            const way = runWay(centre, bad, home?.arrival ?? null);
             const goal = spotAlong(trip, centre, way, r.sizeUp);
             stepLeg(trip, 'avoid', goal, { from: centre, movers: here, replan: 1500 });
-            return { phase: 'travel', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: legAnchor(mem), facing: mem.legFacing, objective: `keep clear of ${up.foes.length} enemies`, reason: `avoid: odds ${openOdds} below ${r.engageAt}, nearest ${Math.round(nearest)} away` };
+            return { phase: 'travel', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: legAnchor(mem), facing: mem.legFacing, objective: `keep clear of ${bad.length} enemies`, reason: `avoid: odds ${worstText} below ${r.engageAt}, nearest ${Math.round(nearest)} away` };
         }
-    }
-    const hidden = new Set(Object.keys(sq.avoid).map(Number));
+    } else sq.clearing = false;
+    const hidden = new Set([...Object.keys(sq.avoid), ...Object.keys(sq.shun)].map(Number));
     // A fight we are in (taken, caught, or they attack us) shows everyone: the avoided ones too.
     const showAll = sq.stand || hit || engaged;
     const contacts = showAll ? p.contacts : p.contacts.filter(c => !hidden.has(c.objectId) || nearOnUs(c));
@@ -389,7 +457,7 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
     const u = callInner(contacts);
     if (sq.stand && u.phase === 'engage') return { ...u, reason: `caught: ${u.reason ?? ''}` };
     // Say who we keep clear of, for the log: the orders alone show only a patrol.
-    if (shunned.length && !showAll && u.phase !== 'engage') return { ...u, reason: `${u.reason ?? ''}; clear of ${shunned.length} at odds ${openOdds}` };
+    if (shunned.length && !showAll && u.phase !== 'engage') return { ...u, reason: `${u.reason ?? ''}; clear of ${shunned.length}${worstText ? ` at odds ${worstText}` : ''}` };
     return u;
 }
 
