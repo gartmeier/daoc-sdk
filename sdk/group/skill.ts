@@ -138,6 +138,12 @@ export const LATE_HEAL_BELOW = 80;
 /** Behaviours a late heal holds back, by name. */
 export const HEAL_BEHAVIOR = /heal/i;
 
+/**
+ * A style choice is asked for on every snapshot while swinging, several times a second: at most one roll per this long,
+ * about a swing (run B, 2026-11-12: one roll per call slipped Galahad 15 times in 30 s).
+ */
+export const STYLE_ROLL_MS = 3000;
+
 /** What a slip did, for the run's log (MemberAgent emits it as a note). */
 export interface Slip {
     kind: 'wrong target' | 'late heal' | 'off-position style';
@@ -160,6 +166,7 @@ export class SkillLens {
     /** Groupmates under LATE_HEAL_BELOW at the last look. */
     private hurt = new Set<string>();
     private lateHealUntil = 0;
+    private styleRollAt = -Infinity;
     readonly slips: Slip[] = [];
 
     constructor(readonly skill: Skill, private readonly rng: () => number = Math.random) {}
@@ -272,13 +279,16 @@ export class SkillLens {
 
     /**
      * A style choice, now and then (mistakeRate) swapped for the member's best positional style, wherever it stands.
-     * `positional`: the member's positional style names. The choice as it came when there is none or no slip.
+     * `positional`: the member's positional style names. The choice as it came when there is none or no slip. At most one
+     * roll per STYLE_ROLL_MS, and a slip changes that one choice.
      */
-    styleSlip<T extends string | readonly string[] | null | undefined>(choice: T, positional: readonly string[]): T | string[] {
+    styleSlip<T extends string | readonly string[] | null | undefined>(choice: T, positional: readonly string[], now = Date.now()): T | string[] {
         if (!positional.length || choice === null || choice === undefined || (Array.isArray(choice) && !choice.length)) return choice;
         const queue = typeof choice === 'string' ? [choice] : [...(choice as readonly string[])];
         const pick = positional.find(p => p !== queue[0]);
-        if (!pick || !this.slip()) return choice;
+        if (!pick || now - this.styleRollAt < STYLE_ROLL_MS) return choice;
+        this.styleRollAt = now;
+        if (!this.slip()) return choice;
         this.note('off-position style', `off-position style: ${pick} instead of ${queue[0]}`);
         return [pick, ...queue.slice(1)];
     }

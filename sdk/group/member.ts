@@ -19,7 +19,7 @@ import { resolveVision, type NoticeClock, type VisionMode, type VisionOptions } 
 import { type Blackboard, observeState, SHADE_REFUSED, steppedInFront, UNATTACKABLE_MS } from './blackboard';
 import type { Character } from './character';
 import { petOrderedOn, petsAllowed } from './pets';
-import { abSlot, checkSkillSetting, describeSkill, resolveSkill, SkillLens, type SkillSetting } from './skill';
+import { abSlot, checkSkillSetting, describeSkill, HEAL_BEHAVIOR, resolveSkill, SkillLens, type SkillSetting } from './skill';
 import { Spellbook } from './spells';
 import { canWield } from './styles';
 import { dryMoveGuard } from './water';
@@ -447,6 +447,7 @@ export class MemberAgent<S = any> {
         const sideSignal = AbortSignal.any([signal, ended.signal]);
         const side = this.runSide(sideSignal);
         // With a skill a switch ends on the clock: look again every SKILL_LOOK_MS whether what the member acts on has changed.
+        const heals = list.some(b => HEAL_BEHAVIOR.test(b.name));
         const looking = this.lens ? setInterval(() => { if (!signal.aborted) this.lookAgain(); }, SKILL_LOOK_MS) : null;
         try {
             while (!signal.aborted) {
@@ -458,7 +459,8 @@ export class MemberAgent<S = any> {
                 const turn = Date.now();
                 let acted = false;
                 if (this.lens) {
-                    this.lens.watchHealth(this.board.picture(turn).members, turn);
+                    // Only a member that heals can be late with it (run B: a Theurgist logged late heals it never held back).
+                    if (heals) this.lens.watchHealth(this.board.picture(turn).members, turn);
                     this.lastSeenOrders = this.seen(true).orders;
                 }
                 for (const b of list) {

@@ -182,6 +182,18 @@ describe('SkillLens', () => {
         expect(lens.holdBack('healer', 3000)).toBe(false);
     });
 
+    test('a style slip is rolled at most once a swing, however often the choice is asked for', () => {
+        let rolls = 0;
+        const lens = new SkillLens({ reactionMs: 0, switchMs: 0, mistakeRate: 0.5 }, () => { rolls++; return 0.9; });
+        for (let t = 0; t < 3000; t += 250) lens.styleSlip(['Taunt'], ['Backstab'], t);
+        expect(rolls).toBe(1);
+        lens.styleSlip(['Taunt'], ['Backstab'], 3000);
+        expect(rolls).toBe(2);
+        // No positional to slip to: no roll.
+        lens.styleSlip(['Taunt'], [], 9000);
+        expect(rolls).toBe(2);
+    });
+
     test('a style slip swaps the first of the queue for a positional', () => {
         expect(lensOf({ mistakeRate: 0.5 }, [0]).styleSlip(['Taunt', 'Slam'], ['Backstab'])).toEqual(['Backstab', 'Slam']);
         expect(lensOf({ mistakeRate: 0.5 }, [0.9]).styleSlip(['Taunt', 'Slam'], ['Backstab'])).toEqual(['Taunt', 'Slam']);
