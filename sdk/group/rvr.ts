@@ -42,6 +42,7 @@ import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, pai
 import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
 import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
+import { AMBUSH_AFTER, AMBUSH_PASS, AMBUSH_WAIT_MS, ambushSpot, closestPass, lastAppearance, LOST_WITHIN_MS, loseQuarry, noteTracks, PASS_WITHIN_S, quarryLike, TRAIL_MS, trailGoal, velocity, type Quarry, type Tracks } from './tactics/ambush';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -57,6 +58,11 @@ export interface RvrSettings extends TacticsSettings, KeepSettings {
     engageRadius: number;
     /** Go after enemy players seen within this of the centre when they don't outnumber us. */
     huntRadius: number;
+    /**
+     * A squad of 1-3 that a hunt lost from sight (tactics/ambush.ts): follow its trail a while; lost again, lie in wait
+     * beside its way in instead of walking back to the patrol. Off: back to the patrol at once, as before.
+     */
+    ambush: boolean;
     retreat: {
         enabled: boolean;
         /**
@@ -155,6 +161,8 @@ export const RVR_SETTINGS: RvrSettings = {
     chaseLeash: 2000,
     engageRadius: 2500,
     huntRadius: 5000,
+    // Field run B (2026-11-12): Albion hunted Hibernia's duo, lost it at the edge of sight, turned back, met it again, every 10 s.
+    ambush: true,
     keepClearance: KEEP_CLEARANCE,
     keepOwners: {},
     // margin 2 → 3 (round 6, 20261101-101056): Midgard on 3 retreated 4× instead of 12×, 10 player kills instead of 4,
@@ -577,6 +585,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
     const inKeep = (c: Point) => !clearOf(c, keeps);
     const enemies = contacts.filter(c => c.kind === 'player' && !c.stale && c.regionId === regionId);
+    // Where each enemy player was seen, over time: what a lost squad's trail and way in are read from (tactics/ambush.ts).
+    if (s.ambush) noteTracks((mem.ambushTracks ??= {}) as Tracks, enemies, now);
     // The enemy players against us (retreat.margin): two other realms fighting each other are two groups, not one.
     const byId = new Map(enemies.map(c => [c.objectId, c]));
     const busy = (c: Contact) => !onUs(c) && c.targetId !== null && (byId.get(c.targetId)?.realm ?? c.realm) !== c.realm;
@@ -754,10 +764,30 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const d = Math.round(dist(centre, them));
         const unready = new Set([...deadHere, ...far].map(m => m.name).concat(low.map(w => w.name)));
         if (ashore.length && unready.size <= HUNT_UNREADY) {
+            if (s.ambush && quarryLike(ashore)) mem.hunted = { ids: ashore.map(c => c.objectId), at: now };
+            // Lying in wait for a squad that came back: while it comes on toward a pass by us, hold; don't walk out at it.
+            const q: Quarry | undefined = mem.quarry;
+            if (s.ambush && q?.spot && q.losses >= AMBUSH_AFTER && now - q.lostAt <= AMBUSH_WAIT_MS && dist(centre, q.spot) <= LEG_REACHED && ashore.every(c => q.ids.includes(c.objectId))) {
+                const tracks = (mem.ambushTracks ?? {}) as Tracks;
+                const vs = ashore.map(c => velocity(lastAppearance(tracks[c.objectId] ?? []))).filter((v): v is Point => !!v);
+                const vel = vs.length ? { x: vs.reduce((a, v) => a + v.x, 0) / vs.length, y: vs.reduce((a, v) => a + v.y, 0) / vs.length } : null;
+                const pass = closestPass(them, vel, centre);
+                if (pass && pass.d <= AMBUSH_PASS && pass.inS <= PASS_WITHIN_S) {
+                    return { ...calm, phase: 'travel', anchor: { x: q.spot.x, y: q.spot.y, z: zAt(q.spot) }, facing: { x: Math.round(them.x), y: Math.round(them.y) }, objective: `lie in wait for ${enemiesText(ashore.length)}${gone}`, reason: `lie in wait: ${enemiesText(ashore.length)} ${d} away, passing ${Math.round(pass.d)} from us in ${Math.round(pass.inS)} s: ${ashore.slice(0, 3).map(label).join(', ')}` };
+                }
+            }
             stepLeg(trip, 'hunt', them, { from: centre, movers: main, replan: HUNT_REPLAN });
             return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: them, objective: `hunt ${enemiesText(ashore.length)} round ${at(them)}${gone}`, reason: `hunt ${enemiesText(ashore.length)} ${d} away: ${ashore.slice(0, 3).map(label).join(', ')}` };
         }
     } else waitAshore(mem, 0, now);
+    // A hunt's squad gone from sight (out of our view, or into its keep): remember it as the quarry, counting its losses.
+    if (s.ambush && !seen.length && mem.hunted && o.phase === 'travel') {
+        if (now - mem.hunted.at <= LOST_WITHIN_MS) {
+            const q = loseQuarry(mem.quarry, mem.hunted.ids, regionId, (mem.ambushTracks ?? {}) as Tracks, now);
+            if (q) mem.quarry = q;
+        }
+        mem.hunted = undefined;
+    }
 
     // ── Attacked by guards: in combat near an enemy keep with nothing on the board on us. Keep guards are realm NPCs, never on
     // the board (isKillable), so this is the only sign of them: walk off, away from that keep, instead of resting under them. ──
@@ -790,6 +820,33 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         return { ...calm, phase: 'gather', anchor: legAnchor(mem), facing: them, waiting: far.map(m => ({ name: m.name, why: 'away' })), objective: `regroup with ${names(far)}${gone}`, reason: `meeting ${names(far)}, ${Math.round(dist(centre, them))} away` };
     }
     if (low.length && !onTheWay) return { ...calm, phase: 'recover', anchor: stay, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)` };
+
+    // ── The quarry: a squad a hunt lost. Lost once: follow where its walk leads, never into a keep. Lost again: it walks a way
+    // in; wait beside it, off its line and hidden from it where the terrain allows (tactics/ambush.ts) ──
+    const q: Quarry | undefined = mem.quarry;
+    if (s.ambush && q && q.regionId === regionId && !seen.length) {
+        const age = now - q.lostAt;
+        const standable = (pt: Point) => clearOf(pt, keeps) && (!dry || isDry(regionId, pt));
+        if (q.losses < AMBUSH_AFTER && age <= TRAIL_MS) {
+            const goal = trailGoal(q, now);
+            if (goal && standable(goal)) {
+                stepLeg(trip, 'trail', goal, { from: centre, movers: main, replan: 1500 });
+                return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `follow ${enemiesText(q.ids.length)} out of sight${gone}`, reason: `trail: lost ${enemiesText(q.ids.length)} ${Math.round(age / 1000)} s ago, ${Math.round(dist(centre, goal))} to where its walk leads` };
+            }
+        }
+        if (q.losses >= AMBUSH_AFTER && q.entry && age <= AMBUSH_WAIT_MS) {
+            if (q.spot === undefined) q.spot = ambushSpot(regionId, q.entry, centre, standable, zAt);
+            if (q.spot) {
+                const mark = { x: Math.round(q.entry.at.x + q.entry.dir.x * 1500), y: Math.round(q.entry.at.y + q.entry.dir.y * 1500) };
+                const hidden = `${Math.round(q.spot.hidden * 100)} % of its way in hidden from it`;
+                if (dist(centre, q.spot) > LEG_REACHED) {
+                    stepLeg(trip, 'ambush', q.spot, { from: centre, movers: main, replan: Infinity });
+                    return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mark, objective: `lie in wait for ${enemiesText(q.ids.length)} (lost ${q.losses}×)${gone}`, reason: `ambush: to a spot beside its way in, ${hidden}, ${Math.round(dist(centre, q.spot))} away` };
+                }
+                return { ...calm, phase: 'travel', anchor: { x: q.spot.x, y: q.spot.y, z: zAt(q.spot) }, facing: mark, objective: `lie in wait for ${enemiesText(q.ids.length)} (lost ${q.losses}×)${gone}`, reason: `lie in wait beside its way in, ${hidden}, ${Math.round((AMBUSH_WAIT_MS - age) / 1000)} s more` };
+            }
+        }
+    }
 
     // ── Patrol: the loop in legs, next waypoint once everyone stands at the leg that ends at this one ──
     const key = `${regionId}:${realm}:${level}:${s.opponent ?? ''}:${dry}`;
