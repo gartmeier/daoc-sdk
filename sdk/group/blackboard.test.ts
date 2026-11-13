@@ -54,6 +54,22 @@ describe('Blackboard: shared awareness', () => {
         expect(b.picture(t0 + 200).contacts).toEqual([]);
     });
 
+    test('a mob a member pulls to charm is no threat while her charm claim on it lasts (Contact.charming)', () => {
+        const b = new Blackboard({ hostileMs: 4000 });
+        const t0 = Date.now();
+        const charming = { kind: 'charm', targetId: 7, detail: 'pulling', since: t0 };
+        b.publish(obs(report('Deirdre', { at: t0, objectId: 11, activity: charming }), [sighting(7, { targetId: 11 }), sighting(8, { targetId: 11 })]), t0);
+        const at = (t: number, id: number) => b.picture(t).contacts.find(c => c.objectId === id)!;
+        expect(at(t0 + 100, 7).threat).toBe(false);
+        expect(at(t0 + 100, 7).charming).toBe('Deirdre');
+        expect(at(t0 + 100, 8).threat).toBe(true);
+        expect(at(t0 + 100, 8).charming).toBeUndefined();
+        // The claim lapses after CHARM_CLAIM_MS, or when her activity moves on: a threat like any other.
+        b.publish(obs(report('Deirdre', { at: t0 + 200, objectId: 11, activity: { kind: 'idle', targetId: null, detail: '', since: t0 + 200 } }), [sighting(7, { targetId: 11 })]), t0 + 200);
+        expect(at(t0 + 300, 7).threat).toBe(true);
+        expect(at(t0 + 300, 7).charming).toBeUndefined();
+    });
+
     test('hostility is sticky: a flickering target field keeps the mob a threat for hostileMs', () => {
         const b = new Blackboard({ hostileMs: 4000 });
         const t0 = Date.now();

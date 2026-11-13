@@ -90,7 +90,7 @@ export interface StarterEquipment {
 
 export const NPC_COLUMNS = [
     'id', 'name', 'guild', 'classType', 'regionId', 'x', 'y', 'z', 'heading', 'level', 'realm', 'model',
-    'flags', 'itemsListTemplateId', 'aggroLevel', 'aggroRange', 'respawn', 'npcTemplateId',
+    'flags', 'itemsListTemplateId', 'aggroLevel', 'aggroRange', 'respawn', 'npcTemplateId', 'factionId',
 ] as const;
 
 export interface NpcSpawn {
@@ -117,6 +117,8 @@ export interface NpcSpawn {
     /** RespawnInterval in seconds (0/-1 = server default / no respawn). */
     respawn: number;
     npcTemplateId: number;
+    /** The mob row's FactionID, 0 for none. Only a mob with a faction brings friends when attacked (StandardMobBrain.BringFriends). */
+    factionId: number;
 }
 
 export interface MerchantEntry {
@@ -436,7 +438,7 @@ export function buildNpcs(mobRows: SqlRow[] = table('mob'), templateRows: SqlRow
             str(r.Mob_ID), str(r.Name), str(r.Guild), str(r.ClassType).replace(/^DOL\.GS\./, ''),
             num(r.Region), Math.round(num(r.X)), Math.round(num(r.Y)), Math.round(num(r.Z)), num(r.Heading),
             levels.length ? Math.max(...levels) : num(r.Level), num(r.Realm), num(r.Model), num(r.Flags), str(r.ItemsListTemplateID),
-            num(aggro.AggroLevel), num(aggro.AggroRange), num(r.RespawnInterval), num(r.NPCTemplateID),
+            num(aggro.AggroLevel), num(aggro.AggroRange), num(r.RespawnInterval), num(r.NPCTemplateID), num(r.FactionID),
         ];
     });
     // Region, then x, then id: stable and diff-friendly.

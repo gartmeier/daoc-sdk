@@ -6,7 +6,7 @@ import { getClassSkills } from '../../data/index';
 import { withCharacter } from '../group/character';
 import { packBehaviors } from '../group/pack';
 import type { Contact } from '../group/types';
-import { CHARM_SAFE_RESIST, charmLimits, charmResist, charmTarget, mentalist, noteTooFar, petOnMe, stunTarget, viewDistance, type TooFar } from './mentalist';
+import { CHARM_SAFE_RESIST, charmLimits, charmPullTarget, charmResist, charmTarget, mentalist, noteTooFar, petOnMe, stunTarget, viewDistance, type TooFar } from './mentalist';
 import type { NearbyNpc } from '../types';
 import { selfBuffDue } from './paladin';
 import { reachOfBuild } from './reach';
@@ -223,6 +223,31 @@ describe('the charm (the user, playing Niamh: Imaginary Enemy on a bwca and matu
         // Without aggro data every monster counts as aggressive at 500.
         expect(charmTarget([npc(1, { x: 1000, y: 0 }), npc(2, { x: 1700, y: 0 })], { maxLevel: 21, busy: new Set() })).toBeNull();
         expect(charmTarget([npc(1, { x: 1000, y: 0, level: 21 }), npc(2, { x: 1900, y: 0 })], { maxLevel: 21, busy: new Set() })?.objectId).toBe(1);
+    });
+
+    test('the pull: one of a camp, of no faction, in nuke range, out of reach of the camp 700 from her on its run in', () => {
+        // The user: "I pulled one with a nuke", since charmed in its camp "they attack the charmed pet right away".
+        const at = (id: number, x: number, y: number, o: Partial<NearbyNpc> = {}) => npc(id, { name: 'perturbed bwca', x, y, distance: Math.round(Math.hypot(x, y)), ...o });
+        const choice = { maxLevel: 21, busy: new Set<number>(), from: { x: 0, y: 0 }, aggroOf: () => ({ range: 500 }), factionOf: () => 0, range: 1500 };
+        const camp = [at(1, 1300, 0), at(2, 1600, 0), at(3, 1650, 200)];
+        // 1 is the camp's nearest: 700 from her on its way (700, 0) its kin stand 900+ off (reach 800), and it is in range.
+        expect(charmPullTarget(camp, choice)?.objectId).toBe(1);
+        // Live: a kin beside the path, 1224 from her but 563 from the spot 700 out: clear only 441 from her, too late.
+        expect(charmPullTarget([at(1, 1250, 0), at(2, 1193, 272, { level: 22 })], choice)).toBeNull();
+        // A kin behind her is in reach of her own spot.
+        expect(charmPullTarget([at(1, 1300, 0), at(2, -700, 0, { level: 22 }), at(3, 1700, 0)], choice)).toBeNull();
+        // The camp too near her: the pulled one would still be in its reach when on her.
+        expect(charmPullTarget([at(1, 1000, 0), at(2, 1100, 0)], choice)).toBeNull();
+        // Out of nuke range, or too near to come clear.
+        expect(charmPullTarget(camp, { ...choice, range: 1200 })).toBeNull();
+        expect(charmPullTarget([at(1, 500, 0), at(2, 1700, 0)], choice)).toBeNull();
+        // A faction (a tomte, 175) brings friends when hit; unknown counts as one.
+        expect(charmPullTarget(camp, { ...choice, factionOf: () => 175 })).toBeNull();
+        expect(charmPullTarget(camp, { ...choice, factionOf: () => null })).toBeNull();
+        // Fought already, busy, or too high.
+        expect(charmPullTarget([at(1, 1300, 0, { inCombat: true }), at(2, 1600, 0)], choice)).toBeNull();
+        expect(charmPullTarget(camp, { ...choice, busy: new Set([1]) })).toBeNull();
+        expect(charmPullTarget(camp, { ...choice, maxLevel: 19 })).toBeNull();
     });
 
     test('in the pack nuker list: charmUp in the chores, petControl on the side tick from the start', () => {

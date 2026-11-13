@@ -762,6 +762,8 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const swimming = (c: Contact) => dry && isWet(regionId, c);
     const inFight = (c: Contact) => {
         if (c.stale || !isAlive(c) || c.regionId !== regionId) return false;
+        // A monster a member pulls to charm (Mentalist charmUp): hits on it would only cost the pet.
+        if (c.charming) return false;
         // Never one of our realm: an observed member's charmed pet read as a monster (16:38, "perturbed bwca is of our realm").
         if (c.realm === realm) return false;
         // Defending our keep: only those within its reach (walls, courtyard, the gate's outside); never out after them.

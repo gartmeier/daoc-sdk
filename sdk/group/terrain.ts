@@ -90,7 +90,7 @@ export function dangerNear(regionId: number, level: number, p: Point, pad = 0): 
     return null;
 }
 
-type AggroSpawn = { x: number; y: number; level: number; range: number };
+type AggroSpawn = { x: number; y: number; level: number; range: number; faction: number };
 const aggroCache = new Map<number, Map<string, AggroSpawn[]>>();
 
 /** Every spawn by name in a region, with its aggro (level 0 = passive). */
@@ -100,7 +100,7 @@ function spawnsByName(regionId: number): Map<string, AggroSpawn[]> {
     m = new Map();
     for (const s of findNpcSpawns({ regionId, realm: 0, limit: 200_000 })) {
         const list = m.get(s.name) ?? [];
-        list.push({ x: s.x, y: s.y, level: s.aggroRange > 0 ? s.aggroLevel : 0, range: s.aggroRange });
+        list.push({ x: s.x, y: s.y, level: s.aggroRange > 0 ? s.aggroLevel : 0, range: s.aggroRange, faction: s.factionId ?? 0 });
         m.set(s.name, list);
     }
     aggroCache.set(regionId, m);
@@ -121,6 +121,21 @@ export function aggroAt(regionId: number, name: string, p: Point): { level: numb
         if (d < bestD) { bestD = d; best = s; }
     }
     return best && best.level > 0 ? { level: best.level, range: best.range } : null;
+}
+
+/**
+ * Faction of a live monster, as aggroAt finds its spawn (the nearest with its name, within 6000): 0 for none, null when
+ * no spawn says. Only a mob with a faction brings friends when attacked (StandardMobBrain.BringFriends): 0 % with one
+ * attacker, 50 % more for each other group member within 5000 (baf_initial_chance 0, baf_additional_chance 50), within
+ * 450 + 150 for each of them (8 at most).
+ */
+export function factionAt(regionId: number, name: string, p: Point): number | null {
+    let best: AggroSpawn | null = null, bestD = 6000;
+    for (const s of spawnsByName(regionId).get(name) ?? []) {
+        const d = Math.hypot(s.x - p.x, s.y - p.y);
+        if (d < bestD) { bestD = d; best = s; }
+    }
+    return best ? best.faction : null;
 }
 
 /**

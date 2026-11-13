@@ -17,7 +17,7 @@ import { modifiedSpec } from '../actions';
 import { petControl, petsAllowed } from '../group/pets';
 import type { NearbyNpc } from '../types';
 import { conLevel } from '../actions-helpers';
-import { aggroAt } from '../group/terrain';
+import { aggroAt, factionAt } from '../group/terrain';
 import { segDist } from '../group/baseplan';
 import type { Point } from '../group/types';
 
@@ -302,6 +302,53 @@ export function charmTarget(npcs: readonly NearbyNpc[], c: CharmChoice): NearbyN
         .sort((a, b) => b.level - a.level || a.distance - b.distance)[0] ?? null;
 }
 
+/**
+ * The pulled mob must be clear of its camp by this far from her: its run in (about 180 a second, live) leaves the 3 s charm
+ * time to pass its half way before a swing. Live 2026-11-13, a kin beside the path rather than behind it: clear only 441 from
+ * her, under CHARM_TOO_CLOSE a moment on, and the boar killed the solo Mentalist (138 a hit of her 262).
+ */
+export const CHARM_PULL_CLEAR = 700;
+/** A pull nearer than this leaves no room to come clear of the camp before it is on her. */
+export const CHARM_PULL_MIN = 600;
+/** The pulled mob this near her is on her before the cast's half way (a swing then interrupts it): a fight like any other. */
+export const CHARM_TOO_CLOSE = 300;
+/** How long she waits for the pulled mob to come clear of its camp. */
+const CHARM_PULL_MS = 12_000;
+
+export interface CharmPull extends CharmChoice {
+    from: Point;
+    /** The mob's faction (factionAt): only 0 is taken, since a mob with one brings friends when hit in a group. */
+    factionOf: (n: NearbyNpc) => number | null;
+    /** Her nuke's range. */
+    range: number;
+}
+
+/**
+ * The mob to pull with a nuke and charm once it is clear of its camp, as the user did ("I pulled one with a nuke": charmed
+ * in its camp, "they attack the charmed pet right away"): what charmTarget takes, but with neighbours, at CHARM_PULL_MIN to her
+ * nuke's range, of no faction (the spawn data says 0: a hit on one with a faction brings friends, 50 % for each other group
+ * member near, StandardMobBrain.BringFriends), with her own spot and the spot CHARM_PULL_CLEAR from her on its run in both out of
+ * every aggressive neighbour's reach (aggro range + CHARM_LONE_PAD), so it is clear of them in time. The strongest first, then the nearest.
+ */
+export function charmPullTarget(npcs: readonly NearbyNpc[], c: CharmPull): NearbyNpc | null {
+    const far = Math.min(c.radius ?? CHARM_RADIUS, c.range);
+    return npcs
+        .filter(n => n.realm === 'none' && !n.isPet && !n.isPeaceful && n.isTargetable && !/^\p{Lu}/u.test(n.name)
+            && n.level <= c.maxLevel && n.level > 0 && n.distance >= CHARM_PULL_MIN && n.distance <= far && n.healthPercent >= CHARM_FRESH
+            && !n.inCombat && n.targetObjectId === null && !c.busy.has(n.objectId)
+            && !c.skipNames?.has(n.name) && !c.skipIds?.has(n.objectId) && c.factionOf(n) === 0
+            && !npcs.some(o => {
+                if (o.objectId === n.objectId || o.realm !== 'none' || o.isPet || o.isPeaceful || conLevel(n.level, o.level) <= -3) return false;
+                const a = c.aggroOf ? c.aggroOf(o) : { range: CHARM_UNKNOWN_AGGRO };
+                if (!a) return false;
+                const reach = a.range + CHARM_LONE_PAD;
+                const d = Math.hypot(n.x - c.from.x, n.y - c.from.y) || 1;
+                const at = { x: c.from.x + (n.x - c.from.x) * CHARM_PULL_CLEAR / d, y: c.from.y + (n.y - c.from.y) * CHARM_PULL_CLEAR / d };
+                return Math.hypot(o.x - c.from.x, o.y - c.from.y) < reach || Math.hypot(o.x - at.x, o.y - at.y) < reach;
+            }))
+        .sort((a, b) => b.level - a.level || a.distance - b.distance)[0] ?? null;
+}
+
 /** Map of name or id to when it may be tried again, kept in the member's memory. */
 const later = <K>(memory: Map<string, any>, key: string): Map<K, number> => { let m = memory.get(key); if (!m) memory.set(key, m = new Map()); return m; };
 const liveKeys = <K>(m: Map<K, number>, now: number): Set<K> => new Set([...m].filter(([, at]) => at > now).map(([k]) => k));
@@ -309,6 +356,10 @@ const liveKeys = <K>(m: Map<K, number>, now: number): Set<K> => new Set([...m].f
 /**
  * A charmed mob as her pet when she has none, as the user played Niamh (6 charms of Imaginary Enemy in 52 min, a bwca and
  * mature boars, to tank the adds; play/niamh-1113-findings.md). The group's petControl, on the kit's list, drives it after.
+ * A lone mob she charms where it stands (charmTarget). Else, with no fight on, she pulls one out of its camp with a nuke and
+ * charms it once it is clear of the others' reach (charmPullTarget), as the user did. Her activity 'charm' on it marks it on
+ * the board (Contact.charming) for CHARM_CLAIM_MS: no threat, no fight of the group's. A Mentalist's charm takes a mob in
+ * combat: the server's in-combat refusal is for the Hunter's and Sorcerer's charms only (CharmSpellHandler.cs CheckEndCast).
  * Not in a pull, a travel or a retreat, not with a melee or an enemy aim on her, not with pets off for the run. In a fight only in
  * the chores' turns, when the fight has nothing for her.
  *
@@ -342,27 +393,96 @@ export const charmUp = ({ maxResist = CHARM_SAFE_RESIST }: { maxResist?: number 
         if (focus !== null) busy.add(focus);
         const names = later<string>(ctx.memory, 'charmSkipNames');
         const ids = later<number>(ctx.memory, 'charmSkipIds');
-        const mob = charmTarget(ctx.sdk.getNearbyNpcs(), {
+        const choice = {
             maxLevel: safe, busy, skipNames: liveKeys(names, now), skipIds: liveKeys(ids, now),
-            from: me, aggroOf: o => aggroAt(me.regionId, o.name, o),
-        });
-        if (!mob) return false;
+            from: me, aggroOf: (o: NearbyNpc) => aggroAt(me.regionId, o.name, o),
+        };
+        let mob = charmTarget(ctx.sdk.getNearbyNpcs(), choice);
+        let pulled = false;
+        if (!mob) {
+            // The pull starts a fight of its own: only with none on.
+            if (phase === 'engage' || ctx.threats().length) return false;
+            const nuke = ctx.spells.nuke({ targetHp: 0 });
+            if (!nuke) return false;
+            const pull = charmPullTarget(ctx.sdk.getNearbyNpcs(), { ...choice, factionOf: n => factionAt(me.regionId, n.name, n), range: nuke.range });
+            if (!pull) return false;
+            ctx.doing('charm', pull.objectId, `pulling ${pull.name} (L${pull.level}) out of its camp with ${nuke.spell.name}`);
+            const hit = await ctx.bot.castSpell(nuke.spell, pull.objectId, { approach: false });
+            if (!hit.success) {
+                ctx.result('charm', hit, pull.objectId);
+                ctx.memory.set('charmRetryAt', Date.now() + CHARM_RETRY_MS);
+                ids.set(pull.objectId, Date.now() + CHARM_MOB_RETRY_MS);
+                return true;
+            }
+            mob = await comeClear(ctx, pull, choice.aggroOf);
+            if (!mob) {
+                // Not clear in time, or on her already: the group's to fight, as any mob on her.
+                ctx.doing('idle', null, `pull of ${pull.name} came on her before it was clear of its camp`);
+                ctx.memory.set('charmRetryAt', Date.now() + CHARM_RETRY_MS);
+                ids.set(pull.objectId, Date.now() + CHARM_MOB_RETRY_MS);
+                return true;
+            }
+            pulled = true;
+        }
         const risk = charmResist(me.level, spec, mob.level);
-        ctx.doing('charm', mob.objectId, `${sp.spell.name} on ${mob.name} (L${mob.level}, ${risk.toFixed(1)} % a pulse)`);
+        ctx.doing('charm', mob.objectId, `${sp.spell.name} on ${mob.name} (L${mob.level}, ${risk.toFixed(1)} % a pulse${pulled ? ', pulled' : ''})`);
         const c = await ctx.bot.charmPet(mob.objectId, { spell: sp.spell.name, approach: false });
         ctx.result('charm', c, mob.objectId);
-        if (c.success) {
+        // A resisted first pulse leaves the song going: live, the pulled boar resisted (34 %) and its next pulse, 5 s on, took it.
+        const onPulse = !c.success && c.reason === 'resisted' && sp.pulse ? await nextPulses(ctx, mob, sp.frequency) : false;
+        if (c.success || onPulse) {
+            if (onPulse) ctx.result('charm', { success: true, message: `${mob.name} taken on a later pulse` } as any, mob.objectId);
             ctx.memory.set('charmed', { objectId: mob.objectId, name: mob.name, at: Date.now() });
-            ctx.note(`charmed ${mob.name} (L${mob.level}, ${risk.toFixed(1)} % a pulse)`);
+            ctx.note(`charmed ${mob.name} (L${mob.level}, ${risk.toFixed(1)} % a pulse${pulled ? ', pulled out of its camp' : ''})`);
             return true;
         }
         ctx.memory.set('charmRetryAt', Date.now() + CHARM_RETRY_MS);
         // By template: a body type the spell doesn't take, or one the server won't charm at all. The rest by this mob.
         if (c.reason === 'refused' && /does not charm|can't be charmed/.test(c.message)) names.set(mob.name, Infinity);
         else ids.set(mob.objectId, Date.now() + CHARM_MOB_RETRY_MS);
+        // A pulled one that stayed hers no more: it's on her, the group's to fight.
+        if (pulled) ctx.doing('idle', null, `charm on pulled ${mob.name} failed`);
         return true;
     },
 });
+
+/**
+ * After a resisted first pulse: the song pulses on (every `frequency` tenths of a second) and each pulse rolls again.
+ * True once the mob is her pet within two more pulses; false when it dies, goes, she dies, or they pass. Her claim on it
+ * goes on meanwhile (Contact.charming).
+ */
+async function nextPulses(ctx: Parameters<Behavior['run']>[0], mob: NearbyNpc, frequency: number): Promise<boolean> {
+    ctx.doing('charm', mob.objectId, `waiting on the song's next pulse on ${mob.name}`);
+    const until = Date.now() + 2 * (frequency || 48) * 100 + 1000;
+    while (Date.now() < until) {
+        if (ctx.bot.isDead()) return false;
+        const pet = ctx.sdk.getPetState();
+        if (pet) return pet.objectId === mob.objectId;
+        const m = ctx.sdk.getNearbyNpcs().find(n => n.objectId === mob.objectId);
+        if (!m || m.healthPercent <= 0) return false;
+        await Bun.sleep(250);
+    }
+    return false;
+}
+
+/**
+ * The pulled mob once it is out of its camp's reach (charmNeighbour, from where it is now) and still CHARM_TOO_CLOSE or more
+ * from her; null when it dies, goes, comes that near first, something else is on her, the group retreats, or CHARM_PULL_MS passes.
+ */
+async function comeClear(ctx: Parameters<Behavior['run']>[0], pull: NearbyNpc, aggroOf: (o: NearbyNpc) => { range: number } | null): Promise<NearbyNpc | null> {
+    const until = Date.now() + CHARM_PULL_MS;
+    while (Date.now() < until) {
+        if (ctx.bot.isDead() || ctx.orders().phase === 'retreat') return null;
+        if (ctx.bot.getAttackers().some(a => a.objectId !== pull.objectId)) return null;
+        const npcs = ctx.sdk.getNearbyNpcs();
+        const m = npcs.find(n => n.objectId === pull.objectId);
+        if (!m || m.healthPercent <= 0 || m.isPet || m.realm !== 'none') return null;
+        if (m.distance < CHARM_TOO_CLOSE) return null;
+        if (!charmNeighbour(m, npcs, { from: ctx.me(), aggroOf })) return m;
+        await Bun.sleep(250);
+    }
+    return null;
+}
 
 /** A pet loss of the charm we cast that no release of ours explains: the mob is on her now (CharmECSEffect.cs OnStopEffect). Once per loss. */
 function noteCharmBreak(ctx: Parameters<Behavior['run']>[0]): void {

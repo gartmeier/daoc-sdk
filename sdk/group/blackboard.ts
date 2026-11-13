@@ -529,6 +529,8 @@ export function isMaterialChange(a: Orders, b: Orders): boolean {
 
 /** Late sightings of a dead mob (a member's client lags) are ignored this long ... */
 const KILLED_MS = 20_000;
+/** How long a member's activity 'charm' on a monster marks it as being charmed (Contact.charming): the pull, its run in and the 3 s cast. */
+export const CHARM_CLAIM_MS = 15_000;
 /** ... a player's only this long: players keep their id, and one seen alive after this was rezzed. */
 const PLAYER_KILLED_MS = 3000;
 /** ... when they are this close to its corpse and carry its name. */
@@ -997,6 +999,9 @@ export class Blackboard {
         const contacts: Contact[] = [];
         // Keep guards only while the orders carry a raid (Contact.keepGuard): nothing else knows what to do with them.
         const guards = !!this.orders.settings?.raid;
+        const members = this.everyone(now);
+        const charming = new Map<number, string>();
+        for (const m of members) if (m.activity?.kind === 'charm' && m.activity.targetId !== null && now - m.activity.since < CHARM_CLAIM_MS) charming.set(m.activity.targetId, m.name);
         for (const [key, c] of this.contacts) {
             if (now - c.lastSeen > this.forgetAfterMs) { this.forget(key, c); continue; }
             // ... or while one is on one of ours (a guard come out after us): rvr.ts fights a lone one outside the walls.
@@ -1006,15 +1011,16 @@ export class Blackboard {
             if (c.unattackableUntil !== undefined && c.unattackableUntil <= now) delete c.unattackableUntil;
             const { engaged: _e, hit: _h, petHitAt: _p, ccSince: _s, ccAt: _a, ccRuns: _r, deathEchoUntil: _d, petKillerUntil: _k, petKillerOf: _o, fixedAt: _f, lastHostile: _l, look: _lk, ...pub } = c;
             const stale = now - c.lastSeen > this.staleAfterMs;
-            const threat = this.isThreat(c, now);
-            contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null, ...(c.ccImmune ? { ccImmune: { ...c.ccImmune } } : {}) });
+            const charmer = c.kind === 'npc' && !c.isPet ? charming.get(c.objectId) : undefined;
+            const threat = !charmer && this.isThreat(c, now);
+            contacts.push({ ...pub, seenBy: [...c.seenBy], stale, threat, hostileSince: threat ? c.hostileSince : 0, cc: c.cc ? { ...c.cc } : null, ...(c.ccImmune ? { ccImmune: { ...c.ccImmune } } : {}), ...(charmer ? { charming: charmer } : {}) });
         }
         // A shade's servant, marked for everyone who reads the board (shadeBodies reads it as the player).
         for (const [petId, shade] of servantsOf(contacts)) {
             const pet = contacts.find(c => c.objectId === petId && c.regionId === shade.regionId);
             if (pet) pet.servantOf = shade.objectId;
         }
-        return { at: now, members: this.everyone(now).map(m => ({ ...m })), contacts, orders: this.getOrders() };
+        return { at: now, members: members.map(m => ({ ...m })), contacts, orders: this.getOrders() };
     }
 
     getOrders(): Orders {

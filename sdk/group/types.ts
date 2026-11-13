@@ -257,6 +257,8 @@ export interface Contact extends Sighting {
     unattackableUntil?: number;
     /** An enemy pet read as the servant of a shade of its realm within the server's leash (blackboard.ts servantsOf): that shade's object id. The servant is the Necromancer's body, the only thing of it to fight; shadeBodies counts it as that player. */
     servantOf?: number;
+    /** A monster a member is pulling to charm (its activity 'charm' on it, CHARM_CLAIM_MS): the member's name. Never a threat, and no fight of the group's (rvr.ts). */
+    charming?: string;
     /** Players: seen helping its own realm (Sighting.helped) since the group first saw it. Sticky: a healer to focus first. */
     healer?: boolean;
     /** Players: seen casting (Sighting.casting) since the group first saw it. Sticky: a caster, not a melee fighter. */
