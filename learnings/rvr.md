@@ -412,7 +412,17 @@ Surveyed from the server source, the DB and the navmesh, then walked and capture
 - **Restarts:** the server keeps the owner across a restart, so a reader that starts later learns it only by seeing a guard. `--state=<file>` keeps the reading between runs.
 - **First live read, 19:21:** 58 bots on the shared server read the Faste as Albion's, by its guards.
 
-**Not seen yet:** a real raid of level-24 players. Open questions: how much the nine ranged guards hurt, whether the stage holds when a fighter wanders, how long ten melee take on a gate, and Hibernia's lord's name.
+**The first capture (2026-11-13 03:38:48, Hibernia, 16 level-24 bots, the probe's seventh attempt):** from the go to the capture took 8 min 12 s. The lord fell in about 4 min to three melee alone. Hibernia's lord is "Chieftain Thidranki". What the six attempts before taught, each fixed in `siege.ts`:
+- **No raid orders at the go (attempt 1):** the straight walk through the north-west wall cost 8 deaths in 51 s, and no guard was touched. A raid without `raidOrders` and guards on the board is no raid.
+- **"Past the stage" must mean the line from the stage in (`pastStage`).** A body near the keep on another side, or on a route's last leg, is not past it.
+- **"At the stage" within 1000, or the body's centre on it.** The formation fans casters out beyond 600.
+- **Seeing no guard at all is no news.** A unit whose picture lacked guards (R3's fix: the make-up wrappers overwrote the raid patch) read every nearby post as cleared and walked to the gate past five fighters.
+- **`staged` holds only about the keep.** A body that fell back walks the route again.
+- **A static guard on us is the focus only within 1650 of our stand.** Roof Scouts and wall Wizards shooting from about 2000 drew the casters into the yard; one unit lost 7 there.
+- **Guards respawn 5-25 min after death** (`guard_respawn` 15 ± 10). In the stateless ranks each respawn reopens its rank, so the raid holds on the lord once 2 of us, and a fifth, stand within his reach.
+- **Broken doors:** a door repairs only 5 % per 30 min out of combat, and our client drops door state. A later raid learns a door is broken from a swing's "the Keep Door is already dead!" line (`DOOR_BROKEN_RE`). After 30 min the gate is back at 5 % and breaks in a few swings.
+- **Busy zones:** with all realms playing, a pack must keep the raid unless enemy players are on it or near the body (R3's 245e89e). Otherwise it drops the muster at the first enemy in sight.
+- **Still open:** casters don't climb to the roof, and the lord counts only damage from within 400 in 3D. The rank-1 stand is about 1600 from the east wall casters (reach 1850). Each unit keeps its own memory of done ranks and broken doors.
 
 ## The wolf pack (`sdk/group/pack.ts`, `rvrPack`)
 
