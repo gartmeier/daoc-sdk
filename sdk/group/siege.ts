@@ -301,6 +301,8 @@ const SEEN_FROM = 2500;
 const AT_SPOT = 600;
 /** The raid goes in from the stage once this share of the living stand there. */
 export const STAGE_SHARE = 0.75;
+/** A static guard on us further than this from the step's stand is no focus: a nuke's 1500 and a step closer. */
+export const FOCUS_REACH = 1650;
 /**
  * A member this near the stage stands at it. The pack's formation fans casters out behind the anchor, further with an enemy
  * in sight (spreadOnSight): live 2026-11-13 02:18-02:32, hibernia-2 stood 5/8 within AT_SPOT for 14 min, its centre 320
@@ -410,7 +412,6 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const onUs = foes.filter(s => s.targetObjectId != null && memberIds.has(s.targetObjectId) && !plan.lordName.test(s.name));
     const offPost = foes.filter(s => !postOf(plan, s));
     const near = (list: SiegeSeen[]) => list.slice().sort((a, b) => Math.hypot(a.x - centre.x, a.y - centre.y) - Math.hypot(b.x - centre.x, b.y - centre.y))[0];
-    const first = near(onUs) ?? near(offPost);
 
     const done = new Set(view.done ?? []);
     const broken = new Set(view.broken ?? []);
@@ -435,6 +436,12 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         ? { step: t, focus: focusOf(t), stand: t.stand }
         : idle(other?.stand ?? plan.roof);
 
+    // A static guard (caster, archer) on us is the focus only within reach of where we stand: one shooting from a wall or
+    // the roof further off would draw the casters in after it, into the yard (live 02:55, hibernia-2 lost 7 that way).
+    // A fighter on us comes to us, so it always is.
+    const stepStand = (rangedStep ?? meleeStep)?.stand ?? plan.roof;
+    const reachable = (s: SiegeSeen) => { const t = postOf(plan, s); return !t || t.kind === 'fighter' || Math.hypot(s.x - stepStand.x, s.y - stepStand.y) <= FOCUS_REACH; };
+    const first = near(onUs.filter(reachable)) ?? near(offPost);
     if (first) {
         const stand = (rangedStep ?? meleeStep)?.stand ?? plan.roof;
         const t: RaidTask = { step: rangedStep ?? meleeStep, focus: first, stand };

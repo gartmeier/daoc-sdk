@@ -248,14 +248,27 @@ describe('raidOrders', () => {
         expect(o.melee.step!.label).toMatch(/^yard-/);
     });
 
-    test('a guard on one of us goes first, whatever its rank', () => {
+    test('a fighter on one of us goes first, whatever its rank', () => {
         const members = at(plan.stage, 10);
         const seen = garrison();
-        const archer = seen.find(s => s.name === 'roof-n')!;
-        archer.targetObjectId = members[3]!.id;
+        const fighter = seen.find(s => s.name === 'yard-1')!;
+        fighter.targetObjectId = members[3]!.id;
         const o = raidOrders(plan, view({ members, seen, staged: true }));
-        expect(o.ranged.focus!.name).toBe('roof-n');
-        expect(o.melee.focus!.name).toBe('roof-n');
+        expect(o.ranged.focus!.name).toBe('yard-1');
+        expect(o.melee.focus!.name).toBe('yard-1');
+    });
+
+    test('a static guard on us beyond reach of our stand is no focus; a fighter on us always is (live 02:55)', () => {
+        const members = at({ x: 34420, y: 38275, z: 3720 }, 10);
+        const seen = [...garrison('albion', labelsUpTo(1)), ...doors];
+        const scout = seen.find(s => s.name === 'roof-e')!;
+        scout.targetObjectId = members[2]!.id;
+        const o = raidOrders(plan, view({ members, seen, staged: true }));
+        expect(o.ranged.focus?.name).not.toBe('roof-e');
+        expect(o.why).not.toMatch(/on us/);
+        const yard = seen.find(s => s.name === 'yard-2')!;
+        yard.targetObjectId = members[1]!.id;
+        expect(raidOrders(plan, view({ members, seen, staged: true })).ranged.focus!.name).toBe('yard-2');
     });
 
     test('a fighter off its post (it came out after us) goes first', () => {
