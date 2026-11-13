@@ -370,6 +370,8 @@ const LAYER_SLACK = 100;
  * wall-walk over our heads that only a long stair reaches, a merlon no walk ends on). Live 2026-11-13 08:36: straight moves to a
  * wall Wizard's z took melee up the Faste's wall.
  */
+/** Why the last layerRoute was 'none', for its caller's message (live diagnosis, 2026-11-13). */
+export let layerRouteWhy = '';
 export function layerRoute(regionId: number, from: Vec3, to: Vec3, maxLength = Infinity): { waypoints: Vec3[] } | 'straight' | 'none' {
     if (Math.abs(to.z - from.z) <= LAYER_DZ) return 'straight';
     const store = navmeshStore();
@@ -379,13 +381,18 @@ export function layerRoute(regionId: number, from: Vec3, to: Vec3, maxLength = I
     const a = mesh.closestPoint(from, { x: 64, y: 64, z: 256 });
     if (!a) return 'straight';
     const b = mesh.closestPoint(to, { x: 64, y: 64, z: 128 });
-    if (!b || Math.abs(b.z - to.z) > 64) return 'none';
+    if (!b || Math.abs(b.z - to.z) > 64) { layerRouteWhy = b ? `the target is off the mesh (${Math.round(b.z)} under ${Math.round(to.z)})` : 'no mesh under the target'; return 'none'; }
     const path = mesh.findPath(a, b);
-    if (path.status !== 'found' || path.points.length === 0) return 'none';
+    if (path.status !== 'found' || path.points.length === 0) {
+        const end = path.points.at(-1);
+        const shut = mesh.hasShutDoors() && end ? mesh.shutDoorNear(end, 400) : null;
+        layerRouteWhy = `route ${path.status}${end ? ` to (${Math.round(end.x)}, ${Math.round(end.y)}, ${Math.round(end.z)})` : ''} from (${Math.round(a.x)}, ${Math.round(a.y)}, ${Math.round(a.z)})${shut ? `, a shut door at (${Math.round(shut.x)}, ${Math.round(shut.y)})` : ''}`;
+        return 'none';
+    }
     let length = 0;
     let prev: Vec3 = from;
     for (const q of path.points) { length += Math.hypot(q.x - prev.x, q.y - prev.y, q.z - prev.z); prev = q; }
-    if (length > maxLength) return 'none';
+    if (length > maxLength) { layerRouteWhy = `the way is ${Math.round(length)} long, over ${Math.round(maxLength)}`; return 'none'; }
     return { waypoints: path.points.map(q => ({ x: q.x, y: q.y, z: q.z })) };
 }
 
@@ -2373,7 +2380,7 @@ export class BotActions {
                 if (!s.movement.moving || (destMoved && now - lastMoveAt > 400)) {
                     // On another layer (a wall-walk, a stair, a floor) only by the navmesh's found route, never straight up its side.
                     const way = layerRoute(p.regionId, p, t);
-                    if (way === 'none') return failWith(`${name} is on another level with no way there (${Math.round(t.z - p.z)} up)`, 'out_of_reach');
+                    if (way === 'none') return failWith(`${name} is on another level with no way there (${Math.round(t.z - p.z)} up: ${layerRouteWhy})`, 'out_of_reach');
                     // Never straight through a keep door: ours opens only by interact, an enemy's is a wall until it breaks (doors.ts).
                     const door = way === 'straight' ? doorBetween(p.regionId, p, t, p.realm) : null;
                     if (door) {
