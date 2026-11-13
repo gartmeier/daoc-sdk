@@ -43,6 +43,12 @@ export interface SiegeTarget {
     who: 'all' | 'ranged' | 'melee';
     /** A door's id (DbDoor.InternalID), as NearbyObject.doorId has it. */
     doorId?: number;
+    /**
+     * Known at its post but no step of the raid: it holds up no rank. It sees too little of where the raid stands to matter
+     * (the west wall), or it is fought from the roof in the lord phase (the roof archers). A guard on us within reach is still
+     * the focus, as any other.
+     */
+    optional?: boolean;
 }
 
 /** A realm's way from its own bank to the stage, over its own bridge. */
@@ -114,32 +120,39 @@ export const FASTE: SiegeLayout = {
     regionId: THIDRANKI,
     stage: { x: 36300, y: 38300, z: 3349 },
     targets: [
-        // Outside the gate, 1300-1700 out: they come to the raid at OUTSIDE, and the two east casters reach it there too.
-        { label: 'outer-armswoman', kind: 'fighter', at: { x: 34687, y: 38050, z: 3716 }, aggro: 1000, rank: 1, stand: OUTSIDE, who: 'all' },
-        { label: 'outer-se', kind: 'fighter', at: { x: 34720, y: 38637, z: 3715 }, aggro: 1000, rank: 1, stand: OUTSIDE, who: 'all' },
-        { label: 'outer-ne', kind: 'fighter', at: { x: 34396, y: 37556, z: 3730 }, aggro: 1000, rank: 1, stand: OUTSIDE, who: 'all' },
-        { label: 'outer-n', kind: 'fighter', at: { x: 34247, y: 37179, z: 3720 }, aggro: 1000, rank: 1, stand: OUTSIDE, who: 'all' },
-        { label: 'outer-s', kind: 'fighter', at: { x: 34024, y: 39282, z: 3720 }, aggro: 1000, rank: 1, stand: OUTSIDE, who: 'all' },
-        // The wall-walks over the gate side: out of melee reach (254 up), 900-1350 from GATE_OUT in 3D.
-        { label: 'wall-e-n', kind: 'caster', at: { x: 33976, y: 37722, z: 3976 }, aggro: 1850, rank: 2, stand: GATE_OUT, who: 'ranged' },
-        { label: 'wall-e-s', kind: 'caster', at: { x: 33971, y: 38815, z: 3976 }, aggro: 1850, rank: 2, stand: GATE_OUT, who: 'ranged' },
-        { label: 'wall-se', kind: 'caster', at: { x: 33679, y: 39074, z: 3976 }, aggro: 1850, rank: 2, stand: GATE_OUT, who: 'ranged' },
-        // The outer gate: melee break it while the casters work the walls.
+        // Ranked by line of sight with the walls (sdk/vision.ts lineOfSight over zone252.occluders, measured 2026-11-13): each
+        // stand sees what is fought from it, and the guards that see a stand are those of its rank or earlier ones.
+        // Outside the gate, 1300-1700 out. GATE_OUT sees all five (OUTSIDE only one) and no wall caster sees it.
+        { label: 'outer-armswoman', kind: 'fighter', at: { x: 34687, y: 38050, z: 3716 }, aggro: 1000, rank: 1, stand: GATE_OUT, who: 'all' },
+        { label: 'outer-se', kind: 'fighter', at: { x: 34720, y: 38637, z: 3715 }, aggro: 1000, rank: 1, stand: GATE_OUT, who: 'all' },
+        { label: 'outer-ne', kind: 'fighter', at: { x: 34396, y: 37556, z: 3730 }, aggro: 1000, rank: 1, stand: GATE_OUT, who: 'all' },
+        { label: 'outer-n', kind: 'fighter', at: { x: 34247, y: 37179, z: 3720 }, aggro: 1000, rank: 1, stand: GATE_OUT, who: 'all' },
+        { label: 'outer-s', kind: 'fighter', at: { x: 34024, y: 39282, z: 3720 }, aggro: 1000, rank: 1, stand: GATE_OUT, who: 'all' },
+        // The outer gate, melee only. No wall caster sees its stand, so the ranged wait there with them, out of the east wall's
+        // sight (nothing outside the gate sees wall-e-n, wall-e-s or wall-se, nor they it).
         { label: 'gate', kind: 'door', at: { x: 34333, y: 38275, z: 3720 }, aggro: 0, rank: 2, stand: { x: 34420, y: 38275, z: 3720 }, who: 'melee', doorId: 252000301 },
-        // The courtyard pair come out once anyone is at the gate.
-        { label: 'yard-1', kind: 'fighter', at: { x: 33353, y: 38186, z: 3720 }, aggro: 1000, rank: 3, stand: GATE_OUT, who: 'all' },
-        { label: 'yard-2', kind: 'fighter', at: { x: 33485, y: 38252, z: 3720 }, aggro: 1000, rank: 3, stand: GATE_OUT, who: 'all' },
-        // The far walls, from the courtyard: 900-1170 in 3D.
-        { label: 'wall-n', kind: 'caster', at: { x: 33185, y: 37386, z: 3975 }, aggro: 1850, rank: 4, stand: COURTYARD, who: 'ranged' },
-        { label: 'wall-sw', kind: 'caster', at: { x: 32478, y: 39130, z: 3976 }, aggro: 1850, rank: 4, stand: COURTYARD, who: 'ranged' },
-        { label: 'wall-nw', kind: 'caster', at: { x: 32441, y: 37328, z: 3991 }, aggro: 1850, rank: 4, stand: COURTYARD, who: 'ranged' },
-        // The roof archers, from the courtyard: 1040-1290 in 3D, 870 up.
-        { label: 'roof-e', kind: 'archer', at: { x: 32526, y: 38271, z: 4592 }, aggro: 2100, rank: 5, stand: COURTYARD, who: 'ranged' },
-        { label: 'roof-n', kind: 'archer', at: { x: 32218, y: 37987, z: 4592 }, aggro: 2100, rank: 5, stand: COURTYARD, who: 'ranged' },
-        { label: 'roof-s', kind: 'archer', at: { x: 32213, y: 38573, z: 4592 }, aggro: 2100, rank: 5, stand: COURTYARD, who: 'ranged' },
-        // The building's door, in front of the stair, then the fighter on its third floor (he comes down to us).
-        { label: 'keep-door', kind: 'door', at: { x: 32654, y: 38180, z: 3720 }, aggro: 0, rank: 6, stand: { x: 32740, y: 38180, z: 3720 }, who: 'melee', doorId: 252000302 },
-        { label: 'floor-3', kind: 'fighter', at: { x: 32308, y: 38560, z: 4272 }, aggro: 1000, rank: 6, stand: KEEP_DOOR_OUT, who: 'all' },
+        // The courtyard: the yard pair and every wall caster that sees it (wall-e-n, wall-e-s, wall-se, wall-n, 93-152 of 215
+        // courtyard points each). COURTYARD sees all of them.
+        { label: 'yard-1', kind: 'fighter', at: { x: 33353, y: 38186, z: 3720 }, aggro: 1000, rank: 3, stand: COURTYARD, who: 'all' },
+        { label: 'yard-2', kind: 'fighter', at: { x: 33485, y: 38252, z: 3720 }, aggro: 1000, rank: 3, stand: COURTYARD, who: 'all' },
+        { label: 'wall-e-n', kind: 'caster', at: { x: 33976, y: 37722, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'ranged' },
+        { label: 'wall-e-s', kind: 'caster', at: { x: 33971, y: 38815, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'ranged' },
+        { label: 'wall-se', kind: 'caster', at: { x: 33679, y: 39074, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'ranged' },
+        { label: 'wall-n', kind: 'caster', at: { x: 33185, y: 37386, z: 3975 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'ranged' },
+        // The west wall: no reachable ground spot sees wall-sw, and wall-nw only from outside the walls; they see 1 and 6 of 215
+        // courtyard points, not the building's door, not the roof. Optional: their stands are the wall-walk spots that see them
+        // (up the stair from the courtyard), should one ever be wanted.
+        { label: 'wall-sw', kind: 'caster', at: { x: 32478, y: 39130, z: 3976 }, aggro: 1850, rank: 4, stand: { x: 32592, y: 39293, z: 3994 }, who: 'ranged', optional: true },
+        { label: 'wall-nw', kind: 'caster', at: { x: 32441, y: 37328, z: 3991 }, aggro: 1850, rank: 4, stand: { x: 32441, y: 37828, z: 3978 }, who: 'ranged', optional: true },
+        // The building's door, then the fighter on its third floor (he comes down to us). No wall or roof guard sees the door's stand
+        // but the courtyard's own.
+        { label: 'keep-door', kind: 'door', at: { x: 32654, y: 38180, z: 3720 }, aggro: 0, rank: 4, stand: { x: 32740, y: 38180, z: 3720 }, who: 'melee', doorId: 252000302 },
+        { label: 'floor-3', kind: 'fighter', at: { x: 32308, y: 38560, z: 4272 }, aggro: 1000, rank: 4, stand: KEEP_DOOR_OUT, who: 'all' },
+        // The roof archers are seen from the roof only (roof-n and roof-s see none of the courtyard, roof-e 30 points): fought in
+        // the lord phase from ROOF, the ranged first on them, the melee on the lord.
+        { label: 'roof-e', kind: 'archer', at: { x: 32526, y: 38271, z: 4592 }, aggro: 2100, rank: 6, stand: ROOF, who: 'ranged', optional: true },
+        { label: 'roof-n', kind: 'archer', at: { x: 32218, y: 37987, z: 4592 }, aggro: 2100, rank: 6, stand: ROOF, who: 'ranged', optional: true },
+        { label: 'roof-s', kind: 'archer', at: { x: 32213, y: 38573, z: 4592 }, aggro: 2100, rank: 6, stand: ROOF, who: 'ranged', optional: true },
         // Everyone on the roof: he takes no damage from beyond 400.
         { label: 'lord', kind: 'lord', at: { x: 32296, y: 38267, z: 4592 }, aggro: 1000, rank: 7, stand: ROOF, who: 'all' },
     ],
@@ -465,7 +478,7 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const done = new Set(view.done ?? []);
     const broken = new Set(view.broken ?? []);
     const isDone = (t: SiegeTarget): boolean => {
-        if (done.has(t.label)) return true;
+        if (done.has(t.label) || t.optional) return true;
         if (t.kind === 'door') return t.doorId !== undefined && broken.has(t.doorId);
         if (atPost(plan, t, foes)) return false;
         // Nothing at the post: gone, if one of us is near enough to see it; else assume it still stands. Seeing no guard
@@ -522,7 +535,12 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const lordStep = plan.targets.find(t => t.kind === 'lord')!;
     const lord = foes.find(s => plan.lordName.test(s.name)) ?? atPost(plan, lordStep, foes);
     const t: RaidTask = { step: lordStep, focus: lord, stand: plan.roof };
-    return { phase: 'lord', stand: plan.roof, ranged: t, melee: { ...t, focus: meleeOk(lord) ? lord : null }, why: lord ? `${lord.name} on the roof` : 'up to the roof' };
+    // The roof archers (optional, fought from the roof): the ranged take them first, the melee stay on the lord.
+    const archerStep = plan.targets.find(x => x.optional && x.kind === 'archer' && atPost(plan, x, foes)) ?? null;
+    const archer = archerStep ? atPost(plan, archerStep, foes) : null;
+    const ranged: RaidTask = archer ? { step: archerStep, focus: archer, stand: plan.roof } : t;
+    const why = archer ? `${archerStep!.label} on the roof first, then ${lord?.name ?? 'the lord'}` : lord ? `${lord.name} on the roof` : 'up to the roof';
+    return { phase: 'lord', stand: plan.roof, ranged, melee: { ...t, focus: meleeOk(lord) ? lord : null }, why };
 }
 
 // ── Doors and walking (meleeReach) ───────────────────────────────────────────

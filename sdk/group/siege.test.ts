@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { NavmeshStore } from '../navmesh';
+import type { Point3 } from './types';
+import { getOccluderStore } from '../occluders';
+import { lineOfSight } from '../vision';
 import { getTerrainStore } from '../terrain';
 import { BATTLEGROUND_LAYOUTS, keepDangers, THIDRANKI, type PlayerRealm } from './keeps';
 import {
@@ -203,9 +206,9 @@ describe('raidOrders', () => {
         const members = at(plan.stage, 10);
         const t = FASTE.targets.find(x => x.label === 'outer-se')!;
         const seen = [...garrison('albion', labelsUpTo(1)), { id: 77, name: 'Hastener', realm: 'albion', kind: 'npc' as const, level: 50, isPeaceful: true, x: t.at.x, y: t.at.y, z: t.at.z }];
-        expect(raidOrders(plan, view({ members, seen, staged: true })).ranged.step!.rank).toBe(2);
+        expect(raidOrders(plan, view({ members, seen, staged: true })).melee.step!.rank).toBe(2);
         seen[seen.length - 1] = { ...seen[seen.length - 1]!, isPeaceful: false, isTargetable: false };
-        expect(raidOrders(plan, view({ members, seen, staged: true })).ranged.step!.rank).toBe(2);
+        expect(raidOrders(plan, view({ members, seen, staged: true })).melee.step!.rank).toBe(2);
     });
 
     test('at the stage it waits for STAGE_SHARE of the living', () => {
@@ -258,14 +261,18 @@ describe('raidOrders', () => {
         expect(o.stand).toEqual(o.ranged.step!.stand);
     });
 
-    test('then casters on the east walls while melee break the gate', () => {
+    test('then the gate, melee only: the ranged wait at its stand, out of the east wall\'s sight', () => {
         const members = at({ x: 34650, y: 38250, z: 3722 }, 10);
         const o = raidOrders(plan, view({ members, seen: [...garrison('albion', labelsUpTo(1)), ...doors], staged: true }));
-        expect(o.ranged.step!.label).toBe('wall-e-n');
-        expect(o.ranged.focus!.name).toBe('wall-e-n');
         expect(o.melee.step!.label).toBe('gate');
         expect(o.melee.focus!.id).toBe(503);
         expect(o.melee.stand).toEqual(o.melee.step!.stand);
+        expect(o.ranged.step).toBeNull();
+        expect(o.ranged.stand).toEqual(o.melee.step!.stand);
+        // The gate broken: the courtyard, the east wall casters with the yard pair.
+        const yard = raidOrders(plan, view({ members, seen: [...garrison('albion', labelsUpTo(1)), ...doors], staged: true, broken: [252000301] }));
+        expect(yard.ranged.step!.rank).toBe(3);
+        expect(FASTE.targets.filter(x => x.rank === 3).map(x => x.label)).toEqual(['yard-1', 'yard-2', 'wall-e-n', 'wall-e-s', 'wall-se', 'wall-n']);
     });
 
     test('a door is done when a member saw it break', () => {
@@ -305,10 +312,14 @@ describe('raidOrders', () => {
         // Everything back at its post but the doors: still the lord.
         const o = raidOrders(plan, view({ members: roof, seen: garrison(), staged: true }));
         expect(o.phase).toBe('lord');
-        expect(o.ranged.focus!.name).toBe('Lady Thidranki');
-        // A roof archer on us takes nothing from the lord; a fighter on us does (frozen window 06:32).
+        // On the roof the ranged take its archers first (seen from there only), the melee stay on the lord.
+        expect(o.ranged.focus!.name).toBe('roof-e');
+        expect(o.melee.focus!.name).toBe('Lady Thidranki');
+        const archersDead = garrison('albion', ['roof-e', 'roof-n', 'roof-s']);
+        expect(raidOrders(plan, view({ members: roof, seen: archersDead, staged: true })).ranged.focus!.name).toBe('Lady Thidranki');
+        // A roof archer on us takes the melee off nothing; a fighter on us does (frozen window 06:32).
         const archerOnUs = garrison().map(s => s.name === 'roof-e' ? { ...s, targetObjectId: roof[0]!.id } : s);
-        expect(raidOrders(plan, view({ members: roof, seen: archerOnUs, staged: true })).ranged.focus!.name).toBe('Lady Thidranki');
+        expect(raidOrders(plan, view({ members: roof, seen: archerOnUs, staged: true })).melee.focus!.name).toBe('Lady Thidranki');
         const fighterOnUs = garrison().map(s => s.name === 'floor-3' ? { ...s, targetObjectId: roof[0]!.id } : s);
         expect(raidOrders(plan, view({ members: roof, seen: fighterOnUs, staged: true })).ranged.focus!.name).toBe('floor-3');
         // One stray up there alone: the ranks (live 03:33).
@@ -369,14 +380,14 @@ describe('raidOrders', () => {
         const p = raidPlan('midgard', undefined, { breakDoors: false })!;
         const members = at({ x: 34650, y: 38250, z: 3722 }, 10);
         const o = raidOrders(p, { members, seen: garrison('albion', labelsUpTo(1)), owner: 'albion', staged: true });
-        expect(o.ranged.step!.label).toBe('wall-e-n');
-        expect(o.melee.step).toBeNull();
+        // No door step: from the outer fighters straight to the courtyard rank.
+        expect(o.ranged.step!.rank).toBe(3);
         expect(o.melee.stand).toEqual(o.ranged.stand);
     });
 
     test('the lord is never taken for a roof archer, though he stands within 400 of their posts', () => {
         const members = at({ x: 33100, y: 38250, z: 3722 }, 10);
-        const seen = [...garrison('albion', [...labelsUpTo(4), 'roof-e', 'roof-n', 'roof-s']), ...doors];
+        const seen = [...garrison('albion', [...labelsUpTo(3), 'wall-sw', 'wall-nw', 'roof-e', 'roof-n', 'roof-s']), ...doors];
         const o = raidOrders(plan, view({ members, seen, staged: true, broken: [252000301] }));
         expect(o.melee.step!.label).toBe('keep-door');
         expect(o.ranged.step!.label).toBe('floor-3');
@@ -427,7 +438,9 @@ describe('raidOrders with reach: melee take no static guard they cannot walk to'
         expect(blind.melee.focus?.name).toBe('wall-se');
         const o = raidOrders(plan, view({ members: yard, seen, staged: true, broken: [252000301], reach: () => false }));
         expect(o.ranged.focus!.name).toBe('wall-se');
-        expect(o.melee.focus).toBeNull();
+        // The melee keep to their own step, the yard pair's fighter, not the Wizard up on the wall.
+        expect(o.melee.focus?.name).not.toBe('wall-se');
+        expect(o.melee.focus!.name).toBe('yard-1');
         expect(raidOrders(plan, view({ members: yard, seen, staged: true, broken: [252000301], reach: () => true })).melee.focus!.name).toBe('wall-se');
     });
 
@@ -441,7 +454,7 @@ describe('raidOrders with reach: melee take no static guard they cannot walk to'
         const roof = [...at(plan.roof, 3), ...at({ x: 33100, y: 38250, z: 3722 }, 5).map(m => ({ ...m, id: m.id + 100 }))];
         const o = raidOrders(plan, view({ members: roof, seen: garrison(), staged: true, reach: () => false }));
         expect(o.phase).toBe('lord');
-        expect(o.ranged.focus!.name).toBe('Lady Thidranki');
+        expect(o.ranged.focus!.name).toBe('roof-e');
         expect(o.melee.focus).toBeNull();
     });
 });
@@ -483,6 +496,38 @@ describe.skipIf(!meshReady)('meleeReach on the Faste\'s navmesh', () => {
 
     test('outside a keep, nothing to say', () => {
         expect(meleeReach(R, stage, { x: 40448, y: 35226, z: 3216 }, none, navStore)).toBe(true);
+    });
+});
+
+describe.skipIf(!meshReady || getOccluderStore().forZone(252) === null)('the Faste\'s stands against the walls (lineOfSight) and the doors', () => {
+    const R = FASTE.regionId;
+    const statics = FASTE.targets.filter(t => t.kind === 'caster' || t.kind === 'archer' || t.kind === 'lord');
+    const sees = (from: Point3, to: Point3) => lineOfSight(R, from, to);
+    const stand = (l: string) => FASTE.targets.find(t => t.label === l)!.stand;
+
+    test('every caster, archer and the lord is seen from its stand', () => {
+        for (const t of statics) expect([t.label, sees(t.stand, t.at)]).toEqual([t.label, true]);
+    });
+
+    test('the outer fighters\' stand sees all five; no wall or roof guard sees it, nor the gate\'s', () => {
+        for (const t of FASTE.targets.filter(x => x.rank === 1)) expect([t.label, sees(t.stand, t.at)]).toEqual([t.label, true]);
+        for (const at of [stand('outer-s'), stand('gate')]) expect(statics.filter(t => sees(t.at, at)).map(t => t.label)).toEqual([]);
+    });
+
+    test('the guards that see the courtyard are of its rank, and none of the roof\'s; the roof sees its archers and the lord', () => {
+        const courtyard = stand('wall-n');
+        expect(statics.filter(t => sees(t.at, courtyard) && !t.optional).every(t => t.rank <= 3)).toBe(true);
+        expect(statics.filter(t => sees(t.at, courtyard)).map(t => t.label)).not.toContain('roof-n');
+        expect(['roof-e', 'roof-n', 'roof-s', 'lord'].every(l => sees(FASTE.roof, FASTE.targets.find(t => t.label === l)!.at))).toBe(true);
+    });
+
+    test('each stand is reachable from the stage once the doors before its rank are broken', () => {
+        const doorsBefore = (rank: number) => FASTE.targets.filter(t => t.kind === 'door' && t.rank < rank).map(t => t.doorId!);
+        for (const t of FASTE.targets) {
+            if (t.kind === 'door') continue;
+            const broken = t.kind === 'lord' || t.stand === FASTE.roof ? [252000301, 252000302] : doorsBefore(t.rank);
+            expect([t.label, meleeReach(R, FASTE.stage, t.stand, { broken, ours: false }, navStore)]).toEqual([t.label, true]);
+        }
     });
 });
 
