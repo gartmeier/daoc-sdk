@@ -10,7 +10,7 @@ import { rvrBehaviors } from '../group/rvr';
 import { STUN_IMMUNE_MS } from './hero';
 import { kitStyle } from './hybrid';
 import { reachOfBuild } from './reach';
-import { auraNow, auraStop, reaver, REAVER_OPENER, reaverStyle } from './reaver';
+import { AURA_PULSE_MS, auraNow, auraRunning, auraStop, lastPulse, reaver, REAVER_OPENER, reaverStyle } from './reaver';
 import { FOE, KIT_WEAPONS, kitStyles, ME, seenBy, swing } from './style-fixtures';
 
 const build = reachOfBuild(getBuild('Reaver', 'Flex, shield and tap')!, 24);
@@ -87,5 +87,24 @@ describe('reaver kit', () => {
         expect(auraNow(me, [at(1, 100), at(2, 500)])).toBe(false);
         expect(auraNow(me, [at(1, 100), at(2, 200), at(3, 600, { cc: { by: 'x', kind: 'mezz', until: 9e12 } })])).toBe(false);
         expect(auraNow(me, [at(1, 100), at(2, 200, { isPet: true })])).toBe(false);
+    });
+
+    test('the aura runs while its pulses come, from a start the server took, until a cancel', () => {
+        const now = 100_000;
+        expect(auraRunning(0, 0, 0, now)).toBe(false);
+        // A new sortie's empty memory: the pulses from the last one say it runs.
+        expect(auraRunning(now - 2000, 0, 0, now)).toBe(true);
+        expect(auraRunning(now - AURA_PULSE_MS - 1, 0, 0, now)).toBe(false);
+        expect(auraRunning(0, now - 500, 0, now)).toBe(true);
+        expect(auraRunning(now - 3000, now - 9000, now - 1000, now)).toBe(false);
+        // A pulse after the cancel: it was started again (or the cancel was a start).
+        expect(auraRunning(now - 500, 0, now - 1000, now)).toBe(true);
+    });
+
+    test('its pulses are our own effect animations on ourselves', () => {
+        const ev = (attacker: number, target: number, effectId: number, receivedAt: number) => ({ kind: 'spellEffect', attackerObjectId: attacker, targetObjectId: target, effectId, receivedAt });
+        const events = [ev(7, 7, 9645, 1000), ev(7, 9, 9645, 2000), ev(8, 8, 9645, 3000), ev(7, 7, 1, 4000), { ...ev(7, 7, 9645, 5000), kind: 'spellCast' }];
+        expect(lastPulse(events, 7, 9645, 0)).toBe(1000);
+        expect(lastPulse(events, 7, 9645, 1500)).toBe(1500);
     });
 });

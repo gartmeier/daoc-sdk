@@ -61,3 +61,17 @@ R6's bot plays **"Flex, shield and tap"**: Flexible 21, Soulrending 22, Shields 
 - **Numb is left out of the opener** (the Hero's kit swings it): a 2 s stun starts the same 60 s immunity Viper's 5 s would use.
 - The other auras (Cramping Curse, a melee damage debuff; Aura of Destiny, an armour debuff) and Spirit Decay (DoT) are untried.
 - Whether Credit to Arawn shows by name in `state.effects` (`keepProc` reads it so).
+
+## The aura in step with the server (stint 2026-11-13, S5)
+
+**The night of 2026-11-12** (21 sorties): 27 `aura:pulse_cancelled` (a start that cancelled an aura still running) and 34 `auraStop:cooldown` (a stop refused, the aura pulsing on near crowd control).
+
+**Server code:**
+- A cast of a running pulse cancels it before anything looks at the recast timer (`CastingComponent.cs` CastSpellRequest.StartSkill, :347-365). Only `castSpell`'s own client-side check refused those stops; the server would have taken them.
+- Every pulse sends its effect animation from him on himself (`SpellHandler.cs:236-237`), so the client sees each 6 s pulse in its combat events (`spellEffect`, client effect 9645).
+
+**The change (`sdk/classes/reaver.ts`):**
+- `auraWatch` (side tick) keeps the time of the last such pulse.
+- `auraRunning` says the aura runs while a pulse or our own start is under 7.5 s old and newer than our last cancel. A new sortie with the aura still pulsing from the last one now reads it as running, and stops it outside an engage.
+- A stop goes out with the recast timer ignored.
+- **To look for:** `auraStop:cooldown` gone, `aura:pulse_cancelled` rare.

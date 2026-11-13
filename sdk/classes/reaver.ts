@@ -16,7 +16,8 @@
 
 import { type TacticsSettings } from '../group/behaviors';
 import type { Character } from '../group/character';
-import type { Behavior } from '../group/member';
+import type { Behavior, MemberContext } from '../group/member';
+import { getSpell } from '../../data/index';
 import { assist } from '../group/behaviors';
 import type { Contact } from '../group/types';
 import { HERO_STUNS } from './hero';
@@ -53,12 +54,58 @@ export function auraStop(me: { x: number; y: number; regionId: number }, contact
     return !players(contacts).some(c => near(me, c, AURA_KEEP));
 }
 
+/** Pulses come every 6 s (Frequency 60); one this recent says the aura runs. */
+export const AURA_PULSE_MS = 7500;
+
+/**
+ * Whether the aura runs, by what the server shows of it: every pulse sends its effect animation from him on himself
+ * (SpellHandler.cs:236-237, SendEffectAnimation with the caster as target), and a start does at once. `pulseAt`: the last
+ * such animation seen; `startedAt`: our last start the server took; `stoppedAt`: our last stop it answered with a cancel.
+ */
+export function auraRunning(pulseAt: number, startedAt: number, stoppedAt: number, now: number): boolean {
+    const last = Math.max(pulseAt, startedAt);
+    return last > stoppedAt && now - last < AURA_PULSE_MS;
+}
+
+/** The newest of our own pulse animations (caster and target us, `effect` the spell's client effect) in the client's combat events, after `since`. */
+export function lastPulse(events: readonly { kind: string; attackerObjectId: number | null; targetObjectId: number | null; effectId?: number; receivedAt: number }[], selfId: number, effect: number, since: number): number {
+    let at = since;
+    for (const e of events) if (e.kind === 'spellEffect' && e.attackerObjectId === selfId && e.targetObjectId === selfId && e.effectId === effect && e.receivedAt > at) at = e.receivedAt;
+    return at;
+}
+
+/** Demolishing Aura (or the best pulsing point-blank damage he knows). */
+const auraSpell = (ctx: MemberContext<TacticsSettings>) => ctx.spells.all()
+    .filter(s => s.type === 'DirectDamage' && s.target === 'Enemy' && s.range === 0 && s.radius > 0 && s.castTime === 0 && s.pulse)
+    .sort((a, b) => b.spell.level - a.spell.level)[0];
+
+/**
+ * On the side tick: the last pulse of his aura the client saw. The combat events keep 200, which a big fight turns over in
+ * seconds, so they are read every 250 ms rather than in the aura's turn.
+ */
+export const auraWatch = (): Behavior<TacticsSettings> => ({
+    name: 'auraWatch',
+    side: true,
+    run(ctx) {
+        const sp = auraSpell(ctx);
+        const state = ctx.sdk.getState();
+        const me = state?.player;
+        if (!sp || !state || !me) return false;
+        const effect = getSpell(sp.spell.internalId)?.clientEffect ?? sp.spell.internalId;
+        ctx.memory.set('auraPulseAt', lastPulse(state.combatEvents, me.objectId, effect, ctx.memory.get('auraPulseAt') ?? 0));
+        return false;
+    },
+});
+
 /**
  * Demolishing Aura is a pulse (live 2026-11-12: a second cast came back pulse_cancelled): one cast hits every enemy within
  * 350 every 6 s for 8 power a pulse until it is cast again or the power runs out. So it starts when auraNow says so and is
- * cast again to stop it when auraStop does. Whether it runs is the kit's own memory (on after a start, off after a cancel):
- * live it didn't show among his effects. A stop that started it instead (the power had run out and ended it) is a start,
- * and the next turn stops it.
+ * cast again to stop it when auraStop does. Whether it runs is read from its pulses (auraWatch, auraRunning): the kit's own
+ * on/off went out of step (night of 2026-11-12: 27 starts that cancelled an aura still running, a new sortie's memory
+ * being empty among them).
+ * A stop goes out during the recast timer too: the server cancels a running pulse before it looks at the timer
+ * (CastingComponent.cs:347-365, CastSpellRequest.StartSkill), and only castSpell's own check refused it (34 `auraStop:cooldown`
+ * that night, the aura pulsing on near crowd control).
  */
 export const aura = (): Behavior<TacticsSettings> => ({
     name: 'aura',
@@ -67,22 +114,21 @@ export const aura = (): Behavior<TacticsSettings> => ({
         const now = Date.now();
         if (now < (ctx.memory.get('auraAt') ?? 0)) return false;
         const me = ctx.me();
-        const sp = ctx.spells.all()
-            .filter(s => s.type === 'DirectDamage' && s.target === 'Enemy' && s.range === 0 && s.radius > 0 && s.castTime === 0 && s.pulse)
-            .sort((a, b) => b.spell.level - a.spell.level)[0];
+        const sp = auraSpell(ctx);
         if (!sp) return false;
-        const effects = new Set((ctx.sdk.getState()?.effects ?? []).map(e => e.name));
         // Dead, it ended with him.
-        if (me.isDead) ctx.memory.set('auraRunning', false);
-        const running: boolean = ctx.memory.get('auraRunning') === true || effects.has(sp.spell.name);
+        if (me.isDead) ctx.memory.set('auraStopAt', now);
+        const running = auraRunning(ctx.memory.get('auraPulseAt') ?? 0, ctx.memory.get('auraStartAt') ?? 0, ctx.memory.get('auraStopAt') ?? 0, now);
         const contacts = ctx.picture().contacts;
         const engaged = ctx.orders().phase === 'engage';
         if (running) {
             if (!auraStop(me, contacts, engaged)) return false;
             ctx.doing('aura', null, `stop ${sp.spell.name}`);
-            const r = await ctx.bot.castSpell(sp.spell);
+            const r = await ctx.bot.castSpell({ ...sp.spell, cooldownRemaining: 0 });
             const stopped = r.reason === 'pulse_cancelled';
-            ctx.memory.set('auraRunning', !stopped && r.success);
+            // A stop that found it ended (the power ran out) starts it, or is refused for the timer: either way the pulses say.
+            if (stopped) ctx.memory.set('auraStopAt', Date.now());
+            else if (r.success) ctx.memory.set('auraStartAt', Date.now());
             ctx.result('auraStop', stopped ? { success: true } : r);
             ctx.memory.set('auraAt', Date.now() + 1500);
             return true;
@@ -90,8 +136,9 @@ export const aura = (): Behavior<TacticsSettings> => ({
         if (!engaged || sp.spell.cooldownRemaining > 0 || (me.mana ?? 0) < ctx.spells.powerOf(sp) * 3 || !auraNow(me, contacts)) return false;
         ctx.doing('aura', null, sp.spell.name);
         const r = await ctx.bot.castSpell(sp.spell);
-        // pulse_cancelled here: it was running after all, and is off now.
-        ctx.memory.set('auraRunning', r.success);
+        // pulse_cancelled here: it was running after all, unseen, and is off now.
+        if (r.success) ctx.memory.set('auraStartAt', Date.now());
+        else if (r.reason === 'pulse_cancelled') ctx.memory.set('auraStopAt', Date.now());
         ctx.result('aura', r);
         ctx.memory.set('auraAt', Date.now() + (r.success || r.reason === 'pulse_cancelled' ? 1500 : waitOf(r.message) ?? 8000));
         return true;
@@ -103,6 +150,7 @@ export function reaver(): Character {
         role: 'melee',
         instant: [interruptWith(['Lifedrain'])],
         react: [surge(), aura()],
+        urgent: [auraWatch()],
         fight: [assist({ melee: true, holdMs: 0, style: reaverStyle })],
         chores: [keepProc()],
     };
