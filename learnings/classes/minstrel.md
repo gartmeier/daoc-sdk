@@ -44,3 +44,15 @@ R6's bot plays **"Group thrust"**: Instruments 21, Thrust 20, Stealth 5 at 24 (`
 - **The shout's 700** against support's place at 450-1600 behind: it reaches a diver on him or our healer, rarely a caster at their back line.
 - **Stealth** (Stealth 5) is unused.
 - Whether a stunned enemy really keeps being hit by the group: the board's `ccImmune` is set, its `cc` not.
+
+## `song: pulse_cancelled`, read (stint 2026-11-13, S5)
+
+**The question from the night of 2026-11-12:** 35 `song: pulse_cancelled` and 38 `cc: pulse_cancelled` for Dagonet. Does the old song stop, or the new one?
+
+**Server code:**
+- **One song at a time, for every singer.** A new pulse ends every other pulse of its caster (`EffectListComponent.CancelIncompatiblePulseEffects`, only spell group 30 exempt), silently. So speed and power can't both run; that is the game, not the kit.
+- **"You stop playing your song."** comes when the same song is cast while it runs (`SpellHandler.cs:501-512`, it stops and the cast ends there); when a flute mezz is stuck in its retry state (target out of range or sight) and a new mezz is cast (`CastingComponent.cs:393-400`): the old mezz stops and the new one is not cast; and at a pulse with no instrument in hand (`SpellHandler.cs:225-229`).
+
+**What the logs show:** the `song` ones came in quiet phases (recover, gather after a release) about 10 s after a song of his. That is `song()`'s own stop: with no song wanted in a quiet phase, it casts the running one once to stop it, and the answer was recorded as a failed `song`. Every singer had them: across the run logs, Oisin 1174, Elaine 1037, Tuck 790, Bragi 572, Gildas 461, Dagonet 155.
+- **Changed (sdk/group/behaviors.ts `song`):** that stop is now its own result kind, `songStop`, a success when the answer is pulse_cancelled.
+- **`cc: pulse_cancelled`:** a flute mezz stuck in its retry, cleared by the next mezz, which isn't cast. The next turn casts it. A lost turn, not a lost mezz; left as is.

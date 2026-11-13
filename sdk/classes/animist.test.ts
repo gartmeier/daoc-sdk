@@ -32,6 +32,13 @@ describe('animist kit', () => {
         expect(dist(far, me)).toBeLessThanOrEqual(TURRET_REACH - SUMMON_MARGIN);
         expect(turretSpot(me, { x: 0, y: 500 })).toEqual({ x: 0, y: 100 });
         expect(turretSpot(me, { x: 2000, y: 0 })).toBeNull();
+        // A lord 600 above us: the ground reach left is sqrt(800² - 600²) ≈ 529, so the turret goes out 771 for one 1300 off,
+        // and one 1500 off is beyond the summon's 920.
+        const up = turretSpot({ ...me, z: 0 }, { x: 1300, y: 0, z: 600 })!;
+        expect(up.x).toBeGreaterThan(760);
+        expect(Math.hypot(1300 - up.x, 600)).toBeLessThanOrEqual(TURRET_REACH - REACH_MARGIN + 1);
+        expect(turretSpot({ ...me, z: 0 }, { x: 1500, y: 0, z: 600 })).toBeNull();
+        expect(turretSpot({ ...me, z: 0 }, { x: 300, y: 0, z: 900 })).toBeNull();
     });
 
     test('the turret: shoot what it reaches, no order in the grace, planted again after it or with none up', () => {
@@ -41,6 +48,8 @@ describe('animist kit', () => {
         expect(turretState(turret, { x: 1700, y: 0 }, 10_000 - LEFT_BEHIND_MS + 1, 10_000)).toBe('wait');
         expect(turretState(turret, { x: 1700, y: 0 }, 10_000 - LEFT_BEHIND_MS, 10_000)).toBe('plant');
         expect(turretState(null, { x: 100, y: 0 }, undefined, 10_000)).toBe('plant');
+        // In 3D: 800 on the ground and 700 up is 1063, out of reach (Lord Thidranki, 1222 from a turret read in reach).
+        expect(turretState({ ...turret, z: 0 } as any, { x: 800, y: 0, z: 700 }, undefined, 10_000)).toBe('wait');
     });
 
     test("Arboreal: Forest's Sentry, the damage turret not the tangler, Spirit of Wrath", () => {

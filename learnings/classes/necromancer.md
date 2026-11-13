@@ -66,3 +66,11 @@ From [pets.md](../pets.md#shade): leaving shade sets health to min(current, max 
 - The owner's walk into 500 for a Cackle, which a shade can make safely by the server code; whether the server measures that range from the owner or the servant wasn't read.
 - `fallBack` and `raiseServant` with enemies near: the servant never died in these sorties.
 - In a group: the group's heals, positions and death counts with a shade in it (above). Field mode from 22:30 is the first.
+
+## Vitality Theft `no_response` and `walk:water` (stint 2026-11-13, S5)
+
+**`nuke: no_response` on Vitality Theft (292 in the run logs):**
+- **Server code:** a PetSpell's owner half is instant and pays its power at once (`PetSpellHandler.FinishSpellCast`). The servant then casts the sub-spell (3 s). An NPC already casting takes a new spell as its queued one (`CastingComponent`: the last one sent wins), with no message. So a Vitality Theft sent while the servant is mid-cast shows no cast in castSpell's wait, and each resend costs 12 power more.
+- **Changed (`servantFight`):** the servant counts as busy until its own cast animation (0x72 with its cast time) has run out (`servantCastingUntil`), and a `no_response` holds the next servant spell for its cast time as a success does.
+
+**`walk:water` (205):** her walk-in to a focus in the river is refused at the bank, once a turn. Now `closeOn` notes it (`noteWet`), and for 8 s she doesn't walk at that focus. She casts from the bank whatever reaches it; her servant still goes in.

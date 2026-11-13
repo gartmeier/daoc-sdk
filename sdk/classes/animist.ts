@@ -52,13 +52,23 @@ const FNF_RETRY_MS = 10_000;
 /** Bombers only with our health above this: below, the lifedrain heals. */
 export const BOMB_ABOVE_HP = 50;
 
+/** 3D where both heights are known, else on the ground: the server measures a turret's reach in 3D. */
+export const dist3 = (a: Point & { z?: number | null }, b: Point & { z?: number | null }) =>
+    Math.hypot(a.x - b.x, a.y - b.y, a.z == null || b.z == null ? 0 : a.z - b.z);
+
 /**
  * Where a turret goes to reach `focus`: on the line from us to it, as near us as reaches it (so it stands behind our line, not
- * among them), but at least 100 out. Null when no spot within the summon's range reaches it.
+ * among them), but at least 100 out. Null when no spot within the summon's range reaches it. With heights (the turret stands
+ * at about ours), the reach left on the ground is what the height difference leaves of it: a keep's lord or a wall's scout
+ * 600 above us is reached from 760 out at most, not 800 (stint 2026-11-13: 94 orders refused at Lord Thidranki, 1222 from a
+ * turret the ground said was in reach).
  */
-export function turretSpot(me: Point, focus: Point, range = TURRET_REACH, reach = TURRET_REACH): Point | null {
+export function turretSpot(me: Point & { z?: number | null }, focus: Point & { z?: number | null }, range = TURRET_REACH, reach = TURRET_REACH): Point | null {
     const d = dist(me, focus);
-    const out = Math.max(d - (reach - REACH_MARGIN), Math.min(100, d / 2));
+    const dz = me.z == null || focus.z == null ? 0 : focus.z - me.z;
+    const flat = (reach - REACH_MARGIN) ** 2 - dz ** 2;
+    if (flat <= 0) return null;
+    const out = Math.max(d - Math.sqrt(flat), Math.min(100, d / 2));
     if (out > range - SUMMON_MARGIN) return null;
     if (d === 0) return { x: me.x, y: me.y };
     const f = out / d;
@@ -84,13 +94,13 @@ export function bomberPick(known: readonly Through[]): Through | null {
  * The turret against the focus: `reach` it can shoot it, `wait` it is out of its reach for less than LEFT_BEHIND_MS (no order, which the server
  * refuses: "Briton is 1772 from it, beyond its 1000", 6 in sortie 2), `plant` none is up or the focus has been out of its reach that long.
  */
-export function turretState(turret: Point | null, focus: Point, outSince: number | undefined, now: number): 'reach' | 'wait' | 'plant' {
+export function turretState(turret: (Point & { z?: number | null }) | null, focus: Point & { z?: number | null }, outSince: number | undefined, now: number): 'reach' | 'wait' | 'plant' {
     if (!turret) return 'plant';
-    if (dist(turret, focus) <= TURRET_REACH - REACH_MARGIN / 2) return 'reach';
+    if (dist3(turret, focus) <= TURRET_REACH - REACH_MARGIN / 2) return 'reach';
     return now - (outSince ?? now) >= LEFT_BEHIND_MS ? 'plant' : 'wait';
 }
 
-function turretLeftBehind(ctx: MemberContext, turret: Point | null, focus: Point, now: number): 'reach' | 'wait' | 'plant' {
+function turretLeftBehind(ctx: MemberContext, turret: (Point & { z?: number | null }) | null, focus: Point & { z?: number | null }, now: number): 'reach' | 'wait' | 'plant' {
     const state = turretState(turret, focus, ctx.memory.get('turretOutSince'), now);
     if (state === 'reach' || !turret) ctx.memory.delete('turretOutSince');
     else if (!ctx.memory.has('turretOutSince')) ctx.memory.set('turretOutSince', now);

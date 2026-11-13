@@ -60,3 +60,9 @@ From [pets.md](../pets.md#turrets): a ground target first; a spot off the mesh i
 - In a group, with a haven for `giveGround`.
 - `fnfTurret`: the reports don't tell its summons from the main turret's.
 - Whether enemy players go for the turret: none died in these sorties.
+
+## Turret reach in 3D (stint 2026-11-13, S5)
+
+**The carry-over:** `petAttack:out_of_range` 14-17 times in the long sorties. In the run logs most were keep targets: "Lord Thidranki is 1222 from it, beyond its 1000" (94), Scouts on the wall (33), Lady Thidranki (27). The SDK measures the turret's reach in 3D, as the server does; `turretState` and `turretSpot` measured on the ground, so a lord or a wall scout 600-700 above read as in reach.
+- **Changed (`sdk/classes/animist.ts`, `pet-cc.ts`):** `turretState` and the off-crowd-control focus check measure in 3D (`dist3`). `turretSpot` plants as far out as the height difference leaves: the ground reach is the square root of 800² less the height difference². A target 800 or more above or below gets no turret.
+- For the keep's defence (milestone 5), turrets inside the gate and on the stair wait for S2's defence orders.

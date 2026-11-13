@@ -11,7 +11,7 @@
 //  - servantHeal and servantBuffs: its heal over time and its buffs, which no healer of the group casts on a pet.
 // learnings/classes/necromancer.md has the runs, and what the group's heals, positions and death counts make of a shade.
 
-import { buffRetryMs, QUIET_PHASES, type TacticsSettings } from '../group/behaviors';
+import { buffRetryMs, noteWet, QUIET_PHASES, wetSkipped, type TacticsSettings } from '../group/behaviors';
 import { dist } from '../group/battleground';
 import type { Character } from '../group/character';
 import type { Behavior, MemberContext } from '../group/member';
@@ -209,7 +209,22 @@ async function closeOn(ctx: MemberContext, mob: { objectId: number; name: string
     ctx.doing('move', mob.objectId, `in to ${Math.round(range)} of ${mob.name}`);
     const w = await ctx.bot.walkToObject(mob.objectId, { range, timeout: WALK_IN_MS });
     if (!w.success && w.reason !== 'timeout') ctx.result('walk', w, mob.objectId);
+    // Refused at the bank (the dry move guard): no walk at it again for WET_SKIP_MS, she casts from the bank what reaches.
+    // The frozen window had 18-28 `walk:water` a sortie, one a turn at the same swimmer.
+    noteWet(ctx, mob.objectId, w);
     return true;
+}
+
+/**
+ * Until when the servant is busy casting, by its own cast animations (0x72 with the cast time, from the servant): a spell sent
+ * meanwhile is queued by the server without a word (CastingComponent: an NPC's new spell becomes QueuedSpellHandler, the
+ * last one sent winning) and its power is paid at once (PetSpellHandler.FinishSpellCast).
+ */
+export function servantCastingUntil(events: readonly { kind: string; attackerObjectId: number | null; castTimeMs?: number; receivedAt: number }[], servantId: number | undefined): number {
+    if (servantId === undefined) return 0;
+    let until = 0;
+    for (const e of events) if (e.kind === 'spellCast' && e.attackerObjectId === servantId && e.castTimeMs) until = Math.max(until, e.receivedAt + e.castTimeMs);
+    return until;
 }
 
 export const servantFight = (opts: { saveBelow?: number; aoe?: boolean } = {}): Behavior<TacticsSettings> => ({
@@ -224,7 +239,8 @@ export const servantFight = (opts: { saveBelow?: number; aoe?: boolean } = {}): 
         // The owner's own distance counts twice on the server: an attack order needs it within 2000 of the target
         // (GamePlayer.CommandNpcAttack), and a PetSpell's owner half checks its range from the owner (SpellHandler.CheckBeginCast).
         // Standing back as a caster does, Morgause had 94 orders refused in field run B's first sortie. A shade can't be hit: walk in.
-        if (go.seen.distance > OWNER_STAND + OWNER_SLACK) return closeOn(ctx, go.mob, OWNER_STAND);
+        const wet = wetSkipped(ctx, go.mob.objectId);
+        if (go.seen.distance > OWNER_STAND + OWNER_SLACK && !wet) return closeOn(ctx, go.mob, OWNER_STAND);
         if (petState.targetObjectId !== go.mob.objectId && !(ctx.memory.get('servantOrder') === go.mob.objectId && waiting(ctx.memory, 'servantOrderAt', now - ORDER_MS))) {
             ctx.memory.set('servantOrder', go.mob.objectId);
             ctx.memory.set('servantOrderAt', now);
@@ -236,11 +252,11 @@ export const servantFight = (opts: { saveBelow?: number; aoe?: boolean } = {}): 
         const me = ctx.me();
         if ((opts.saveBelow ?? 0) > 0 && me.manaPercent < opts.saveBelow!) return ctx.skip('servantFight: saving power');
         const pet = ctx.sdk.getPet();
-        const servantBusy = waiting(ctx.memory, 'servantCastUntil', now);
+        const servantBusy = waiting(ctx.memory, 'servantCastUntil', now) || servantCastingUntil(ctx.sdk.getState()?.combatEvents ?? [], petState.objectId) > now;
         const pick = servantNuke(servantNukes(through(ctx, 'PetSpell')), {
             underMelee: servantUnderMelee(ctx), servantHp: pet?.healthPercent ?? 100, aoe: opts.aoe,
             ready: n => ready(ctx, n) && (n.ownerCast || !servantBusy) && (!pet || dist(pet, go.seen) <= n.range)
-                && (go.seen.distance <= n.range || (pet?.healthPercent ?? 100) >= NO_WALK_IN_BELOW),
+                && (go.seen.distance <= n.range || (!wet && (pet?.healthPercent ?? 100) >= NO_WALK_IN_BELOW)),
         });
         if (!pick) return ctx.skip(servantBusy ? 'servantFight: the servant is casting' : 'servantFight: nothing to cast');
         if (pick.range > 0 && go.seen.distance > pick.range) return closeOn(ctx, go.mob, Math.max(pick.range - 50, 100));
@@ -249,6 +265,9 @@ export const servantFight = (opts: { saveBelow?: number; aoe?: boolean } = {}): 
         ctx.result('nuke', c, go.mob.objectId);
         if (c.success && !pick.ownerCast) ctx.memory.set('servantCastUntil', Date.now() + (pick.sub?.castTime ?? 3) * 1000 + 300);
         if (!c.success && c.reason === 'must_wait') ctx.memory.set('servantCastUntil', Date.now() + (c.retryAfterMs ?? 1500));
+        // No sign of the servant's cast in castSpell's wait: queued behind its current action, and paid for. Not again until it would
+        // have cast it: the frozen window had 6-14 `nuke:no_response` a sortie on Vitality Theft, each 12 power.
+        if (!c.success && c.reason === 'no_response' && !pick.ownerCast) ctx.memory.set('servantCastUntil', Date.now() + (pick.sub?.castTime ?? 3) * 1000 + 300);
         return true;
     },
 });

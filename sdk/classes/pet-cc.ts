@@ -14,6 +14,10 @@ import type { Behavior, MemberContext } from '../group/member';
 import type { Contact } from '../group/types';
 import { focusToHit, waiting } from './summoner';
 
+/** The server measures a pet's reach in 3D: a keep's lord above a turret is farther than the ground says. */
+const dist3 = (a: { x: number; y: number; z?: number | null }, b: { x: number; y: number; z?: number | null }) =>
+    Math.hypot(a.x - b.x, a.y - b.y, a.z == null || b.z == null ? 0 : a.z - b.z);
+
 /** A mezz cast at it by another member this recently still counts as on its way. */
 const CC_CLAIM_MS = 4000;
 /** No second wipe within this. */
@@ -74,7 +78,7 @@ export const petOffCc = (o: PetOffCcOptions): Behavior<TacticsSettings> => ({
         if (waiting(ctx.memory, `${o.name}At`, now - WIPE_MS)) return false;
         const onIt = ctx.contact(petState.targetObjectId);
         const go = focusToHit(ctx);
-        const focus = go && !ccOnIt(ctx, go.mob) && dist(pet, go.seen) <= o.focusReach && go.seen.distance <= (o.ownerReach ?? Infinity) ? go : null;
+        const focus = go && !ccOnIt(ctx, go.mob) && dist3(pet, go.seen) <= o.focusReach && go.seen.distance <= (o.ownerReach ?? Infinity) ? go : null;
         const busy = !!o.busy?.(ctx);
         const plan = offCcPlan({ targetHeld: !!onIt && ccOnIt(ctx, onIt), fresh: newlyHeld(before, held).length > 0, busy, focusInReach: !!focus });
         if (plan === 'none') {

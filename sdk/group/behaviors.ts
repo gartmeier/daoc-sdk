@@ -2302,7 +2302,10 @@ export const song = (): Behavior<TacticsSettings> => ({
             if (!running || QUIET_OR_TRAVEL.has(ctx.orders().phase) === false || ctx.me().attacking) return false;
             ctx.memory.delete('songCast');
             ctx.doing('song', null, `stop ${running.spell.name}`);
-            ctx.result('song', await ctx.bot.castSpell(running.spell));
+            // The stop's answer is pulse_cancelled, which is what it is for: a success of its own kind. Counted as `song`
+            // failures, these stops were most of the "song: pulse_cancelled" in every singer's report (S5, 2026-11-13).
+            const r = await ctx.bot.castSpell(running.spell);
+            ctx.result('songStop', r.reason === 'pulse_cancelled' ? { success: true, message: `stopped ${running.spell.name}` } : r);
             return true;
         }
         // A pulse's effect can drop out between two pulses, so it counts as playing until a pulse is overdue;

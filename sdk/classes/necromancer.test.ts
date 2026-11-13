@@ -5,7 +5,7 @@ import { withCharacter } from '../group/character';
 import type { Behavior } from '../group/member';
 import { packBehaviors } from '../group/pack';
 import { rvrBehaviors } from '../group/rvr';
-import { leashOrders, necromancer, OWNER_STAND, servantBuffPicks, servantHealPick, servantNuke, servantNukes, stepAway } from './necromancer';
+import { leashOrders, necromancer, OWNER_STAND, servantBuffPicks, servantHealPick, servantNuke, servantNukes, stepAway, servantCastingUntil } from './necromancer';
 import { knownThrough } from './summoner-fixtures';
 
 const nukesOf = (build: string) => servantNukes(knownThrough('Necromancer', build, 24, 'PetSpell'));
@@ -78,5 +78,13 @@ describe('necromancer kit', () => {
         const vt = nukesOf('Sight and servant split').find(n => n.pick.spell.name === 'Vitality Theft')!;
         expect(OWNER_STAND + 150).toBeLessThan(2000);
         expect(OWNER_STAND).toBeLessThanOrEqual(vt.range);
+    });
+});
+
+describe('necromancer kit: the servant busy by its own casts', () => {
+    test('its newest cast animation with a cast time, nobody else\'s', () => {
+        const ev = (attacker: number, castTimeMs: number | undefined, receivedAt: number, kind = 'spellCast') => ({ kind, attackerObjectId: attacker, castTimeMs, receivedAt });
+        expect(servantCastingUntil([ev(5, 3000, 1000), ev(5, 3000, 4500), ev(6, 3000, 9000), ev(5, undefined, 9000), ev(5, 3000, 9000, 'spellEffect')], 5)).toBe(7500);
+        expect(servantCastingUntil([ev(5, 3000, 1000)], undefined)).toBe(0);
     });
 });
