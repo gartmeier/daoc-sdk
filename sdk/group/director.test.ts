@@ -178,6 +178,22 @@ describe('muster', () => {
         expect(out.events.find(e => e.kind === 'stage')).toMatchObject({ stage: 'go', atRally: 9, of: 9 });
     });
 
+    test('the muster call carries the raid: every member of each running unit asked, places rounded', () => {
+        const d = director();
+        d.startMuster({ rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } });
+        const out = d.update({
+            camelot: frame({ id: 'camelot', members: [{ name: 'G0', x: 37012, y: 52026, z: 3990 }, { name: 'G1', x: 37000, y: 52000, dead: true }] }),
+            'camelot-s1': frame({ id: 'camelot-s1', noRun: true, members: at(30000, 30000, 2, 'S') }),
+        }, 0, []);
+        expect(out.calls[0]!.raid).toEqual([
+            { unit: 'camelot', x: 37000, y: 52050, z: 4000, alive: true },
+            { unit: 'camelot', x: 37000, y: 52000, z: 0, alive: false },
+        ]);
+        // A help call carries none.
+        const help = director().update({ camelot: frame({ id: 'camelot', phase: 'engage', members: at(MID.x, MID.y, 1, 'G'), foes: foes(MID.x + 300, MID.y, 3) }) }, 0, []);
+        expect(help.calls[0]!.raid).toBeUndefined();
+    });
+
     test('the rally goes after rallyMaxMs with half there; endMuster closes it', () => {
         const d = director();
         d.startMuster({ rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } });

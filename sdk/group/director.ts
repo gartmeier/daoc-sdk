@@ -56,10 +56,27 @@ export interface RealmCall {
     asked: string[];
     /** Units that answered 'coming' (and not left since). */
     coming: string[];
+    /**
+     * Muster only: every member of each running unit in `asked`, refreshed each update, places rounded to RAID_ROUND so
+     * the file changes only on real moves. Lets a unit see where the rest of the raid stands (R5's RaidView.raid).
+     */
+    raid?: RaidMember[];
     /** ms epoch. */
     since: number;
     updatedAt: number;
 }
+
+/** A raid member as the muster call carries it. */
+export interface RaidMember {
+    unit: string;
+    x: number;
+    y: number;
+    z: number;
+    alive: boolean;
+}
+
+/** Raid members' places are rounded to this. */
+export const RAID_ROUND = 50;
 
 /** <dir>/<realm>.json */
 export interface CallsFile {
@@ -261,7 +278,7 @@ export class RealmDirector {
 
     /** The open calls now. */
     calls(): RealmCall[] {
-        return [...this.open.values()].map(o => ({ ...o.call, asked: [...o.call.asked], coming: [...o.call.coming] }));
+        return [...this.open.values()].map(o => ({ ...o.call, asked: [...o.call.asked], coming: [...o.call.coming], ...(o.call.raid ? { raid: o.call.raid.map(m => ({ ...m })) } : {}) }));
     }
 
     /** The last board read. */
@@ -512,6 +529,8 @@ export class RealmDirector {
         const call = o.call;
         const raid = board.units.filter(u => call.asked.includes(u.unit) && u.running);
         const living = raid.reduce((t, u) => t + u.alive, 0);
+        const round = (n: number) => Math.round(n / RAID_ROUND) * RAID_ROUND;
+        call.raid = raid.flatMap(u => u.members.map(m => ({ unit: u.unit, x: round(m.x), y: round(m.y), z: round(m.z), alive: !m.isDead })));
         const point = call.stage === 'rally' ? o.raid.rally : o.raid.target;
         const there = raid.reduce((t, u) => t + u.members.filter(m => !m.isDead && dist2(m, point) <= s.arrive * 1.5).length, 0);
         const near = foesNear(board.foes, point, s.nearFoe);
