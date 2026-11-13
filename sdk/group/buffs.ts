@@ -15,6 +15,9 @@
 //  - A caster drops its concentration buffs that are not in its plan (the slot
 //    moved to another provider, the target needs no such slot) when the pool is
 //    short; buffs on dead or absent members end on their own.
+//  - Leftover concentration goes on the group's window pets, as players do (the user, playing Niamh, 2026-11-13):
+//    the last pass of the plan, concentration buffs only, never at the cost of a member's buff (nextBuff keeps
+//    the room every member's buff needs, and surplusConcentration drops pet buffs first).
 
 import type { BuffSlot, BuffSpell, MemberReport, Role } from './types';
 
@@ -40,9 +43,16 @@ const PROVIDERS: Record<'base' | 'spec' | 'other', Role[]> = {
 };
 const TARGET_ORDER: Role[] = ['tank', 'melee', 'healer', 'support', 'nuker'];
 
+/** What a member's window pet takes from the leftover concentration, most important first: a fighter's. Off with []. */
+export const PET_BUFF_NEEDS: BuffSlot[] = BUFF_NEEDS.melee;
+
 export interface BuffOptions {
     needs?: Partial<Record<Role, BuffSlot[]>>;
     selfOnly?: Partial<Record<Role, BuffSlot[]>>;
+    /** Slots for members' window pets (default PET_BUFF_NEEDS; [] for none). */
+    petNeeds?: BuffSlot[];
+    /** The caster's own concentration list (state.concentrationEffects): the only word on what is on a pet. */
+    ownConc?: readonly Pick<ConcEntry, 'name' | 'ownerName'>[];
 }
 
 export interface BuffTask {
@@ -55,6 +65,8 @@ export interface BuffTask {
     covered: boolean;
     /** ... and it is this very spell (so it is probably ours and ties up our concentration). */
     ours: boolean;
+    /** A member's window pet, `target` being its name: the plan's last pass, from leftover concentration. */
+    pet?: { owner: string; objectId: number };
 }
 
 const kind = (slot: BuffSlot) => (BASE.has(slot) ? 'base' : SPEC.has(slot) ? 'spec' : 'other');
@@ -115,6 +127,22 @@ export function planBuffs(caster: string, members: MemberReport[], opts: BuffOpt
         if (owner?.name !== caster) continue;
         tasks.push({ spell: s, target: caster, rank: 99, covered: me.effects.includes(s.name), ours: me.effects.includes(s.name) });
     }
+    // Last, the window pets of living members, in the targets' order, rounds over their needs: concentration buffs from
+    // the slot's provider by role (a pet casts none of its own). What is on one we know only from our own list.
+    const pets = targets.filter(t => t.pet?.name && t.pet.objectId).map(t => ({ owner: t.name, pet: t.pet! }));
+    const petNeeds = opts.petNeeds ?? PET_BUFF_NEEDS;
+    const own = opts.ownConc ?? [];
+    for (let rank = 0; rank < petNeeds.length; rank++) {
+        const slot = petNeeds[rank]!;
+        for (const { owner, pet } of pets) {
+            const spell = spellFor(me, slot, false);
+            if (!spell || spell.concentration <= 0) continue;
+            const by = PROVIDERS[kind(slot)].map(r => members.find(m => !m.isDead && m.role === r && spellFor(m, slot, false)?.concentration)).find(Boolean);
+            if (by?.name !== caster) continue;
+            const ours = own.some(c => c.ownerName === pet.name && sameSpell(spell.name, c.name));
+            tasks.push({ spell, target: pet.name, rank: 100 + rank, covered: ours, ours, pet: { owner, objectId: pet.objectId } });
+        }
+    }
     return tasks;
 }
 
@@ -133,12 +161,16 @@ export const MAX_CONC_EFFECTS = 20;
 export function nextBuff(tasks: BuffTask[], conc: { current: number; max: number; effects?: number }, waiting: (t: BuffTask) => boolean = () => false): BuffTask | null {
     let budget = conc.max;
     const capped = (conc.effects ?? 0) >= MAX_CONC_EFFECTS;
+    // A member's buff that fits the pool but not what is free now, or that waits, keeps its room from the pets: and a
+    // pet buff never takes the last of the 20 effects while a member's still has to go up.
+    let heldPool = 0, heldNow = 0, memberDue = 0;
     for (const t of tasks) {
         const cost = t.spell.concentration;
+        if (t.pet && !t.covered && (cost > budget - heldPool || cost > conc.current - heldNow || (memberDue && (conc.effects ?? 0) + memberDue >= MAX_CONC_EFFECTS))) continue;
         if (t.covered) { if (t.ours) budget -= cost; continue; }
         if (cost > budget || (capped && cost > 0)) continue;
-        if (waiting(t)) { budget -= cost; continue; }
-        if (cost > conc.current) continue;
+        if (waiting(t)) { budget -= cost; if (!t.pet && cost > 0) { heldNow += cost; memberDue++; } continue; }
+        if (cost > conc.current) { if (!t.pet && cost > 0) { heldPool += cost; heldNow += cost; memberDue++; } continue; }
         return t;
     }
     return null;
@@ -156,8 +188,12 @@ const sameSpell = (full: string, shown: string) => (shown.endsWith('..') ? full.
  */
 export function surplusConcentration(tasks: BuffTask[], active: ConcEntry[], conc: { current: number }, members: MemberReport[]): ConcEntry[] {
     const missing = tasks.filter(t => !t.covered && t.spell.concentration > 0);
-    const short = missing.some(t => t.spell.concentration > conc.current) || (missing.length > 0 && active.length >= MAX_CONC_EFFECTS);
-    if (!short) return [];
+    const short = (list: BuffTask[]) => list.some(t => t.spell.concentration > conc.current) || (list.length > 0 && active.length >= MAX_CONC_EFFECTS);
+    // A member's buff short of room: our buffs on pets go first, planned or not (they were the leftover).
+    const petNames = new Set(members.filter(m => m.pet?.name).map(m => m.pet!.name));
+    const onPets = active.filter(a => a.concentration > 0 && petNames.has(a.ownerName));
+    if (onPets.length && short(missing.filter(t => !t.pet))) return onPets;
+    if (!short(missing)) return [];
     const living = new Set(members.filter(m => !m.isDead).map(m => m.name));
     return active.filter(a => a.concentration > 0 && living.has(a.ownerName)
         && !tasks.some(t => t.target === a.ownerName && sameSpell(t.spell.name, a.name)));

@@ -2400,7 +2400,7 @@ export const buff = (): Behavior<TacticsSettings> => ({
     async run(ctx) {
         if (!QUIET_PHASES.has(ctx.orders().phase) || ctx.threats().length) return false;
         const me = ctx.me();
-        const tasks = planBuffs(me.name, ctx.members(), { needs: ctx.settings.buffNeeds, selfOnly: ctx.settings.buffSelfOnly });
+        const tasks = planBuffs(me.name, ctx.members(), { needs: ctx.settings.buffNeeds, selfOnly: ctx.settings.buffSelfOnly, ownConc: ctx.sdk.getState()?.concentrationEffects ?? [] });
         if (!tasks.length) return false;
         const conc = { current: me.concentration ?? 0, max: me.maxConcentration ?? 0, effects: ctx.sdk.getState()?.concentrationEffects?.length ?? 0 };
         const retry: Map<string, number> = ctx.memory.get('buffRetry') ?? new Map();
@@ -2420,6 +2420,12 @@ export const buff = (): Behavior<TacticsSettings> => ({
         const lowMana = me.maxMana > 0 && me.manaPercent < ctx.settings.buffMana;
         const reach = (ctx.settings as { gatherRadius?: number }).gatherRadius ?? DEFAULT_GATHER_RADIUS;
         const tooFar = (t: BuffTask, s: { range: number }) => {
+            // A pet: out of its owner's view (x null) or beyond the spell's range, as it walks with its owner.
+            if (t.pet) {
+                const o = ctx.member(t.pet.owner);
+                const p = o?.pet;
+                return !o || o.regionId !== me.regionId || !p || p.objectId !== t.pet.objectId || p.x == null || p.y == null || dist(me, { x: p.x, y: p.y }) > s.range + reach;
+            }
             const m = t.target === me.name ? undefined : ctx.member(t.target);
             return !!m && (m.regionId !== me.regionId || dist(me, m) > s.range + reach);
         };
@@ -2432,16 +2438,17 @@ export const buff = (): Behavior<TacticsSettings> => ({
         const next = nextBuff(tasks, conc, waiting);
         if (!next) return false;
         const pick = book.get(next.spell.name)!;
-        const target = ctx.member(next.target);
-        const onOther = next.target !== me.name;
-        ctx.doing('buff', target?.objectId ?? null, `${pick.spell.name} on ${next.target}`);
+        const target = next.pet ? undefined : ctx.member(next.target);
+        const targetId = next.pet ? next.pet.objectId : target?.objectId;
+        const onOther = next.target !== me.name || !!next.pet;
+        ctx.doing('buff', targetId ?? null, `${pick.spell.name} on ${next.pet ? `${next.pet.owner}'s ${next.target}` : next.target}`);
         const began = Date.now();
-        const c = await until(() => Date.now() - began > BUFF_TURN_MS && !castRunning(ctx), () => ctx.bot.castSpell(pick.spell, pick.target === 'Realm' ? (onOther ? target?.objectId : me.objectId) : undefined))
+        const c = await until(() => Date.now() - began > BUFF_TURN_MS && !castRunning(ctx), () => ctx.bot.castSpell(pick.spell, pick.target === 'Realm' ? (onOther ? targetId : me.objectId) : undefined))
             ?? { success: false, reason: 'timeout', message: `No cast of ${pick.spell.name} on ${next.target} in ${BUFF_TURN_MS / 1000} s` };
         // On an observed member a timed buff never shows (the server sends nobody its effects by name): it stands for its duration, less a margin.
         const lasts = target?.observed && c.success && pick.concentration <= 0 && pick.duration > 0 ? Math.max(20_000, pick.duration * 1000 - OBSERVED_BUFF_MARGIN_MS) : 0;
         retry.set(`${next.spell.name}:${next.target}`, Date.now() + (lasts || buffRetryMs(c)));
-        ctx.result('buff', c, target?.objectId ?? null);
+        ctx.result(next.pet ? 'buffPet' : 'buff', c, targetId ?? null);
         return true;
     },
 });

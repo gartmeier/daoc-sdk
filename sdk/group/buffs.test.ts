@@ -115,3 +115,54 @@ describe('concentration', () => {
         expect(surplusConcentration(tasks, active, { current: 4 }, g).map(a => `${a.name}@${a.ownerName}`)).toEqual(['Strength of ..@Brigid', 'Strength of ..@Cuchulainn']);
     });
 });
+
+describe('leftover concentration on the pets', () => {
+    // Ciaran with a window pet (an Enchanter's, say); the plan is Oisin's (base buffs) and Brigid's (the rest).
+    const pet = { objectId: 900, name: 'underhill ally', level: 24, x: 0, y: 0, z: 0, hp: 100, targetId: null, inCombat: false, aggression: 'defensive', walk: 'follow', icons: [] } as unknown as NonNullable<MemberReport['pet']>;
+    const withPet = (over: Record<string, Partial<MemberReport>> = {}) => group({ ...over, Ciaran: { pet, ...over.Ciaran } });
+
+    test('the last pass: after every member, concentration buffs only, from the slot provider by role', () => {
+        const tasks = planBuffs('Oisin', withPet());
+        const petTasks = tasks.filter(t => t.pet);
+        expect(petTasks.length).toBeGreaterThan(0);
+        expect(tasks.findIndex(t => t.pet)).toBe(tasks.length - petTasks.length);
+        expect(petTasks.every(t => t.target === 'underhill ally' && t.pet!.owner === 'Ciaran' && t.pet!.objectId === 900 && t.spell.concentration > 0)).toBe(true);
+        // A fighter's needs in order: the base buffs from the Bard, haste and the damage shield from the Druid.
+        expect(petTasks.map(t => t.spell.slot)).toEqual(['af', 'con', 'str', 'dex']);
+        expect(planBuffs('Brigid', withPet()).filter(t => t.pet).map(t => t.spell.slot)).toEqual(['haste', 'dmgshield']);
+        expect(planBuffs('Oisin', withPet(), { petNeeds: [] }).some(t => t.pet)).toBe(false);
+        expect(planBuffs('Oisin', group()).some(t => t.pet)).toBe(false);
+    });
+
+    test('on a pet is what our own list says', () => {
+        const own = [{ name: "Oak's Stoutn..", ownerName: 'underhill ally' }];
+        const t = planBuffs('Oisin', withPet(), { ownConc: own }).find(x => x.pet && x.spell.slot === 'con')!;
+        expect(t.covered && t.ours).toBe(true);
+    });
+
+    test('never at the cost of a member: a member buff short of free concentration keeps its room', () => {
+        // Everyone's buffs are up but Strength on the tank (3), and 3 are free: the pet's Oak's Stoutness (2) would leave 1.
+        const all = planBuffs('Oisin', withPet());
+        const tasks = all.map(t => (t.pet || (t.target === 'Cuchulainn' && t.spell.slot === 'str') ? t : { ...t, covered: true, ours: true }));
+        expect(nextBuff(tasks, { current: 3, max: 70 })?.target).toBe('Cuchulainn');
+        // 2 free: the tank's doesn't fit yet, and the pet's (2) would take its room.
+        expect(nextBuff(tasks, { current: 2, max: 70 })).toBeNull();
+        // The tank's waits a retry: its room is held, nothing for the pet.
+        expect(nextBuff(tasks, { current: 4, max: 70 }, t => t.target === 'Cuchulainn')).toBeNull();
+        // With room for both, the pet's comes once the member's is up.
+        const up = tasks.map(t => (t.pet ? t : { ...t, covered: true, ours: true }));
+        expect(nextBuff(up, { current: 10, max: 70 })?.pet?.owner).toBe('Ciaran');
+    });
+
+    test('surplus: our buffs on pets go first when a member buff lacks room, and only then', () => {
+        const g = withPet();
+        const tasks = planBuffs('Oisin', g);
+        const active = [
+            { index: 0, concentration: 2, name: "Oak's Stoutn..", ownerName: 'underhill ally' },
+            { index: 1, concentration: 2, name: 'Stray Buff', ownerName: 'Cuchulainn' },
+        ];
+        expect(surplusConcentration(tasks, active, { current: 1 }, g).map(a => a.ownerName)).toEqual(['underhill ally']);
+        const membersUp = tasks.map(t => (t.pet ? t : { ...t, covered: true, ours: true }));
+        expect(surplusConcentration(membersUp, active, { current: 1 }, g).map(a => a.ownerName)).toEqual(['Cuchulainn']);
+    });
+});
