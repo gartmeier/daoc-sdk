@@ -547,6 +547,17 @@ describe('the defence call (S3, 2026-11-13)', () => {
         expect(e).toMatchObject({ unit: 'camelot-s2', was: 'camelot' });
     });
 
+    test('a defence that cannot win asks nobody: one group of 6 against 6 at the gate (live 18:17, midgard-4: 5 of 6 lost, no kill)', () => {
+        const lone = { camelot: frame({ id: 'camelot', members: at(faste.x + 6000, faste.y, 6, 'G') }), 'camelot-s1': frame({ id: 'camelot-s1', members: at(faste.x + 5000, faste.y, 1, 'S'), foes: foes(faste.x + 1500, faste.y, 6) }) };
+        const d = director({ units: UNITS6, targetOwner: () => 'albion', settings: { sight: false } });
+        const out = d.update(lone, 0, []);
+        expect(out.calls.find(x => x.kind === 'defend')!.asked).toEqual([]);
+        expect((out.events.find(e => e.kind === 'refused') as any).units.find((u: any) => u.unit === 'camelot').why).toBe('too few to win: 6 against 6');
+        // Five attackers: the 6 we can send outnumber them, so it goes.
+        const d2 = director({ units: UNITS6, targetOwner: () => 'albion', settings: { sight: false } });
+        expect(d2.update({ ...lone, 'camelot-s1': frame({ id: 'camelot-s1', members: at(faste.x + 5000, faste.y, 1, 'S'), foes: foes(faste.x + 1500, faste.y, 5) }) }, 0, []).calls.find(x => x.kind === 'defend')!.asked).toEqual(['camelot']);
+    });
+
     test('picketFor reads the duty for its own unit only', () => {
         const file: CallsFile = { v: 1, realm: 'albion', at: 1000, enabled: true, calls: [], picket: { unit: 'camelot-s2', at: { x: 1, y: 2, z: 3 }, keep: { x: 0, y: 0, z: 0 } } };
         expect(picketFor(file, 'camelot-s2', 2000)?.at).toEqual({ x: 1, y: 2, z: 3 });

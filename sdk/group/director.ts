@@ -24,6 +24,10 @@ import type { GroupFrame } from '../../gateway/group-types';
 import type { FoeRole } from './class-read';
 import { BATTLEGROUND_LAYOUTS, homeOf, THIDRANKI, type PlayerRealm } from './keeps';
 import { dist2, foesNear, RealmBoard, roleCount, type RealmBoardView, type SeenFoe, type SeenRole, type UnitView } from './realm-board';
+import { isDry } from './water';
+
+/** Where raiders stage at a region's keep (siege.ts's Faste stage): the picket keeps away from it. */
+const PICKET_STAGE: Record<number, Point> = { [THIDRANKI]: { x: 36300, y: 38300 } };
 import type { Point, Point3 } from './types';
 
 export const DIRECTOR_DIR = process.env.DAOC_DIRECTOR_DIR ?? join(import.meta.dir, '..', '..', 'groups', 'director');
@@ -900,7 +904,17 @@ export class RealmDirector {
         if (!keep) { if (this.picketNow) set(null, 'the keep is not ours'); return; }
         const home = homeOf(this.regionId, this.realm);
         const dx = (home?.keep.x ?? keep.x) - keep.x, dy = (home?.keep.y ?? keep.y) - keep.y, l = Math.hypot(dx, dy) || 1;
-        const at = { x: Math.round(keep.x + dx / l * s.picketFrom), y: Math.round(keep.y + dy / l * s.picketFrom), z: keep.z };
+        // Toward home, turned up to 60° to keep as far as it can from where raiders stage (live 18:17: Midgard's spot stood 2263 from the
+        // gate, beside the stage, and its picket met Albion's raid there). Dry ground only.
+        const stage = PICKET_STAGE[this.regionId] ?? null;
+        let at = { x: Math.round(keep.x + dx / l * s.picketFrom), y: Math.round(keep.y + dy / l * s.picketFrom), z: keep.z };
+        if (stage) {
+            const a0 = Math.atan2(dy, dx);
+            const spots = [-60, -45, -30, -15, 0, 15, 30, 45, 60].map(t => a0 + t * Math.PI / 180)
+                .map(a => ({ x: Math.round(keep.x + Math.cos(a) * s.picketFrom), y: Math.round(keep.y + Math.sin(a) * s.picketFrom), z: keep.z }))
+                .filter(p => isDry(this.regionId, p));
+            if (spots.length) at = spots.reduce((b, p) => (dist2(p, stage) > dist2(b, stage) ? p : b));
+        }
         const busy = new Set<string>();
         for (const x of this.open.values()) { if (x.call.kind === 'help') busy.add(x.call.from); for (const a of x.call.asked) busy.add(a); for (const c of x.call.coming) busy.add(c); }
         const ok = (u: UnitView) => u.running && !!u.centre && u.alive > 0 && !busy.has(u.unit) && u.hp >= s.helperHp;
@@ -1001,6 +1015,15 @@ export class RealmDirector {
                 .map(u => ({ u, d: dist2(u.centre!, keep) }))
                 .sort((a, b) => a.d - b.d);
             const before = call.asked.length;
+            // Only a defence that can win (as the raid's go): ours there and those we could send must outnumber the attackers. A lone
+            // group sent at an equal raid at the gate dies (live 18:17, midgard-4: midgard went in alone, 6 against 6, lost 5 of 6, no
+            // kill). Two attackers or fewer are always answered.
+            const could = ours + coming + free.slice(0, Math.max(0, cap - call.asked.length)).reduce((t, x) => t + (dist2(x.u.centre!, keep) > s.defendRadius ? x.u.alive : 0), 0);
+            if (attackers > 2 && could < attackers + 1 && !call.asked.length) {
+                this.logRefused(o, board, want, busy, s.defendReach, s.defendMinSize, true, events, `too few to win: ${could} against ${attackers}`);
+                call.want = Math.max(0, want);
+                return;
+            }
             for (const { u, d } of free) {
                 if (want <= 0 || call.asked.length >= cap) break;
                 call.asked.push(u.unit);
@@ -1040,13 +1063,13 @@ export class RealmDirector {
     }
 
     /** Log why every other unit was passed over (R2's carry-over 2; S2 at 14:05: two defend calls asked nobody), throttled per call. */
-    private logRefused(o: Open, board: RealmBoardView, want: number, busy: ReadonlySet<string>, reach: number, minSize: number, defence: boolean, events: DirectorEvent[]): void {
+    private logRefused(o: Open, board: RealmBoardView, want: number, busy: ReadonlySet<string>, reach: number, minSize: number, defence: boolean, events: DirectorEvent[], all?: string): void {
         const now = board.at;
         if (o.refusedAt !== undefined && now - o.refusedAt < REFUSED_EVERY_MS) return;
         const at = o.call.at;
         const units = board.units
             .filter(u => u.unit !== o.call.from && !o.call.asked.includes(u.unit) && !o.call.coming.includes(u.unit))
-            .map(u => ({ unit: u.unit, why: this.refusal(u, at, { busy, reach, minSize, ...(defence ? { fightWithin: this.settings.defendRadius } : {}) }) ?? 'free' }));
+            .map(u => ({ unit: u.unit, why: this.refusal(u, at, { busy, reach, minSize, ...(defence ? { fightWithin: this.settings.defendRadius } : {}) }) ?? all ?? 'free' }));
         if (!units.length) return;
         o.refusedAt = now;
         events.push({ kind: 'refused', call: o.call.id, want, units });
