@@ -234,6 +234,8 @@ export interface CallSource {
     units?(): readonly UnitSpot[];
     /** Our picket duty while the realm holds its keep (director.ts Picket), or null. */
     picket?(): PicketDuty | null;
+    /** Where the realm saw enemies lately (director.ts Sighting): the roam's places (tactics/roam.ts). */
+    seen?(): readonly { x: number; y: number; n: number; at: number }[];
 }
 
 /** director.ts Picket: stand at `at`, within sight of our keep at `keep`. */

@@ -133,7 +133,21 @@ export interface CallsFile {
     units?: UnitSpot[];
     /** While we hold the keep: the unit that stands within sight of it (the picket), and where. */
     picket?: Picket;
+    /** Where our realm saw enemy players lately (2000-cells, the last SIGHTING_MS): the units roam toward them (tactics/roam.ts). */
+    seen?: Sighting[];
 }
+
+/** Enemy players our realm saw in one 2000-cell: their mean place, the most seen at once, when last. */
+export interface Sighting {
+    x: number;
+    y: number;
+    n: number;
+    at: number;
+}
+
+/** A sighting is kept this long. */
+export const SIGHTING_MS = 300_000;
+const SIGHTING_CELL = 2000;
 
 /**
  * The picket (S3, S2's finding 16:11): while we hold the keep, one free unit stands within sight of it, so the realm sees an
@@ -444,6 +458,7 @@ export class RealmDirector {
     private targetSeen = new Map<string, { at: number; realm: string }>();
     private lookedAt: number | null = null;
     private picketNow: (Picket & { since: number }) | null = null;
+    private sightings = new Map<string, Sighting>();
 
     constructor(opts: DirectorOptions) {
         this.realm = opts.realm;
@@ -569,6 +584,7 @@ export class RealmDirector {
 
         // What our realm sees at the raid target, all the time; then the muster and our keep's defence.
         this.watchTarget(board, now);
+        this.noteSightings(board, now);
         this.stepMuster(board, now, events);
         this.stepDefend(board, now, events);
         this.stepPicket(board, now, events);
@@ -900,6 +916,21 @@ export class RealmDirector {
         else if (this.picketNow) set(null, 'nobody free');
     }
 
+    /** Where our realm sees enemy players now, by 2000-cell; kept SIGHTING_MS. */
+    private noteSightings(board: RealmBoardView, now: number): void {
+        const cells = new Map<string, SeenFoe[]>();
+        for (const f of board.foes) {
+            const k = `${Math.round(f.x / SIGHTING_CELL)}:${Math.round(f.y / SIGHTING_CELL)}`;
+            cells.set(k, [...(cells.get(k) ?? []), f]);
+        }
+        for (const [k, fs] of cells) {
+            const had = this.sightings.get(k);
+            const x = Math.round(fs.reduce((t, f) => t + f.x, 0) / fs.length), y = Math.round(fs.reduce((t, f) => t + f.y, 0) / fs.length);
+            this.sightings.set(k, { x, y, n: Math.max(fs.length, had && now - had.at < 60_000 ? had.n : 0), at: now });
+        }
+        for (const [k, v] of this.sightings) if (now - v.at > SIGHTING_MS) this.sightings.delete(k);
+    }
+
     /** Keep targetSeen and lookedAt (the raid plan's target) up to date from this board. */
     private watchTarget(board: RealmBoardView, now: number): void {
         const s = this.settings;
@@ -1063,7 +1094,8 @@ export class RealmDirector {
         const on = this.settings.enabled;
         const units = on && this.last ? this.last.units.filter(u => u.running && u.centre && u.alive > 0).map(spotOf) : [];
         const picket = on && this.picketNow ? { unit: this.picketNow.unit, at: this.picketNow.at, keep: this.picketNow.keep } : null;
-        const file: CallsFile = { v: 1, realm: this.realm, at: now, enabled: on, calls: on ? this.calls() : [], ...(on ? { units } : {}), ...(picket ? { picket } : {}) };
+        const seen = on ? [...this.sightings.values()] : [];
+        const file: CallsFile = { v: 1, realm: this.realm, at: now, enabled: on, calls: on ? this.calls() : [], ...(on ? { units, seen } : {}), ...(picket ? { picket } : {}) };
         writeAtomic(join(this.dir, `${this.realm}.json`), JSON.stringify(file));
     }
 }
@@ -1098,6 +1130,12 @@ export function picketFor(file: CallsFile | null, unit: string, now = Date.now()
     return file.picket?.unit === unit ? file.picket : null;
 }
 
+/** Where the realm saw enemies lately (none while off or stale). */
+export function seenFor(file: CallsFile | null, now = Date.now()): Sighting[] {
+    if (!file || file.v !== 1 || !file.enabled || now - file.at > CALLS_STALE_MS) return [];
+    return file.seen ?? [];
+}
+
 /** The realm's other running units (none while off or stale). */
 export function unitsFor(file: CallsFile | null, unit: string, now = Date.now()): UnitSpot[] {
     if (!file || file.v !== 1 || !file.enabled || now - file.at > CALLS_STALE_MS) return [];
@@ -1118,6 +1156,8 @@ export interface CallWatch {
     units: () => UnitSpot[];
     /** This unit's picket duty (within sight of our keep), or null. */
     picket: () => Picket | null;
+    /** Where the realm saw enemies lately. */
+    seen: () => Sighting[];
     answer: (callId: string, state: AnswerState, why?: string) => void;
     stop: () => void;
 }
@@ -1147,6 +1187,7 @@ export function callWatch(unit: string, realm: PlayerRealm, dir = DIRECTOR_DIR):
         mine: () => ownCallsFor(file, unit),
         units: () => unitsFor(file, unit),
         picket: () => picketFor(file, unit),
+        seen: () => seenFor(file),
         answer: (callId, state, why = '') => {
             answers.answers[callId] = { state, why: why.slice(0, 200), at: Date.now() };
             // Keep the newest 20.

@@ -51,6 +51,7 @@ import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDef
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { planBuffs } from './buffs';
+import { FRIEND_NEAR, meetingPlaces, placeOk, roamStep, sightingPlaces, type RoamPlace } from './tactics/roam';
 import { loiter, waveOrder, waveWatch, type RealmWave } from './waves';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
@@ -115,6 +116,8 @@ export interface RvrSettings extends TacticsSettings, KeepSettings {
     calls?: CallSettings;
     /** Close up on the nearest friendly unit when farther than 4500 (tactics/help.ts roamGoal); `--roam=false` off. */
     roam?: boolean;
+    /** Place to place instead of the fixed ring when no settings.patrol is set (tactics/roam.ts); `--roamPlaces=false` off. */
+    roamPlaces?: boolean;
 }
 
 /**
@@ -1028,8 +1031,17 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     }
     // ── The realm's wave (waves.ts, the life cycle S4): a break at the portal keep, or out toward where our realm last saw
     // enemies. Free as for a call (no fight, nobody seen, dead, away or low: all above); never in a pair round. No wave file: patrol. ──
-    const wave = !s.opponent && !seen.length && realm !== 'none' ? waveOrder((mem.realmWave ?? null) as RealmWave | null, { unit: mem.realmUnit ?? '', realm, regionId, centre, reached: mem.waveReached, now }) : null;
+    const wave = !s.opponent && !seen.length && realm !== 'none' ? waveOrder((mem.realmWave ?? null) as RealmWave | null, { unit: mem.realmUnit ?? '', realm, regionId, centre, reached: mem.waveReached, resting: mem.waveRest?.key ?? null, human: p.members.some(m => m.observed), now }) : null;
     if (wave?.kind === 'reached') mem.waveReached = wave.key;
+    else if (wave?.kind === 'rest') {
+        // A rest where we are (as a player group out roaming): off the roads out of the portal keeps, clear of keeps, dry; picked once a wave.
+        if (mem.waveRest?.key !== wave.key) {
+            const r = restAt();
+            const spot = drySpot(regionId, r.at, { toward: r.at, ok: c => clearOf(c, keeps) });
+            mem.waveRest = { key: wave.key, at: { x: Math.round(spot.x), y: Math.round(spot.y), z: zAt(spot) } };
+        }
+        return { ...calm, phase: 'recover', anchor: mem.waveRest.at, objective: `a rest in the field${gone}`, reason: wave.why };
+    }
     else if (wave?.kind === 'home' || wave?.kind === 'toward') {
         stepLeg(trip, wave.kind === 'home' ? 'break' : 'wave', wave.at, { from: centre, movers: main, replan: 1500 });
         return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `${wave.kind === 'home' ? 'a break at the portal keep' : 'out toward the enemies our realm saw'}${gone}`, reason: wave.why };
@@ -1090,9 +1102,26 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // Within reach of a friend (help.ts roamGoal): farther than 4500 from the nearest friendly unit, close up to 3000 of it first,
     // so a call finds help near. Stint 2026-11-13, S3: help stood 6000-9000 away and most fights ended before it came.
     const roam = s.roam === false ? null : roamGoal(mem, centre, homeAt);
-    if (roam && clearOf(roam.goal, keeps)) {
+    // Already on our way to a roam place near that friend (tactics/roam.ts): no need to close on it first.
+    const placeNearFriend = !!roam && !!mem.roam?.place && dist(mem.roam.place, roam.friend) <= FRIEND_NEAR;
+    if (roam && !placeNearFriend && clearOf(roam.goal, keeps)) {
         stepLeg(trip, 'roam', roam.goal, { from: centre, movers: main, replan: 1500 });
         return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `stay within reach of ${roam.friend.unit}${gone}`, reason: `roam near: ${roam.friend.unit} is ${Math.round(roam.d)} away, closing to 3000` };
+    }
+    // ── The roam (tactics/roam.ts): with no patrol of its own (settings.patrol) and no pair round, place to place as a player group goes,
+    // where our realm saw enemies lately and the battleground's meeting places, weighted and varied, staying a while at each. The
+    // user, 17:5x: "we're doing the same back and forth every time" (the same five waypoints in the same order all afternoon). ──
+    if (!s.patrol && !s.opponent && s.roamPlaces !== false && realm !== 'none') {
+        const okPlace = placeOk([...keeps, ...aggroZones(regionId, level)], q => !dry || isDry(regionId, q));
+        if (mem.roamKey !== key) { mem.roamMeet = meetingPlaces(regionId, realm as PlayerRealm, loop, okPlace); mem.roamKey = key; }
+        const places: RoamPlace[] = [...(mem.roamMeet as RoamPlace[]), ...sightingPlaces(mem.realmSeen ?? [], now, okPlace)];
+        const friends = ((mem.realmUnits ?? []) as { x: number; y: number; size: number; alive: number }[]).filter(u => u.size >= 4 && u.alive >= 3);
+        const r = roamStep(mem, { centre, places, now, ok: okPlace, friends });
+        if (r) {
+            stepLeg(trip, 'roam', r.goal, { from: centre, movers: here, replan: r.kind === 'go' ? 1500 : 300 });
+            mem.camp = { x: r.place.x, y: r.place.y, z: zAt(r.place), names: r.place.what };
+            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `roam${gone}`, reason: r.reason };
+        }
     }
     stepLeg(trip, 'patrol', wp, { from: centre, movers: here, replan: Infinity, force: arrived });
     // The leg that ends at the waypoint goes on to the next one: the group walks through it, not to a stop at it.
@@ -1240,7 +1269,7 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         try { calls = src?.calls() ?? []; } catch { calls = []; }
         mem.realmCalls = calls;
         // Our own calls (their helpers) and the realm's other units (roaming near them): help.ts helperPoint, roamGoal.
-        try { mem.ownCalls = src?.mine?.() ?? []; mem.realmUnits = src?.units?.() ?? []; mem.picket = src?.picket?.() ?? null; } catch { mem.ownCalls = []; mem.realmUnits = []; mem.picket = null; }
+        try { mem.ownCalls = src?.mine?.() ?? []; mem.realmUnits = src?.units?.() ?? []; mem.picket = src?.picket?.() ?? null; mem.realmSeen = src?.seen?.() ?? []; } catch { mem.ownCalls = []; mem.realmUnits = []; mem.picket = null; mem.realmSeen = []; }
         let out = strategy.decide(ctx);
         // The raid's patch (Orders.settings, tactics/raid.ts) over whatever the strategy's own wrappers set there: Hibernia's
         // withMakeUp and Camelot's withOurMakeUp put their patch (or null) on every tick, and the board showed no guard (attempt 3,
