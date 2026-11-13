@@ -3,7 +3,7 @@ import { getTerrainStore } from '../terrain';
 import { BATTLEGROUND_LAYOUTS, keepDangers, THIDRANKI, type PlayerRealm } from './keeps';
 import {
     brokenDoors, doorDamage, doorHealth, FASTE, inLordReach, raidCentre, raidOrders, raidPlan, routeFrom, STAGE_SHARE,
-    type RaidMember, type RaidView, type SiegeSeen, pastStage } from './siege';
+    type RaidMember, type RaidView, type SiegeSeen, pastStage, DOOR_BROKEN_RE } from './siege';
 import { isWet } from './water';
 
 const REALMS: PlayerRealm[] = ['albion', 'midgard', 'hibernia'];
@@ -122,6 +122,15 @@ const doors: SiegeSeen[] = [
     { id: 508, name: 'Keep Door', realm: 'albion', kind: 'object', doorId: 252000302, x: 32654, y: 38180, z: 3720 },
 ];
 const labelsUpTo = (rank: number) => FASTE.targets.filter(t => t.rank <= rank && t.kind !== 'door').map(t => t.label);
+
+describe('DOOR_BROKEN_RE', () => {
+    test('the break and a swing at a broken door, as seen live', () => {
+        expect(DOOR_BROKEN_RE.test('The Keep Door is broken!')).toBe(true);
+        expect(DOOR_BROKEN_RE.test('the Keep Door is already dead!')).toBe(true);
+        expect(DOOR_BROKEN_RE.test('Conall attacks the Keep Door with his blade!')).toBe(false);
+        expect(DOOR_BROKEN_RE.test('the Keep Door is too far away to attack!')).toBe(false);
+    });
+});
 
 describe('raidOrders', () => {
     const plan = raidPlan('midgard')!;

@@ -78,8 +78,12 @@ export const doorHealth = (baseLevel: number, keepLevel: number) => baseLevel * 
 
 /** What a melee hit on a keep door says, to the hitter (GameKeepDoor.ModifyAttack takes 5 % a keep level off). */
 export const DOOR_HIT_RE = /^You attack the Keep Door with .+ and hit for (\d+) damage!$/;
-/** What a door says when it breaks, to players within 512 of it (GameKeepDoor.Die, WorldMgr.INFO_DISTANCE). */
-export const DOOR_BROKEN_RE = /^The Keep Door is broken!$/;
+/**
+ * What a door says when it breaks, to players within 512 of it (GameKeepDoor.Die, WorldMgr.INFO_DISTANCE), and what a
+ * swing at a broken one says to the swinger. A door stays broken for long (it repairs 5 % per 30 min out of combat,
+ * GameKeepDoor.REPAIR_INTERVAL), so a later raid learns it only by swinging (live 02:57:14: "the Keep Door is already dead!").
+ */
+export const DOOR_BROKEN_RE = /^(The Keep Door is broken|the Keep Door is already dead)!$/i;
 
 // The Faste's posts are the DB's mob rows (DOL.GS.Keeps.*), seen at those spots by a client on 2026-11-12. Aggro:
 // fighters 1000 (GameKeepGuard.SetAggression), static casters 1850, static archers 2100. Stands are picked so a
