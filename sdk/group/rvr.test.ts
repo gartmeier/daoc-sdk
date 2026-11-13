@@ -255,6 +255,9 @@ describe('decideRvr: fights', () => {
         expect(decideRvr(ctx(picture(team(), [boar, foe(51)]))).focus).toBe(51);
         d = decideRvr(ctx(picture(team(), [{ ...boar, target: null, targetId: 999 }])));
         expect(d.phase).toBe('travel');
+        // One a member pulls to charm (Contact.charming) is no fight of ours: hits on it would only cost the pet.
+        d = decideRvr(ctx(picture(team(), [{ ...boar, threat: false, charming: 'Encha' }])));
+        expect(d.phase).toBe('travel');
     });
 
     test('measures from the main body: a member walking back from the portal keep moves neither the fight nor the hunt', () => {
@@ -1472,6 +1475,19 @@ describe('decideRvr: a roam place we stay at holds while the friend is within 60
         expect(near.reason).toMatch(/^roam: at where 3 enemies were seen, looking about/);
         const far = decideRvr(ctx(p, { settings: { patrol: null }, memory: { realmUnits: [spot(29_680 + 6_500)], roam: staying(p.at) } }));
         expect(far.reason).toMatch(/^roam near: hibernia-2/);
+    });
+});
+
+describe('decideRvr: an enemy in sight stays in sight 1000 past huntRadius (19:54: wait ashore and roam near took turns each second)', () => {
+    test('first seen inside 5000: still in sight at 5600; never seen: not', () => {
+        const foe = (x: number) => enemy(900, 'midgard', { regionId: R, x, y: 10_000, z: 0 });
+        const mem: Record<string, any> = {};
+        const near = decideRvr(ctx(picture(team(), [foe(9_680 + 4_900)]), { memory: mem }));
+        expect(near.reason).toMatch(/hunt|attack|engage/i);
+        const edge = decideRvr(ctx(picture(team(), [foe(9_680 + 5_600)]), { memory: mem }));
+        expect(edge.reason).toMatch(/hunt|attack|engage/i);
+        const fresh = decideRvr(ctx(picture(team(), [foe(9_680 + 5_600)]), { memory: {} }));
+        expect(fresh.reason).not.toMatch(/hunt|attack|engage/i);
     });
 });
 

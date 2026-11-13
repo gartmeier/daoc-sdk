@@ -4,7 +4,7 @@ import { decideRvr, defaultPatrol, RVR_SETTINGS, THIDRANKI, type RvrSettings } f
 import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { GroupPicture, MemberReport } from '../types';
 import { roamGoal } from './help';
-import { meetingPlaces, pickPlace, ROAM_SETTINGS, roamStep, sightingPlaces, type RoamPlace } from './roam';
+import { meetingPlaces, pickPlace, roamCircuit, sideOf, ROAM_SETTINGS, roamStep, sightingPlaces, type RoamPlace } from './roam';
 
 const place = (key: string, x: number, y: number, weight = 1): RoamPlace => ({ key, what: key, x, y, weight });
 const seq = (...xs: number[]) => { let i = 0; return () => xs[i++ % xs.length]!; };
@@ -43,6 +43,26 @@ describe('the roam (S3; the user: "we\'re doing the same back and forth every ti
         expect(roamGoal(friend('travel'), { x: 0, y: 0 }, null, undefined, 0)?.friend.unit).toBe('hibernia-2');
         expect(roamGoal(friend('recover'), { x: 0, y: 0 }, null, undefined, 0)).toBeNull();
         expect(roamGoal(friend('idle'), { x: 0, y: 0 }, null, undefined, 0)).toBeNull();
+    });
+
+    test("the circuit (the user: look for enemies on Hib's island, then Mid's, then Albion's): two places a side, ours first, round again", () => {
+        expect(roamCircuit('hibernia')).toEqual(['hibernia', 'midgard', 'albion']);
+        expect(sideOf(THIDRANKI, { x: 18_000, y: 19_000 })).toBe('hibernia');
+        const ring = defaultPatrol(THIDRANKI, 'hibernia', 24);
+        const ps = meetingPlaces(THIDRANKI, 'hibernia', ring, () => true);
+        for (const side of ['hibernia', 'midgard', 'albion']) expect(ps.some(p => p.part === side)).toBe(true);
+        const mem: Record<string, any> = {};
+        const sides: string[] = [];
+        let centre = { x: 18_000, y: 19_000 };
+        for (let i = 0; i < 9; i++) {
+            const r = roamStep(mem, { centre, places: ps, now: i * 60_000, rand: () => 0.5, circuit: roamCircuit('hibernia') })!;
+            sides.push(r.place.part!);
+            centre = { x: r.place.x, y: r.place.y };
+        }
+        // Each side's run: two places (a side may run short of fresh ones), in circuit order.
+        const runs = sides.reduce<string[]>((a, x) => (a[a.length - 1] === x ? a : [...a, x]), []);
+        expect(runs.slice(0, 3)).toEqual(['hibernia', 'midgard', 'albion']);
+        expect(sides.slice(0, 6)).toEqual(['hibernia', 'hibernia', 'midgard', 'midgard', 'albion', 'albion']);
     });
 
     test('sightingPlaces: weight from how many and how fresh; none past 5 min', () => {

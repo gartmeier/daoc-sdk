@@ -51,7 +51,7 @@ import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDef
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { planBuffs } from './buffs';
-import { FRIEND_NEAR, STAY_FRIEND_FAR, meetingPlaces, placeOk, roamStep, sightingPlaces, type RoamPlace } from './tactics/roam';
+import { FRIEND_NEAR, STAY_FRIEND_FAR, meetingPlaces, placeOk, roamCircuit, roamStep, sightingPlaces, type RoamPlace } from './tactics/roam';
 import { FIELD_REST_MS, fieldRestSpot, loiter, waveOrder, waveWatch, type RealmWave } from './waves';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
@@ -609,6 +609,9 @@ export function guardOnUs(c: Contact): boolean {
     return !!c.keepGuard && !c.stale && isAlive(c) && (!!c.target || !!c.targetPet);
 }
 
+/** An enemy in sight (within huntRadius) stays in sight this much farther, so the edge doesn't flip the decision each tick. */
+export const HUNT_KEEP = 1000;
+
 /** Within this of our portal keep's arrival a group is home, and buffs up before it leaves. */
 export const HOME_BUFF_RADIUS = 3000;
 /** It waits for owed buffs at most this long after arriving home; past it they catch up on the way. */
@@ -930,7 +933,11 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 
     // ── Hunting: enemy players in sight beyond engageRadius. Too many: fall back (toward home unless they stand that way) ──
     // Raiding: no hunt and no fall-back for those in sight; one that comes within RAID_FOE_REACH is fought (inFight).
-    const seen = raid || defendingInside ? [] : enemies.filter(c => !inKeep(c) && dist(c, centre) <= s.huntRadius);
+    // One in sight last tick stays in sight to HUNT_KEEP beyond huntRadius: a swimmer at 4880-4994 flipped hibernia between waiting
+    // ashore and closing on hibernia-2 every second (19:54, the user: "they are flipping again").
+    const huntSeen = new Set<number>(mem.huntSeen ?? []);
+    const seen = raid || defendingInside ? [] : enemies.filter(c => !inKeep(c) && dist(c, centre) <= s.huntRadius + (huntSeen.has(c.objectId) ? HUNT_KEEP : 0));
+    mem.huntSeen = seen.map(c => c.objectId);
     if (seen.length) {
         // The group we just ran from is sized up whole: those of it we mezzed, and those out of view, still count (FLED_MS).
         const recalled = fled ? [
@@ -1158,7 +1165,7 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         if (mem.roamKey !== key) { mem.roamMeet = meetingPlaces(regionId, realm as PlayerRealm, loop, okPlace); mem.roamKey = key; }
         const places: RoamPlace[] = [...(mem.roamMeet as RoamPlace[]), ...sightingPlaces(mem.realmSeen ?? [], now, okPlace)];
         const friends = ((mem.realmUnits ?? []) as { x: number; y: number; size: number; alive: number; phase?: string | null }[]).filter(u => u.size >= 4 && u.alive >= 3 && roamingPhase(u.phase));
-        const r = roamStep(mem, { centre, places, now, ok: okPlace, friends, sightings: mem.realmSeen ?? [] });
+        const r = roamStep(mem, { centre, places, now, ok: okPlace, friends, sightings: mem.realmSeen ?? [], circuit: roamCircuit(realm as PlayerRealm) });
         if (r) {
             stepLeg(trip, 'roam', r.goal, { from: centre, movers: here, replan: r.kind === 'go' ? 1500 : 300 });
             mem.camp = { x: r.place.x, y: r.place.y, z: zAt(r.place), names: r.place.what };

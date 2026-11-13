@@ -24,6 +24,8 @@ export interface RoamPlace extends Point {
     what: string;
     /** Base weight: a meeting place 1, a sighting more (roamPlaces). */
     weight: number;
+    /** Whose side of the battleground it is on (sideOf): the roam's circuit goes side by side (roamCircuit). */
+    part?: PlayerRealm;
 }
 
 /** An enemy sighting our realm made (director.ts Sighting): where, how many, when. */
@@ -57,6 +59,8 @@ export interface RoamSettings {
     areaRadius: number;
     areaMs: number;
     areaFar: number;
+    /** The circuit (roamCircuit): this many places on one realm's side, then on to the next side. */
+    partPlaces: number;
 }
 
 // No stop: a place is a waypoint, and on reaching it (reach) the group walks on to the next (the user, playing Niamh at 19:45, the
@@ -64,8 +68,25 @@ export interface RoamSettings {
 // be stops"). A stay and its circle steps come only with stayMax above 0 (settings of one's own).
 export const ROAM_SETTINGS: RoamSettings = {
     maxLeg: 16_000, memory: 4, reach: 900, stayMin: 0, stayMax: 0, circle: 700, stepMs: 25_000, sightingMs: 300_000, sightingWeight: 2,
-    areaRadius: 5000, areaMs: 300_000, areaFar: 12_000,
+    areaRadius: 5000, areaMs: 300_000, areaFar: 12_000, partPlaces: 2,
 };
+
+/** Whose side of the battleground `p` is on: the realm of the nearest portal keep (undefined off a known battleground). */
+export function sideOf(regionId: number, p: Point): PlayerRealm | undefined {
+    const pks = (BATTLEGROUND_LAYOUTS[regionId]?.keeps ?? []).filter(k => k.portal && k.owner !== 'none');
+    if (!pks.length) return undefined;
+    return pks.reduce((a, b) => (dist(a, p) <= dist(b, p) ? a : b)).owner as PlayerRealm;
+}
+
+/**
+ * The roam's circuit for `realm`: our own side first (enemies who came over), then the others, and round again (the user, playing
+ * Niamh at 19:5x: "Roaming is: look for enemies on Hib's island, then Mid's, then Albion's").
+ */
+export function roamCircuit(realm: PlayerRealm): PlayerRealm[] {
+    const order: PlayerRealm[] = ['hibernia', 'midgard', 'albion'];
+    const i = Math.max(0, order.indexOf(realm));
+    return [order[i]!, order[(i + 1) % 3]!, order[(i + 2) % 3]!];
+}
 
 /** memory.roam */
 export interface RoamMemory {
@@ -81,6 +102,9 @@ export interface RoamMemory {
     last: string[];
     /** Where the group's current area started, and when (RoamSettings.areaRadius). */
     area?: Point & { since: number };
+    /** The circuit: the side we roam now (an index into it), and how many places on it we went to. */
+    part?: number;
+    inPart?: number;
 }
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -117,7 +141,7 @@ export function meetingPlaces(regionId: number, realm: PlayerRealm, ring: readon
         const plan = raidPlan(r);
         if (plan && plan.regionId === regionId) out.push({ key: `bank:${r}`, what: `${r === realm ? 'our' : `${r}'s`} bank by the Faste`, x: plan.rally.x, y: plan.rally.y, weight: r === realm ? 0.7 : 1 });
     }
-    return out.filter(ok);
+    return out.filter(ok).map(p => ({ ...p, part: sideOf(regionId, p) }));
 }
 
 /** Sightings as places, their weight fading with age; none older than sightingMs. */
@@ -141,14 +165,16 @@ export const STAY_FRIEND_FAR = 6000;
  * key `seen:`) first, at any distance: the roam goes where the fighting is (the user at 19:51). Else from the meeting places
  * within maxLeg (the nearest few else); with `farFrom`, only those at least areaFar from that point, at any distance.
  */
-export function pickPlace(places: readonly RoamPlace[], centre: Point, last: readonly string[], rand: () => number, s: RoamSettings = ROAM_SETTINGS, friends: readonly Point[] = [], farFrom?: Point): RoamPlace | null {
+export function pickPlace(places: readonly RoamPlace[], centre: Point, last: readonly string[], rand: () => number, s: RoamSettings = ROAM_SETTINGS, friends: readonly Point[] = [], farFrom?: Point, part?: PlayerRealm): RoamPlace | null {
     const fresh = places.filter(p => !last.includes(p.key) && dist(p, centre) > s.reach * 1.5);
     const pool = fresh.length ? fresh : places.filter(p => dist(p, centre) > s.reach * 1.5);
     if (!pool.length) return null;
     const seen = pool.filter(p => p.key.startsWith('seen:') && (!farFrom || dist(p, farFrom) >= s.areaFar));
+    // The circuit's side (`part`), at any distance: no sighting, and the roam goes on round the realms' sides.
+    const onSide = part ? pool.filter(p => p.part === part && !p.key.startsWith('seen:')) : [];
     const far = farFrom ? pool.filter(p => dist(p, farFrom) >= s.areaFar) : [];
     const near = pool.filter(p => dist(p, centre) <= s.maxLeg);
-    const from = seen.length ? seen : far.length ? far : near.length ? near : [...pool].sort((a, b) => dist(a, centre) - dist(b, centre)).slice(0, 2);
+    const from = seen.length ? seen : onSide.length ? onSide : far.length ? far : near.length ? near : [...pool].sort((a, b) => dist(a, centre) - dist(b, centre)).slice(0, 2);
     // Nearer is likelier: a long walk is worth it for a fresh sighting, less for an empty meeting place.
     // And near a friendly group of ours (help.ts roamGoal keeps us within reach of one): three times as likely.
     const w = from.map(p => p.weight / (1 + dist(p, centre) / 5000) * (friends.some(f => dist(f, p) <= FRIEND_NEAR) ? 3 : 1));
@@ -166,23 +192,35 @@ export type RoamStep =
  * This tick's roam: go to the place, or stay at it (a step round a small circle every stepMs) until stayUntil, then pick the next.
  * `ok` checks a circle step (dry, clear). Null with no place at all (the caller patrols as before).
  */
-export function roamStep(mem: Record<string, any>, o: { centre: Point; places: readonly RoamPlace[]; now: number; rand?: () => number; ok?: (p: Point) => boolean; settings?: RoamSettings; friends?: readonly Point[]; sightings?: readonly RoamSighting[] }): RoamStep | null {
+export function roamStep(mem: Record<string, any>, o: { centre: Point; places: readonly RoamPlace[]; now: number; rand?: () => number; ok?: (p: Point) => boolean; settings?: RoamSettings; friends?: readonly Point[]; sightings?: readonly RoamSighting[]; circuit?: readonly PlayerRealm[] }): RoamStep | null {
     const s = o.settings ?? ROAM_SETTINGS;
     const rand = o.rand ?? Math.random;
     const r: RoamMemory = mem.roam ??= { place: null, last: [] };
-    const next = (farFrom?: Point) => {
+    const circuit = o.circuit ?? [];
+    const turn = () => { r.part = ((r.part ?? 0) + 1) % circuit.length; r.inPart = 0; };
+    const freshOn = (part: PlayerRealm) => o.places.some(p => p.part === part && !p.key.startsWith('seen:') && !r.last.includes(p.key) && dist(p, o.centre) > s.reach * 1.5);
+    // With a circuit: partPlaces places on a side, then the next side (one with nothing fresh is skipped); `onward` turns at once.
+    const next = (farFrom?: Point, onward = false) => {
         if (r.place) { r.last = [...r.last.filter(k => k !== r.place!.key), r.place.key].slice(-s.memory); }
-        r.place = pickPlace(o.places, o.centre, r.last, rand, s, o.friends ?? [], farFrom);
+        let part: PlayerRealm | undefined;
+        if (circuit.length) {
+            if (onward || (r.inPart ?? 0) >= s.partPlaces) turn();
+            for (let i = 0; i < circuit.length && !freshOn(circuit[(r.part ?? 0) % circuit.length]!); i++) turn();
+            part = circuit[(r.part ?? 0) % circuit.length];
+        }
+        r.place = pickPlace(o.places, o.centre, r.last, rand, s, o.friends ?? [], farFrom, part);
+        if (part && r.place?.part === part && !r.place.key.startsWith('seen:')) r.inPart = (r.inPart ?? 0) + 1;
         r.reachedAt = undefined; r.stayUntil = undefined; r.step = undefined; r.stepAt = undefined;
     };
+    const side = (p: RoamPlace) => (p.part && circuit.length && !p.key.startsWith('seen:') ? `, ${p.part === circuit[0] ? 'our' : `${p.part}'s`} side` : '');
     // The area (areaRadius): areaMs in it with no enemy seen in it, and on to a place far off (areaFar), whatever we were going to.
     if (!r.area || dist(o.centre, r.area) > s.areaRadius) r.area = { x: Math.round(o.centre.x), y: Math.round(o.centre.y), since: o.now };
     const seenHere = Math.max(r.area.since, ...(o.sightings ?? []).filter(x => dist(x, r.area!) <= s.areaRadius).map(x => x.at));
     if (o.now - seenHere >= s.areaMs) {
         const left = r.area;
         r.area = { x: Math.round(o.centre.x), y: Math.round(o.centre.y), since: o.now };
-        next(left);
-        if (r.place) return { kind: 'go', goal: r.place, place: r.place, reason: `roam: ${Math.round((o.now - seenHere) / 60_000)} min here with no enemy seen, far off to ${r.place.what} (${Math.round(r.place.x)}, ${Math.round(r.place.y)}), ${Math.round(dist(o.centre, r.place))} away` };
+        next(left, true);
+        if (r.place) return { kind: 'go', goal: r.place, place: r.place, reason: `roam: ${Math.round((o.now - seenHere) / 60_000)} min here with no enemy seen, far off to ${r.place.what}${side(r.place)} (${Math.round(r.place.x)}, ${Math.round(r.place.y)}), ${Math.round(dist(o.centre, r.place))} away` };
     }
     // A place that's gone from the list (a sighting faded) is still where we go: we picked it.
     if (!r.place || (r.stayUntil !== undefined && o.now >= r.stayUntil)) next();
@@ -190,13 +228,13 @@ export function roamStep(mem: Record<string, any>, o: { centre: Point; places: r
     const place = r.place;
     const d = dist(o.centre, place);
     if (r.reachedAt === undefined && d > s.reach) {
-        return { kind: 'go', goal: place, place, reason: `roam: to ${place.what} (${Math.round(place.x)}, ${Math.round(place.y)}), ${Math.round(d)} away` };
+        return { kind: 'go', goal: place, place, reason: `roam: to ${place.what}${side(place)} (${Math.round(place.x)}, ${Math.round(place.y)}), ${Math.round(d)} away` };
     }
     // No stay: past it, on to the next place at once (the group never stands while it roams).
     if (r.reachedAt === undefined && s.stayMax <= 0) {
         next();
         const on = r.place as RoamPlace | null;
-        if (on) return { kind: 'go', goal: on, place: on, reason: `roam: past ${place.what}, on to ${on.what} (${Math.round(on.x)}, ${Math.round(on.y)}), ${Math.round(dist(o.centre, on))} away` };
+        if (on) return { kind: 'go', goal: on, place: on, reason: `roam: past ${place.what}, on to ${on.what}${side(on)} (${Math.round(on.x)}, ${Math.round(on.y)}), ${Math.round(dist(o.centre, on))} away` };
         r.place = place;
     }
     if (r.reachedAt === undefined) {
