@@ -51,8 +51,10 @@ export interface RoamSettings {
     sightingWeight: number;
 }
 
+// A look of 8-18 s at each place, then on (the user, playing Niamh at 19:45, the group standing 1-2 min at a sighting: "that's not
+// human-like behaviour. You'd keep roaming"). The circle step comes only with a stay longer than stepMs (settings of one's own).
 export const ROAM_SETTINGS: RoamSettings = {
-    maxLeg: 16_000, memory: 4, reach: 900, stayMin: 60_000, stayMax: 150_000, circle: 700, stepMs: 25_000, sightingMs: 300_000, sightingWeight: 2,
+    maxLeg: 16_000, memory: 4, reach: 900, stayMin: 8_000, stayMax: 18_000, circle: 700, stepMs: 25_000, sightingMs: 300_000, sightingWeight: 2,
 };
 
 /** memory.roam */

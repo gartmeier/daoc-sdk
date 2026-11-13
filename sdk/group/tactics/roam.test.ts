@@ -27,19 +27,32 @@ describe('the roam (S3; the user: "we\'re doing the same back and forth every ti
         expect(sightingPlaces([{ x: 1, y: 1, n: 6, at: 0 }], ROAM_SETTINGS.sightingMs + 1, ok)).toHaveLength(0);
     });
 
-    test('roamStep: go, stay a while walking a small circle, then on to another place (not the same)', () => {
+    test('roamStep by default: a look of at most 18 s at a place, then on (the user at 19:45: "You\'d keep roaming")', () => {
+        const mem: Record<string, any> = {};
+        const ps = [place('a', 5000, 0), place('b', -5000, 0)];
+        let r = roamStep(mem, { centre: { x: 0, y: 0 }, places: ps, now: 0, rand: seq(0.99) })!;
+        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000, rand: seq(0.99) })!;
+        expect(r.kind).toBe('stay');
+        const first = r.place.key;
+        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000 + 18_000, rand: seq(0.99) })!;
+        expect(r.kind).toBe('go');
+        expect(r.place.key).not.toBe(first);
+    });
+
+    test('roamStep with a long stay: go, stay a while walking a small circle, then on to another place (not the same)', () => {
+        const S = { ...ROAM_SETTINGS, stayMin: 60_000, stayMax: 150_000 };
         const mem: Record<string, any> = {};
         const ps = [place('a', 5000, 0), place('b', -5000, 0), place('c', 0, 6000)];
-        let r = roamStep(mem, { centre: { x: 0, y: 0 }, places: ps, now: 0, rand: seq(0) })!;
+        let r = roamStep(mem, { centre: { x: 0, y: 0 }, places: ps, now: 0, rand: seq(0), settings: S })!;
         expect(r.kind).toBe('go');
         const first = r.place.key;
-        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000, rand: seq(0) })!;
+        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000, rand: seq(0), settings: S })!;
         expect(r.kind).toBe('stay');
         expect(r.reason).toContain('looking about');
-        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000 + ROAM_SETTINGS.stepMs + 1, rand: seq(0) })!;
+        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000 + S.stepMs + 1, rand: seq(0), settings: S })!;
         expect(r.kind).toBe('stay');
-        expect(Math.hypot(r.goal.x - r.place.x, r.goal.y - r.place.y)).toBeCloseTo(ROAM_SETTINGS.circle, -1);
-        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000 + ROAM_SETTINGS.stayMax + 1, rand: seq(0) })!;
+        expect(Math.hypot(r.goal.x - r.place.x, r.goal.y - r.place.y)).toBeCloseTo(S.circle, -1);
+        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000 + S.stayMax + 1, rand: seq(0), settings: S })!;
         expect(r.kind).toBe('go');
         expect(r.place.key).not.toBe(first);
     });
