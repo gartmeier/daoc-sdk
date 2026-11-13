@@ -311,21 +311,26 @@ export const STAGE_NEAR = 1000;
 const isFoe = (s: SiegeSeen, realm: PlayerRealm) => s.kind === 'npc' && !s.isPet && !s.isDead && (s.healthPercent ?? 100) > 0
     && !s.isPeaceful && s.isTargetable !== false && s.realm !== 'none' && s.realm !== realm && (s.level ?? 2) > 1;
 
-/** The way in past the stage: the stage→keep corridor, this wide each side, and this near the keep's centre (inside its walls). */
+/** Inside the keep: this near its centre (inside its walls). */
 export const CORRIDOR = 1200;
+/** The way in past the stage: this wide each side of the line from the stage to the keep, */
+export const CORRIDOR_WIDTH = 600;
+/** and at least this share of the way from the stage to the keep (about 480 at the Faste). */
+export const CORRIDOR_FROM = 0.15;
 
 /**
- * Whether `p` is on the way in past the stage: beside the line from the stage to the keep (between the two), or
- * inside the keep. A body anywhere else near the keep (one that came in from another side, live 2026-11-13 01:58)
- * is not past the stage and still walks the route.
+ * Whether `p` is on the way in past the stage: inside the keep (CORRIDOR), or beside the line from the stage to the
+ * keep (CORRIDOR_WIDTH) and some way along it (CORRIDOR_FROM). A body anywhere else near the keep (one that came in from
+ * another side, live 2026-11-13 01:58), or on a route's last leg into the stage (live 02:39, the 1200 corridor it had
+ * then took Hibernia's last leg for "past the stage" and skipped the staging), is not past the stage and still walks.
  */
 export function pastStage(plan: Pick<RaidPlan, 'stage'>, keep: Point, p: Point): boolean {
     if (Math.hypot(p.x - keep.x, p.y - keep.y) <= CORRIDOR) return true;
     const dx = keep.x - plan.stage.x, dy = keep.y - plan.stage.y, len2 = dx * dx + dy * dy;
     if (!len2) return false;
     const t = ((p.x - plan.stage.x) * dx + (p.y - plan.stage.y) * dy) / len2;
-    if (t < 0 || t > 1) return false;
-    return Math.hypot(p.x - (plan.stage.x + t * dx), p.y - (plan.stage.y + t * dy)) <= CORRIDOR;
+    if (t < CORRIDOR_FROM || t > 1) return false;
+    return Math.hypot(p.x - (plan.stage.x + t * dx), p.y - (plan.stage.y + t * dy)) <= CORRIDOR_WIDTH;
 }
 
 /** The centre of the living members (their mean), or null with none alive. */
@@ -409,7 +414,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         if (done.has(t.label)) return true;
         if (t.kind === 'door') return t.doorId !== undefined && broken.has(t.doorId);
         if (atPost(plan, t, foes)) return false;
-        // Nothing at the post: gone, if one of us is near enough to see it; else assume it still stands.
+        // Nothing at the post: gone, if one of us is near enough to see it; else assume it still stands. Seeing no guard
+        // at all is no news (a picture without them, live 02:39: a unit walked to the gate past five outer fighters).
+        if (!foes.length) return false;
         return view.members.some(m => m.alive && Math.hypot(m.x - t.at.x, m.y - t.at.y) <= SEEN_FROM);
     };
     const open = plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));

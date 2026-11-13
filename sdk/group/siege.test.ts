@@ -159,6 +159,28 @@ describe('raidOrders', () => {
             for (const p of FASTE.approach[r].route.slice(0, -1)) expect(pastStage(plan, keep, p)).toBe(false);
     });
 
+    test("no point on any route leg into the stage is past it (live 02:39: Hibernia's last leg was)", () => {
+        const keep = { x: 33089, y: 38271 };
+        for (const r of ['albion', 'midgard', 'hibernia'] as const) {
+            const way = [FASTE.approach[r].rally, ...FASTE.approach[r].route];
+            for (let i = 1; i < way.length; i++)
+                for (let k = 0; k <= 20; k++) {
+                    const p = { x: way[i - 1]!.x + (way[i]!.x - way[i - 1]!.x) * k / 20, y: way[i - 1]!.y + (way[i]!.y - way[i - 1]!.y) * k / 20 };
+                    expect(pastStage(plan, keep, p)).toBe(false);
+                }
+        }
+        // The rank-1 and gate stands are past it.
+        for (const label of ['outer-armswoman', 'gate', 'wall-e-n']) expect(pastStage(plan, keep, FASTE.targets.find(x => x.label === label)!.stand)).toBe(true);
+    });
+
+    test('seeing no guard at all is no news: posts near us still stand (live 02:39)', () => {
+        const members = at(plan.stage, 10);
+        const o = raidOrders(plan, view({ members, seen: [], staged: true }));
+        expect(o.phase).toBe('assault');
+        expect(o.ranged.step!.rank).toBe(1);
+        expect(o.ranged.focus).toBeNull();
+    });
+
     test('a peaceful or untargetable NPC at a post (the Hastener at the gate) is no guard', () => {
         const members = at(plan.stage, 10);
         const t = FASTE.targets.find(x => x.label === 'outer-se')!;
