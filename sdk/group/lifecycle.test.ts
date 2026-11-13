@@ -265,15 +265,45 @@ describe('sessions', () => {
         expect(e.events.find(x => x.kind === 'leave')?.bot).toBe('fiacra');
     });
 
-    test('a leaving bot near a keep waits to log out', () => {
+    test('a leaving bot near a keep walks out by the exit; if that fails it waits; away from it, logs out', () => {
         const now = at(20);
         const lives = initialLives(HIB.slice(0, 1), 'hibernia', new Set(['amergin']), now, seeded(3));
         lives[0]!.state = 'leaving' as Life['state'];
         const base = { target: 0, inGame: new Set(['amergin']), held: new Set<string>(), needs: [] as string[][], pinned: { away: new Set<string>(), stay: new Set<string>() }, lastOut: now, lastIn: now };
         const r = stepRealm(lives, { ...base, unsafe: new Set(['amergin']) }, now, seeded(3));
-        expect(r.actions).toEqual([]);
-        expect(r.events.map(e => e.kind)).toEqual(['wait']);
-        expect(stepRealm(lives, base, now + 30_000, seeded(3)).actions.map(a => a.kind)).toEqual(['logOut']);
+        expect(r.actions.map(a => a.kind)).toEqual(['heal']);
+        expect(r.events[0]!.why).toContain('near a keep');
+        // The walk out failed (still inside, still near): it waits, no second trip.
+        const w = stepRealm(lives, { ...base, unsafe: new Set(['amergin']) }, now + MIN, seeded(3));
+        expect(w.actions).toEqual([]);
+        expect(w.events.map(e => e.kind)).toEqual(['wait']);
+        expect(stepRealm(lives, base, now + 2 * MIN, seeded(3)).actions.map(a => a.kind)).toEqual(['logOut']);
+    });
+
+    test('constitution lost when the session would go on (the realm short): to the healer and back in, a new session', () => {
+        const now = at(20);
+        const lives = initialLives(HIB.slice(0, 2), 'hibernia', new Set(['amergin', 'fiacra']), now - 300 * MIN, seeded(3));
+        for (const l of lives) l.until = now + 60 * MIN;
+        lives[0]!.until = now - MIN;
+        const base = { target: 3, inGame: new Set(['amergin', 'fiacra']), held: new Set<string>(), needs: [] as string[][], pinned: { away: new Set<string>(), stay: new Set<string>() }, lastOut: 0, lastIn: now, conLost: new Map([['amergin', 60]]) };
+        const r = stepRealm(lives, base, now, seeded(3));
+        expect(lives[0]!.state).toBe('leaving');
+        expect(lives[0]!.healBack).toBe(true);
+        expect(r.events.find(e => e.kind === 'leave')?.why).toContain('to the healer and back');
+        expect(r.actions.map(a => [a.kind, a.bot])).toEqual([['heal', 'amergin']]);
+        // Out at the healer: walks back in with a new session, no log-out.
+        const back = stepRealm(lives, { ...base, outside: new Set(['amergin']), lastOut: now }, now + 5 * MIN, seeded(3));
+        expect(back.actions.map(a => [a.kind, a.bot])).toEqual([['enter', 'amergin']]);
+        expect(lives[0]!.state).toBe('entering');
+        expect(lives[0]!.until - (now + 5 * MIN)).toBeGreaterThanOrEqual(60 * MIN);
+        // Back inside: online.
+        stepRealm(lives, { ...base, lastOut: now }, now + 9 * MIN, seeded(3));
+        expect(lives[0]!.state).toBe('online');
+        // Without constitution lost the same session is extended, as before.
+        const plain = initialLives(HIB.slice(0, 1), 'hibernia', new Set(['amergin']), now - 100 * MIN, seeded(3));
+        plain[0]!.until = now - MIN;
+        const p = stepRealm(plain, { ...base, conLost: new Map(), inGame: new Set(['amergin']) }, now, seeded(3));
+        expect(p.events.map(e => e.kind)).toEqual(['extend']);
     });
 
     test('unsafe to log out: near the Faste (whoever holds it), near an enemy portal keep; safe at home and in the field', () => {

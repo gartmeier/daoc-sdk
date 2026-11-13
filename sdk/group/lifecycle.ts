@@ -270,6 +270,8 @@ export interface Life extends LifeBot {
     waitedAt?: number;
     /** leaving: when its healer trip was asked (one per leave). */
     healAskedAt?: number;
+    /** leaving to the healer only: its session would have gone on (the realm short), so it comes back in after the trip. */
+    healBack?: boolean;
     /** Why it is in this state (a log). */
     why: string;
 }
@@ -330,7 +332,10 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
     const events: LifeEvent[] = [];
     let { lastOut, lastIn } = o;
     const ev = (kind: LifeEvent['kind'], l: Life, why: string) => events.push({ kind, bot: l.bot, realm: l.realm, why });
-    const set = (l: Life, state: LifeState, until: number, why: string) => { l.state = state; l.since = now; l.until = until; l.why = why; l.healAskedAt = undefined; };
+    const set = (l: Life, state: LifeState, until: number, why: string) => { l.state = state; l.since = now; l.until = until; l.why = why; l.healAskedAt = undefined; l.healBack = undefined; };
+    // A session that would go on for numbers or a need, with constitution lost: to the healer and straight back in (evenings,
+    // when nobody rested can come in, nobody's session ends, 2026-11-13 19:00-19:40: Brigid at 367 min with 60 lost).
+    const healAndBack = (l: Life, why: string) => { set(l, 'leaving', now, 'healer'); l.healBack = true; ev('leave', l, `${worn(l)} constitution lost: to the healer and back (${why})`); lastOut = now; outThisStep = true; };
     const worn = (l: Life) => { const c = o.conLost?.get(l.bot) ?? 0; return c >= s.healAt ? c : 0; };
 
     // 1. What is in game, and where.
@@ -378,9 +383,15 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
         const n = playing().length;
         const replace = lives.filter(rested).length > 0;
         // Players leave when their time is up even if nobody comes in at once: one under the target is fine, two is not.
-        if (n - 1 < o.target - 1 && !replace) { l.until = now + s.extendMs; ev('extend', l, `${n} playing for a target of ${o.target}, nobody rested to come in`); continue; }
+        if (n - 1 < o.target - 1 && !replace) {
+            if (worn(l)) { healAndBack(l, `${n} playing for a target of ${o.target}`); continue; }
+            l.until = now + s.extendMs; ev('extend', l, `${n} playing for a target of ${o.target}, nobody rested to come in`); continue;
+        }
         // A needed class plays on until another of its class can take over, but not past neededMaxMs (a healer main's long evening).
-        if (breaks(l) && !sameClassRested(l) && now - l.since < s.neededMaxMs) { l.until = now + s.extendMs; ev('extend', l, `the last ${l.className} a group needs`); continue; }
+        if (breaks(l) && !sameClassRested(l) && now - l.since < s.neededMaxMs) {
+            if (worn(l)) { healAndBack(l, `the last ${l.className} a group needs`); continue; }
+            l.until = now + s.extendMs; ev('extend', l, `the last ${l.className} a group needs`); continue;
+        }
         const played = Math.round((now - l.since) / 60_000);
         set(l, 'leaving', now, 'session over'); ev('leave', l, `session over after ${played} min`);
         lastOut = now; outThisStep = true;
@@ -414,10 +425,18 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
     // 5. Leaving bots no unit holds, standing where a log-in later is safe: log out (again, if the last ask didn't take).
     for (const l of lives) {
         if (l.state !== 'leaving' || o.held.has(l.bot) || !o.inGame.has(l.bot) || o.pinned.away.has(l.bot) || o.healing?.has(l.bot)) continue;
-        // Constitution lost: out by the exit to the healer first (from anywhere inside: the walk takes it away from any keep).
-        if (worn(l) && !l.healAskedAt && !o.outside?.has(l.bot)) {
+        const outside = !!o.outside?.has(l.bot);
+        // Back from the healer, its session went on: in again with a new one (enterAlone), or, the trip failed inside, play on.
+        if (l.healBack && l.healAskedAt) {
+            if (outside) { set(l, 'entering', now + between(rand, s.session), 'back from the healer'); enter(l, 'back from the healer'); ev('entering', l, 'back from the healer: walks back in'); }
+            else { set(l, 'online', now + s.extendMs, 'the healer trip failed: plays on'); ev('extend', l, 'the healer trip failed: plays on'); }
+            continue;
+        }
+        // Constitution lost, or near a keep (where a log-out would land it at the bind, and with no unit holding it nothing walks
+        // it away: Cathbad waited 90 min at the Faste on 11-13): out by the exit, to the healer there if any is lost, then the log-out.
+        if ((worn(l) || o.unsafe?.has(l.bot)) && !l.healAskedAt && !outside) {
             l.healAskedAt = now;
-            const why = `${worn(l)} constitution lost: out to the healer, logs out there`;
+            const why = worn(l) ? `${worn(l)} constitution lost: out to the healer${l.healBack ? ' and back' : ', logs out there'}` : 'near a keep: walks out by the exit, logs out there';
             ev('heal', l, why);
             actions.push({ kind: 'heal', bot: l.bot, realm: l.realm, why });
             continue;
@@ -746,6 +765,7 @@ export async function healerTrip(bot: string, className: string, log?: (line: st
         const p = c.sdk.getPlayer();
         if (!p || p.regionId === THIDRANKI) return { success: false, message: `still in Thidranki: ${out.message}` };
         const before = p.constitutionLost ?? 0;
+        if (before <= 0) return { success: true, message: `out in region ${p.regionId}, no constitution lost` };
         const spot = findNpcSpawns({ regionId: p.regionId, near: p, radius: 4000, classType: /GameHealer/, limit: 1 })[0];
         if (!spot) return { success: false, message: `out in region ${p.regionId}: no healer within 4000` };
         if (Math.hypot(spot.x - p.x, spot.y - p.y) > 400) {
