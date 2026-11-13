@@ -750,6 +750,8 @@ export interface DefencePlan {
     stands: DefenceStand[];
     roof: Point3;
     lord: Point3;
+    /** The keep's centre (keeps.ts): inside the walls is within 1000 of it. */
+    centre: Point;
     doors: SiegeDoor[];
 }
 
@@ -759,9 +761,10 @@ export function defencePlan(realm: PlayerRealm, keep = FASTE.keep): DefencePlan 
     if (!layout?.defence) return null;
     const a = layout.approach[realm];
     const lord = layout.targets.find(t => t.kind === 'lord')!;
+    const k = BATTLEGROUND_LAYOUTS[layout.regionId]?.keeps.find(x => x.name === keep);
     return {
         keep, realm, regionId: layout.regionId, rally: a.rally, route: [...a.route, layout.defence.entry], entry: layout.defence.entry,
-        stands: layout.defence.stands, roof: layout.roof, lord: lord.at, doors: layout.doors,
+        stands: layout.defence.stands, roof: layout.roof, lord: lord.at, centre: k ? { x: k.x, y: k.y } : { x: lord.at.x, y: lord.at.y }, doors: layout.doors,
     };
 }
 
@@ -842,7 +845,7 @@ export function defenceSeats(plan: Pick<DefencePlan, 'stands'>, defenders: reado
  */
 export function defenceOrders(plan: DefencePlan, view: DefenceView): DefenceOrders {
     const roof = view.foes.filter(f => Math.hypot(f.x - plan.lord.x, f.y - plan.lord.y, f.z - plan.lord.z) <= ROOF_THREAT).length;
-    const inside = view.foes.filter(f => insideOf(plan.lord, f)).length - roof;
+    const inside = view.foes.filter(f => insideOf(plan.centre, f)).length - roof;
     const outside = view.foes.length - inside - roof;
     const threat = { outside, inside, roof };
     if (view.owner !== plan.realm) return { phase: 'lost', seats: new Map(), threat, why: `the keep is ${view.owner || 'nobody'}'s` };
@@ -869,8 +872,8 @@ export function defenceOrders(plan: DefencePlan, view: DefenceView): DefenceOrde
 export const DEFENCE_REACH = 1450;
 
 /** Whether a foe is the defence's to fight: within DEFENCE_REACH of the keep, or by the lord (any height). */
-export function inDefenceReach(plan: Pick<DefencePlan, 'lord'>, foe: Point): boolean {
-    return Math.hypot(foe.x - plan.lord.x, foe.y - plan.lord.y) <= DEFENCE_REACH;
+export function inDefenceReach(plan: Pick<DefencePlan, 'centre'>, foe: Point): boolean {
+    return Math.hypot(foe.x - plan.centre.x, foe.y - plan.centre.y) <= DEFENCE_REACH;
 }
 
 /**
@@ -878,7 +881,7 @@ export function inDefenceReach(plan: Pick<DefencePlan, 'lord'>, foe: Point): boo
  * Empty inside the walls or at the entry: from there walk to the stand itself, through our own doors.
  */
 export function defenceRouteFrom(plan: DefencePlan, at: Point3): Point3[] {
-    if (insideOf(plan.lord, at) || Math.hypot(at.x - plan.entry.x, at.y - plan.entry.y) <= AT_SPOT) return [];
+    if (insideOf(plan.centre, at) || Math.hypot(at.x - plan.entry.x, at.y - plan.entry.y) <= AT_SPOT) return [];
     const way = [plan.rally, ...plan.route];
     let best = 0, bestD = Infinity;
     for (let i = 0; i < way.length; i++) {
