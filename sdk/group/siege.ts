@@ -643,7 +643,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // The bolt's work: a live guard with a `bolt` spot, once no wall caster of an earlier or this rank stands (their sight covers
     // those spots) and before the lord.
     const boltWork = (): RaidTask | null => {
-        if (rank === null || open.some(t => t.kind === 'caster' && !t.optional && t.rank <= rank)) return null;
+        // No wall caster left at all (the spot is in every east wall caster's sight, and up the stair beyond the gate): live 19:48, at
+        // rank 1 "Blaise on the roof-e from the wall" while the wall casters of rank 3 stood (open counted only ranks up to this one).
+        if (rank === null || open.some(t => t.kind === 'caster' && !t.optional)) return null;
         const t = plan.targets.find(x => x.bolt && !done.has(x.label) && atPost(plan, x, foes));
         return t ? { step: t, focus: atPost(plan, t, foes), stand: t.bolt! } : null;
     };

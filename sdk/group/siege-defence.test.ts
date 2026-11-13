@@ -399,3 +399,18 @@ describe('raidOrders: an outer fighter off its post keeps rank 1 open', () => {
         expect(o.melee.step?.label).not.toBe('gate');
     });
 });
+
+describe('raidOrders: no bolt task before the wall casters are down', () => {
+    test('rank 1 with the wall casters up: no bolt', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('albion')!;
+        const at = (l: string) => FASTE.targets.find(t => t.label === l)!.at;
+        const seen = [
+            { id: 1, name: 'Huscarl', realm: 'midgard', kind: 'npc' as const, ...at('outer-armswoman') },
+            { id: 7, name: 'Runemaster', realm: 'midgard', kind: 'npc' as const, ...at('wall-e-n') },
+            { id: 9, name: 'Hunter', realm: 'midgard', kind: 'npc' as const, ...at('roof-e') },
+        ];
+        const members = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, x: 34650, y: 38200 + i * 20, z: 3722, alive: true }));
+        expect(raidOrders(raid, { members, seen, owner: 'midgard', staged: true }).bolt).toBeUndefined();
+    });
+});
