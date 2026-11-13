@@ -41,17 +41,17 @@ import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, pairMeet, THIDRANKI, type KeepSettings, type PlayerRealm } from './keeps';
 import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
 import { isLevel } from './slope';
-import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
+import { drySpot, isDry, isWet, staysDry } from './water';
 import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, TRAIL_MS, trailGoal, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
-import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, noteArrival, roamGoal, roamingPhase, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
+import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, noteArrival, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
 import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
 import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDefence, withDefence } from './tactics/defend';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { planBuffs } from './buffs';
-import { FRIEND_NEAR, STAY_FRIEND_FAR, meetingPlaces, placeOk, roamCircuit, roamStep, sightingPlaces, type RoamPlace } from './tactics/roam';
+import { placeOk, roamCircuit, roamPlaces, roamStep, type RoamPlace } from './tactics/roam';
 import { FIELD_REST_MS, fieldRestSpot, loiter, waveOrder, waveWatch, type RealmWave } from './waves';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
@@ -114,9 +114,7 @@ export interface RvrSettings extends TacticsSettings, KeepSettings {
     softFocus?: SoftFocus;
     /** Realm calls (tactics/help.ts): answer a unit's call for help, or the muster, when free and the way is short. `--calls.enabled=false` off. */
     calls?: CallSettings;
-    /** Close up on the nearest friendly unit when farther than 4500 (tactics/help.ts roamGoal); `--roam=false` off. */
-    roam?: boolean;
-    /** Place to place instead of the fixed ring when no settings.patrol is set (tactics/roam.ts); `--roamPlaces=false` off. */
+    /** The roam's circuit (tactics/roam.ts) instead of the fixed ring when no settings.patrol is set; `--roamPlaces=false` off. */
     roamPlaces?: boolean;
 }
 
@@ -807,7 +805,7 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const candidates = contacts.filter(inFight);
     const players = candidates.filter(c => c.kind === 'player');
     // With stayDry, a player swimming that isn't on us is no focus, mezz or reason to fight until it is ashore, as in the pack;
-    // it still counts against us (retreat, outnumbered). The hunt waits for it on dry ground (waitAshore).
+    // it still counts against us (retreat, outnumbered). The hunt leaves it in the water (no hunt, the roam goes on).
     const ashore = candidates.filter(c => !(c.kind === 'player' && swimming(c) && !onUs(c)));
     const fighters = ashore.filter(c => c.kind === 'player');
     // Players first, while one is free: with all of them crowd-controlled, a pet on us is what's left to hit (pickRvrFocus takes the free first).
@@ -954,16 +952,10 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
             const counts = more ? `${counted(big.filter(c => !recalled.includes(c)), seen)} and ${more} more we ran from (mezzed or out of view)` : counted(big, seen);
             return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `fall back ${way.home ? toward : 'away from them'}${gone}`, reason: `fall back: ${counts} ${d} away vs ${main.length}${withAllies}${way.home && helper ? `, ${toward} (${Math.round(dist(centre, helper))} away)` : ''}` };
         }
-        // With stayDry, those swimming aren't hunted into the river: with only such in sight, the group waits on dry ground for them (waitAshore).
+        // With stayDry, one check for the rivers: those swimming are never hunted into the water. Only such in sight: the roam goes
+        // on along its dry legs (no waiting on the bank, the user at 20:54: "they are flipping again"); one that comes ashore is hunted.
         const ashore = seen.filter(c => !swimming(c));
-        const wet = seen.length - ashore.length;
-        // On the way in to our keep's defence: fall back from a bigger group (above), never hunt or wait for one.
-        if (!defending && !ashore.length && waitAshore(mem, wet, now)) {
-            const them = centroid(seen);
-            return { ...calm, phase: 'travel', anchor: standHere(), facing: { x: Math.round(them.x), y: Math.round(them.y) }, objective: `wait for ${enemiesText(wet)} swimming${gone}`, reason: `wait ashore: ${enemiesText(wet)} swimming ${Math.round(dist(centre, them))} away` };
-        }
-        if (!wet) mem.ashoreSince = undefined;
-        const them = centroid(ashore);
+        const them = centroid(ashore.length ? ashore : seen);
         const d = Math.round(dist(centre, them));
         const unready = new Set([...deadHere, ...far].map(m => m.name).concat(low.map(w => w.name)));
         if (ashore.length && unready.size <= HUNT_UNREADY && !defending) {
@@ -977,7 +969,7 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
             stepLeg(trip, 'hunt', them, { from: centre, movers: main, replan: HUNT_REPLAN });
             return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: them, objective: `hunt ${enemiesText(ashore.length)} round ${at(them)}${gone}`, reason: `hunt ${enemiesText(ashore.length)} ${d} away: ${ashore.slice(0, 3).map(label).join(', ')}` };
         }
-    } else waitAshore(mem, 0, now);
+    }
     // A hunt's squad gone from sight (out of our view, or into its keep): remember it as the quarry, counting its losses.
     // Not after a fight (the last orders engaged): those are dead or fled from a fight, no squad walking off.
     if (s.ambush && !seen.length && mem.hunted) {
@@ -1067,16 +1059,16 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         }
         return { ...calm, phase: 'recover', anchor: there, facing: { x: picket.keep.x, y: picket.keep.y }, waiting: low, objective: `stand picket by our keep${gone}`, reason: `picket: watching our keep from ${Math.round(dist(there, picket.keep))} out` };
     }
-    // ── The realm's wave (waves.ts, the life cycle S4): a break at the portal keep, or out toward where our realm last saw
-    // enemies. Free as for a call (no fight, nobody seen, dead, away or low: all above); never in a pair round. No wave file: patrol. ──
-    const wave = !s.opponent && !seen.length && realm !== 'none' ? waveOrder((mem.realmWave ?? null) as RealmWave | null, { unit: mem.realmUnit ?? '', realm, regionId, centre, reached: mem.waveReached, resting: mem.waveRest?.key ?? null, human: p.members.some(m => m.observed), now }) : null;
-    if (wave?.kind === 'reached') mem.waveReached = wave.key;
-    else if (wave?.kind === 'rest' && !(mem.waveRest?.key === wave.key && mem.waveRest.done)) {
-        // A short rest in the field (bot-only, far from the portal keep): out of sight off the roads and away from the meeting
+    // ── The realm's wave (waves.ts, the life cycle S4): its breaks, at the portal keep or a short rest in the field. Free as for a
+    // call (no fight, nobody seen, dead, away or low: all above); never in a pair round. Its "out toward a sighting" is the roam's
+    // own first rule (tactics/roam.ts nextPlace), so the roam goes on from here. ──
+    const wave = !s.opponent && !seen.length && realm !== 'none' ? waveOrder((mem.realmWave ?? null) as RealmWave | null, { unit: mem.realmUnit ?? '', realm, regionId, centre, resting: mem.waveRest?.key ?? null, human: p.members.some(m => m.observed), now }) : null;
+    if (wave?.kind === 'rest' && !(mem.waveRest?.key === wave.key && mem.waveRest.done)) {
+        // A short rest in the field (bot-only, far from the portal keep): out of sight off the roads and away from the roam's
         // places, everyone sitting (loiter), FIELD_REST_MS once there; then it roams on. Picked once a wave.
         if (mem.waveRest?.key !== wave.key) {
             const ok = (q: Point) => clearOf(q, keeps) && !onRoadOut(q, roads) && isDry(regionId, q);
-            const avoid = ((mem.roamMeet ?? []) as Point[]);
+            const avoid = ((mem.roamPlaces ?? []) as Point[]);
             const found = fieldRestSpot(regionId, centre, { avoid, ok, zAt });
             const spot = found ?? (() => { const r = restAt(); const d = drySpot(regionId, r.at, { toward: r.at, ok: c => clearOf(c, keeps) }); return { x: Math.round(d.x), y: Math.round(d.y), z: zAt(d) }; })();
             mem.waveRest = { key: wave.key, at: spot, arrivedAt: null, done: false };
@@ -1086,9 +1078,9 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         if (wr.arrivedAt && now - wr.arrivedAt >= FIELD_REST_MS) wr.done = true;
         else return { ...calm, phase: 'recover', anchor: wr.at, objective: `a short rest in the field${gone}`, reason: wave.why };
     }
-    else if (wave?.kind === 'home' || wave?.kind === 'toward') {
-        stepLeg(trip, wave.kind === 'home' ? 'break' : 'wave', wave.at, { from: centre, movers: main, replan: 1500 });
-        return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `${wave.kind === 'home' ? 'a break at the portal keep' : 'out toward the enemies our realm saw'}${gone}`, reason: wave.why };
+    else if (wave?.kind === 'home') {
+        stepLeg(trip, 'break', wave.at, { from: centre, movers: main, replan: 1500 });
+        return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `a break at the portal keep${gone}`, reason: wave.why };
     } else if (wave?.kind === 'quiet') {
         const spot = dry ? drySpot(regionId, wave.at, { toward: wave.at, ok: c => clearOf(c, keeps) }) : wave.at;
         return { ...calm, phase: 'recover', anchor: { x: Math.round(spot.x), y: Math.round(spot.y), z: zAt(spot) }, objective: `a break at the portal keep${gone}`, reason: wave.why };
@@ -1122,7 +1114,7 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         }
     }
 
-    // ── Patrol: the loop in legs, next waypoint once everyone stands at the leg that ends at this one ──
+    // ── The roam, or a patrol of one's own (settings.patrol) or a pair round's ring ──
     const key = `${regionId}:${realm}:${level}:${s.opponent ?? ''}:${dry}`;
     if (!s.patrol && mem.patrolKey !== key) {
         mem.patrol = defaultPatrol(regionId, realm, level, s);
@@ -1130,6 +1122,21 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         mem.wp = undefined;
     }
     const loop: Point3[] = s.patrol ?? mem.patrol;
+    // The group we just ran from (FLED_MS): no leg back toward where it was until it is left behind.
+    const towardFled = (pt: Point) => !!fled && dist(centre, fled.at) <= s.huntRadius + FLED_CLEAR && dist(pt, fled.at) < dist(centre, fled.at);
+    // The roam (tactics/roam.ts): with no patrol of its own and no pair round, the circuit over the realms' sides, ours first,
+    // a fresh sighting near us before it, passing through each place (the user, 2026-11-13: "look for enemies on Hib's island,
+    // then Mid's, then Albion's"). Everything above comes first; the roam picks up where it was.
+    if (!s.patrol && !s.opponent && s.roamPlaces !== false && realm !== 'none') {
+        const okPlace = placeOk([...keeps, ...aggroZones(regionId, level)], q => !dry || isDry(regionId, q));
+        if (mem.roamKey !== key) { mem.roamPlaces = roamPlaces(regionId, realm as PlayerRealm, loop, okPlace); mem.roamKey = key; }
+        const r = roamStep(mem, { regionId, centre, places: mem.roamPlaces as RoamPlace[], sightings: mem.realmSeen ?? [], circuit: roamCircuit(realm as PlayerRealm), now, ok: okPlace, blocked: towardFled });
+        if (r) {
+            stepLeg(trip, 'roam', r.goal, { from: centre, movers: here, replan: 1500 });
+            mem.camp = { x: r.place.x, y: r.place.y, z: zAt(r.place), names: r.place.what };
+            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `roam${gone}`, reason: r.reason };
+        }
+    }
     if (!loop.length) return { ...calm, phase: 'idle', anchor: stay, reason: `no patrol in region ${regionId} for ${realm}: set settings.patrol` };
     if (mem.wp === undefined || mem.wp >= loop.length) mem.wp = loop.reduce((best: number, w, i) => (dist(w, centre) < dist(loop[best]!, centre) ? i : best), 0);
     let wp = loop[mem.wp]!;
@@ -1138,39 +1145,9 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         mem.wp = (mem.wp + 1) % loop.length;
         wp = loop[mem.wp]!;
     }
-    // The group we just ran from: no patrol leg back toward where it was (FLED_MS). Wait off the roads out until it is left behind.
-    if (fled && dist(centre, fled.at) <= s.huntRadius + FLED_CLEAR && dist(wp, fled.at) < dist(centre, fled.at)) {
+    if (fled && towardFled(wp)) {
         const rest = restAt();
         return { ...calm, phase: 'recover', anchor: rest.at, objective: `keep off the ${enemiesText(fled.ids.length)} we ran from${gone}`, reason: `keep off: the ${enemiesText(fled.ids.length)} we ran from were ${Math.round(dist(centre, fled.at))} away at ${at(fled.at)}, patrol on in ${Math.ceil((fled.until - now) / 1000)} s${rest.why}` };
-    }
-    // Within reach of a friend (help.ts roamGoal): farther than 4500 from the nearest friendly unit, close up to 3000 of it first,
-    // so a call finds help near. Stint 2026-11-13, S3: help stood 6000-9000 away and most fights ended before it came.
-    const roam = s.roam === false ? null : roamGoal(mem, centre, homeAt, undefined, now);
-    // Already on our way to a roam place near that friend (tactics/roam.ts): no need to close on it first.
-    // Staying at it, or judged near the friend once: it holds while the friend is within STAY_FRIEND_FAR (no flip as the friend moves).
-    const roamAt = mem.roam?.place as RoamPlace | null | undefined;
-    const stayingAt = !!roamAt && mem.roam.reachedAt !== undefined && (mem.roam.stayUntil ?? 0) > now;
-    const nearReach = roamAt && (stayingAt || mem.roamNearKey === roamAt.key) ? STAY_FRIEND_FAR : FRIEND_NEAR;
-    const placeNearFriend = !!roam && !!roamAt && dist(roamAt, roam.friend) <= nearReach;
-    mem.roamNearKey = placeNearFriend ? roamAt!.key : undefined;
-    if (roam && !placeNearFriend && clearOf(roam.goal, keeps)) {
-        stepLeg(trip, 'roam', roam.goal, { from: centre, movers: main, replan: 1500 });
-        return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `stay within reach of ${roam.friend.unit}${gone}`, reason: `roam near: ${roam.friend.unit} is ${Math.round(roam.d)} away, closing to 3000` };
-    }
-    // ── The roam (tactics/roam.ts): with no patrol of its own (settings.patrol) and no pair round, place to place as a player group goes,
-    // where our realm saw enemies lately and the battleground's meeting places, weighted and varied, staying a while at each. The
-    // user, 17:5x: "we're doing the same back and forth every time" (the same five waypoints in the same order all afternoon). ──
-    if (!s.patrol && !s.opponent && s.roamPlaces !== false && realm !== 'none') {
-        const okPlace = placeOk([...keeps, ...aggroZones(regionId, level)], q => !dry || isDry(regionId, q));
-        if (mem.roamKey !== key) { mem.roamMeet = meetingPlaces(regionId, realm as PlayerRealm, loop, okPlace); mem.roamKey = key; }
-        const places: RoamPlace[] = [...(mem.roamMeet as RoamPlace[]), ...sightingPlaces(mem.realmSeen ?? [], now, okPlace)];
-        const friends = ((mem.realmUnits ?? []) as { x: number; y: number; size: number; alive: number; phase?: string | null }[]).filter(u => u.size >= 4 && u.alive >= 3 && roamingPhase(u.phase));
-        const r = roamStep(mem, { centre, places, now, ok: okPlace, friends, sightings: mem.realmSeen ?? [], circuit: roamCircuit(realm as PlayerRealm) });
-        if (r) {
-            stepLeg(trip, 'roam', r.goal, { from: centre, movers: here, replan: r.kind === 'go' ? 1500 : 300 });
-            mem.camp = { x: r.place.x, y: r.place.y, z: zAt(r.place), names: r.place.what };
-            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `roam${gone}`, reason: r.reason };
-        }
     }
     stepLeg(trip, 'patrol', wp, { from: centre, movers: here, replan: Infinity, force: arrived });
     // The leg that ends at the waypoint goes on to the next one: the group walks through it, not to a stop at it.

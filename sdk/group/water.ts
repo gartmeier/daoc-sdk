@@ -48,36 +48,6 @@ export function staysDry(s: { stayDry?: unknown }): boolean {
     return !/^(false|0|off|no)$/i.test(String(s.stayDry ?? true));
 }
 
-/**
- * How long a group that sees only enemies swimming waits on dry ground for them to come ashore before it goes on (they may
- * swim on along the river). Hibernia's arena round 3, 2026-11-09: it saw Albion swimming 4949 off, ignored it and patrolled
- * on, and Albion came ashore behind it and wiped it.
- */
-export const ASHORE_WAIT_MS = 45_000;
-
-/**
- * After this long with no swimmer in sight, the next one starts a new wait. A shorter gap is a contact flickering at the
- * edge of sight: field mode, 2026-11-11, Midgard switched between waiting and patrolling every second for 5 minutes with
- * two enemies swimming ~4800 off, as each tick without them started the 45 s over.
- */
-export const ASHORE_GONE_MS = 10_000;
-
-/**
- * Whether to (still) wait for `swimming` enemies: from the first sighting for ASHORE_WAIT_MS, again once none swam for
- * ASHORE_GONE_MS. Memory: mem[key] and mem[key + 'Last'], its own per caller (the pack runs decideRvr with no players
- * in it, which would end its wait).
- */
-export function waitAshore(mem: Record<string, any>, swimming: number, now: number, key = 'ashoreSince'): boolean {
-    const last = `${key}Last`;
-    if (!swimming) {
-        if (mem[key] !== undefined && !(now - (mem[last] ?? -Infinity) < ASHORE_GONE_MS)) mem[key] = undefined;
-        return false;
-    }
-    mem[last] = now;
-    mem[key] ??= now;
-    return now - mem[key] < ASHORE_WAIT_MS;
-}
-
 /** How far from water a stop stays (drySpot): casters stand up to ~700 behind the anchor, most of them 200-450. */
 export const DRY_MARGIN = 300;
 

@@ -277,58 +277,6 @@ export function callerAllies(mem: Record<string, any>, centre: Point, ourLiving:
     return n;
 }
 
-// ── Roaming within reach of a friend (stint 2026-11-13, S3) ──
-
-export interface RoamSettings {
-    /** Close up on the nearest friendly unit once it is farther than this ... */
-    far: number;
-    /** ... until within this of it. */
-    near: number;
-    /** Friends of at least this many living (a group or a trio, not a stealther alone). */
-    minAlive: number;
-    /** A friend this near our own portal keep is resting at home: not one to roam by. */
-    homeClear: number;
-}
-
-/** Closing on a friend that got no nearer (by 200) in this long gives up ... */
-export const ROAM_STALL_MS = 20_000;
-/** ... for this long. */
-const ROAM_STALL_REST_MS = 120_000;
-/** A unit this big is a main group (a squad is 1-3). */
-const MAIN_SIZE = 4;
-
-export const ROAM_SETTINGS: RoamSettings = { far: 4500, near: 3000, minAlive: 3, homeClear: 7000 };
-
-/** A friendly unit in this phase is out roaming or fighting (null: an older calls file, taken as out). */
-export const roamingPhase = (phase: string | null | undefined): boolean => phase == null || phase === 'travel' || phase === 'engage' || phase === 'pull' || phase === 'retreat';
-
-/**
- * Where to walk to stay within reach of the nearest friendly unit (memory.realmUnits), or null while it is near enough or
- * there is none. Once farther than `far` we close up to `near` of it, then patrol on (memory.roamClose holds the state).
- */
-export function roamGoal(mem: Record<string, any>, centre: Point, home: Point | null, s: RoamSettings = ROAM_SETTINGS, now = Date.now()): { goal: Point; friend: UnitSpot; d: number } | null {
-    // Gave up closing lately (no nearer for ROAM_STALL_MS): roam on (live 17:55: hibernia stood still 3500-3900 from hibernia-2's
-    // centre, pulled 15000 off by a member at our portal keep).
-    if ((mem.roamStallUntil ?? 0) > now) return null;
-    // Only a friend out roaming or fighting: not one resting or waiting (the user at 19:51: hibernia closed on hibernia-2 resting 14000 from our portal keep).
-    const out = ((mem.realmUnits ?? []) as UnitSpot[]).filter(u => u.alive >= s.minAlive && (!home || dist(u, home) > s.homeClear) && roamingPhase(u.phase));
-    // A main group first: a squad roams the edges and runs off (live 13:24, a group closed on midgard-s1 and lost it every few
-    // seconds); a trio only when no main group is out.
-    const mains = out.filter(u => u.size >= MAIN_SIZE);
-    const friends = mains.length ? mains : out;
-    if (!friends.length) { mem.roamClose = undefined; return null; }
-    const friend = friends.reduce((a, b) => (dist(a, centre) <= dist(b, centre) ? a : b));
-    const d = dist(friend, centre);
-    if (d <= s.near || (!mem.roamClose && d <= s.far)) { mem.roamClose = undefined; mem.roamBest = undefined; return null; }
-    // Getting no nearer: close enough for now.
-    const best: { unit: string; d: number; at: number } | undefined = mem.roamBest;
-    if (!best || best.unit !== friend.unit || d < best.d - 200) mem.roamBest = { unit: friend.unit, d, at: now };
-    else if (now - best.at >= ROAM_STALL_MS) { mem.roamClose = undefined; mem.roamBest = undefined; mem.roamStallUntil = now + ROAM_STALL_REST_MS; return null; }
-    mem.roamClose = friend.unit;
-    const k = (d - s.near) / d;
-    return { goal: { x: Math.round(centre.x + (friend.x - centre.x) * k), y: Math.round(centre.y + (friend.y - centre.y) * k) }, friend, d };
-}
-
 /** Sends the answers helpStep and noteArrival queued (memory.helpOut), in order. */
 export function flushAnswers(mem: Record<string, any>, source: CallSource | null | undefined): void {
     const q: { id: string; answer: CallAnswer; why?: string }[] = mem.helpOut ?? [];

@@ -1,18 +1,26 @@
-// A main group's roam (S3, 2026-11-13; the user, playing Niamh: "the roaming we currently do is not very good, we're doing the same
-// back and forth every time"). Instead of the fixed ring round the meeting point in the same order, the group goes from place to
-// place as a player group does: where our realm saw enemies lately (the director's sightings), and the battleground's meeting places
-// (the ring round the meeting point, where two realms' halves meet, each realm's bank by the Faste's bridges). The next place is
-// picked weighted and at random from those within a leg's reach, never one of the last few, never a 20k crossing when a nearer one
-// will do; there the group stays a while (a small circle round it, a wait) before it moves on.
+// A main group's roam in a battleground: the user's own definition (2026-11-13, playing Niamh): "look for enemies on Hib's
+// island, then Mid's, then Albion's", moving all the time. Two rules, nothing else:
 //
-// Pure but for `rand` and memory.roam. decideRvr (rvr.ts) calls roamStep where its patrol was, when no settings.patrol is set.
+//   1. The place picker (nextPlace): a fresh enemy sighting near us first; else the nearest place on the circuit's current
+//      side we haven't passed this lap; with none left there, the next side (ours, then each enemy realm's, round again).
+//   2. The leave rule (shouldLeave): a place is kept until it is passed (within `reach`, then straight on to the next: no stop)
+//      or given up (it took far longer than the walk should). Only a fresh sighting takes over from a circuit place, and only
+//      once the place has been held `holdMs`; nothing takes over from a sighting. A blocked place (the group we just ran from
+//      stands that way) is left at once.
+//
+// Fights, hunts, calls, the defence, buffs, rests and breaks all come before the roam in decideRvr (rvr.ts): they take over
+// whenever they have something to do, and the roam picks up where it was. Rivers are one check, made once: every place is
+// on dry ground (placeOk), and the legs to it keep to dry ground (rvr.ts stepLeg); a swimmer is never hunted (rvr.ts).
+//
+// Replaces the pile from 2026-11-13 (weighted random places, looks and stays, 5-min areas, "roam near a friend", waves out to
+// sightings, waiting ashore), which flipped between its own rules every few seconds. Pure: state in memory.roam.
 
 import type { Point, Point3 } from '../types';
 import { BATTLEGROUND_LAYOUTS, clearOf, type PlayerRealm } from '../keeps';
 import type { Danger } from '../terrain';
 import { raidPlan } from '../siege';
 
-/** An approach to another realm's portal keep stands this far out from the keep (its guards reach about 4500). */
+/** An approach to a portal keep stands this far out from the keep toward the meeting point (its guards reach about 4500). */
 export const APPROACH = 7500;
 /** Spots round the Faste stand this far from its centre (outside its guards for a realm that doesn't hold it). */
 export const FASTE_RING = 5800;
@@ -22,10 +30,10 @@ export interface RoamPlace extends Point {
     key: string;
     /** What it is, for the reason. */
     what: string;
-    /** Base weight: a meeting place 1, a sighting more (roamPlaces). */
-    weight: number;
-    /** Whose side of the battleground it is on (sideOf): the roam's circuit goes side by side (roamCircuit). */
-    part?: PlayerRealm;
+    /** Whose side of the battleground it is on (sideOf); undefined off a known battleground (then every side has it). */
+    side?: PlayerRealm;
+    /** A sighting's time (ms): set only on sightings. */
+    at?: number;
 }
 
 /** An enemy sighting our realm made (director.ts Sighting): where, how many, when. */
@@ -35,41 +43,38 @@ export interface RoamSighting extends Point {
 }
 
 export interface RoamSettings {
-    /** Places farther than this from the group are left while nearer ones exist (no 20k crossings back and forth). */
-    maxLeg: number;
-    /** The last this many places aren't picked again. */
-    memory: number;
-    /** A place this near counts as reached. */
+    /** A place this near counts as passed. */
     reach: number;
-    /** How long the group stays at a place, at least and at most (ms). */
-    stayMin: number;
-    stayMax: number;
-    /** While it stays, it walks a small circle of this radius round the place, a step every stepMs. */
-    circle: number;
-    stepMs: number;
-    /** A sighting counts this long (ms), its weight fading to nothing. */
+    /** A place is held at least this long before a sighting takes over (no flips). */
+    holdMs: number;
+    /** A sighting counts this long (ms). */
     sightingMs: number;
-    /** A sighting's weight: this, plus one per enemy seen, at its freshest. */
-    sightingWeight: number;
-    /**
-     * An area: the group within this of where it started roaming there (memory.roam.area). After areaMs in one with no enemy seen
-     * in it (by us or our realm), it goes on to a place at least areaFar away, past maxLeg (the user at 19:51: "we're in the same
-     * area forever. There are no enemies here. We're going in circles for like 20 minutes").
-     */
-    areaRadius: number;
-    areaMs: number;
-    areaFar: number;
-    /** The circuit (roamCircuit): this many places on one realm's side, then on to the next side. */
-    partPlaces: number;
+    /** Only a sighting this near is worth turning for (no long crossings back and forth). */
+    sightingReach: number;
+    /** A place is given up after this, plus the walk at giveUpSpeed (units/s): stuck, or a detour that never ends. */
+    giveUpMs: number;
+    giveUpSpeed: number;
 }
 
-// No stop: a place is a waypoint, and on reaching it (reach) the group walks on to the next (the user, playing Niamh at 19:45, the
-// group standing 1-2 min at a sighting: "that's not human-like behaviour. You'd keep roaming"; on 8-18 s looks: "there shouldn't
-// be stops"). A stay and its circle steps come only with stayMax above 0 (settings of one's own).
-export const ROAM_SETTINGS: RoamSettings = {
-    maxLeg: 16_000, memory: 4, reach: 900, stayMin: 0, stayMax: 0, circle: 700, stepMs: 25_000, sightingMs: 300_000, sightingWeight: 2,
-    areaRadius: 5000, areaMs: 300_000, areaFar: 12_000, partPlaces: 2,
-};
+export const ROAM_SETTINGS: RoamSettings = { reach: 900, holdMs: 10_000, sightingMs: 300_000, sightingReach: 9000, giveUpMs: 30_000, giveUpSpeed: 100 };
+
+/** memory.roam */
+export interface RoamMemory {
+    /** Where we go now, since when, and until when before giving up. */
+    place: RoamPlace | null;
+    since: number;
+    until: number;
+    /** The circuit's current side (an index into it). */
+    side: number;
+    /** Circuit places passed on this lap of their side. */
+    done: string[];
+    /** Sighting cells passed, and when: a sighting there older than that is no news. */
+    passed: Record<string, number>;
+}
+
+export type RoamStep = { goal: Point; place: RoamPlace; reason: string };
+
+const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 
 /** Whose side of the battleground `p` is on: the realm of the nearest portal keep (undefined off a known battleground). */
 export function sideOf(regionId: number, p: Point): PlayerRealm | undefined {
@@ -78,178 +83,122 @@ export function sideOf(regionId: number, p: Point): PlayerRealm | undefined {
     return pks.reduce((a, b) => (dist(a, p) <= dist(b, p) ? a : b)).owner as PlayerRealm;
 }
 
-/**
- * The roam's circuit for `realm`: our own side first (enemies who came over), then the others, and round again (the user, playing
- * Niamh at 19:5x: "Roaming is: look for enemies on Hib's island, then Mid's, then Albion's").
- */
+/** The circuit for `realm`: our own side first (enemies who came over), then the others, and round again. */
 export function roamCircuit(realm: PlayerRealm): PlayerRealm[] {
     const order: PlayerRealm[] = ['hibernia', 'midgard', 'albion'];
     const i = Math.max(0, order.indexOf(realm));
     return [order[i]!, order[(i + 1) % 3]!, order[(i + 2) % 3]!];
 }
 
-/** memory.roam */
-export interface RoamMemory {
-    /** The place we go to, or stay at. */
-    place: RoamPlace | null;
-    /** When we reached it, and until when we stay. */
-    reachedAt?: number;
-    stayUntil?: number;
-    /** The circle's current step (index) and when it was taken. */
-    step?: number;
-    stepAt?: number;
-    /** Keys of the last places, newest last. */
-    last: string[];
-    /** Where the group's current area started, and when (RoamSettings.areaRadius). */
-    area?: Point & { since: number };
-    /** The circuit: the side we roam now (an index into it), and how many places on it we went to. */
-    part?: number;
-    inPart?: number;
-}
-
-const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
-
 /**
- * The battleground's meeting places for `realm`: `ring` (the old patrol's waypoints round the meeting point, already dry, level and
- * clear), where our realm's halves meet another's (BattlegroundLayout.pairs with our realm in the key), and each realm's bank by the
- * Faste's bridges (siege.ts raidPlan rallies). `ok` filters places (dry, clear of camps and keeps).
+ * The battleground's places for `realm`, each with its side: `ring` (the patrol ring round the meeting point), where our realm's
+ * halves meet another's (BattlegroundLayout.pairs), the approach to every portal keep (ours too: enemies come over), spots round
+ * the Faste, and each realm's bank by the Faste's bridges (siege.ts raidPlan rallies). `ok` keeps those dry and clear of keeps.
  */
-export function meetingPlaces(regionId: number, realm: PlayerRealm, ring: readonly Point3[], ok: (p: Point) => boolean): RoamPlace[] {
-    const out: RoamPlace[] = ring.map((p, i) => ({ key: `ring${i}`, what: 'the meeting ground', x: p.x, y: p.y, weight: 1 }));
+export function roamPlaces(regionId: number, realm: PlayerRealm, ring: readonly Point3[], ok: (p: Point) => boolean): RoamPlace[] {
+    const out: RoamPlace[] = ring.map((p, i) => ({ key: `ring${i}`, what: 'the meeting ground', x: p.x, y: p.y }));
     const bg = BATTLEGROUND_LAYOUTS[regionId];
     for (const [key, p] of Object.entries(bg?.pairs ?? {})) {
-        if (!key.split('|').includes(realm)) continue;
-        out.push({ key: `pair:${key}`, what: `where ${key.replace('|', ' and ')} meet`, x: p.x, y: p.y, weight: 1 });
+        if (key.split('|').includes(realm)) out.push({ key: `pair:${key}`, what: `where ${key.replace('|', ' and ')} meet`, x: p.x, y: p.y });
     }
-    // The user, 18:0x: "I would expect more variety: going by mid PK, alb PK, Faste." The approaches to the other realms' portal keeps
-    // (APPROACH out from the keep toward the meeting point, beyond its guards' reach) and spots round the Faste (FASTE_RING out).
     const meet = bg?.meet;
     for (const k of bg?.keeps ?? []) {
-        if (!k.portal || k.owner === realm || !meet) continue;
+        if (!k.portal || !meet) continue;
         const d = dist(k, meet) || 1;
+        const whose = k.owner === realm ? 'our' : `${k.owner}'s`;
         for (const [i, turn] of [0, 0.35, -0.35].entries()) {
             const a = Math.atan2(meet.y - k.y, meet.x - k.x) + turn;
-            out.push({ key: `pk:${k.owner}:${i}`, what: `the approach to ${k.owner}'s portal keep`, x: Math.round(k.x + Math.cos(a) * Math.min(APPROACH, d)), y: Math.round(k.y + Math.sin(a) * Math.min(APPROACH, d)), weight: 0.8 });
+            out.push({ key: `pk:${k.owner}:${i}`, what: `the approach to ${whose} portal keep`, x: Math.round(k.x + Math.cos(a) * Math.min(APPROACH, d)), y: Math.round(k.y + Math.sin(a) * Math.min(APPROACH, d)) });
         }
     }
     const faste = bg?.keeps.find(k => !k.portal);
     if (faste) for (let i = 0; i < 6; i++) {
         const a = i * Math.PI / 3 + 0.3;
-        out.push({ key: `faste:${i}`, what: "the Faste's surroundings", x: Math.round(faste.x + Math.cos(a) * FASTE_RING), y: Math.round(faste.y + Math.sin(a) * FASTE_RING), weight: 0.6 });
+        out.push({ key: `faste:${i}`, what: "the Faste's surroundings", x: Math.round(faste.x + Math.cos(a) * FASTE_RING), y: Math.round(faste.y + Math.sin(a) * FASTE_RING) });
     }
     for (const r of ['albion', 'midgard', 'hibernia'] as const) {
         const plan = raidPlan(r);
-        if (plan && plan.regionId === regionId) out.push({ key: `bank:${r}`, what: `${r === realm ? 'our' : `${r}'s`} bank by the Faste`, x: plan.rally.x, y: plan.rally.y, weight: r === realm ? 0.7 : 1 });
+        if (plan && plan.regionId === regionId) out.push({ key: `bank:${r}`, what: `${r === realm ? 'our' : `${r}'s`} bank by the Faste`, x: plan.rally.x, y: plan.rally.y });
     }
-    return out.filter(ok).map(p => ({ ...p, part: sideOf(regionId, p) }));
+    return out.filter(ok).map(p => ({ ...p, side: sideOf(regionId, p) }));
 }
 
-/** Sightings as places, their weight fading with age; none older than sightingMs. */
-export function sightingPlaces(sightings: readonly RoamSighting[], now: number, ok: (p: Point) => boolean, s: RoamSettings = ROAM_SETTINGS): RoamPlace[] {
+/** Fresh sightings (within sightingMs) as places, on dry ground (`ok`), by 2000-unit cell. */
+export function sightingPlaces(regionId: number, sightings: readonly RoamSighting[], now: number, ok: (p: Point) => boolean, s: RoamSettings = ROAM_SETTINGS): RoamPlace[] {
     return sightings
         .filter(x => now - x.at < s.sightingMs && ok(x))
-        .map(x => ({ key: `seen:${Math.round(x.x / 2000)}:${Math.round(x.y / 2000)}`, what: `where ${x.n} ${x.n === 1 ? 'enemy was' : 'enemies were'} seen ${Math.round((now - x.at) / 60_000)} min ago`, x: x.x, y: x.y, weight: (s.sightingWeight + x.n) * (1 - (now - x.at) / s.sightingMs) }));
+        .map(x => ({ key: `seen:${Math.round(x.x / 2000)}:${Math.round(x.y / 2000)}`, what: `where ${x.n} ${x.n === 1 ? 'enemy was' : 'enemies were'} seen ${Math.round((now - x.at) / 60_000)} min ago`, x: x.x, y: x.y, at: x.at, side: sideOf(regionId, x) }));
 }
 
-/** A place this near a friendly group counts as near it. */
-export const FRIEND_NEAR = 4500;
-/**
- * A place we stay at (looking about), or one already judged near the friend, holds while the friend is within this of it: the
- * friend walking in and out of FRIEND_NEAR flipped hibernia between the place and closing on it every 6-12 s (19:43, the user's
- * report through the player-feedback session).
- */
-export const STAY_FRIEND_FAR = 6000;
+const isSighting = (p: RoamPlace | null | undefined) => p?.at !== undefined;
 
-/**
- * The next place: weighted, at random, never the last `memory` ones nor where we stand. Where our realm saw enemies (a sighting,
- * key `seen:`) first, at any distance: the roam goes where the fighting is (the user at 19:51). Else from the meeting places
- * within maxLeg (the nearest few else); with `farFrom`, only those at least areaFar from that point, at any distance.
- */
-export function pickPlace(places: readonly RoamPlace[], centre: Point, last: readonly string[], rand: () => number, s: RoamSettings = ROAM_SETTINGS, friends: readonly Point[] = [], farFrom?: Point, part?: PlayerRealm): RoamPlace | null {
-    const fresh = places.filter(p => !last.includes(p.key) && dist(p, centre) > s.reach * 1.5);
-    const pool = fresh.length ? fresh : places.filter(p => dist(p, centre) > s.reach * 1.5);
-    if (!pool.length) return null;
-    const seen = pool.filter(p => p.key.startsWith('seen:') && (!farFrom || dist(p, farFrom) >= s.areaFar));
-    // The circuit's side (`part`), at any distance: no sighting, and the roam goes on round the realms' sides.
-    const onSide = part ? pool.filter(p => p.part === part && !p.key.startsWith('seen:')) : [];
-    const far = farFrom ? pool.filter(p => dist(p, farFrom) >= s.areaFar) : [];
-    const near = pool.filter(p => dist(p, centre) <= s.maxLeg);
-    const from = seen.length ? seen : onSide.length ? onSide : far.length ? far : near.length ? near : [...pool].sort((a, b) => dist(a, centre) - dist(b, centre)).slice(0, 2);
-    // Nearer is likelier: a long walk is worth it for a fresh sighting, less for an empty meeting place.
-    // And near a friendly group of ours (help.ts roamGoal keeps us within reach of one): three times as likely.
-    const w = from.map(p => p.weight / (1 + dist(p, centre) / 5000) * (friends.some(f => dist(f, p) <= FRIEND_NEAR) ? 3 : 1));
-    const total = w.reduce((a, b) => a + b, 0);
-    let r = rand() * total;
-    for (let i = 0; i < from.length; i++) { r -= w[i]!; if (r <= 0) return from[i]!; }
-    return from[from.length - 1]!;
+/** Rule 1, the place picker: a fresh sighting near us, else the nearest unpassed place on the circuit's side (turning to the next side when none is left). */
+export function nextPlace(r: RoamMemory, o: { centre: Point; places: readonly RoamPlace[]; sightings: readonly RoamPlace[]; circuit: readonly PlayerRealm[]; blocked?: (p: Point) => boolean }, s: RoamSettings = ROAM_SETTINGS): RoamPlace | null {
+    const away = (p: RoamPlace) => dist(p, o.centre) > s.reach && !o.blocked?.(p);
+    const nearest = (ps: readonly RoamPlace[]) => (ps.length ? ps.reduce((a, b) => (dist(a, o.centre) <= dist(b, o.centre) ? a : b)) : null);
+    const news = o.sightings.filter(p => away(p) && dist(p, o.centre) <= s.sightingReach && !((r.passed[p.key] ?? -Infinity) >= p.at!));
+    const seen = nearest(news);
+    if (seen) return seen;
+    const sides = o.circuit.length ? o.circuit : [undefined];
+    for (let turn = 0; turn <= sides.length; turn++) {
+        const side = sides[r.side % sides.length];
+        const left = o.places.filter(p => (p.side === side || p.side === undefined) && !r.done.includes(p.key) && away(p));
+        const pick = nearest(left);
+        if (pick) return pick;
+        // This side done: on to the next, its places fresh again.
+        r.side = (r.side + 1) % sides.length;
+        const next = sides[r.side];
+        r.done = r.done.filter(k => o.places.find(p => p.key === k)?.side !== next);
+    }
+    return null;
 }
 
-export type RoamStep =
-    | { kind: 'go'; goal: Point; place: RoamPlace; reason: string }
-    | { kind: 'stay'; goal: Point; place: RoamPlace; reason: string };
+/** Rule 2, the leave rule: whether to drop the current place now (for `better`, when there is one). */
+export function shouldLeave(r: RoamMemory, o: { centre: Point; now: number; better: RoamPlace | null; blocked?: (p: Point) => boolean }, s: RoamSettings = ROAM_SETTINGS): boolean {
+    const p = r.place;
+    if (!p) return true;
+    if (dist(o.centre, p) <= s.reach || o.now >= r.until || o.blocked?.(p)) return true;
+    return o.now - r.since >= s.holdMs && !isSighting(p) && isSighting(o.better);
+}
 
 /**
- * This tick's roam: go to the place, or stay at it (a step round a small circle every stepMs) until stayUntil, then pick the next.
- * `ok` checks a circle step (dry, clear). Null with no place at all (the caller patrols as before).
+ * This tick's roam: mark what we pass, keep the place unless the leave rule says go, else pick the next (rule 1). Null with no
+ * place at all (the caller patrols). `blocked`: a place not to walk toward now (the group we just ran from).
  */
-export function roamStep(mem: Record<string, any>, o: { centre: Point; places: readonly RoamPlace[]; now: number; rand?: () => number; ok?: (p: Point) => boolean; settings?: RoamSettings; friends?: readonly Point[]; sightings?: readonly RoamSighting[]; circuit?: readonly PlayerRealm[] }): RoamStep | null {
+export function roamStep(mem: Record<string, any>, o: { regionId: number; centre: Point; places: readonly RoamPlace[]; sightings?: readonly RoamSighting[]; circuit?: readonly PlayerRealm[]; now: number; ok?: (p: Point) => boolean; blocked?: (p: Point) => boolean; settings?: RoamSettings }): RoamStep | null {
     const s = o.settings ?? ROAM_SETTINGS;
-    const rand = o.rand ?? Math.random;
-    const r: RoamMemory = mem.roam ??= { place: null, last: [] };
+    const r: RoamMemory = mem.roam?.passed ? mem.roam : (mem.roam = { place: null, since: o.now, until: o.now, side: 0, done: [], passed: {} });
     const circuit = o.circuit ?? [];
-    const turn = () => { r.part = ((r.part ?? 0) + 1) % circuit.length; r.inPart = 0; };
-    const freshOn = (part: PlayerRealm) => o.places.some(p => p.part === part && !p.key.startsWith('seen:') && !r.last.includes(p.key) && dist(p, o.centre) > s.reach * 1.5);
-    // With a circuit: partPlaces places on a side, then the next side (one with nothing fresh is skipped); `onward` turns at once.
-    const next = (farFrom?: Point, onward = false) => {
-        if (r.place) { r.last = [...r.last.filter(k => k !== r.place!.key), r.place.key].slice(-s.memory); }
-        let part: PlayerRealm | undefined;
-        if (circuit.length) {
-            if (onward || (r.inPart ?? 0) >= s.partPlaces) turn();
-            for (let i = 0; i < circuit.length && !freshOn(circuit[(r.part ?? 0) % circuit.length]!); i++) turn();
-            part = circuit[(r.part ?? 0) % circuit.length];
-        }
-        r.place = pickPlace(o.places, o.centre, r.last, rand, s, o.friends ?? [], farFrom, part);
-        if (part && r.place?.part === part && !r.place.key.startsWith('seen:')) r.inPart = (r.inPart ?? 0) + 1;
-        r.reachedAt = undefined; r.stayUntil = undefined; r.step = undefined; r.stepAt = undefined;
-    };
-    const side = (p: RoamPlace) => (p.part && circuit.length && !p.key.startsWith('seen:') ? `, ${p.part === circuit[0] ? 'our' : `${p.part}'s`} side` : '');
-    // The area (areaRadius): areaMs in it with no enemy seen in it, and on to a place far off (areaFar), whatever we were going to.
-    if (!r.area || dist(o.centre, r.area) > s.areaRadius) r.area = { x: Math.round(o.centre.x), y: Math.round(o.centre.y), since: o.now };
-    const seenHere = Math.max(r.area.since, ...(o.sightings ?? []).filter(x => dist(x, r.area!) <= s.areaRadius).map(x => x.at));
-    if (o.now - seenHere >= s.areaMs) {
-        const left = r.area;
-        r.area = { x: Math.round(o.centre.x), y: Math.round(o.centre.y), since: o.now };
-        next(left, true);
-        if (r.place) return { kind: 'go', goal: r.place, place: r.place, reason: `roam: ${Math.round((o.now - seenHere) / 60_000)} min here with no enemy seen, far off to ${r.place.what}${side(r.place)} (${Math.round(r.place.x)}, ${Math.round(r.place.y)}), ${Math.round(dist(o.centre, r.place))} away` };
+    const sightings = sightingPlaces(o.regionId, o.sightings ?? [], o.now, o.ok ?? (() => true), s);
+    const was = r.place;
+    const reached = !!was && dist(o.centre, was) <= s.reach;
+    const gaveUp = !!was && !reached && o.now >= r.until;
+    // A sighting reached on another side: the circuit goes on from that side, its places fresh (no crossing back).
+    if (reached && isSighting(was) && was!.side && circuit.includes(was!.side) && circuit[r.side % circuit.length] !== was!.side) {
+        r.side = circuit.indexOf(was!.side);
+        r.done = r.done.filter(k => o.places.find(p => p.key === k)?.side !== was!.side);
     }
-    // A place that's gone from the list (a sighting faded) is still where we go: we picked it.
-    if (!r.place || (r.stayUntil !== undefined && o.now >= r.stayUntil)) next();
-    if (!r.place) return null;
-    const place = r.place;
-    const d = dist(o.centre, place);
-    if (r.reachedAt === undefined && d > s.reach) {
-        return { kind: 'go', goal: place, place, reason: `roam: to ${place.what}${side(place)} (${Math.round(place.x)}, ${Math.round(place.y)}), ${Math.round(d)} away` };
-    }
-    // No stay: past it, on to the next place at once (the group never stands while it roams).
-    if (r.reachedAt === undefined && s.stayMax <= 0) {
-        next();
-        const on = r.place as RoamPlace | null;
-        if (on) return { kind: 'go', goal: on, place: on, reason: `roam: past ${place.what}, on to ${on.what}${side(on)} (${Math.round(on.x)}, ${Math.round(on.y)}), ${Math.round(dist(o.centre, on))} away` };
-        r.place = place;
-    }
-    if (r.reachedAt === undefined) {
-        r.reachedAt = o.now;
-        r.stayUntil = o.now + s.stayMin + Math.round(rand() * (s.stayMax - s.stayMin));
-        r.step = 0;
-        r.stepAt = o.now;
-    }
-    // Round a small circle, a step every stepMs (a group looking about, not standing in formation).
-    if (o.now - (r.stepAt ?? o.now) >= s.stepMs) { r.step = ((r.step ?? 0) + 1) % 4; r.stepAt = o.now; }
-    const a = (r.step ?? 0) * Math.PI / 2 + (place.x % 7);
-    let goal: Point = r.step ? { x: Math.round(place.x + Math.cos(a) * s.circle), y: Math.round(place.y + Math.sin(a) * s.circle) } : { x: place.x, y: place.y };
-    if (o.ok && !o.ok(goal)) goal = { x: place.x, y: place.y };
-    const left = Math.max(0, Math.round(((r.stayUntil ?? o.now) - o.now) / 1000));
-    return { kind: 'stay', goal, place, reason: `roam: at ${place.what}, looking about, on in ${left} s` };
+    // Passing through counts: every place we come within reach of, on the way to anything.
+    for (const p of o.places) if (dist(p, o.centre) <= s.reach && !r.done.includes(p.key)) r.done.push(p.key);
+    for (const p of sightings) if (dist(p, o.centre) <= s.reach) r.passed[p.key] = o.now;
+    for (const [k, at] of Object.entries(r.passed)) if (o.now - at > s.sightingMs) delete r.passed[k];
+    if (gaveUp && !isSighting(was) && !r.done.includes(was!.key)) r.done.push(was!.key);
+    if (gaveUp && isSighting(was)) r.passed[was!.key] = o.now;
+    const pickArgs = { centre: o.centre, places: o.places, sightings, circuit, blocked: o.blocked };
+    const better = was && !isSighting(was) && o.now - r.since >= s.holdMs ? nextPlace({ ...r, done: [...r.done] }, pickArgs, s) : null;
+    if (!shouldLeave(r, { centre: o.centre, now: o.now, better, blocked: o.blocked }, s)) return step(was!, o.centre, circuit, 'to');
+    const place = nextPlace(r, pickArgs, s);
+    r.place = place;
+    if (!place) return null;
+    r.since = o.now;
+    r.until = o.now + s.giveUpMs + dist(o.centre, place) / s.giveUpSpeed * 1000;
+    const how = !was ? 'to' : reached ? `past ${was.what}, on to` : gaveUp ? `gave up on ${was.what}, on to` : isSighting(place) && !isSighting(was) ? 'turning for' : 'keeping off the group we ran from, to';
+    return step(place, o.centre, circuit, how);
+}
+
+function step(place: RoamPlace, centre: Point, circuit: readonly PlayerRealm[], how: string): RoamStep {
+    const side = place.side && circuit.length ? `, ${place.side === circuit[0] ? 'our' : `${place.side}'s`} side` : '';
+    return { goal: place, place, reason: `roam: ${how} ${place.what}${side} (${Math.round(place.x)}, ${Math.round(place.y)}), ${Math.round(dist(centre, place))} away` };
 }
 
 /** Keep `p` usable as a roam place: dry, level enough and clear of camps and keeps (by `dangers`). */

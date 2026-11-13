@@ -1224,12 +1224,11 @@ describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('decideRvr with stayDry: 
     const decide = (contacts: Contact[], o: { stayDry?: boolean; memory?: Record<string, any>; now?: number } = {}) =>
         decideRvr(ctx(picture(team({}, bank, T), contacts), { memory: o.memory ?? { realm: 'hibernia' }, now: o.now, settings: { patrol: null, stayDry: o.stayDry ?? true } }));
 
-    test('no fight with those swimming: the group waits for them on dry ground, facing them; with stayDry off, it fights', () => {
+    test('no fight and no hunt into the water: the roam goes on along its dry legs; with stayDry off, it fights', () => {
         const u = decide(swim(40_900));
         expect(u.phase).toBe('travel');
-        expect(u.reason).toMatch(/wait ashore: 3 enemies swimming/);
+        expect(u.reason).toMatch(/^roam: /);
         expect(isDry(T, u.anchor!)).toBe(true);
-        expect(u.facing!.x).toBeGreaterThan(40_900);
         expect(decide(swim(40_900), { stayDry: false }).reason).toMatch(/^(fight|hunt)/);
     });
 
@@ -1244,28 +1243,16 @@ describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('decideRvr with stayDry: 
         expect(decide(swim(39_400)).phase).toBe('engage');
     });
 
-    test('the wait ends after ASHORE_WAIT_MS with them still swimming, and starts again after they were gone', () => {
+    test('swimmers in and out of sight every other second: the roam all along, one place, no flips (20:54: "they are flipping again")', () => {
+        // 25 s: the group here never moves, and a place not reached in 30 s plus its walk is given up.
         const memory: Record<string, any> = { realm: 'hibernia' };
-        expect(decide(swim(40_900), { memory, now: 1000 }).reason).toMatch(/wait ashore/);
-        expect(decide(swim(40_900), { memory, now: 40_000 }).reason).toMatch(/wait ashore/);
-        expect(decide(swim(40_900), { memory, now: 47_000 }).reason).not.toMatch(/wait ashore/);
-        // Gone for a tick (a contact flickering at the edge of sight): no new wait.
-        decide([], { memory, now: 50_000 });
-        expect(decide(swim(40_900), { memory, now: 51_000 }).reason).not.toMatch(/wait ashore/);
-        // Gone for ASHORE_GONE_MS: the next ones start a new wait.
-        decide([], { memory, now: 62_000 });
-        expect(decide(swim(40_900), { memory, now: 63_000 }).reason).toMatch(/wait ashore/);
-    });
-
-    test('swimmers flickering out of sight every other tick: the wait still ends after ASHORE_WAIT_MS', () => {
-        // Field mode, 2026-11-11: Midgard switched between waiting and patrolling every second for 5 minutes.
-        const memory: Record<string, any> = { realm: 'hibernia' };
-        let waited = 0;
-        for (let t = 1000; t < 120_000; t += 1000) {
+        const keys = new Set<string>();
+        for (let t = 1000; t < 26_000; t += 1000) {
             const d = decide(t % 2000 ? swim(40_900) : [], { memory, now: t });
-            if (/wait ashore/.test(d.reason)) waited = t;
+            expect(d.reason).toMatch(/^roam: /);
+            keys.add(memory.roam.place.key);
         }
-        expect(waited).toBeLessThan(1000 + 45_000 + 1000);
+        expect(keys.size).toBe(1);
     });
 });
 
@@ -1435,47 +1422,6 @@ describe('decideRvr: help in time (S3, 2026-11-13)', () => {
         d = decideRvr(ctx(picture(team(), seven), { memory: { ownCalls: own(8_500, 4) } }));
         expect(d.reason).toMatch(/^hunt 7 enemies/);
     });
-
-    test('roams within reach: farther than 4500 from the nearest friendly unit, it closes to 3000 first, then patrols', () => {
-        const friend = (x: number, alive = 6) => ({ unit: 'hibernia-2', x, y: 10_000, z: 0, alive, size: 6, fight: false, phase: 'travel' });
-        const memory: Record<string, any> = { realmUnits: [friend(20_000)] };
-        const d = decideRvr(ctx(picture(team()), { memory }));
-        expect(d.reason).toContain('roam near: hibernia-2');
-        expect(d.anchor!.x).toBeGreaterThan(9_700);
-        // Within 4500 but closing: on to 3000.
-        memory.realmUnits = [friend(13_900)];
-        expect(decideRvr(ctx(picture(team()), { memory })).reason).toContain('roam near');
-        memory.realmUnits = [friend(12_500)];
-        expect(decideRvr(ctx(picture(team()), { memory })).reason).toContain('patrol');
-        // Not closing again until past 4500; a stealther alone (1 living) is no friend to roam by; roam: false is off.
-        memory.realmUnits = [friend(13_900)];
-        expect(decideRvr(ctx(picture(team()), { memory })).reason).toContain('patrol');
-        expect(decideRvr(ctx(picture(team()), { memory: { realmUnits: [friend(20_000, 1)] } })).reason).toContain('patrol');
-        expect(decideRvr(ctx(picture(team()), { memory: { realmUnits: [friend(20_000)] }, settings: { roam: false } })).reason).toContain('patrol');
-    });
-});
-
-describe('decideRvr: roaming by a main group first (S3, live 13:24)', () => {
-    test('a main group out is the friend to roam by, even farther than a trio', () => {
-        const spot = (unit: string, x: number, size: number) => ({ unit, x, y: 10_000, z: 0, alive: size, size, fight: false, phase: 'travel' });
-        const d = decideRvr(ctx(picture(team()), { memory: { realmUnits: [spot('hibernia-s1', 15_000, 3), spot('hibernia-2', 20_000, 6)] } }));
-        expect(d.reason).toContain('roam near: hibernia-2');
-        expect(decideRvr(ctx(picture(team()), { memory: { realmUnits: [spot('hibernia-s1', 15_000, 3)] } })).reason).toContain('roam near: hibernia-s1');
-    });
-});
-
-describe('decideRvr: a roam place we stay at holds while the friend is within 6000 (19:43: hibernia flipped every 6-12 s)', () => {
-    // In Thidranki (a roam needs a battleground's places), round 30000, 30000: the centre is 29680, 30000.
-    const T = 252, base = { x: 30_000, y: 30_000 };
-    const spot = (x: number) => ({ unit: 'hibernia-2', x, y: 30_000, z: 0, alive: 6, size: 6, fight: false, phase: 'travel' });
-    const staying = (now: number) => ({ place: { key: 'seen:1', what: 'where 3 enemies were seen', x: 29_680, y: 30_000, weight: 2 }, reachedAt: now - 10_000, stayUntil: now + 50_000, last: ['seen:1'] });
-    test('the friend 4800 off: we stay; 6500 off: we close on it', () => {
-        const p = picture(team({}, base, T));
-        const near = decideRvr(ctx(p, { settings: { patrol: null }, memory: { realmUnits: [spot(29_680 + 4_800)], roam: staying(p.at) } }));
-        expect(near.reason).toMatch(/^roam: at where 3 enemies were seen, looking about/);
-        const far = decideRvr(ctx(p, { settings: { patrol: null }, memory: { realmUnits: [spot(29_680 + 6_500)], roam: staying(p.at) } }));
-        expect(far.reason).toMatch(/^roam near: hibernia-2/);
-    });
 });
 
 describe('decideRvr: an enemy in sight stays in sight 1000 past huntRadius (19:54: wait ashore and roam near took turns each second)', () => {
@@ -1543,14 +1489,3 @@ describe('decideRvr: buffed before leaving home, never a fight with our own real
     });
 });
 
-describe('decideRvr: closing on a friend gives up when it gets no nearer (S3, live 17:55: hibernia stood still 3500-3900 out)', () => {
-    test('no nearer by 200 in 20 s: roam on, and no closing for 2 min', () => {
-        const friend = { unit: 'hibernia-2', x: 20_000, y: 10_000, z: 0, alive: 6, size: 6, fight: false, phase: 'travel' };
-        const memory: Record<string, any> = { realmUnits: [friend] };
-        const at = (now: number) => decideRvr({ ...ctx(picture(team(), [], {}, now), { memory }), now });
-        expect(at(0).reason).toContain('roam near');
-        expect(at(10_000).reason).toContain('roam near');
-        expect(at(21_000).reason).not.toContain('roam near');
-        expect(at(60_000).reason).not.toContain('roam near');
-    });
-});

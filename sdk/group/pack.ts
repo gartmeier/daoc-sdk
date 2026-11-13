@@ -34,14 +34,12 @@ import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import { countFor, groupSize, type Count } from './size';
 import type { ColumnOrder, Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
-import { drySpot, isDry, isWet, waitAshore } from './water';
+import { drySpot, isDry, isWet } from './water';
 
 export { focusHealed, pickPackFocus } from './rvr';
 
 /** A rebuff waits for buffs still owed (planBuffs) at most this long from its start; past it, they catch up on the way. */
 export const REBUFF_MAX_MS = 60_000;
-/** The pack's waitAshore memory key: decideRvr, run for its quiet times, has its own. */
-const PACK_ASHORE = 'packAshoreSince';
 
 export interface PackOptions {
     /** Stop this far from the nearest enemy of a group we mean to raid. */
@@ -79,6 +77,11 @@ export interface PackOptions {
     phantomMs: number;
     /** Refuse more free enemies than this round their nearest. */
     maxFoes: number;
+    /**
+     * Outnumbered: free enemy players within reach (every realm) at least this many more than our main body. No raid starts on
+     * them, and one going leaves (the user, playing Niamh at 20:09: "5 free of 6 vs 3", "6 free of 7 vs 3", four of us dead).
+     */
+    outnumbered?: number;
     /** ... counting those within this of it. */
     crowdRadius: number;
     /** How long the burst lasts ... */
@@ -165,7 +168,7 @@ export const PACK_OPTIONS: PackOptions = {
     // minTogether 0.55 (night 2026-11-11): 3 at five as before, 4 at eight, where 0.6 sent five of eight home (W2's 8 v 8: an 8-pack ran after losing 4).
     standoff: 1500, reach: 1500, openAt: 1450, idleMs: 3000, waitMs: 0, minPack: { share: 0.6 }, minTogether: { share: 0.55 },
     // User, live: fights may be joined head on, the first version avoided all of them. Only a real crowd is refused.
-    boltRun: 0, boltMs: 15_000, boltCoolMs: 30_000, frozenMs: 20_000, phantomMs: 120_000, maxFoes: 8, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
+    boltRun: 0, boltMs: 15_000, boltCoolMs: 30_000, frozenMs: 20_000, phantomMs: 120_000, maxFoes: 8, outnumbered: 2, crowdRadius: 1000, raidReady: { hp: 50, mana: 25 }, restClear: 2500,
     raidMs: 8000, finishMs: 4000, finishHp: 25, closeCount: { share: 0.6 }, closeIn: 700,
     pullBack: 1500, pullMs: 6000, maxChasers: 2, chaseGap: 800, maxLegs: 0, killMs: 12_000, preyHp: 40, healedBy: 30, droppedMs: 15_000,
     leave: 2000, cooldownMs: 0,
@@ -294,6 +297,10 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const raiding = raidNow(mem, realm, regionId);
     const keeps = keepDangers(regionId, realm, raiding ? { ...s, raid: raiding.plan.keep } : s);
     const inKeep = (c: Point) => !clearOf(c, keeps);
+    // Enemy players under the guards of a keep not ours are no fight unless on us, raiding or not: a fight there brings the guards
+    // (the user, 20:09, raiding the Faste: "then we got the guards' adds"). The raid's own keep is in this one too.
+    const guarded = raiding ? keepDangers(regionId, realm, s) : keeps;
+    const underGuards = (c: Point) => !clearOf(c, guarded);
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, leader.z, { radius: 8000 });
     const dry = staysDry(s);
     const trip: Trip = { mem, now, regionId, level, avoid: keeps, travelLeg: s.travelLeg, zAt, dry };
@@ -313,7 +320,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // With stayDry, one swimming that isn't fighting us waits until it is ashore. User, live 2026-11-09: with the pair spot on
     // Hibernia's bank, Midgard swam across and the pack hunted it in the river (us 10-43 % of fight time wet, them 60-100 %).
     const swimming = (c: Contact) => dry && !onUs(c) && isWet(regionId, c);
-    const foes = p.contacts.filter(c => players(c) && !mem.phantoms[c.objectId] && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !inKeep(c)) && !swimming(c));
+    const foes = p.contacts.filter(c => players(c) && !mem.phantoms[c.objectId] && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !underGuards(c)) && !swimming(c));
     // Where each enemy player was seen, over time: a lost prey's trail and way in (tactics/ambush.ts; decideRvr follows it).
     if (s.ambush) noteTracks((mem.ambushTracks ??= {}) as Tracks, p.contacts.filter(c => players(c) && !c.stale && c.regionId === regionId), now);
     // A runner (an enemy that ran out of reach of our engage RUNNER_OUTS times lately) is let go: no hunt, stalk, raid or focus on it
@@ -478,6 +485,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         const close = free.filter(c => casters.some(m => dist(m, c) <= k.closeIn)).length;
         const done = elapsed >= k.raidMs + (focus && focus.hp < k.finishHp ? k.finishMs : 0);
         if (close >= k.closeCount) return startPull(`${close} enemies on our casters`);
+        if (k.outnumbered !== undefined && reachable.length >= main.length + k.outnumbered) return startLeave(`outnumbered: ${reachable.length} free in reach vs ${main.length}`);
         // Nobody left in reach: on with the stalk, which finds the next target.
         if (!foes.length || (!reachable.length && elapsed >= k.idleMs)) mem.pack = 'stalk';
         else {
@@ -591,15 +599,10 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             }
             mem.hunted = undefined;
         }
-        // Only enemies swimming in sight: wait for them on dry ground, facing them, instead of patrolling on (waitAshore).
-        const wet = p.contacts.filter(c => players(c) && swimming(c) && !c.stale && isAlive(c) && c.regionId === regionId && !inKeep(c) && dist(c, centre) <= s.huntRadius);
-        if (waitAshore(mem, wet.length, now, PACK_ASHORE)) {
-            const them = centroid(wet);
-            return say({ ...none, phase: 'travel', anchor: stay, facing: { x: Math.round(them.x), y: Math.round(them.y) }, objective: `wait for ${wet.length} swimming`, reason: `wait ashore: ${wet.length} swimming ${Math.round(dist(centre, them))} away` });
-        }
+        // Only enemies swimming in sight (or none): rvr-roam's calm side roams on along its dry legs, as decideRvr does (no
+        // waiting on the bank: it flipped with the roam every second, 2026-11-13).
         return say(calm());
     }
-    mem[PACK_ASHORE] = undefined;
     const lead = seen[0]!;
     const d = dist(lead, centre);
     const onUsNow = seen.some(onUs);
@@ -651,8 +654,10 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         stepLeg(trip, 'prey', lead, { from: centre, movers: main, replan: 500 });
         return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: { x: lead.x, y: lead.y }, objective: `hunt ${inSight.length} stragglers`, reason: `hunt ${tag(lead)}, ${Math.round(d)} away, ${inSight.length} in sight vs ${main.length}` });
     }
+    const inReach = free.filter(c => dist(c, centre) <= k.reach).length;
     const refuse = main.length < k.minPack ? `only ${main.length} together`
         : crowd > k.maxFoes ? `${crowd} enemies together`
+        : k.outnumbered !== undefined && inReach >= main.length + k.outnumbered ? `outnumbered: ${inReach} free in reach vs ${main.length}`
         : cooling && d > k.openAt && !onUsNow ? 'still cooling down'
         : ctx.windingDown ? 'time is up'
         : null;

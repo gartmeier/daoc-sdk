@@ -2,124 +2,176 @@ import { describe, expect, test } from 'bun:test';
 import { picture, report } from '../fixtures';
 import { decideRvr, defaultPatrol, RVR_SETTINGS, THIDRANKI, type RvrSettings } from '../rvr';
 import { mergeSettings, type CoordinatorContext } from '../strategy';
-import type { GroupPicture, MemberReport } from '../types';
-import { roamGoal } from './help';
-import { meetingPlaces, pickPlace, roamCircuit, sideOf, ROAM_SETTINGS, roamStep, sightingPlaces, type RoamPlace } from './roam';
+import type { GroupPicture, MemberReport, Point } from '../types';
+import type { PlayerRealm } from '../keeps';
+import { nextPlace, roamCircuit, roamPlaces, roamStep, ROAM_SETTINGS, shouldLeave, sideOf, type RoamMemory, type RoamPlace } from './roam';
 
-const place = (key: string, x: number, y: number, weight = 1): RoamPlace => ({ key, what: key, x, y, weight });
-const seq = (...xs: number[]) => { let i = 0; return () => xs[i++ % xs.length]!; };
+const place = (key: string, x: number, y: number, side?: PlayerRealm): RoamPlace => ({ key, what: key, x, y, side });
+const fresh = (): RoamMemory => ({ place: null, since: 0, until: 0, side: 0, done: [], passed: {} });
+const seen = (x: number, y: number, at: number, n = 3) => ({ x, y, n, at });
+const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 
-describe('the roam (S3; the user: "we\'re doing the same back and forth every time")', () => {
-    test('pickPlace: never one of the last few nor where we stand; within a leg\'s reach while one is; weighted', () => {
-        const ps = [place('a', 1000, 0), place('b', 6000, 0), place('c', 30_000, 0), place('here', 100, 0)];
-        expect(pickPlace(ps, { x: 0, y: 0 }, ['a'], () => 0)?.key).toBe('b');
-        // c is 30k off: never while a and b are within 16000.
-        for (const r of [0, 0.3, 0.6, 0.99]) expect(pickPlace(ps, { x: 0, y: 0 }, [], () => r)?.key).not.toBe('c');
-        // A fresh big sighting outweighs an empty meeting place at the same distance.
-        const w = [place('meet', 5000, 0, 1), place('seen', -5000, 0, 8)];
-        const picks = Array.from({ length: 50 }, (_, i) => pickPlace(w, { x: 0, y: 0 }, [], () => i / 50)?.key);
-        expect(picks.filter(k => k === 'seen').length).toBeGreaterThan(35);
+describe('the roam\'s place picker (rule 1)', () => {
+    const sides: PlayerRealm[] = ['hibernia', 'midgard', 'albion'];
+    const ps = [place('h1', 2000, 0, 'hibernia'), place('h2', 6000, 0, 'hibernia'), place('m1', 20_000, 0, 'midgard'), place('m2', 24_000, 0, 'midgard'), place('a1', 0, 20_000, 'albion')];
+    const args = (centre: Point, sightings: RoamPlace[] = []) => ({ centre, places: ps, sightings, circuit: sides });
+
+    test('the nearest place on the current side we have not passed; that side done, the next side', () => {
+        const r = fresh();
+        expect(nextPlace(r, args({ x: 0, y: 0 }))?.key).toBe('h1');
+        r.done = ['h1'];
+        expect(nextPlace(r, args({ x: 2000, y: 0 }))?.key).toBe('h2');
+        r.done = ['h1', 'h2'];
+        expect(nextPlace(r, args({ x: 6000, y: 0 }))?.key).toBe('m1');
+        expect(r.side).toBe(1);
     });
 
-    test('pickPlace: a sighting first, at any distance (the user at 19:51: "There are no enemies here")', () => {
-        const ps = [place('meet', 3000, 0), place('seen:1', 30_000, 0, 0.5)];
-        for (const r of [0, 0.5, 0.99]) expect(pickPlace(ps, { x: 0, y: 0 }, [], () => r)?.key).toBe('seen:1');
+    test('round again: after the last side our own, its places fresh again', () => {
+        const r = { ...fresh(), side: 2, done: ['a1', 'h1', 'h2'] };
+        expect(nextPlace(r, args({ x: 0, y: 20_000 }))?.key).toBe('h1');
+        expect(r.side).toBe(0);
+        expect(r.done).toEqual(['a1']);
     });
 
-    test('roamStep: 5 min in one area with no enemy seen in it, then a place at least 12000 off', () => {
+    test('a fresh sighting near us comes first; one beyond sightingReach, or one we passed since, does not', () => {
+        const near: RoamPlace = { ...place('seen:1:1', 4000, 3000, 'hibernia'), at: 1000 };
+        const far: RoamPlace = { ...place('seen:9:9', 0, ROAM_SETTINGS.sightingReach + 2000, 'albion'), at: 1000 };
+        expect(nextPlace(fresh(), args({ x: 0, y: 0 }, [far, near]))?.key).toBe('seen:1:1');
+        expect(nextPlace(fresh(), args({ x: 0, y: 0 }, [far]))?.key).toBe('h1');
+        const r = { ...fresh(), passed: { 'seen:1:1': 2000 } };
+        expect(nextPlace(r, args({ x: 0, y: 0 }, [near]))?.key).toBe('h1');
+        // Seen again there after we passed: news again.
+        expect(nextPlace(r, args({ x: 0, y: 0 }, [{ ...near, at: 3000 }]))?.key).toBe('seen:1:1');
+    });
+
+    test('never where we stand, never a blocked place', () => {
+        expect(nextPlace(fresh(), args({ x: 2100, y: 0 }))?.key).toBe('h2');
+        expect(nextPlace(fresh(), { ...args({ x: 0, y: 0 }), blocked: p => p.x < 3000 })?.key).toBe('h2');
+    });
+});
+
+describe('the roam\'s leave rule (rule 2)', () => {
+    const goal = place('m1', 20_000, 0, 'midgard');
+    const sighting: RoamPlace = { ...place('seen:1:1', 4000, 0), at: 0 };
+    const held = (since: number, p: RoamPlace = goal): RoamMemory => ({ ...fresh(), place: p, since, until: since + 300_000 });
+
+    test('a place holds 10 s against a sighting, then the sighting takes over; nothing else takes over', () => {
+        expect(shouldLeave(held(0), { centre: { x: 0, y: 0 }, now: 9_000, better: sighting })).toBe(false);
+        expect(shouldLeave(held(0), { centre: { x: 0, y: 0 }, now: 11_000, better: sighting })).toBe(true);
+        expect(shouldLeave(held(0), { centre: { x: 0, y: 0 }, now: 60_000, better: place('h1', 100, 0) })).toBe(false);
+        // A sighting we go to is never left for another.
+        expect(shouldLeave(held(0, sighting), { centre: { x: 10_000, y: 0 }, now: 60_000, better: { ...sighting, key: 'seen:2:2', at: 50_000 } })).toBe(false);
+    });
+
+    test('passed (within reach), given up (too long on the way) or blocked: left at once', () => {
+        expect(shouldLeave(held(0), { centre: { x: 19_200, y: 0 }, now: 1000, better: null })).toBe(true);
+        expect(shouldLeave(held(0), { centre: { x: 0, y: 0 }, now: 300_001, better: null })).toBe(true);
+        expect(shouldLeave(held(0), { centre: { x: 0, y: 0 }, now: 1000, better: null, blocked: () => true })).toBe(true);
+    });
+});
+
+describe('roamStep', () => {
+    const ps = [place('a', 5000, 0), place('b', 10_000, 0), place('c', 15_000, 0)];
+
+    test('no stop: reaching a place goes straight on to the next in the same tick (the user: "there shouldn\'t be stops")', () => {
         const mem: Record<string, any> = {};
-        const ps = [place('a', 2000, 0), place('b', -2000, 0), place('c', 0, 2500), place('far', 20_000, 0)];
-        roamStep(mem, { centre: { x: 0, y: 0 }, places: ps, now: 0, rand: seq(0) });
-        // A sighting in the area 2 min in keeps it fresh until 7 min.
-        const sightings = [{ x: 1000, y: 0, n: 2, at: 120_000 }];
-        expect(roamStep(mem, { centre: { x: 100, y: 0 }, places: ps, now: 400_000, rand: seq(0), sightings })!.reason).not.toMatch(/far off/);
-        const r = roamStep(mem, { centre: { x: 100, y: 0 }, places: ps, now: 421_000, rand: seq(0), sightings })!;
-        expect(r.reason).toMatch(/min here with no enemy seen, far off/);
-        expect(r.place.key).toBe('far');
+        let r = roamStep(mem, { regionId: 1, centre: { x: 0, y: 0 }, places: ps, now: 0 })!;
+        expect(r.place.key).toBe('a');
+        expect(r.reason).toMatch(/^roam: to a /);
+        r = roamStep(mem, { regionId: 1, centre: { x: 4300, y: 0 }, places: ps, now: 30_000 })!;
+        expect(r.place.key).toBe('b');
+        expect(r.reason).toMatch(/^roam: past a, on to b /);
     });
 
-    test('roamGoal: only a friend out roaming or fighting, never one resting (19:51: hibernia closed on hibernia-2 resting)', () => {
-        const friend = (phase: string | null) => ({ realmUnits: [{ unit: 'hibernia-2', x: 8000, y: 0, z: 0, alive: 6, size: 6, fight: false, phase }] });
-        expect(roamGoal(friend('travel'), { x: 0, y: 0 }, null, undefined, 0)?.friend.unit).toBe('hibernia-2');
-        expect(roamGoal(friend('recover'), { x: 0, y: 0 }, null, undefined, 0)).toBeNull();
-        expect(roamGoal(friend('idle'), { x: 0, y: 0 }, null, undefined, 0)).toBeNull();
+    test('passing through a place on the way counts: it is not gone to again this lap', () => {
+        const mem: Record<string, any> = {};
+        expect(roamStep(mem, { regionId: 1, centre: { x: 0, y: 0 }, places: ps, now: 0 })!.place.key).toBe('a');
+        // Pulled off by a hunt, the group passes b: done, though a is still where it goes.
+        expect(roamStep(mem, { regionId: 1, centre: { x: 10_100, y: 0 }, places: ps, now: 5_000 })!.place.key).toBe('a');
+        expect(mem.roam.done).toContain('b');
+        expect(roamStep(mem, { regionId: 1, centre: { x: 4_500, y: 0 }, places: ps, now: 30_000 })!.place.key).toBe('c');
     });
 
-    test("the circuit (the user: look for enemies on Hib's island, then Mid's, then Albion's): two places a side, ours first, round again", () => {
+    test('a sighting near us: taken after the 10 s hold; reached on another side, the circuit goes on from that side', () => {
+        const sides: PlayerRealm[] = ['hibernia', 'midgard', 'albion'];
+        const T = THIDRANKI;
+        const places = [place('h1', 30_000, 28_000, 'hibernia'), place('m1', 50_000, 20_000, 'midgard'), place('m2', 56_000, 20_000, 'midgard')];
+        const spot = { x: 38_000, y: 27_000 };
+        expect(sideOf(T, spot)).toBe('midgard');
+        const s = [seen(spot.x, spot.y, 4000)];
+        const mem: Record<string, any> = {};
+        const go = (centre: Point, now: number, sightings: typeof s = []) => roamStep(mem, { regionId: T, centre, places, sightings, circuit: sides, now })!;
+        expect(go({ x: 30_000, y: 20_000 }, 0).place.key).toBe('h1');
+        expect(go({ x: 32_000, y: 23_000 }, 5_000, s).place.key).toBe('h1');
+        const turned = go({ x: 33_000, y: 24_000 }, 11_000, s);
+        expect(turned.place.key).toMatch(/^seen:/);
+        expect(turned.reason).toMatch(/^roam: turning for where 3 enemies were seen/);
+        const on = go(spot, 40_000, s);
+        expect(mem.roam.side).toBe(1);
+        expect(on.place.key).toBe('m1');
+    });
+
+    test('a place we never get to is given up (stuck or a detour that never ends), and not picked again this lap', () => {
+        const mem: Record<string, any> = {};
+        roamStep(mem, { regionId: 1, centre: { x: 0, y: 0 }, places: ps, now: 0 });
+        const until = mem.roam.until;
+        const r = roamStep(mem, { regionId: 1, centre: { x: 100, y: 0 }, places: ps, now: until + 1 })!;
+        expect(r.reason).toMatch(/^roam: gave up on a, on to b/);
+        expect(mem.roam.done).toContain('a');
+    });
+});
+
+describe('the roam in Thidranki: the circuit over the realms\' sides (the user: "Hib\'s island, then Mid\'s, then Albion\'s")', () => {
+    const ring = defaultPatrol(THIDRANKI, 'hibernia', 24);
+    const ps = roamPlaces(THIDRANKI, 'hibernia', ring, () => true);
+
+    test('places on every side, our own portal keep\'s approach among ours', () => {
         expect(roamCircuit('hibernia')).toEqual(['hibernia', 'midgard', 'albion']);
-        expect(sideOf(THIDRANKI, { x: 18_000, y: 19_000 })).toBe('hibernia');
-        const ring = defaultPatrol(THIDRANKI, 'hibernia', 24);
-        const ps = meetingPlaces(THIDRANKI, 'hibernia', ring, () => true);
-        for (const side of ['hibernia', 'midgard', 'albion']) expect(ps.some(p => p.part === side)).toBe(true);
+        expect(roamCircuit('albion')).toEqual(['albion', 'hibernia', 'midgard']);
+        for (const side of ['hibernia', 'midgard', 'albion']) expect(ps.some(p => p.side === side)).toBe(true);
+        expect(ps.some(p => p.key.startsWith('pk:hibernia') && p.side === 'hibernia')).toBe(true);
+        expect(new Set(ps.filter(p => p.key.startsWith('pk:')).map(p => p.key.split(':')[1]))).toEqual(new Set(['hibernia', 'midgard', 'albion']));
+    });
+
+    test('walked out from our portal keep: each side in turn, every place once a lap, moving all the time, no short hops back', () => {
         const mem: Record<string, any> = {};
-        const sides: string[] = [];
-        let centre = { x: 18_000, y: 19_000 };
-        for (let i = 0; i < 9; i++) {
-            const r = roamStep(mem, { centre, places: ps, now: i * 60_000, rand: () => 0.5, circuit: roamCircuit('hibernia') })!;
-            sides.push(r.place.part!);
-            centre = { x: r.place.x, y: r.place.y };
+        let centre: Point = { x: 18_400, y: 18_300 };
+        const visits: RoamPlace[] = [];
+        let now = 0;
+        for (let tick = 0; tick < 4000 && visits.length < ps.length * 2; tick++) {
+            const r = roamStep(mem, { regionId: THIDRANKI, centre, places: ps, circuit: roamCircuit('hibernia'), now })!;
+            if (visits[visits.length - 1]?.key !== r.place.key) visits.push(r.place);
+            // Walk 190 a second toward it.
+            const d = dist(centre, r.goal);
+            const k = Math.min(1, 190 / Math.max(1, d));
+            centre = { x: centre.x + (r.goal.x - centre.x) * k, y: centre.y + (r.goal.y - centre.y) * k };
+            now += 1000;
         }
-        // Each side's run: two places (a side may run short of fresh ones), in circuit order.
-        const runs = sides.reduce<string[]>((a, x) => (a[a.length - 1] === x ? a : [...a, x]), []);
-        expect(runs.slice(0, 3)).toEqual(['hibernia', 'midgard', 'albion']);
-        expect(sides.slice(0, 6)).toEqual(['hibernia', 'hibernia', 'midgard', 'midgard', 'albion', 'albion']);
+        const runs = visits.map(p => p.side).reduce<string[]>((a, x) => (a[a.length - 1] === x ? a : [...a, x!]), []);
+        expect(runs.slice(0, 4)).toEqual(['hibernia', 'midgard', 'albion', 'hibernia']);
+        // A lap: every place once before any comes again.
+        const lap = visits.slice(0, ps.length).map(p => p.key);
+        expect(new Set(lap).size).toBe(lap.length);
     });
+});
 
-    test('sightingPlaces: weight from how many and how fresh; none past 5 min', () => {
-        const ok = () => true;
-        const s = sightingPlaces([{ x: 1, y: 1, n: 6, at: 0 }, { x: 5000, y: 1, n: 2, at: 0 }], 60_000, ok);
-        expect(s[0]!.weight).toBeGreaterThan(s[1]!.weight);
-        expect(sightingPlaces([{ x: 1, y: 1, n: 6, at: 0 }], ROAM_SETTINGS.sightingMs + 1, ok)).toHaveLength(0);
-    });
+describe('decideRvr roams the circuit with no patrol of its own', () => {
+    const caps = { heal: false, cc: false, nuke: false, buffs: [], buffSpells: [] };
+    const members: MemberReport[] = ['Tank', 'Druid', 'Bard'].map((n, i) => report(n, { role: i ? 'healer' : 'tank', className: i ? 'Druid' : 'Hero', objectId: i + 1, regionId: THIDRANKI, x: 30_000 + i * 50, y: 30_000, z: 3800, level: 24, capabilities: caps }));
+    const ctx = (p: GroupPicture, memory: Record<string, any>, extra: Partial<RvrSettings> = {}): CoordinatorContext<RvrSettings> =>
+        ({ picture: p, orders: p.orders, memory, now: p.at, windingDown: false, settings: mergeSettings(RVR_SETTINGS, { patrol: null, ...extra } as any) });
 
-    test('roamStep by default: no stop, on reaching a place on to the next at once (the user: "there shouldn\'t be stops")', () => {
-        const mem: Record<string, any> = {};
-        const ps = [place('a', 5000, 0), place('b', -5000, 0)];
-        let r = roamStep(mem, { centre: { x: 0, y: 0 }, places: ps, now: 0, rand: seq(0.99) })!;
-        const first = r.place.key;
-        r = roamStep(mem, { centre: { x: r.place.x - 800, y: 0 }, places: ps, now: 10_000, rand: seq(0.99) })!;
-        expect(r.kind).toBe('go');
-        expect(r.place.key).not.toBe(first);
-        expect(r.reason).toMatch(/^roam: past /);
-    });
-
-    test('roamStep with a long stay: go, stay a while walking a small circle, then on to another place (not the same)', () => {
-        const S = { ...ROAM_SETTINGS, stayMin: 60_000, stayMax: 150_000 };
-        const mem: Record<string, any> = {};
-        const ps = [place('a', 5000, 0), place('b', -5000, 0), place('c', 0, 6000)];
-        let r = roamStep(mem, { centre: { x: 0, y: 0 }, places: ps, now: 0, rand: seq(0), settings: S })!;
-        expect(r.kind).toBe('go');
-        const first = r.place.key;
-        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000, rand: seq(0), settings: S })!;
-        expect(r.kind).toBe('stay');
-        expect(r.reason).toContain('looking about');
-        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000 + S.stepMs + 1, rand: seq(0), settings: S })!;
-        expect(r.kind).toBe('stay');
-        expect(Math.hypot(r.goal.x - r.place.x, r.goal.y - r.place.y)).toBeCloseTo(S.circle, -1);
-        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000 + S.stayMax + 1, rand: seq(0), settings: S })!;
-        expect(r.kind).toBe('go');
-        expect(r.place.key).not.toBe(first);
-    });
-
-    test('meetingPlaces in Thidranki: the ring, our two pair grounds, each realm\'s bank by the Faste', () => {
-        const ring = defaultPatrol(THIDRANKI, 'hibernia', 24);
-        const ps = meetingPlaces(THIDRANKI, 'hibernia', ring, () => true);
-        expect(ps.filter(p => p.key.startsWith('pair:')).map(p => p.key).sort()).toEqual(['pair:albion|hibernia', 'pair:hibernia|midgard']);
-        expect(ps.filter(p => p.key.startsWith('bank:'))).toHaveLength(3);
-        expect(ps.filter(p => p.key.startsWith('ring')).length).toBe(ring.length);
-        // The user: "going by mid PK, alb PK, Faste": the approaches to the other two portal keeps and the Faste's surroundings.
-        expect(new Set(ps.filter(p => p.key.startsWith('pk:')).map(p => p.key.split(':')[1]))).toEqual(new Set(['midgard', 'albion']));
-        expect(ps.filter(p => p.key.startsWith('faste:')).length).toBe(6);
-    });
-
-    test('decideRvr with no patrol of its own roams instead of the fixed ring', () => {
-        const caps = { heal: false, cc: false, nuke: false, buffs: [], buffSpells: [] };
-        const members: MemberReport[] = ['Tank', 'Druid', 'Bard'].map((n, i) => report(n, { role: i ? 'healer' : 'tank', className: i ? 'Druid' : 'Hero', objectId: i + 1, regionId: THIDRANKI, x: 30_000 + i * 50, y: 30_000, z: 3800, level: 24, capabilities: caps }));
-        const ctx = (p: GroupPicture, memory: Record<string, any>): CoordinatorContext<RvrSettings> =>
-            ({ picture: p, orders: p.orders, memory, now: p.at, windingDown: false, settings: mergeSettings(RVR_SETTINGS, { patrol: null } as any) });
-        const d = decideRvr(ctx(picture(members), {}));
-        expect(d.reason).toMatch(/^roam: to /);
-        const off = decideRvr({ ...ctx(picture(members), {}), settings: mergeSettings(RVR_SETTINGS, { patrol: null, roamPlaces: false } as any) });
+    test('roam on our side first; roamPlaces: false is the old ring', () => {
+        const d = decideRvr(ctx(picture(members), { realm: 'hibernia' }));
+        expect(d.reason).toMatch(/^roam: to .*our side/);
+        const off = decideRvr(ctx(picture(members), {}, { roamPlaces: false }));
         expect(off.reason).toMatch(/^patrol to waypoint/);
+    });
+
+    test('a friendly group resting nearby is not trailed: the roam goes its own way', () => {
+        const friend = { unit: 'hibernia-2', x: 36_000, y: 30_000, z: 0, alive: 6, size: 6, fight: false, phase: 'recover' };
+        const d = decideRvr(ctx(picture(members), { realm: 'hibernia', realmUnits: [friend] }));
+        expect(d.reason).toMatch(/^roam: /);
+        expect(d.reason).not.toContain('hibernia-2');
     });
 });
