@@ -961,6 +961,19 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const rest = restAt();
         return { ...calm, phase: 'recover', anchor: rest.at, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)${rest.why}` };
     }
+    // ── The picket (director.ts, S3): while our realm holds its keep, the unit the director names stands within sight of it, so
+    // an attack is seen (S2 at 16:11: two raids reached the Faste and Midgard never knew). Fights and calls come first (above). ──
+    const picket: { unit: string; at: Point3; keep: Point3 } | null = !raid && !s.opponent && mem.picket && regionId === THIDRANKI ? mem.picket : null;
+    if (picket) {
+        const spot = dry ? drySpot(regionId, picket.at, { toward: picket.keep, ok: c => clearOf(c, keeps) }) : picket.at;
+        const there: Point3 = { x: Math.round(spot.x), y: Math.round(spot.y), z: zAt(spot) };
+        const d = Math.round(dist(centre, there));
+        if (d > 600) {
+            stepLeg(trip, 'picket', there, { from: centre, movers: main, replan: 1500 });
+            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `stand picket by our keep${gone}`, reason: `picket: to a spot in sight of our keep, ${d} away` };
+        }
+        return { ...calm, phase: 'recover', anchor: there, facing: { x: picket.keep.x, y: picket.keep.y }, waiting: low, objective: `stand picket by our keep${gone}`, reason: `picket: watching our keep from ${Math.round(dist(there, picket.keep))} out` };
+    }
     // ── The realm's wave (waves.ts, the life cycle S4): a break at the portal keep, or out toward where our realm last saw
     // enemies. Free as for a call (no fight, nobody seen, dead, away or low: all above); never in a pair round. No wave file: patrol. ──
     const wave = !s.opponent && !seen.length && realm !== 'none' ? waveOrder((mem.realmWave ?? null) as RealmWave | null, { unit: mem.realmUnit ?? '', realm, regionId, centre, reached: mem.waveReached, now }) : null;
@@ -1175,7 +1188,7 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         try { calls = src?.calls() ?? []; } catch { calls = []; }
         mem.realmCalls = calls;
         // Our own calls (their helpers) and the realm's other units (roaming near them): help.ts helperPoint, roamGoal.
-        try { mem.ownCalls = src?.mine?.() ?? []; mem.realmUnits = src?.units?.() ?? []; } catch { mem.ownCalls = []; mem.realmUnits = []; }
+        try { mem.ownCalls = src?.mine?.() ?? []; mem.realmUnits = src?.units?.() ?? []; mem.picket = src?.picket?.() ?? null; } catch { mem.ownCalls = []; mem.realmUnits = []; mem.picket = null; }
         let out = strategy.decide(ctx);
         // The raid's patch (Orders.settings, tactics/raid.ts) over whatever the strategy's own wrappers set there: Hibernia's
         // withMakeUp and Camelot's withOurMakeUp put their patch (or null) on every tick, and the board showed no guard (attempt 3,

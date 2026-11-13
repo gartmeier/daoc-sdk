@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { askedOf, callsFor, callWatch, defaultRaid, DIRECTOR_SETTINGS, musterHold, RealmDirector, type AnswersFile, type CallsFile, type RealmCall } from './director';
+import { askedOf, callsFor, callWatch, defaultRaid, DIRECTOR_SETTINGS, musterHold, picketFor, RealmDirector, type AnswersFile, type CallsFile, type RealmCall } from './director';
 import { homeOf, THIDRANKI } from './keeps';
 import { frame, type FoeSpec, type MemberSpec } from './realm-board-fixtures';
 
@@ -523,6 +523,27 @@ describe('the defence call (S3, 2026-11-13)', () => {
         d.update(frames(7), 0, []);
         expect(d.update(frames(0), 60_000, []).calls.find(x => x.kind === 'defend')).toBeDefined();
         expect(d.update(frames(0), 200_000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'quiet' });
+    });
+
+    test('the picket: while we hold the keep, a free squad first (then the nearest) stands 3200 out toward home; none once the keep is lost', () => {
+        let owner = 'albion';
+        const d = director({ units: UNITS6, targetOwner: () => owner, settings: { sight: false } });
+        const out = d.update(frames(0), 0, []);
+        const e = out.events.find(x => x.kind === 'picket') as any;
+        expect(e?.unit).toMatch(/^camelot-s/);
+        const home = homeOf(THIDRANKI, 'albion')!.keep;
+        // Kept while free; another only after picketMs.
+        expect(d.update(frames(0), 60_000, []).events.find(x => x.kind === 'picket')).toBeUndefined();
+        owner = 'midgard';
+        expect(d.update(frames(0), 70_000, []).events.find(x => x.kind === 'picket')).toMatchObject({ unit: null, was: e.unit });
+        expect(Math.hypot(home.x - faste.x, home.y - faste.y)).toBeGreaterThan(3200);
+    });
+
+    test('picketFor reads the duty for its own unit only', () => {
+        const file: CallsFile = { v: 1, realm: 'albion', at: 1000, enabled: true, calls: [], picket: { unit: 'camelot-s2', at: { x: 1, y: 2, z: 3 }, keep: { x: 0, y: 0, z: 0 } } };
+        expect(picketFor(file, 'camelot-s2', 2000)?.at).toEqual({ x: 1, y: 2, z: 3 });
+        expect(picketFor(file, 'camelot', 2000)).toBeNull();
+        expect(picketFor({ ...file, enabled: false }, 'camelot-s2', 2000)).toBeNull();
     });
 
     test('one attacker is no defence; the keep lost closes it', () => {

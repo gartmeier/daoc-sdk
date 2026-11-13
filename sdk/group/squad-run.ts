@@ -64,7 +64,8 @@ export function squadMain(dir: string) {
         try {
             const calls = (realm: Realm) => (realm === 'none' ? [] : (cw ??= callWatch(def.name, realm as PlayerRealm)).calls());
             const answer = (id: string, state: Parameters<CallWatch['answer']>[1], why: string) => cw?.answer(id, state, why);
-            const strategy = squadStrategy({ name: `${def.name}-squad`, friends: watch.friends, unit: def.name, calls, answer });
+            const picket = (realm: Realm) => (realm === 'none' ? null : (cw ??= callWatch(def.name, realm as PlayerRealm)).picket?.() ?? null);
+            const strategy = squadStrategy({ name: `${def.name}-squad`, friends: watch.friends, unit: def.name, calls, answer, picket });
             const variant = (settings as any)['squad.variant'] ?? squadVariant(basename(dir));
             return await runGroup({ dir, strategy, seconds: Number(seconds), have: { bot, sdk }, settings: { 'squad.variant': variant, ...settings } });
         } finally {

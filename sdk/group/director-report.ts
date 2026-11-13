@@ -38,6 +38,7 @@ export function callRows(events: readonly LoggedEvent[]): CallRow[] {
     const rows = new Map<string, CallRow>();
     const out: CallRow[] = [];
     for (const e of events) {
+        if (!('call' in e)) continue;
         const key = `${e.realm}/${e.call}`;
         if (e.kind === 'open') {
             if (rows.has(key)) out.push(rows.get(key)!);

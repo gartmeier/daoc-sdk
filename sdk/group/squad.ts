@@ -27,7 +27,7 @@
 import { estimateZ } from '../../data/index';
 import type { Realm } from '../types';
 import { untouchable } from './blackboard';
-import type { AnswerState, RealmCall } from './director';
+import type { AnswerState, Picket, RealmCall } from './director';
 import { roleOfClass, type FoeRole } from './class-read';
 import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, type PlayerRealm } from './keeps';
 import { decideRvr, legAnchor, mainBody, realmOfGroup, RVR_SETTINGS, runWay, rvrRoaming, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
@@ -552,6 +552,8 @@ export interface SquadOptions {
     calls?: (realm: Realm) => readonly RealmCall[];
     /** Tell the director: coming, declined, arrived, left. */
     answer?: (callId: string, state: AnswerState, why: string) => void;
+    /** Our picket duty while the realm holds its keep (director.ts callWatch.picket): the inner decide holds it. */
+    picket?: (realm: Realm) => Picket | null;
 }
 
 /** The muster's target this near the raid plan's lord spot is that plan's keep (siege.ts raidPlan); farther, no plan here. */
@@ -563,6 +565,11 @@ export function squadDecide(inner: (ctx: CoordinatorContext<any>) => OrdersUpdat
 }
 
 export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx: CoordinatorContext<any>) => OrdersUpdate = decideRvr, opts: SquadOptions = {}): OrdersUpdate {
+    // The picket (director.ts): the inner decide (decideRvr) holds it in its quiet branch.
+    if (opts.picket) {
+        const realm = realmOfGroup(ctx.picture.members);
+        try { ctx.memory.picket = realm === 'none' ? null : opts.picket(realm); } catch { ctx.memory.picket = null; }
+    }
     const u = squadTick(ctx, inner, opts);
     // The inner decide's own answers (noteArrival at a raid): the squad tells the director itself (opts.answer).
     ctx.memory.helpOut = undefined;

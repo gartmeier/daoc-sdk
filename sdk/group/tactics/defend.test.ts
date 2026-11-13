@@ -94,4 +94,15 @@ describe('the defence call, the units\' side (S3, 2026-11-13)', () => {
         expect(meleeHeld(TH, { x: 33900, y: 38275, z: 3720 }, { x: 34600, y: 38275, z: 3720 })).toBe(true);
         expect(meleeHeld(TH, { x: 33900, y: 38275, z: 3720 }, { x: 33700, y: 38275, z: 3720 })).toBe(false);
     });
+
+    test('the picket: the named unit walks to its spot, then holds there facing the keep (S3, S2 at 16:11)', () => {
+        const ctx = (p: GroupPicture, memory: Record<string, any>): CoordinatorContext<RvrSettings> =>
+            ({ picture: p, orders: p.orders, memory, now: p.at, windingDown: false, settings: mergeSettings(RVR_SETTINGS, {} as any) });
+        const duty = { unit: 'camelot', at: { x: 30300, y: 40000, z: 3100 }, keep: { x: 33089, y: 38271, z: 3700 } };
+        let o = decideRvr(ctx(picture(five(25000, 44000)), { picket: duty }));
+        expect(o.reason).toMatch(/^picket: to a spot/);
+        o = decideRvr(ctx(picture(five(30300, 40000)), { picket: duty }));
+        expect(o.reason).toMatch(/^picket: watching our keep/);
+        expect(o.phase).toBe('recover');
+    });
 });

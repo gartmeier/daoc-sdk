@@ -131,6 +131,19 @@ export interface CallsFile {
     calls: RealmCall[];
     /** Every running unit with a living member in the region (while on): where the realm's friends are, to roam near them. */
     units?: UnitSpot[];
+    /** While we hold the keep: the unit that stands within sight of it (the picket), and where. */
+    picket?: Picket;
+}
+
+/**
+ * The picket (S3, S2's finding 16:11): while we hold the keep, one free unit stands within sight of it, so the realm sees an
+ * attack. The server tells the owner nothing (the "under attack" broadcast is for relic gates only), so a defence is only as
+ * good as our eyes on the keep.
+ */
+export interface Picket {
+    unit: string;
+    at: Point3;
+    keep: Point3;
 }
 
 /** <dir>/answers/<unit>.json */
@@ -231,6 +244,13 @@ export interface DirectorSettings {
     /** After a big wave (defendBigFoes or more seen at once) the call stays open defendClearBigMs (S2, 15:22: the defenders walked out between two waves of one raid). */
     defendBigFoes: number;
     defendClearBigMs: number;
+    /**
+     * The picket: while we hold the keep, one free unit (squads first, then the nearest) stands picketFrom out from the keep
+     * toward our portal keep, for picketMs at most, then another takes over when one is free.
+     */
+    picket: boolean;
+    picketFrom: number;
+    picketMs: number;
     /** Only units this big are asked in (main groups: squads don't answer a defence yet). */
     defendMinSize: number;
     /** In 'go', the raid broke once its living fell below this share of those it went with. */
@@ -252,6 +272,7 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     fewShare: 0.5, fewMin: 2, ownersAwayMin: 3, ownersAwayFrom: 8000, ownersAwayPair: 2500,
     onWayMs: 120_000, onWayMin: 1000,
     defend: true, defendRadius: 4500, defendMin: 2, defendMemoryMs: 30_000, defendReach: 14_000, defendShare: 0.5, defendClearMs: 45_000, defendMaxMs: 900_000, defendMinSize: 4, defendBigFoes: 6, defendClearBigMs: 180_000,
+    picket: true, picketFrom: 3200, picketMs: 1_200_000,
 };
 
 /** A unit's orders reason in siege.ts's lord phase (tactics/raid.ts writes `raid <phase>: ...`). */
@@ -322,6 +343,8 @@ export type DirectorEvent =
     | { kind: 'open'; call: string; from: string; why: CallWhy; at: Point3; foes: number; ours: number; foeRoles: Partial<Record<SeenRole, number>>; nearest?: number | null; fight?: boolean }
     /** Bodies still wanted and nobody (more) to ask: why each unit was passed over (at most every REFUSED_EVERY_MS per call). */
     | { kind: 'refused'; call: string; want: number; units: { unit: string; why: string }[] }
+    /** The picket changed: `unit` now stands within sight of our keep (null: none). */
+    | { kind: 'picket'; unit: string | null; was: string | null; why: string }
     /** A help call's reason got worse (sighted → outnumbered → caught). */
     | { kind: 'why'; call: string; why: CallWhy; was: CallWhy }
     | { kind: 'ask'; call: string; unit: string; dist: number }
@@ -420,6 +443,7 @@ export class RealmDirector {
      */
     private targetSeen = new Map<string, { at: number; realm: string }>();
     private lookedAt: number | null = null;
+    private picketNow: (Picket & { since: number }) | null = null;
 
     constructor(opts: DirectorOptions) {
         this.realm = opts.realm;
@@ -547,6 +571,7 @@ export class RealmDirector {
         this.watchTarget(board, now);
         this.stepMuster(board, now, events);
         this.stepDefend(board, now, events);
+        this.stepPicket(board, now, events);
 
         // Every open call: losses, arrivals, asks, close.
         for (const o of [...this.open.values()]) {
@@ -847,6 +872,34 @@ export class RealmDirector {
         return faste ? { x: faste.x, y: faste.y, z: faste.z } : null;
     }
 
+    /** The picket while we hold the keep: kept while it is free, replaced after picketMs when another is. */
+    private stepPicket(board: RealmBoardView, now: number, events: DirectorEvent[]): void {
+        const s = this.settings;
+        const keep = s.picket ? this.ourKeep() : null;
+        const was = this.picketNow?.unit ?? null;
+        const set = (p: (Picket & { since: number }) | null, why: string) => {
+            this.picketNow = p;
+            if ((p?.unit ?? null) !== was) events.push({ kind: 'picket', unit: p?.unit ?? null, was, why });
+        };
+        if (!keep) { if (this.picketNow) set(null, 'the keep is not ours'); return; }
+        const home = homeOf(this.regionId, this.realm);
+        const dx = (home?.keep.x ?? keep.x) - keep.x, dy = (home?.keep.y ?? keep.y) - keep.y, l = Math.hypot(dx, dy) || 1;
+        const at = { x: Math.round(keep.x + dx / l * s.picketFrom), y: Math.round(keep.y + dy / l * s.picketFrom), z: keep.z };
+        const busy = new Set<string>();
+        for (const x of this.open.values()) { if (x.call.kind === 'help') busy.add(x.call.from); for (const a of x.call.asked) busy.add(a); for (const c of x.call.coming) busy.add(c); }
+        const ok = (u: UnitView) => u.running && !!u.centre && u.alive > 0 && !busy.has(u.unit) && u.hp >= s.helperHp;
+        const cur = this.picketNow ? board.units.find(u => u.unit === this.picketNow!.unit) : undefined;
+        const keepIt = cur && cur.running && cur.alive > 0 && (now - this.picketNow!.since < s.picketMs);
+        if (keepIt) { this.picketNow = { ...this.picketNow!, at, keep }; return; }
+        // Squads first (a main group is worth more in the field), then the nearest to the spot; the last picket only if nobody else.
+        const free = board.units.filter(u => ok(u) && !u.inFight)
+            .sort((a, b) => Number(a.size > 3) - Number(b.size > 3) || Number(a.unit === was) - Number(b.unit === was) || dist2(a.centre!, at) - dist2(b.centre!, at));
+        const pick = free[0];
+        if (pick) set({ unit: pick.unit, at, keep, since: now }, `free${pick.size <= 3 ? ', a squad' : ''}, ${Math.round(dist2(pick.centre!, at))} from the spot`);
+        else if (cur && cur.running && cur.alive > 0) this.picketNow = { ...this.picketNow!, at, keep, since: now };
+        else if (this.picketNow) set(null, 'nobody free');
+    }
+
     /** Keep targetSeen and lookedAt (the raid plan's target) up to date from this board. */
     private watchTarget(board: RealmBoardView, now: number): void {
         const s = this.settings;
@@ -1009,7 +1062,8 @@ export class RealmDirector {
         if (!this.write) return;
         const on = this.settings.enabled;
         const units = on && this.last ? this.last.units.filter(u => u.running && u.centre && u.alive > 0).map(spotOf) : [];
-        const file: CallsFile = { v: 1, realm: this.realm, at: now, enabled: on, calls: on ? this.calls() : [], ...(on ? { units } : {}) };
+        const picket = on && this.picketNow ? { unit: this.picketNow.unit, at: this.picketNow.at, keep: this.picketNow.keep } : null;
+        const file: CallsFile = { v: 1, realm: this.realm, at: now, enabled: on, calls: on ? this.calls() : [], ...(on ? { units } : {}), ...(picket ? { picket } : {}) };
         writeAtomic(join(this.dir, `${this.realm}.json`), JSON.stringify(file));
     }
 }
@@ -1038,6 +1092,12 @@ export function ownCallsFor(file: CallsFile | null, unit: string, now = Date.now
     return (file.calls ?? []).filter(c => c.from === unit && c.kind === 'help');
 }
 
+/** The picket the director names this unit for, or null. */
+export function picketFor(file: CallsFile | null, unit: string, now = Date.now()): Picket | null {
+    if (!file || file.v !== 1 || !file.enabled || now - file.at > CALLS_STALE_MS) return null;
+    return file.picket?.unit === unit ? file.picket : null;
+}
+
 /** The realm's other running units (none while off or stale). */
 export function unitsFor(file: CallsFile | null, unit: string, now = Date.now()): UnitSpot[] {
     if (!file || file.v !== 1 || !file.enabled || now - file.at > CALLS_STALE_MS) return [];
@@ -1056,6 +1116,8 @@ export interface CallWatch {
     mine: () => RealmCall[];
     /** The realm's other running units, where they stand. */
     units: () => UnitSpot[];
+    /** This unit's picket duty (within sight of our keep), or null. */
+    picket: () => Picket | null;
     answer: (callId: string, state: AnswerState, why?: string) => void;
     stop: () => void;
 }
@@ -1084,6 +1146,7 @@ export function callWatch(unit: string, realm: PlayerRealm, dir = DIRECTOR_DIR):
         calls: () => callsFor(file, unit),
         mine: () => ownCallsFor(file, unit),
         units: () => unitsFor(file, unit),
+        picket: () => picketFor(file, unit),
         answer: (callId, state, why = '') => {
             answers.answers[callId] = { state, why: why.slice(0, 200), at: Date.now() };
             // Keep the newest 20.

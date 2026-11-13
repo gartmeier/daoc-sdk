@@ -232,6 +232,15 @@ export interface CallSource {
     mine?(): readonly RealmCall[];
     /** The realm's other running units. */
     units?(): readonly UnitSpot[];
+    /** Our picket duty while the realm holds its keep (director.ts Picket), or null. */
+    picket?(): PicketDuty | null;
+}
+
+/** director.ts Picket: stand at `at`, within sight of our keep at `keep`. */
+export interface PicketDuty {
+    unit: string;
+    at: Point3;
+    keep: Point3;
 }
 
 // ── The caller's side (stint 2026-11-13, S3): fall back toward the helpers, turn when they are with us ──
