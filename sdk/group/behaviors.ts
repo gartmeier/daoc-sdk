@@ -28,6 +28,7 @@ import { keepsTravelling, travelAim } from './travel';
 import { isWet } from './water';
 import type { BotWorldState, InventoryItem, NearbyNpc, NearbyPlayer, PlayerState, Style } from '../types';
 import { finishedBy } from './observed';
+import { foeKind } from './tactics/make-up';
 import type { BuffSlot, Contact, MemberReport, Point, Role } from './types';
 
 /** Settings the behaviours read; strategies extend this. */
@@ -965,12 +966,93 @@ export function ccSpellFor(ctx: MemberContext<TacticsSettings>, c: Contact) {
 /** A mezz target refused for sight is left this long for the next one. */
 const CC_UNSEEN_MS = 8000;
 
+/** Orders before an engage on enemy players coming (pack.ts): a stalk, a stand-off, a hunt of stragglers. Not a refusal, an ambush or a leave. */
+const OPEN_OBJECTIVE = /^(stalk|stand off|hunt)\b/;
+/** The opener steps this far at most beyond its mezz's range to bring an enemy in reach: the rest of the group sets up behind. */
+export const OPEN_STEP = 700;
+
+/**
+ * Who an opening mezz goes on, best first, of enemy players within `reach`: casters, then healers but the one nearest our group
+ * (the kill: the coordinator focuses healers first), then fighters; nearest first within each.
+ */
+export function openingTargets<T extends Pick<Contact, 'objectId' | 'x' | 'y'> & { classGuess?: Contact['classGuess']; healer?: boolean; caster?: boolean }>(foes: readonly T[], me: Point, centre: Point): T[] {
+    const kind = (c: T) => foeKind(c as unknown as Contact);
+    const healers = foes.filter(c => kind(c) === 'healer').sort((a, b) => dist(a, centre) - dist(b, centre));
+    const kill = healers[0]?.objectId;
+    const rank = (c: T) => (kind(c) === 'caster' ? 0 : kind(c) === 'healer' ? 1 : 2);
+    return foes.filter(c => c.objectId !== kill).sort((a, b) => rank(a) - rank(b) || dist(a, me) - dist(b, me));
+}
+
+/**
+ * The opening mezz, as a player's Bard opens on a group coming in: before our engage, with enemy players seen coming (orders
+ * OPEN_OBJECTIVE), it steps up to its mezz's range (OPEN_STEP at most) and mezzes them one after another (openingTargets), an
+ * area mezz where it catches areaMezzMin (2 at least). The support with any mezz; another kit only with an area mezz. The user,
+ * playing Niamh (2026-11-13, 19:52): "the Bard should have rushed forward and AE mezzed the mids"; Fiacra's first mezz came 21 s
+ * after the inc. A Hibernian Bard has no area mezz at 24 (Mesmerizing Hymn and its kin are radius 0, range 1500).
+ */
+async function openingMezz(ctx: MemberContext<TacticsSettings>): Promise<boolean> {
+    const o = ctx.orders();
+    if (o.phase !== 'travel' || !OPEN_OBJECTIVE.test(o.objective ?? '')) return false;
+    if (hammeredBy(ctx) || castRunning(ctx)) return false;
+    const me = ctx.me();
+    const mezz = ctx.spells.mezz();
+    const area = ctx.spells.areaMezz();
+    const minCatch = Math.max(2, ctx.settings.areaMezzMin ?? 2);
+    if (!area && !(mezz && ctx.role === 'support')) return false;
+    const cantLand: Map<string, number> = ctx.memory.get('ccCantLand') ?? new Map();
+    ctx.memory.set('ccCantLand', cantLand);
+    const now = Date.now();
+    const longest = Math.max(area?.range ?? 0, mezz?.range ?? 0);
+    const contacts = ctx.picture().contacts;
+    const foes = contacts.filter(c => c.kind === 'player' && !c.isPet && !c.isShade && !c.stale && alive(c) && !untouchable(c, now) && c.realm !== me.realm
+        && c.regionId === me.regionId && !c.cc && !immuneKinds(c).includes('mezz') && !((cantLand.get(ckey(c)) ?? 0) > now) && !wetSkipped(ctx, c.objectId)
+        && !claimedBy(ctx, 'cc', c.objectId, CC_CLAIM_MS).length && !!foeInView(ctx, c.objectId) && dist(c, me) <= longest + OPEN_STEP
+        && !doorBetween(me.regionId, me, c, me.realm));
+    if (!foes.length) return false;
+    const living = ctx.members().filter(m => !m.isDead && m.regionId === me.regionId);
+    const centre = living.length ? { x: living.reduce((t, m) => t + m.x, 0) / living.length, y: living.reduce((t, m) => t + m.y, 0) / living.length } : me;
+    const caught = (c: Contact) => (area ? areaMezzCatch(c, contacts, area.radius, null, now) : []);
+    const wide = area ? foes.map(c => ({ c, n: caught(c).length })).filter(x => x.n >= minCatch).sort((a, b) => b.n - a.n || dist(a.c, me) - dist(b.c, me))[0]?.c : undefined;
+    const target = wide ?? (mezz && ctx.role === 'support' ? openingTargets(foes, me, centre)[0] : undefined);
+    if (!target) return false;
+    const sp = wide ? area! : mezz!;
+    const view = foeInView(ctx, target.objectId);
+    if (!view) return false;
+    if (view.distance > sp.range - RANGE_MARGIN_3D) {
+        const d = Math.hypot(target.x - me.x, target.y - me.y) || 1;
+        const go = Math.min(OPEN_STEP, d - (sp.range - 150));
+        if (go <= 0) return false;
+        const to = { x: Math.round(me.x + ((target.x - me.x) / d) * go), y: Math.round(me.y + ((target.y - me.y) / d) * go) };
+        if (isWet(me.regionId, to)) return ctx.skip('opening mezz: the step is in water');
+        ctx.doing('move', target.objectId, `into mezz range of ${target.name}`);
+        noteWet(ctx, target.objectId, await ctx.bot.walkTo(to.x, to.y, { tolerance: 40, timeout: 4000 }));
+        return true;
+    }
+    await stopSwinging(ctx);
+    ctx.doing('cc', target.objectId, `opening ${sp.spell.name}`);
+    const c = await ctx.bot.castSpell(sp.spell, target.objectId, { approach: false });
+    const fullMs = Math.max(CC_MIN_MS, sp.duration * 1000);
+    const refused = !c.success ? null : c.effectImmune ? 'immune' : c.alreadyOn ? 'already_on' : c.resisted ? 'resisted' : c.effectLanded === false ? 'no_effect' : null;
+    ctx.result('cc', refused ? { ...c, success: false, reason: refused } : c, target.objectId);
+    if (refused === 'immune') ctx.markCcImmune(target.objectId, 'mezz', CC_IMMUNE_MS);
+    else if (refused === 'already_on') ctx.markCcImmune(target.objectId, 'mezz', fullMs + CC_IMMUNE_MS);
+    else if (c.success && !refused) {
+        ctx.markCc(target.objectId, 'mezz', fullMs, c.landedOn);
+        if (wide) for (const n of caught(target)) if (n.objectId !== target.objectId) ctx.markCc(n.objectId, 'mezz', fullMs);
+    } else if (c.reason === 'not_visible' || c.reason === 'out_of_range') cantLand.set(ckey(target), Date.now() + CC_UNSEEN_MS);
+    else if (c.reason === 'invalid_target' || c.reason === 'not_attackable' || c.reason === 'no_target') cantLand.set(ckey(target), Date.now() + CC_IMMUNE_MS);
+    else if (c.reason === 'water') noteWet(ctx, target.objectId, c);
+    else await waitOutSelfCc(c);
+    return true;
+}
+
+
 export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<TacticsSettings> => ({
     name: 'crowdControl',
     interruptible: false,
     async run(ctx) {
         const o = ctx.orders();
-        if (!CC_PHASES.has(o.phase)) return false;
+        if (!CC_PHASES.has(o.phase)) return openingMezz(ctx);
         // The board knows what's on each target and what it is immune to, whoever found out.
         const kinds = ctx.spells.capabilities().ccKinds;
         // Targets castSpell knows without a send it can't land on, by ckey: left alone for CC_IMMUNE_MS. In our own memory: another mezzer may yet be told otherwise by the server, and the board's mark is for a real immunity.

@@ -52,6 +52,18 @@ A song needs an instrument out (`SpellHandler.cs` `CheckInstrument`), and `bot.t
 
 **Verified, 2026-11-13:** Fiacra played no song in any recorded run. She has no promotion lute, the gear template's Bard kit has no instrument, and her only one, a level-29 Arcane Flute drop, sat in the backpack: "You are not wielding the right type of instrument!" every time. In the ranged slot (13) it plays (S1, by hand). Since 79383bd, `song` brings an instrument out itself after that refusal, at most once a minute: a worn one off and on in its slot, else the backpack's best, put on where the server takes it (`songs.ts` `instrumentToBringOut`). Not yet seen live.
 
+## The opening mezz
+
+The user, playing Niamh (2026-11-13, 19:52): "the Bard should have rushed forward and AE mezzed the mids". It took 10 s from the inc to our engage, and Fiacra's first mezz came 21 s after the inc. In that fight the coordinator's `mezzMelee` (`tactics/peel.ts`) moved her assignment between two Norsemen every second. A Hibernian Bard has no area mezz at 24: Mesmerizing Hymn, Facinating Melody and Entrancing Hymn have radius 0 and range 1500, and Lullaby is Amnesia.
+
+Since this commit, `crowdControl` opens before the engage (`behaviors.ts` `openingMezz`):
+- **When:** the orders are travel with a stalk, a stand-off or a hunt of stragglers. Never in a refusal, an ambush or a leave.
+- **The step:** the support steps up to its mezz's range, at most `OPEN_STEP` (700) beyond it.
+- **Whom:** enemies one after another (`openingTargets`): casters first, then healers but the one nearest our group (the kill), then fighters.
+- **Area mezz:** any kit with one opens where it catches two (Minstrel, Skald, Sorcerer...).
+
+Not yet seen live.
+
 ## Weight
 
 **Verified.** Oisin is the group's worst carrier. On 2026-10-31 he stood at 90/70 with a speed of 34 against 191, and the whole group waited for him at each leg until he sold his bags. After the level-24 template he was at 97 %, the heaviest of all 15. A Bard that's left full costs every member.
