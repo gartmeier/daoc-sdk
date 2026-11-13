@@ -315,15 +315,24 @@ describe('balance', () => {
 });
 
 describe('raids', () => {
-    const base = { playing: 17, out: 12, open: false, lastEnd: 0, holdsTarget: false, shift: 0, now: 60 * MIN };
+    const base = { playing: 17, target: 17 as number | undefined, out: 12, open: false, lastEnd: 0, holdsTarget: false, shift: 0, now: 60 * MIN };
     test('the numbers on and out, no raid lately', () => {
         expect(wantsMuster(base).want).toBe(true);
+        expect(wantsMuster({ ...base, playing: 16 }).want).toBe(true);
         expect(wantsMuster({ ...base, playing: 10 }).want).toBe(false);
-        expect(wantsMuster({ ...base, out: 6 }).want).toBe(false);
+        expect(wantsMuster({ ...base, out: 11 }).want).toBe(false);
+        expect(wantsMuster({ ...base, target: undefined }).want).toBe(false);
         expect(wantsMuster({ ...base, lastEnd: 50 * MIN }).want).toBe(false);
         expect(wantsMuster({ ...base, holdsTarget: true }).want).toBe(false);
         expect(wantsMuster({ ...base, open: true }).want).toBe(false);
         expect(wantsMuster({ ...base, shift: 1 }).want).toBe(false);
+    });
+    test('follow the curve: the afternoon 12 and a night of 7 raid too, with most of them out', () => {
+        expect(wantsMuster({ ...base, target: 12, playing: 11, out: 9 }).want).toBe(true);
+        expect(wantsMuster({ ...base, target: 12, playing: 11, out: 8 }).want).toBe(false);
+        expect(wantsMuster({ ...base, target: 7, playing: 6, out: 5 }).want).toBe(true);
+        expect(wantsMuster({ ...base, target: 7, playing: 7, out: 4 }).want).toBe(false);
+        expect(wantsMuster({ ...base, target: 6, playing: 6, out: 4 }).want).toBe(false);
     });
 });
 
