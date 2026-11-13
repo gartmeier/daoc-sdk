@@ -30,6 +30,8 @@ const HASTEN_GIVE_UP_MS = 24 * 3_600_000;
 const HASTEN_WAIT_MS = 3000;
 /** With no effect names to go by, a max speed this high is the hastener's (100 + 147; a Bard's or Skald's speed is far below). */
 const SPED_PERCENT = 200;
+/** Speed of the Realm's value (spell 2430, SpeedEnhancement 147): a speed buff this strong or stronger keeps it off. */
+const SONG_ENOUGH = 147;
 /** Orders a member may step out of for it: resting, gathering, idle, and travel (the leg waits for it). */
 const PHASES: ReadonlySet<string> = new Set(['recover', 'gather', 'idle', 'travel']);
 
@@ -51,6 +53,9 @@ export function hastenBlock(o: {
     if (o.me.isDead) return 'dead';
     if (!o.hastener) return 'no hastener in reach';
     if (hasRealmSpeed(o.effects, o.me)) return 'sped already';
+    // A speed song as fast or faster: the server keeps one movement speed buff, and the hastener's weaker one is refused
+    // (EffectListComponent CanCoexist, IsBetterThan). Live 2026-11-13: every no_effect was in a unit with a singer, at 173 %.
+    if ((o.me.maxSpeedPercent ?? 0) >= SONG_ENOUGH) return 'a speed song already';
     if (!PHASES.has(o.phase)) return `orders say ${o.phase}`;
     if (o.threats || o.me.inCombat) return 'in a fight';
     if (o.foes.some(f => Math.hypot(f.x - o.me.x, f.y - o.me.y) <= HASTEN_FOE_CLEAR)) return 'an enemy near';

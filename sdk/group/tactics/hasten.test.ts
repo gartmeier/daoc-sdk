@@ -35,6 +35,9 @@ describe('hasten: the rule', () => {
         expect(hastenBlock({ ...quiet, foes: [{ x: 22_000, y: 19_000 }] })).toBeNull();
         expect(hastenBlock({ ...quiet, retryAt: 5000 })).toBe('tried lately');
         expect(hastenBlock({ ...quiet, me: { ...me, isDead: true } })).toBe('dead');
+        // A Bard's Clear Road (173 %) keeps the hastener's weaker buff off: the server refuses it (live 2026-11-13, 890 no_effect).
+        expect(hastenBlock({ ...quiet, me: { ...me, maxSpeedPercent: 173 } })).toBe('a speed song already');
+        expect(hastenBlock({ ...quiet, me: { ...me, maxSpeedPercent: 140 } })).toBeNull();
     });
 });
 
