@@ -125,6 +125,25 @@ describe('raid: decideRvr at the muster\'s go', () => {
     });
 });
 
+describe('raid: a strategy that sets Orders.settings itself (Hibernia withMakeUp, Camelot withOurMakeUp)', () => {
+    const ctx = (p: GroupPicture, memory: Record<string, any>, orders: Partial<Orders> = {}): CoordinatorContext<RvrSettings> =>
+        ({ picture: p, orders: { ...p.orders, ...orders }, memory, now: p.at, windingDown: false, settings: mergeSettings(RVR_SETTINGS, {} as any) });
+    const makeUp = { heal: { tank: 90 } };
+    const wrapped = (patch: object | null) => ({ ...rvrRoamingLike(), decide: (c: any) => ({ ...decideRvr(c), settings: patch }) });
+
+    test('the raid patch goes on top of theirs, the same object tick to tick; after the go, theirs alone', () => {
+        const mem = mustered();
+        const { strategy } = realmCalls(wrapped(makeUp) as any, 'hibernia', { calls: () => [go], answer: () => {} });
+        const a = strategy.decide(ctx(picture(five(plan.rally)), mem));
+        expect(a.settings).toMatchObject({ raid: FASTE.keep, raidDoor: null, heal: { tank: 90 } });
+        expect(strategy.decide(ctx(picture(five(plan.rally)), mem)).settings).toBe(a.settings);
+        const { strategy: nulled } = realmCalls(wrapped(null) as any, 'hibernia', { calls: () => [go], answer: () => {} });
+        expect(nulled.decide(ctx(picture(five(plan.rally)), mustered())).settings).toMatchObject({ raid: FASTE.keep });
+        const { strategy: over } = realmCalls(wrapped(makeUp) as any, 'hibernia', { calls: () => [], answer: () => {} });
+        expect(over.decide(ctx(picture(five(plan.rally)), { realm: 'midgard' }, { settings: a.settings })).settings).toBe(makeUp);
+    });
+});
+
 function rvrRoamingLike() {
     const b = (name: string): Behavior => ({ name, run: () => false });
     return { name: 'x', settings: RVR_SETTINGS, behaviors: { tank: [b('tank'), b('rest')], melee: [b('meleeFight'), b('rest')], healer: [b('heal'), b('rest')], nuker: [b('assist'), b('rest')], support: [b('rest')] } };

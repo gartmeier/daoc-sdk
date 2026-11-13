@@ -1081,6 +1081,15 @@ export const rvrRoaming: GroupStrategy<RvrSettings> = {
  * the group plays as before. `source` replaces it (tests). stop() ends the watch: call it when the run ends.
  * Every role's and member's list also gets hasten (tactics/hasten.ts withHastener): Speed of the Realm before going out.
  */
+/** `base` (a strategy's own patch, or null) with the raid's patch on top: the same object while neither changes (members rebuild their settings on a new one). */
+export function overRaid(mem: Record<string, any>, base: Record<string, unknown> | null, raid: object): Record<string, unknown> {
+    const m = mem.raidOver as { base: unknown; raid: unknown; out: Record<string, unknown> } | undefined;
+    if (m && m.base === base && m.raid === raid) return m.out;
+    const out = base ? { ...base, ...raid } : raid as Record<string, unknown>;
+    mem.raidOver = { base, raid, out };
+    return out;
+}
+
 export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?: CallSource | null): { strategy: GroupStrategy<S>; stop(): void } {
     let src: CallSource | null | undefined = source;
     let stopped = false;
@@ -1104,8 +1113,11 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         try { calls = src?.calls() ?? []; } catch { calls = []; }
         mem.realmCalls = calls;
         let out = strategy.decide(ctx);
-        // The raid's patch (Orders.settings, tactics/raid.ts) ends with the muster's go: guards off the picture, the keep's circle back.
-        if (!raidCall(mem) && ctx.orders.settings?.raid && out.settings === undefined) out = { ...out, settings: null };
+        // The raid's patch (Orders.settings, tactics/raid.ts) over whatever the strategy's own wrappers set there: Hibernia's
+        // withMakeUp and Camelot's withOurMakeUp put their patch (or null) on every tick, and the board showed no guard (attempt 3,
+        // 2026-11-13 02:39-02:41: "nothing to hit in view" at every rank). It ends with the muster's go: guards off, the circle back.
+        if (raidCall(mem) && mem.raid?.patch) out = { ...out, settings: overRaid(mem, out.settings ?? null, mem.raid.patch) };
+        else if (ctx.orders.settings?.raid && (out.settings === undefined || (out.settings as { raid?: unknown } | null)?.raid)) out = { ...out, settings: null };
         flushAnswers(mem, src);
         return out;
     };
