@@ -53,6 +53,8 @@ From [pets.md](../pets.md#turrets): a ground target first; a spot off the mesh i
 
 **Correction (the frozen window, 06:04-07:56, with 2125074):** in three long sorties the turret dealt 3881, 3109 and 9133 and broke crowd control 1, 0 and 2 times; the 2 were roots on a PvE mob. So passive does not cost the turret its damage: the 0-1178 sorties after 2125074 were quiet ones, and the reading behind b2ee129 was wrong. Read turret damage against the group's fights before blaming the kit.
 
+**Still 10 broken in 7 sorties of the window:** 6 on players (5 mezzes and a root), the rest on PvE mobs. The side tick sends passive on what the turret already shoots. But after a kill the turret takes its next target off its list at once, and a mezzed enemy on that list breaks before any tick. **Next stint (23cef5c, `sdk/classes/pet-cc.ts`):** crowd control landing within the turret's reach also sends it passive, which wipes the list, then attacks the clean focus if it reaches it. Not seen live.
+
 ## Not seen live
 
 - In a group, with a haven for `giveGround`.

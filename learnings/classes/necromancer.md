@@ -59,6 +59,8 @@ From [pets.md](../pets.md#shade): leaving shade sets health to min(current, max 
 
 **With the fix (camelot's 23:35 sortie, 22 min):** no refused attack order (90 in the sortie before), the servant on the focus 70 % (28-51 %), first nuke 6.1 s after the engage (32-34 s), 3278 damage, her best; idle 26 %, now all "the servant is casting". One death, out of shade: the servant died at 20:47 and she died at 20:49 still walking in. So the walk in now lasts 1.5 s a turn, and with the servant below 40 % she walks in for no short-range nuke (the 500 ones).
 
+**The frozen window (2026-11-13 06:04-09:24, 7 sorties in camelot):** damage 1500-6255 a sortie (29455 in all), the servant up 87-97 % and on the focus 54-74 %, 13 deaths. Every death came out of shade after the servant's. The servant broke 2 mezzes (a Celt, an Elf): `servantFight` orders only the focus, and after a kill the servant takes its next target off its own list. **Next stint (23cef5c):** `servantOffCc` on the side tick (`sdk/classes/pet-cc.ts`). It sends passive when the servant's target, or any enemy within 1500 of it, comes under crowd control. Passive wipes the list. Then it attacks the clean focus, if that is within 2000 of her. A wipe for crowd control nearby waits out the servant's 3 s cast half. Not seen live. Also open: Vitality Theft `no_response` 6-14 a sortie, and `walk:water` 18-28 (her walk-in won't go into water).
+
 ## Not seen live
 
 - The owner's walk into 500 for a Cackle, which a shade can make safely by the server code; whether the server measures that range from the owner or the servant wasn't read.
