@@ -44,11 +44,17 @@ export interface SeenFoe {
     seenBy: string[];
     /** The units whose boards hold it. */
     units: string[];
+    /** In combat as our client saw it (a fight with someone, us or another realm). */
+    inCombat?: boolean;
 }
 
 export interface BoardMember {
     name: string;
     bot: string;
+    /** Its object id and level (0 when unknown), and whether it knows a rez (the run's capabilities). */
+    objectId?: number;
+    level?: number;
+    rez?: boolean;
     x: number;
     y: number;
     z: number;
@@ -119,7 +125,7 @@ export function foesIn(frame: Pick<GroupFrame, 'id' | 'world'>, realm: PlayerRea
         if (!finite(w.x) || !finite(w.y)) continue;
         out.push({
             key: w.key, objectId: w.objectId, x: w.x, y: w.y, z: finite(w.z) ? w.z : 0, hp: finite(w.hp) ? w.hp : 100, level: finite(w.level) ? w.level : 0,
-            realm: w.realm, role: roleOf(b), threat: !!b.threat, seenBy: [...(b.seenBy ?? [])], units: [frame.id],
+            realm: w.realm, role: roleOf(b), threat: !!b.threat, seenBy: [...(b.seenBy ?? [])], units: [frame.id], inCombat: !!w.inCombat,
         });
     }
     return out;
@@ -141,6 +147,7 @@ export function mergeFoes(lists: readonly (readonly SeenFoe[])[]): SeenFoe[] {
             for (const n of f.seenBy) if (!had.seenBy.includes(n)) had.seenBy.push(n);
             for (const u of f.units) if (!had.units.includes(u)) had.units.push(u);
             had.threat ||= f.threat;
+            had.inCombat ||= f.inCombat;
             if (had.role === 'unknown') had.role = f.role;
         }
     }
@@ -180,7 +187,10 @@ export class RealmBoard {
             const p = m.player;
             if (!p || p.regionId !== this.regionId || !finite(p.x) || !finite(p.y)) continue;
             if (p.realm && p.realm !== this.realm) continue;
-            members.push({ name: p.name || m.charName || m.bot, bot: m.bot, x: p.x, y: p.y, z: finite(p.z) ? p.z : 0, hp: finite(p.hp) ? p.hp : 100, isDead: !!p.isDead, inCombat: !!p.inCombat });
+            members.push({
+                name: p.name || m.charName || m.bot, bot: m.bot, x: p.x, y: p.y, z: finite(p.z) ? p.z : 0, hp: finite(p.hp) ? p.hp : 100, isDead: !!p.isDead, inCombat: !!p.inCombat,
+                objectId: finite(p.objectId) ? p.objectId : 0, level: finite(p.level) ? p.level : 0, rez: !!m.run?.can?.rez,
+            });
         }
         // Deaths: a member seen alive, then dead (only on a frame read now, so a kept frame adds none twice).
         const lost = (this.losses.get(unit) ?? []).filter(l => now - l.at <= LOSS_KEEP_MS);

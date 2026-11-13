@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { askedOf, callsFor, callWatch, defaultRaid, RealmDirector, type AnswersFile, type CallsFile, type RealmCall } from './director';
+import { askedOf, callsFor, callWatch, defaultRaid, DIRECTOR_SETTINGS, musterHold, RealmDirector, type AnswersFile, type CallsFile, type RealmCall } from './director';
 import { homeOf, THIDRANKI } from './keeps';
 import { frame, type FoeSpec, type MemberSpec } from './realm-board-fixtures';
 
@@ -221,8 +221,8 @@ describe('muster', () => {
             'camelot-s1': frame({ id: 'camelot-s1', noRun: true, members: at(30000, 30000, 2, 'S') }),
         }, 0, []);
         expect(out.calls[0]!.raid).toEqual([
-            { unit: 'camelot', x: 37000, y: 52050, z: 4000, alive: true },
-            { unit: 'camelot', x: 37000, y: 52000, z: 0, alive: false },
+            { unit: 'camelot', x: 37000, y: 52050, z: 4000, alive: true, name: 'G0', id: 14, level: 24, onWay: true },
+            { unit: 'camelot', x: 37000, y: 52000, z: 0, alive: false, name: 'G1', id: 14, level: 24 },
         ]);
         // A help call carries none.
         const help = director().update({ camelot: frame({ id: 'camelot', phase: 'engage', members: at(MID.x, MID.y, 1, 'G'), foes: foes(MID.x + 300, MID.y, 3) }) }, 0, []);
@@ -308,10 +308,10 @@ describe('muster', () => {
         expect(out.calls[0]!.hold).toBeUndefined();
         expect(out.events.map(e => e.kind)).toEqual(['hold', 'stage']);
 
-        // As many as the raid's living: no hold.
+        // Few (at most half the raid's living): no hold.
         const d2 = director({ settings: { sight: false } });
         d2.startMuster(plan);
-        expect(d2.update(f(7), 0, []).calls[0]!.stage).toBe('go');
+        expect(d2.update(f(3), 0, []).calls[0]!.stage).toBe('go');
 
         // Held without a break for defenceMaxMs: the muster ends 'defended'.
         const d3 = director();
@@ -320,6 +320,53 @@ describe('muster', () => {
         out = d3.update(f(8), 600_000, []);
         expect(out.calls).toHaveLength(0);
         expect(out.events.find(e => e.kind === 'close')).toMatchObject({ end: 'defended' });
+    });
+
+    test('the moment to raid: few defenders, the owners busy elsewhere, or the weaker side when a third realm is at the keep (S3, 2026-11-13)', () => {
+        const S = DIRECTOR_SETTINGS;
+        const h = (defenders: number, third: number, ownersAway: number, living = 12) => musterHold({ defenders, third, ownersAway, living }, S);
+        expect(h(0, 0, 0)).toBeNull();
+        expect(h(6, 0, 0)).toBeNull();                 // half of 12
+        expect(h(7, 0, 0)).toBe('defenders');          // more than half
+        expect(h(7, 0, 3)).toBeNull();                 // but the owners are fighting the third realm elsewhere
+        expect(h(13, 0, 5)).toBe('defenders');         // more than us: never
+        expect(h(2, 0, 0, 2)).toBeNull();              // at least fewMin
+        expect(h(8, 8, 0)).toBe('winner');             // as many of the third realm: wait for the winner
+        expect(h(10, 4, 0)).toBeNull();                // fewer: join them on the weaker side
+        expect(h(20, 4, 0)).toBe('defenders');         // 16 more than our 12
+    });
+
+    test('the go: defenders by the owner\'s realm, the third realm apart, owners away from a fight seen far off', () => {
+        const plan = { rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } };
+        const raid = { camelot: frame({ id: 'camelot', members: at(33000, 44000, 6, 'G') }) };
+        // The keep is Midgard's; a scout sees 4 Midgard and 5 Hibernia at it: wait for the winner.
+        let d = director({ settings: { sight: false }, targetOwner: () => 'midgard' });
+        d.startMuster(plan);
+        const scout = (fs: ReturnType<typeof foes>) => frame({ id: 'camelot-s1', members: at(33000, 41000, 1, 'S'), foes: fs });
+        let out = d.update({ ...raid, 'camelot-s1': scout([...foes(33000, 38500, 4), ...foes(33000, 38800, 5, 20, { realm: 'hibernia' })]) }, 0, []);
+        expect(out.calls[0]).toMatchObject({ stage: 'rally', hold: 'winner', defenders: 4 });
+        // 6 Midgard at it, and 4 Midgard fighting 3 Hibernia far off: the owners are busy, go.
+        d = director({ settings: { sight: false }, targetOwner: () => 'midgard' });
+        d.startMuster(plan);
+        out = d.update({ ...raid, 'camelot-s1': scout(foes(33000, 38500, 5)) }, 0, []);
+        expect(out.calls[0]).toMatchObject({ stage: 'rally', hold: 'defenders' });
+        const far = frame({ id: 'camelot-s2', members: at(20000, 30000, 1, 'T'), foes: [...foes(20500, 30000, 4, 40), ...foes(21000, 30000, 3, 50, { realm: 'hibernia' })] });
+        far.world.forEach(w => { w.inCombat = true; });
+        out = d.update({ ...raid, 'camelot-s1': scout(foes(33000, 38500, 5)), 'camelot-s2': far }, 2000, []);
+        expect(out.calls[0]).toMatchObject({ stage: 'go' });
+        expect(out.events.find(e => e.kind === 'stage')).toMatchObject({ defenders: 5, third: 0, ownersAway: 4, owner: 'midgard' });
+    });
+
+    test('on its way: a raid unit closing on the target counts at any distance; one that stopped closing for 2 min does not', () => {
+        const plan = { rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } };
+        const d = director({ settings: { sight: false } });
+        d.startMuster(plan);
+        const f = (y: number) => ({ camelot: frame({ id: 'camelot', members: at(33000, 44000, 4, 'G') }), 'camelot-2': frame({ id: 'camelot-2', members: at(33000, y, 3, 'H') }) });
+        const onWay = (o: ReturnType<typeof d.update>) => o.calls[0]!.raid!.filter(m => m.unit === 'camelot-2').every(m => m.onWay);
+        expect(onWay(d.update(f(60000), 0, []))).toBe(true);
+        expect(onWay(d.update(f(60000), 60_000, []))).toBe(true);    // just set out
+        expect(onWay(d.update(f(60000), 130_000, []))).toBe(false);  // still at home after 2 min
+        expect(onWay(d.update(f(58000), 140_000, []))).toBe(true);   // walking again
     });
 
     test('a muster counts losses and kills over every unit in the raid', () => {

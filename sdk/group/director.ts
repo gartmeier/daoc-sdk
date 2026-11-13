@@ -67,8 +67,12 @@ export interface RealmCall {
     raid?: RaidMember[];
     /** Muster only: enemy players our realm saw near the target in the last defenceMemoryMs. */
     defenders?: number;
-    /** Muster only: what holds it now. 'defenders': the go waits while they outnumber the raid; 'lord': the clock waits. */
-    hold?: 'defenders' | 'lord';
+    /**
+     * Muster only: what holds it now. 'defenders': the go waits for few defenders (or their realm busy elsewhere);
+     * 'winner': a third realm fights the owners at the target, at least as many: we wait to take it from the winner;
+     * 'lord': the clock waits.
+     */
+    hold?: MusterHold;
     /**
      * Help only: where the units coming (answered 'coming', or asked) stand now, not yet arrived, nearest to `at` first. The
      * caller falls back toward the nearest (rvr.ts) and turns once they are with it (they count as ours there).
@@ -86,10 +90,23 @@ export interface RaidMember {
     y: number;
     z: number;
     alive: boolean;
+    /** The character, its object id and level, and whether it knows a rez: rez in the raid across its units (tactics/raid.ts). */
+    name?: string;
+    id?: number;
+    level?: number;
+    rez?: boolean;
+    /**
+     * Alive, and its unit still closing on the target (or just set out): the stage waits for it at any distance, not only
+     * within siege.ts RAID_COMING (the whole-raid wait counts units on their way). A unit that stopped closing for
+     * onWayMs (forming up at home, in a fight elsewhere) drops out of it, so it can't hold the raid forever.
+     */
+    onWay?: boolean;
 }
 
 /** Raid members' places are rounded to this. */
 export const RAID_ROUND = 50;
+
+export type MusterHold = 'defenders' | 'winner' | 'lord';
 
 /** A running unit of the realm as the calls file carries it: its living's centre (rounded to RAID_ROUND), how many live. */
 export interface UnitSpot {
@@ -180,6 +197,21 @@ export interface DirectorSettings {
     defenceShare: number;
     defenceMemoryMs: number;
     defenceMaxMs: number;
+    /**
+     * The moment to raid (stint 2026-11-13, S3): the go waits for few defenders seen at the target, at most fewShare of
+     * the raid's living (at least fewMin), unless the owners are seen busy elsewhere: ownersAwayMin of the owner's realm
+     * in a fight more than ownersAwayFrom from the target with the third realm within ownersAwayPair of them, seen within
+     * defenceMemoryMs. With the third realm at the target too, we join the weaker side: they are fewer than the
+     * defenders, we go (counting the defenders less them); as many or more, we wait for the winner ('winner').
+     */
+    fewShare: number;
+    fewMin: number;
+    ownersAwayMin: number;
+    ownersAwayFrom: number;
+    ownersAwayPair: number;
+    /** A raid unit counts as on its way while it came onWayMin closer to the target in the last onWayMs (or set out within it). */
+    onWayMs: number;
+    onWayMin: number;
     /** In 'go', the raid broke once its living fell below this share of those it went with. */
     raidBreak: number;
     /** Raids on a rhythm: a new muster this long after the last one ended (or the director started). 0 = only startMuster. */
@@ -196,6 +228,8 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     quorum: 0.7, rallyMaxMs: 240_000, goMaxMs: 900_000, raidBreak: 0.3, raidEveryMs: 0,
     lordGraceMs: 30_000, lordMaxMs: 600_000,
     defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000,
+    fewShare: 0.5, fewMin: 2, ownersAwayMin: 3, ownersAwayFrom: 8000, ownersAwayPair: 2500,
+    onWayMs: 120_000, onWayMin: 1000,
 };
 
 /** A unit's orders reason in siege.ts's lord phase (tactics/raid.ts writes `raid <phase>: ...`). */
@@ -237,6 +271,25 @@ export function defaultRaid(realm: PlayerRealm, regionId = THIDRANKI): RaidPlan 
     return { rally, target: { x: faste.x, y: faste.y, z: faste.z } };
 }
 
+/**
+ * What holds a muster's go, or null (the moment to raid, stint 2026-11-13, S3). Defenders are the owner's realm seen at
+ * the target; third the other realm seen there; ownersAway those of the owner's realm seen fighting the third realm far off.
+ * - Both at the target: as many of the third or more, wait for the winner; fewer, join them on the weaker side (go while
+ *   the defenders less them don't outnumber us).
+ * - Otherwise: go on few defenders (fewShare of our living, at least fewMin), or with the owners busy elsewhere while the
+ *   defenders don't outnumber us (defenceShare, the hold of 59b44a0).
+ */
+export function musterHold(n: { defenders: number; third: number; ownersAway: number; living: number }, s: Pick<DirectorSettings, 'defenceShare' | 'fewShare' | 'fewMin' | 'ownersAwayMin'>): MusterHold | null {
+    const { defenders, third, living } = n;
+    if (third > 0 && defenders > 0) {
+        if (third >= defenders) return 'winner';
+        return defenders - third > s.defenceShare * living ? 'defenders' : null;
+    }
+    if (defenders > s.defenceShare * living) return 'defenders';
+    const few = defenders <= Math.max(s.fewMin, s.fewShare * living);
+    return few || n.ownersAway >= s.ownersAwayMin ? null : 'defenders';
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────── the events
 
 export type DirectorEvent =
@@ -247,9 +300,10 @@ export type DirectorEvent =
     | { kind: 'ask'; call: string; unit: string; dist: number }
     | { kind: 'answer'; call: string; unit: string; state: AnswerState; why: string }
     | { kind: 'arrive'; call: string; unit: string; ms: number; answered: boolean }
-    | { kind: 'stage'; call: string; stage: 'rally' | 'go'; atRally: number; of: number }
-    /** A muster's hold began (on) or ended: the go waits for the defenders, or the clock for the lord. */
-    | { kind: 'hold'; call: string; why: 'defenders' | 'lord'; on: boolean; defenders: number; living: number }
+    /** At the go: defenders and the third realm seen at the target, owners seen busy elsewhere (the moment to raid). */
+    | { kind: 'stage'; call: string; stage: 'rally' | 'go'; atRally: number; of: number; defenders?: number; third?: number; ownersAway?: number; owner?: string | null }
+    /** A muster's hold began (on) or ended: the go waits for the defenders or the winner, or the clock for the lord. */
+    | { kind: 'hold'; call: string; why: MusterHold; on: boolean; defenders: number; living: number; third?: number; ownersAway?: number }
     | { kind: 'close'; call: string; from: string; why: CallWhy | 'raid'; ms: number; end: string; lost: number; wiped: boolean; asked: string[]; coming: string[]; arrived: string[]; kills: number | null; foesMax: number; oursMax: number };
 
 export type LoggedEvent = DirectorEvent & { t: number; realm: PlayerRealm; shadow: boolean };
@@ -274,8 +328,12 @@ interface Open {
         lordAt?: number;
         /** Since when the defenders hold the rally. */
         heldSince?: number;
-        /** Enemy players seen near the target, by key: last seen. */
-        seen: Map<string, number>;
+        /** Enemy players seen near the target, by key: last seen and realm. */
+        seen: Map<string, { at: number; realm: string }>;
+        /** Owner-realm players seen in a fight with the third realm far from the target, by key: last seen. */
+        away?: Map<string, number>;
+        /** Each raid unit's distance to the target over time (onWay). */
+        progress?: Map<string, { t: number; d: number }[]>;
     };
 }
 
@@ -649,7 +707,24 @@ export class RealmDirector {
         const raid = board.units.filter(u => call.asked.includes(u.unit) && u.running);
         const living = raid.reduce((t, u) => t + u.alive, 0);
         const round = (n: number) => Math.round(n / RAID_ROUND) * RAID_ROUND;
-        call.raid = raid.flatMap(u => u.members.map(m => ({ unit: u.unit, x: round(m.x), y: round(m.y), z: round(m.z), alive: !m.isDead })));
+        // On its way: each unit's distance to the target over onWayMs (a unit forming up at home or fighting elsewhere stops counting).
+        const progress = o.raid.progress ??= new Map();
+        const onWay = new Set<string>();
+        for (const u of raid) {
+            if (!u.centre) continue;
+            const d = dist2(u.centre, o.raid.target);
+            const list = progress.get(u.unit) ?? [];
+            const first = list[0];
+            list.push({ t: now, d });
+            while (list.length > 2 && now - list[1]!.t >= s.onWayMs) list.shift();
+            progress.set(u.unit, list);
+            if (!first || now - first.t < s.onWayMs || list[0]!.d - d >= s.onWayMin) onWay.add(u.unit);
+        }
+        call.raid = raid.flatMap(u => u.members.map(m => ({
+            unit: u.unit, x: round(m.x), y: round(m.y), z: round(m.z), alive: !m.isDead, name: m.name,
+            ...(m.objectId ? { id: m.objectId } : {}), ...(m.level ? { level: m.level } : {}), ...(m.rez ? { rez: true } : {}),
+            ...(!m.isDead && onWay.has(u.unit) ? { onWay: true } : {}),
+        })));
         const point = call.stage === 'rally' ? o.raid.rally : o.raid.target;
         const there = raid.reduce((t, u) => t + u.members.filter(m => !m.isDead && dist2(m, point) <= s.arrive * 1.5).length, 0);
         const near = foesNear(board.foes, point, s.nearFoe);
@@ -658,39 +733,51 @@ export class RealmDirector {
         call.ours = there;
         o.foesMax = Math.max(o.foesMax, call.foes);
         o.oursMax = Math.max(o.oursMax, there);
-        // The defenders: enemy players seen near the target lately (the board holds only those in view now).
+        // Who holds the target now (live read), and the realms seen near it lately (the board holds only those in view now).
+        let owner: string | null = null;
+        try { owner = this.targetOwner?.() ?? null; } catch { /* unknown */ }
         const seen = o.raid.seen;
-        for (const f of foesNear(board.foes, o.raid.target, s.defenceRadius)) seen.set(f.key, now);
-        for (const [k, at] of seen) if (now - at > s.defenceMemoryMs) seen.delete(k);
-        const defenders = seen.size;
+        for (const f of foesNear(board.foes, o.raid.target, s.defenceRadius)) seen.set(f.key, { at: now, realm: f.realm });
+        for (const [k, v] of seen) if (now - v.at > s.defenceMemoryMs) seen.delete(k);
+        // Defenders: the owner's realm (all of them while the owner is unknown); the third realm: the others there.
+        const knownOwner = owner && owner !== this.realm && owner !== 'none' ? owner : null;
+        let defenders = 0, third = 0;
+        for (const v of seen.values()) { if (!knownOwner || v.realm === knownOwner) defenders++; else third++; }
+        // The owners busy elsewhere: of their realm, in a fight far from the target, the third realm by them.
+        const away = o.raid.away ??= new Map();
+        if (knownOwner) {
+            const far = board.foes.filter(f => f.realm === knownOwner && f.inCombat && dist2(f, o.raid!.target) > s.ownersAwayFrom);
+            const others = board.foes.filter(f => f.realm !== knownOwner);
+            for (const f of far) if (others.some(x => dist2(x, f) <= s.ownersAwayPair)) away.set(f.key, now);
+        }
+        for (const [k, at] of away) if (now - at > s.defenceMemoryMs) away.delete(k);
+        const ownersAway = away.size;
         call.defenders = defenders;
-        const hold = (why: 'defenders' | 'lord', on: boolean) => {
+        const hold = (why: MusterHold, on: boolean) => {
             if ((call.hold === why) === on) return;
-            if (on) call.hold = why; else delete call.hold;
-            events.push({ kind: 'hold', call: call.id, why, on, defenders, living });
+            if (on) { if (call.hold && call.hold !== why) hold(call.hold, false); call.hold = why; } else delete call.hold;
+            events.push({ kind: 'hold', call: call.id, why, on, defenders, living, third, ownersAway });
         };
         if (call.stage === 'rally') {
             const waited = now - o.raid.stagedAt;
             const ready = living > 0 && (there >= s.quorum * living || (waited >= s.rallyMaxMs && there >= 0.5 * living));
-            const outnumbered = living > 0 && defenders > s.defenceShare * living;
-            if (outnumbered) o.raid.heldSince ??= now;
+            const why = living > 0 ? musterHold({ defenders, third, ownersAway, living }, s) : null;
+            if (why) o.raid.heldSince ??= now;
             else delete o.raid.heldSince;
-            hold('defenders', outnumbered);
+            if (why) hold(why, true); else if (call.hold) hold(call.hold, false);
             if (o.raid.heldSince !== undefined && now - o.raid.heldSince >= s.defenceMaxMs) {
-                hold('defenders', false);
+                if (call.hold) hold(call.hold, false);
                 events.push(this.close(o, 'defended', board, now));
                 this.raidEndedAt = now;
-            } else if (ready && !outnumbered) {
+            } else if (ready && !why) {
                 call.stage = 'go';
                 call.at = { ...o.raid.target };
                 o.raid.stagedAt = now;
                 o.raid.livingAtGo = living;
                 o.arrived.clear();
-                events.push({ kind: 'stage', call: call.id, stage: 'go', atRally: there, of: living });
+                events.push({ kind: 'stage', call: call.id, stage: 'go', atRally: there, of: living, defenders, third, ownersAway, owner });
             }
         } else {
-            let owner: string | null = null;
-            try { owner = this.targetOwner?.() ?? null; } catch { /* unknown */ }
             if (raid.some(u => LORD_PHASE.test(u.reason))) o.raid.lordAt = now;
             const gone = now - o.raid.stagedAt;
             const onLord = o.raid.lordAt !== undefined && now - o.raid.lordAt <= s.lordGraceMs;
