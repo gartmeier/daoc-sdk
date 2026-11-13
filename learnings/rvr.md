@@ -446,6 +446,31 @@ The ranks follow line of sight with the walls (`sdk/vision.ts` `lineOfSight` ove
   - Our client gave the same 13 answers, guard by guard. Untested so far: lines through the merlon gaps, eye heights other than ours, and a closed gate.
 - **To measure again:** a throwaway allows one realm per account, and it moves a character that logs in near an enemy keep to its bind point unless its last login was within `NearKeepRelogGracePeriod` minutes (3). Raise that in `serverproperty` first. Then capture in its gameserver container (`tcpdump -i any -nn -U -w /tmp/x.pcap tcp port <game port>`) and run `bun client/dev/los-capture.ts <pcap> --port=<game port>`; it names each checker from the NPC packets in the same capture.
 
+**Our own doors (`sdk/doors.ts`, 2026-11-13).** A player of the keep's realm goes through any of its doors by interacting with it (`GameKeepDoor.Interact`, within 192 in 3D).
+- **The jump:** the server puts the player on the door's other side, 150 past a gate (`DoorId % 10 == 1`) or 100 past an inner door or postern, at the door's z. Without keep components (the Faste), no door raises z.
+- **The door's front** is where its heading points (`GetPointFromHeading`: x - sin, y + cos), and it faces the keep's inside. The gate (heading 1024) faces west, into the courtyard.
+- **In our walks:** where a planned route crosses a door registered as ours (`applyDoors` with `ours`, `openOwnDoors`), `walkTo` stops 90 out, interacts and waits for the jump. Live: 47 ms.
+  - A door that doesn't open is dropped (reason `door`).
+  - The melee chase never goes straight through a keep door, ours or a shut enemy's (`doorBetween`): `out_of_reach`.
+- **Live on a throwaway** (an L24 Albion Wizard, Albion's Faste): outside the gate to the wall-walk took 9.4 s, through the gate and up the stair at (33530-33660, 38860-38960). From Albion's rally over its bridge to a wall stand took 85 s.
+
+**Another level only by a found route (`actions.ts` `layerRoute`).** `walkToObject`'s step onto a target that is close on the ground, and the melee chase to a target more than 100 up or down, both take the navmesh's found route.
+- The step: only a route no longer than 1.5 × the 3D distance + 100.
+- The chase: a found route of any length.
+- Otherwise `out_of_reach`. Melee under a wall Wizard no longer climb the wall (live 2026-11-13 08:36). Without a mesh, nothing changes.
+
+**The defence from inside** (`defencePlan`, `defenceOrders`; members by `holdDefenceStand`, the unit by `tactics/defend.ts`).
+- **Jobs come from spells, never from names.** Each member reports its own in `capabilities.defence`, and the unit seats them by it:
+  - a point-blank bomb of 100 or more: the gate's inside, then the stair tops;
+  - an Animist's turret: inside the gate;
+  - a healer: by the wall stair's foot;
+  - a ranged nuke of 1000 or more, or a bow: the wall-walk;
+  - everyone else: behind the gate.
+- **The wall sees only the courtyard.** No wall-walk spot within 1500 of the stair sees anything outside the gate, and nothing outside sees it: the eye is below the merlons' tops. The five wall stands each see 155-175 of 202 courtyard points. So the wall fights once the gate is down.
+- **A point-blank bomb has no line-of-sight check** (`SpellHandler.SelectTargets`, ENEMY with a radius: `GetPlayersInRadius`). A bomber 120 inside the gate hits the melee breaking it from outside (34420, 210 away). Rehearsal: an Ice Wizard's Steaming Blast hit them through the shut gate for 118-127, and one died in 10 s.
+- **Fight what comes to the keep:** `inDefenceReach`, within 1450 of the keep's centre. Unlimited, the rehearsal's defenders engaged attackers at the stage, 3200 out, and walked out to them.
+- **Measure "inside" from the keep's centre** (33089, 38271), not the lord's spot, which is 800 west on the building.
+
 ## The wolf pack (`sdk/group/pack.ts`, `rvrPack`)
 
 Hit and run for one group, as an alternative to `rvr-roam`: `defineStrategy(rvrPack, { name: '<group>-pack' })`. Live on 2026-11-03 for Hibernia against Midgard and Camelot on roaming, with the user watching and correcting.
