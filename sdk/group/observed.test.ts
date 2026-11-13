@@ -288,13 +288,10 @@ describe('buffers buff it first', () => {
         const [t] = planBuffs('Druid', [druid, human({ effects: ['Strength'] })], { needs: { melee: ['str'], healer: [] } });
         expect(t).toMatchObject({ target: 'Vue', covered: true, ours: true });
     });
-    test('its own pet (a charmed bwca) gets the leftover concentration, last, as a member’s window pet does', () => {
+    test('a pet near it is not taken for its own: only window pets are the group ones (the user: Only buff in the group)', () => {
         const druid = report('Druid', { role: 'healer', capabilities: { heal: true, cc: false, nuke: false, buffs: [], buffSpells: [spell('Strength', 'str')] } });
-        const tasks = planBuffs('Druid', [druid, human({ observedPet: { objectId: 600, name: 'bwca', x: 0, y: 0, z: 0 } })], { needs: { melee: ['str'], healer: [] }, petNeeds: ['str'] });
-        expect(tasks.map(t => `${t.target}${t.pet ? `@${t.pet.owner}:${t.pet.objectId}` : ''}`)).toEqual(['Vue', 'bwca@Vue:600']);
-        // Some member's window pet after all (the board's view was wrong): not taken twice.
-        const owner = report('Ench', { role: 'nuker', pet: { objectId: 600, name: 'bwca' } as MemberReport['pet'] });
-        expect(planBuffs('Druid', [druid, owner, human({ observedPet: { objectId: 600, name: 'bwca', x: 0, y: 0, z: 0 } })], { needs: { melee: ['str'], healer: [], nuker: [] }, petNeeds: ['str'] }).filter(t => t.pet).map(t => t.pet!.owner)).toEqual(['Ench']);
+        const tasks = planBuffs('Druid', [druid, human({ observedPet: { objectId: 600, name: 'underhill compatriot', x: 0, y: 0, z: 0 } })], { needs: { melee: ['str'], healer: [] }, petNeeds: ['str'] });
+        expect(tasks.map(t => t.target)).toEqual(['Vue']);
     });
 });
 

@@ -129,13 +129,10 @@ export function planBuffs(caster: string, members: MemberReport[], opts: BuffOpt
     }
     // Last, the window pets of living members, in the targets' order, rounds over their needs: concentration buffs from
     // the slot's provider by role (a pet casts none of its own). What is on one we know only from our own list.
-    // A window pet, or an observed member's own (observedPet: a human's charmed mob), unless it is some member's window pet.
-    const windowPets = new Set(members.map(m => m.pet?.objectId).filter(Boolean));
+    // Only a member's window pet: one we know is the group's. Not an observed member's guessed pet (observedPet): the nearest
+    // pet near Niamh was another player's underhill compatriot, and the user said "Only buff in the group" (2026-11-13 16:12).
     const pets: { owner: string; pet: { objectId: number; name: string } }[] = [];
-    for (const t of targets) {
-        const pet = t.pet?.name && t.pet.objectId ? t.pet : t.observedPet && !windowPets.has(t.observedPet.objectId) ? t.observedPet : null;
-        if (pet) pets.push({ owner: t.name, pet });
-    }
+    for (const t of targets) if (t.pet?.name && t.pet.objectId) pets.push({ owner: t.name, pet: t.pet });
     const petNeeds = opts.petNeeds ?? PET_BUFF_NEEDS;
     const own = opts.ownConc ?? [];
     for (let rank = 0; rank < petNeeds.length; rank++) {
@@ -225,7 +222,7 @@ export function surplusConcentration(tasks: BuffTask[], active: ConcEntry[], con
     const missing = tasks.filter(t => !t.covered && t.spell.concentration > 0);
     const short = (list: BuffTask[]) => list.some(t => t.spell.concentration > conc.current) || (list.length > 0 && active.length >= MAX_CONC_EFFECTS);
     // A member's buff short of room: our buffs on pets go first, planned or not (they were the leftover).
-    const petNames = new Set(members.flatMap(m => [m.pet?.name, m.observedPet?.name]).filter((n): n is string => !!n));
+    const petNames = new Set(members.map(m => m.pet?.name).filter((n): n is string => !!n));
     const onPets = active.filter(a => a.concentration > 0 && petNames.has(a.ownerName));
     if (onPets.length && short(missing.filter(t => !t.pet))) return onPets;
     if (!short(missing)) return [];
