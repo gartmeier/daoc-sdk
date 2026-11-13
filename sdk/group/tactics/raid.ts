@@ -240,6 +240,10 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     const { plan } = o;
     const r: RaidMemory = o.mem.raid;
     for (const m of o.members) for (const id of m.doorsBroken ?? []) if (!r.broken.includes(id)) r.broken.push(id);
+    // A door the server says shut (0x99, MemberReport.doorsShut: repaired) is no longer broken, unless a living member stands behind it
+    // (passedDoors below puts it back). S2, f7465d2.
+    const shut = new Set(o.members.flatMap(m => m.doorsShut ?? []));
+    if (shut.size) r.broken = r.broken.filter(id => !shut.has(id));
     const view: RaidView = {
         members: o.members.map(m => ({ id: m.objectId, x: m.x, y: m.y, z: m.z, alive: !m.isDead })),
         seen: o.guards.map(guardSeen),

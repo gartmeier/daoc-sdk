@@ -445,3 +445,11 @@ describe('the rush up to the lord: everyone OK first (S2, the user: "if the seco
         expect(lordHurt(ms, [contact(800, { kind: 'npc', name: 'Runemaster', keepGuard: true, hp: 90, target: ms[0]!.name } as any)], undefined)).toBe(true);
     });
 });
+
+describe('raidStep: a door the server says shut is no longer broken (S2, f7465d2)', () => {
+    test('doorsShut drops it from the raid memory', () => {
+        const mem: Record<string, any> = { raid: { callId: 'x', staged: false, broken: [4242] } };
+        raidStep({ plan, mem, members: five(plan.rally).map((m, i) => (i ? m : { ...m, doorsShut: [4242] })), guards: [] });
+        expect(mem.raid.broken).not.toContain(4242);
+    });
+});
