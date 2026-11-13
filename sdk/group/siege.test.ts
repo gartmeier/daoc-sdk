@@ -239,6 +239,9 @@ describe('raidOrders', () => {
         // The others there too: in it goes. Those back at the portal keep don't count.
         const arrived = at(plan.stage, 10).map(m => ({ ...m, id: m.id + 100 }));
         expect(raidOrders(plan, view({ members: unit, raid: [...unit, ...arrived, ...far] })).phase).toBe('assault');
+        // The rest already in at the gate: they count, in it goes (live 04:58).
+        const atGate = at(FASTE.targets.find(x => x.label === 'gate')!.stand, 10).map(m => ({ ...m, id: m.id + 100 }));
+        expect(raidOrders(plan, view({ members: unit, raid: [...unit, ...atGate, ...far] })).phase).toBe('assault');
         // Without the raid: as before, the unit alone.
         expect(raidOrders(plan, view({ members: unit })).phase).toBe('assault');
         // Staged already: the raid count is not asked again.

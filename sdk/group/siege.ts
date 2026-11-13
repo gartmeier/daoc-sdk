@@ -414,7 +414,8 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         const there = alive.filter(m => Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= STAGE_NEAR).length;
         // The whole raid (when known): wait at the stage for the share of it on the way.
         const coming = view.raid?.filter(m => m.alive && Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= RAID_COMING) ?? [];
-        const raidThere = coming.filter(m => Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= STAGE_NEAR).length;
+        // At the stage or past it: those who went in already count (live 04:58: hibernia-2 waited for "6/18" while the rest stood at the gate).
+        const raidThere = coming.filter(m => Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= STAGE_NEAR || (keep && pastStage(plan, keep, m))).length;
         // Nobody there yet and the body not past the stage: walk on (each member by routeFrom from itself).
         if (there === 0 && toStage > AT_SPOT && !(keep && pastStage(plan, keep, centre))) {
             const next = routeFrom(plan, centre)[0] ?? plan.stage;
