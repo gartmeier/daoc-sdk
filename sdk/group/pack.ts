@@ -27,7 +27,7 @@ import { aggroZones } from './terrain';
 import { lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, roadsOut } from './tactics/roads';
 import { withHasten } from './tactics/hasten';
-import { RAID_FOE_REACH, raidNow } from './tactics/raid';
+import { RAID_FOE_REACH, raidNow, underRaidKeep } from './tactics/raid';
 import { planBuffs } from './buffs';
 import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
@@ -299,8 +299,9 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const inKeep = (c: Point) => !clearOf(c, keeps);
     // Enemy players under the guards of a keep not ours are no fight unless on us, raiding or not: a fight there brings the guards
     // (the user, 20:09, raiding the Faste: "then we got the guards' adds"). The raid's own keep is in this one too.
-    const guarded = raiding ? keepDangers(regionId, realm, s) : keeps;
-    const underGuards = (c: Point) => !clearOf(c, guarded);
+    // The raid's own keep: before the assault, within RAID_KEEP_AREA (tactics/raid.ts underRaidKeep; decideRvr waits outside for them).
+    const preAssault = !!raiding && !(mem.raid as { staged?: boolean } | undefined)?.staged;
+    const underGuards = (c: Point) => inKeep(c) || (preAssault && underRaidKeep(raiding!.plan, c));
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, leader.z, { radius: 8000 });
     const dry = staysDry(s);
     const trip: Trip = { mem, now, regionId, level, avoid: keeps, travelLeg: s.travelLeg, zAt, dry };

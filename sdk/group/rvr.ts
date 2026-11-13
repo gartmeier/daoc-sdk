@@ -44,9 +44,10 @@ import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry } from './water';
 import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, TRAIL_MS, trailGoal, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
-import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, leaveWiped, noteArrival, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
+import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, leaveCall, leaveWiped, noteArrival, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
-import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
+import { peelStand, RAID_FOE_REACH, RAID_PEEL_MAX_MS, RAID_REST_MAX_MS, raidCall, raidNow, raidStep, underRaidKeep, withRaid } from './tactics/raid';
+import { planKeep } from './siege';
 import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDefence, withDefence } from './tactics/defend';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
@@ -705,6 +706,12 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const ours = new Set(p.members.map(m => m.name));
     const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
     const inKeep = (c: Point) => !clearOf(c, keeps);
+    // Before the assault (the raid not yet staged): enemy players met on the way are fought on open ground as outside a raid, and those
+    // under the raid keep's guards are no fight unless on us; the raid waits outside for them (below). The user at 20:09: "I would have
+    // tried to face the Mids on the field, then rest if we win, then try to peel the Albs at the keep from the outside, and only if
+    // everything is clean, we go for the guards."
+    const preAssault = !!raid && !(mem.raid as { staged?: boolean } | undefined)?.staged;
+    const atRaidKeep = (c: Point) => preAssault && underRaidKeep(raid!.plan, c);
     const enemies = contacts.filter(c => c.kind === 'player' && !c.stale && c.regionId === regionId);
     // Where each enemy player was seen, over time: what a lost squad's trail and way in are read from (tactics/ambush.ts).
     if (s.ambush) noteTracks((mem.ambushTracks ??= {}) as Tracks, enemies, now);
@@ -774,9 +781,9 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const near = dist(c, centre) <= s.engageRadius + (c.threat || c.objectId === o.focus ? FOCUS_SLACK : 0);
         if (onUs(c)) return inMain.has(onWhom(c)!) || near;
         if (c.isPet && c.threat) return near;
-        if (c.kind !== 'player' || inKeep(c) || (ctx.windingDown && !c.threat && c.objectId !== o.focus)) return false;
-        // Raiding: a player not on us fights us only within RAID_FOE_REACH; the raid goes on past one farther off.
-        if (raid && dist(c, centre) > RAID_FOE_REACH) return false;
+        if (c.kind !== 'player' || inKeep(c) || atRaidKeep(c) || (ctx.windingDown && !c.threat && c.objectId !== o.focus)) return false;
+        // In the assault: a player not on us fights us only within RAID_FOE_REACH; the raid goes on past one farther off.
+        if (raid && !preAssault && dist(c, centre) > RAID_FOE_REACH) return false;
         return near;
     };
 
@@ -939,7 +946,7 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // One in sight last tick stays in sight to HUNT_KEEP beyond huntRadius: a swimmer at 4880-4994 flipped hibernia between waiting
     // ashore and closing on hibernia-2 every second (19:54, the user: "they are flipping again").
     const huntSeen = new Set<number>(mem.huntSeen ?? []);
-    const seen = raid || defendingInside ? [] : enemies.filter(c => !inKeep(c) && dist(c, centre) <= s.huntRadius + (huntSeen.has(c.objectId) ? HUNT_KEEP : 0));
+    const seen = (raid && !preAssault) || defendingInside ? [] : enemies.filter(c => !inKeep(c) && !atRaidKeep(c) && dist(c, centre) <= s.huntRadius + (huntSeen.has(c.objectId) ? HUNT_KEEP : 0));
     mem.huntSeen = seen.map(c => c.objectId);
     if (seen.length) {
         // The group we just ran from is sized up whole: those of it we mezzed, and those out of view, still count (FLED_MS).
@@ -998,6 +1005,33 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 
     // ── The raid (tactics/raid.ts, siege.ts): the muster said go. Enemy players first (above); then over our own bridge to the
     // stage, and rank by rank to the lord, whoever is dead or low: raidOrders counts the living, and rest comes with nothing to hit. ──
+    if (raid && preAssault) {
+        // After a fight on the way: rest and rebuff before going on (RAID_REST_MAX_MS at most; buffs as in a field rest).
+        if (o.phase === 'engage' || o.phase === 'retreat' || o.phase === 'pull') mem.raidRested = now;
+        if (mem.raidRested !== undefined && now - mem.raidRested < RAID_REST_MAX_MS) {
+            const buffs = homeBuffHold({ recoverSince: mem.raidRested }, p.members, here, centre, null, now, true);
+            if (low.length || buffs) {
+                return { ...calm, phase: 'recover', anchor: restAt().at, waiting: low, objective: `raid: rest and rebuff${gone}`, reason: `raid: rest and rebuff after the fight${low.length ? `: ${low.map(w => `${w.name}'s ${w.why}`).join(', ')}` : ''}${buffs ? `; ${buffs}` : ''}` };
+            }
+        }
+        mem.raidRested = undefined;
+        // Enemy players at the keep: wait outside its guards for them to come out (fought as they come: inFight), then the guards.
+        const atKeep = enemies.filter(c => isAlive(c) && atRaidKeep(c));
+        if (atKeep.length) {
+            mem.raidPeelSince ??= now;
+            const keep = planKeep(raid.plan);
+            if (now - mem.raidPeelSince >= RAID_PEEL_MAX_MS) {
+                leaveCall(mem, raid.call, `defended: ${atKeep.length} enemy players at ${raid.plan.keep}`, now + 10 * 60_000);
+                mem.raidPeelSince = undefined;
+                return { ...calm, phase: 'recover', anchor: stay, reason: `raid left: ${enemiesText(atKeep.length)} at ${raid.plan.keep} for ${Math.round(RAID_PEEL_MAX_MS / 60_000)} min${gone}` };
+            }
+            const q = peelStand(raid.plan);
+            const spot = dry ? drySpot(regionId, q, { toward: raid.plan.rally, ok: c => clearOf(c, keeps) }) : q;
+            const left = Math.ceil((RAID_PEEL_MAX_MS - (now - mem.raidPeelSince)) / 1000);
+            return { ...calm, phase: 'recover', anchor: { x: Math.round(spot.x), y: Math.round(spot.y), z: zAt(spot) }, ...(keep ? { facing: { x: keep.x, y: keep.y } } : {}), objective: `raid: peel the keep from outside${gone}`, reason: `raid: ${enemiesText(atKeep.length)} at ${raid.plan.keep}: waiting outside its guards for them, the guards after, ${left} s at most` };
+        }
+        mem.raidPeelSince = undefined;
+    }
     if (raid) {
         const guards = p.contacts.filter(c => c.keepGuard && !c.stale && isAlive(c) && c.regionId === regionId);
         const { update } = raidStep({ plan: raid.plan, mem, members: p.members.filter(m => m.regionId === regionId), guards, call: raid.call, unit: mem.realmUnit ?? '' });

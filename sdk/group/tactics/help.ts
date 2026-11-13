@@ -254,8 +254,13 @@ export const WIPED_LEAVE_MS = 30 * 60_000;
  * same muster from our portal keep, twice, without the user ("they just left without me").
  */
 export function leaveWiped(mem: Record<string, any>, call: Pick<RealmCall, 'id'>, dead: number, of: number, now: number): void {
-    send(mem, call.id, 'left', `wiped: ${dead} of ${of} dead`);
-    (mem.helpLeft ??= {})[call.id] = now + WIPED_LEAVE_MS;
+    leaveCall(mem, call, `wiped: ${dead} of ${of} dead`, now + WIPED_LEAVE_MS);
+}
+
+/** Leave the call we answer: 'left' with `why`, not answered again until `until`, the raid's memory gone. */
+export function leaveCall(mem: Record<string, any>, call: Pick<RealmCall, 'id'>, why: string, until: number): void {
+    send(mem, call.id, 'left', why);
+    (mem.helpLeft ??= {})[call.id] = until;
     mem.help = undefined;
     mem.raid = undefined;
 }

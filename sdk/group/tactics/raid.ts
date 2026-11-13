@@ -64,6 +64,31 @@ export function raidCall(mem: Record<string, any>): RealmCall | null {
     return c && c.kind === 'muster' && c.stage === 'go' ? c : null;
 }
 
+/**
+ * Enemy players this near the raid's keep stand under its guards (keeps.ts KEEP_AREA.keep). Before the assault none of them is fought
+ * unless on us, and the raid waits outside for them (raidPeel in rvr.ts); the guards only once none is left. The user, playing Niamh
+ * at 20:09: "try to peel the Albs at the keep from the outside, and only if everything is clean, we go for the guards."
+ */
+export const RAID_KEEP_AREA = 3000;
+/** The raid waits for those this long at most, then leaves the raid. */
+export const RAID_PEEL_MAX_MS = 180_000;
+/** After a fight on the way, the raid rests and rebuffs this long at most (the user: "then rest if we win"). */
+export const RAID_REST_MAX_MS = 120_000;
+
+/** Whether `p` stands under the raid keep's guards (RAID_KEEP_AREA). */
+export function underRaidKeep(plan: RaidPlan, p: Point): boolean {
+    const k = planKeep(plan);
+    return !!k && Math.hypot(p.x - k.x, p.y - k.y) <= RAID_KEEP_AREA;
+}
+
+/** Where the raid waits outside its keep's guards: RAID_KEEP_AREA + 900 out from the keep toward the rally (before any dry-ground fix). */
+export function peelStand(plan: RaidPlan): Point3 {
+    const k = planKeep(plan) ?? plan.stage;
+    const d = Math.hypot(plan.rally.x - k.x, plan.rally.y - k.y) || 1;
+    const r = Math.min(d, RAID_KEEP_AREA + 900);
+    return { x: Math.round(k.x + (plan.rally.x - k.x) * r / d), y: Math.round(k.y + (plan.rally.y - k.y) * r / d), z: plan.rally.z };
+}
+
 /** The raid this unit plays now: the muster at 'go' and a plan for our realm in this region. Null otherwise (and the memory goes). */
 export function raidNow(mem: Record<string, any>, realm: Realm, regionId: number): { call: RealmCall; plan: RaidPlan } | null {
     const call = raidCall(mem);

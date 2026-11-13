@@ -4,7 +4,7 @@ import type { NearbyObject } from '../../types';
 import { Blackboard, doorsBrokenNear, observeState, type MemberSelf } from '../blackboard';
 import { contact, obs, picture, report } from '../fixtures';
 import { decideRvr, realmCalls, RVR_SETTINGS, type RvrSettings } from '../rvr';
-import { FASTE, raidPlan } from '../siege';
+import { FASTE, planKeep, raidPlan } from '../siege';
 import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { Behavior } from '../member';
 import type { Contact, GroupPicture, MemberReport, Orders, Point3 } from '../types';
@@ -229,8 +229,23 @@ describe('raid: enemy players at the go (attempt 6: the main groups dropped the 
 
     test("decidePack: one 3000 off is no hunt; one under the keep's guards is no fight unless on us, then out of their reach first (the user at 20:09: we got the guards' adds)", () => {
         expect(pk([enemyAt(901, 3000)]).reason).toContain('raid');
-        expect(pk([enemyAt(901, RAID_FOE_REACH - 300)]).focus ?? null).not.toBe(901);
-        expect(pk([{ ...enemyAt(901, RAID_FOE_REACH - 300), target: 'M0', threat: true } as Contact]).reason).toMatch(/^pull back: on us under the guards/);
+        // Under the keep's guards: halfway from the stage (3211 out) to the keep, before the assault.
+        const keep = planKeep(plan)!;
+        const under = (over: Partial<Contact> = {}) => ({ ...enemyAt(901, 0), x: Math.round((plan.stage.x + keep.x) / 2), y: Math.round((plan.stage.y + keep.y) / 2), ...over }) as Contact;
+        expect(pk([under()]).focus ?? null).not.toBe(901);
+        expect(pk([under({ target: 'M0', threat: true })]).reason).toMatch(/^pull back: on us under the guards/);
+        // On open ground on the way (4400 from the keep): fought, as outside a raid (the user: "face the Mids on the field").
+        expect(pk([enemyAt(901, RAID_FOE_REACH - 300)]).focus).toBe(901);
+    });
+
+    test('decideRvr before the assault: players at the keep, the raid waits outside its guards for them; after a fight, rest first', () => {
+        const keep = planKeep(plan)!;
+        const under = { ...enemyAt(901, 0), x: Math.round((plan.stage.x + keep.x) / 2), y: Math.round((plan.stage.y + keep.y) / 2) } as Contact;
+        const u = rvr([under]);
+        expect(u.reason).toMatch(/^raid: 1 enemy at Thidranki Faste: waiting outside its guards for them/);
+        expect(Math.hypot(u.anchor!.x - keep.x, u.anchor!.y - keep.y)).toBeGreaterThan(3000);
+        const low = decideRvr({ picture: picture(five(plan.stage, { mana: 10 }), []), orders: { ...picture([]).orders, phase: 'engage' }, memory: mustered(), now: Date.now(), windingDown: false, settings: mergeSettings(RVR_SETTINGS, {} as any) } as any);
+        expect(low.reason).toMatch(/^raid: rest and rebuff after the fight/);
     });
 });
 
