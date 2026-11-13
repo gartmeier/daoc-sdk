@@ -206,6 +206,22 @@ describe('/region', () => {
         step(18_000, 8);
         expect(said).toEqual(['5 mids on us north of the Faste, help!', '8 mids on us north of the Faste, help!']);
     });
+    test('two units in one fight: said once, again only when it got worse or grew by 3', () => {
+        const v = new RegionVoice();
+        const mids = (n: number, at: { x: number; y: number }) => Array.from({ length: n }, () => ({ ...at, realm: 'midgard' }));
+        const a = { x: 33000, y: 25000 }, b = { x: 34500, y: 25800 }, far = { x: 45000, y: 30000 };
+        const said: string[] = [];
+        const step = (t: number, calls: object[]) => { const l = v.hear(base({ calls: calls as RegionInput['calls'], foes: mids(8, a) }), t); if (l) said.push(`${l.by}: ${l.text}`); };
+        step(0, [help({ id: 'h-1', from: 'hib-1', why: 'sighted', foes: 8, at: a })]);
+        step(6000, [help({ id: 'h-1', from: 'hib-1', why: 'sighted', foes: 8, at: a }), help({ id: 'h-2', from: 'hib-2', why: 'sighted', foes: 8, at: b })]);
+        // The first caller's call closes; the other one of that fight stays quiet.
+        step(12_000, [help({ id: 'h-2', from: 'hib-2', why: 'sighted', foes: 9, at: b })]);
+        // Worse (caught): said again.
+        step(18_000, [help({ id: 'h-2', from: 'hib-2', why: 'caught', foes: 8, at: b })]);
+        // Another fight far off: its own line.
+        step(24_000, [help({ id: 'h-2', from: 'hib-2', why: 'caught', foes: 8, at: b }), help({ id: 'h-3', from: 'hib-1', why: 'sighted', foes: 3, at: far })]);
+        expect(said).toEqual(['hib-1: 8 mids coming north of the Faste, need help', 'hib-2: 8 mids on us north of the Faste, help!', 'hib-1: 3 coming north-east of the Faste, need help']);
+    });
     test('omw from a unit coming', () => {
         const c = regionClaims(base({ calls: [help()], events: [{ kind: 'answer', call: 'hibernia-7', unit: 'hib-2', state: 'coming' }] }));
         expect(c.find(x => x.text === 'omw')?.by).toBe('hib-2');
