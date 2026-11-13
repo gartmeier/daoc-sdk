@@ -47,6 +47,8 @@ From [pets.md](../pets.md#turrets): a ground target first; a spot off the mesh i
 
 **Field run B, hibernia's main group (three sorties, 22:28-00:00):** her Forest's Sentry dealt 6565, 7695 and 7700, two to seven times her own (3041, 1036, 2170), up 58-70 %, 10-21 plants a sortie; 3, 3 and 2 deaths. It broke crowd control 2, 5 and 2 times: only a turret on the focus was called off, and a turret takes its own next target when its target dies. **Fixed, twice:** whatever the turret shoots, mezzed or assigned a mezz, sends it passive. In `plantTurret`'s turn that still let 6 through in the next sortie (23:18): her 2.5 s casts held the turn. Now `turretOffCc` runs on the side tick, every 250 ms, and also counts a mezz another member is casting at it.
 
+**After the side-tick fix (5 sorties, 00:43-03:13):** 1 broken mezz in all five, but the turret dealt 0-1178 a sortie, a fifth of what it dealt before. **Why (server code):** passive wipes the turret's list of what it has been fighting (`ControlledMobBrain.Disengage`), and a turret starts `Defensive`, so after each kill it picks its next target off that list. Those picks were most of its damage. An attack order also stops the shot (`Attack`, `StopCurrentSpellcast`) and keeps the list. So `turretOffCc` now sends the turret back at the focus when it reaches it (`offCcMove`), and goes passive only when it doesn't (b2ee129, 04:19). It hasn't been seen live yet.
+
 ## Not seen live
 
 - In a group, with a haven for `giveGround`.
