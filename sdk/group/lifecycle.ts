@@ -29,6 +29,8 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BATTLEGROUND_LAYOUTS, THIDRANKI, type PlayerRealm } from './keeps';
+import { lineupPool } from './lineup';
+import { loadGroup } from './roster';
 import type { RealmBoardView } from './realm-board';
 import type { Point3 } from './types';
 import { WAVE_DIR, writeWave, type RealmWave } from './waves';
@@ -508,6 +510,17 @@ export interface LifecycleRealm {
     requires?: readonly (string | readonly string[])[];
 }
 
+/**
+ * A realm for startLifecycle from its main group's folder (groups/<camelot|midgard|hibernia>): every bot of its members
+ * and bench with its class and whether it heals (lineup.ts lineupPool), its required classes, and the field's units with
+ * their largest sizes.
+ */
+export async function lifecycleRealm(dir: string, realm: PlayerRealm, units: readonly string[], sizes: Readonly<Record<string, number>>): Promise<LifecycleRealm> {
+    const def = loadGroup(dir, { lineup: undefined });
+    const pool = await lineupPool(def);
+    return { realm, units, sizes, bots: pool.map(c => ({ bot: c.bot, className: c.className, healer: c.healer })), requires: def.requires?.classes };
+}
+
 export interface LifecycleOptions {
     realms: readonly LifecycleRealm[];
     /** S1's swarm control. Resolves when the request is made; the life cycle watches the gateway for the effect. */
@@ -675,7 +688,8 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
                 }
             }
             const state: Saved = { v: 1, at: now, lives: [...lives.values()], balance, sightings, waves, musterEnd, lastOut, lastIn };
-            try { writeAtomic(statePath, JSON.stringify(state)); } catch { /* next time */ }
+            // Shadow plays its sessions only in its head: no state for the real one to pick up.
+            if (!shadow) try { writeAtomic(statePath, JSON.stringify(state)); } catch { /* next time */ }
             if (now - lastSample >= 5 * 60_000) {
                 lastSample = now;
                 const realms = Object.fromEntries(opts.realms.map(r => {
