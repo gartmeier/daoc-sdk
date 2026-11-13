@@ -23,6 +23,8 @@ export interface PathResult {
     /** Waypoints after `from`, ending at the destination. */
     waypoints: Vec3[];
     message?: string;
+    /** Why there is no route, when the caller can act on it: 'door' = a shut door (NavMesh.setDoorBlocking) is in the way. */
+    reason?: 'door';
 }
 
 /** Pluggable route planner for walkTo / travel. */
@@ -95,6 +97,8 @@ const BORDER_SNAP: Vec3 = { x: 128, y: 128, z: 4000 };
 const MAX_CHAIN = 128;
 /** chain(): a partial query ending this close to the leg start or an earlier end made no progress. */
 const CHAIN_STALL = 4;
+/** The door a route through shut doors passes, named in the message: a shut door within this of one of its points. */
+const SHUT_DOOR_NEAR = 300;
 /**
  * chain() weighs a way through water by run speed over swim speed: 191 against a real client's 85 at 100 % with no water
  * speed (client/movement.ts PLAYER_BASE_SWIM_SPEED). A dry way round is taken while it is no slower than that.
@@ -212,7 +216,13 @@ export class NavmeshPathProvider implements PathProvider {
                 if (endOnMesh) {
                     const leg = this.chain(mesh, cur, endOnMesh);
                     pts.push(...leg.points.slice(1));
-                    if (!leg.reached) note = `navmesh reaches (${pts.at(-1)!.x}, ${pts.at(-1)!.y}), ${dist2(pts.at(-1)!, to)} units short; straight from there`;
+                    if (!leg.reached) {
+                        // A shut door (NavMesh.setDoorBlocking) in the way: the route ends, no straight line through the door, which the
+                        // server lets a player walk and a real client cannot (2026-11-13: our raiders passed the Faste's shut doors).
+                        const door = this.shutDoorInTheWay(mesh, cur, endOnMesh);
+                        if (door) return { success: false, waypoints: [], message: `a shut door at (${door.x}, ${door.y}) is in the way: the navmesh reaches (${pts.at(-1)!.x}, ${pts.at(-1)!.y}), ${dist2(pts.at(-1)!, to)} units short`, reason: 'door' };
+                        note = `navmesh reaches (${pts.at(-1)!.x}, ${pts.at(-1)!.y}), ${dist2(pts.at(-1)!, to)} units short; straight from there`;
+                    }
                 } else {
                     note = `destination is off the navmesh of ${zoneLabel(endZone.id)}; straight from (${cur.x}, ${cur.y})`;
                 }
@@ -265,14 +275,26 @@ export class NavmeshPathProvider implements PathProvider {
         return dry.reached && dry.cost <= any.cost ? dry : any;
     }
 
+    /** When some door here is shut: the shut door a route through the shut doors would pass, if that route reaches `end`; else null. */
+    private shutDoorInTheWay(mesh: NavMesh, start: Vec3, end: Vec3): Vec3 | null {
+        if (!mesh.hasShutDoors()) return null;
+        const through = this.chainWith(mesh, start, end, 0, true);
+        if (!through.reached) return null;
+        for (const p of through.points) {
+            const d = mesh.shutDoorNear(p, SHUT_DOOR_NEAR);
+            if (d) return d;
+        }
+        return null;
+    }
+
     /** Chains Detour queries past the 256-poly corridor limit until `end` is reached or progress stops, leaving out polys with `exclude`. */
-    private chainWith(mesh: NavMesh, start: Vec3, end: Vec3, exclude: number): { points: Vec3[]; reached: boolean; cost: number; swims: boolean } {
+    private chainWith(mesh: NavMesh, start: Vec3, end: Vec3, exclude: number, throughShutDoors = false): { points: Vec3[]; reached: boolean; cost: number; swims: boolean } {
         const points: Vec3[] = [start];
         const ends: Vec3[] = [start];
         let cur = start;
         let cost = 0, swims = false;
         for (let i = 0; i < MAX_CHAIN; i++) {
-            const path = mesh.findPath(cur, end, DEFAULT_EXTENTS, exclude);
+            const path = mesh.findPath(cur, end, DEFAULT_EXTENTS, exclude, throughShutDoors);
             if (path.status === 'none' || path.points.length === 0) return { points, reached: false, cost, swims };
             const c = pathCost(path.points);
             cost += c.cost;

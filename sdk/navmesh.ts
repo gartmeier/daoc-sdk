@@ -16,8 +16,11 @@ import { basename, join } from 'node:path';
 import type { Vec3 } from './types';
 import { getZoneAt, getZone } from '../data/zones';
 
-/** Poly flags baked in by buildnav (Pathing/Detour.Managed/DetourEnums.cs). */
-export const PolyFlags = { Walk: 0x01, Swim: 0x02, Door: 0x04, Jump: 0x08, Disabled: 0x10, All: 0xffff } as const;
+/**
+ * Poly flags baked in by buildnav (Pathing/Detour.Managed/DetourEnums.cs). BlockingDoor is set at runtime on a shut door's polys
+ * (NavMesh.setDoorBlocking), as the server does for its NPCs (LocalPathfindingMgr.UpdateDoorFlags): every query leaves it out.
+ */
+export const PolyFlags = { Walk: 0x01, Swim: 0x02, Door: 0x04, Jump: 0x08, Disabled: 0x10, BlockingDoor: 0x20, All: 0xffff } as const;
 
 const DT_FAILURE = 1 << 31 >>> 0;
 const DT_SUCCESS = 1 << 30;
@@ -27,8 +30,11 @@ const DT_STRAIGHTPATH_ALL_CROSSINGS = 0x02;
 const MAX_POLY = 256;
 const SCALE = 1 / 32;
 
-/** Include every poly except Disabled, exclude nothing (PathfindingMgrBase.DefaultFilters). */
-const DEFAULT_FILTER = new Uint16Array([PolyFlags.All ^ PolyFlags.Disabled, 0]);
+/** Include every poly except Disabled; exclude a shut door's (PathfindingMgrBase.DefaultFilters, BlockingDoorAvoidanceFilters). */
+const DEFAULT_FILTER = new Uint16Array([PolyFlags.All ^ PolyFlags.Disabled, PolyFlags.BlockingDoor]);
+/** The server's box round a door for its polys (LocalPathfindingMgr.RegisterDoor: 128 x 128 x 32, at most 24). */
+export const DOOR_POLY_EXTENTS: Vec3 = { x: 128, y: 128, z: 32 };
+const MAX_DOOR_POLYS = 24;
 /** Server default poly-pick half extents (RecastCoords.DefaultHalfExtents): 32 across, 64 up/down. */
 export const DEFAULT_EXTENTS: Vec3 = { x: 32, y: 32, z: 64 };
 
@@ -48,6 +54,10 @@ const symbols = {
     FindRandomPointAroundCircle: { args: [FFIType.ptr, FFIType.ptr, FFIType.f32, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.u32 },
     // (query, start, end, pickExt, filter, *bool, *hit)
     HasLineOfSight: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr], returns: FFIType.u32 },
+    // (query, center, pickExt, filter, *polyRefs (64-bit), *count, maxPolys)
+    GetPolysInBox: { args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.i32], returns: FFIType.u32 },
+    // (navMesh, *polyRefs, count, flagsToRemove, flagsToAdd)
+    UpdateFlags: { args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.u16, FFIType.u16], returns: FFIType.u32 },
 } as const;
 
 type DetourLib = ReturnType<typeof dlopen<typeof symbols>>['symbols'];
@@ -156,6 +166,10 @@ export class NavMesh {
     /** Include and exclude flags for a query that leaves some polys out (findPath's `exclude`). */
     private readonly filter = new Uint16Array(2);
     private readonly losFlag = new Uint8Array(1);
+    /** Each door's polys by its spot (doorPolys), found once as the server does. */
+    private readonly doors = new Map<string, BigUint64Array>();
+    /** The doors shut now (setDoorBlocking), by the same key: where a route that stops short meets one. */
+    private readonly shut = new Map<string, Vec3>();
     private disposed = false;
 
     constructor(private readonly lib: DetourLib, private mesh: Pointer, private query: Pointer, readonly zoneId: number | null, readonly file: string) {}
@@ -179,15 +193,16 @@ export class NavMesh {
 
     /**
      * Straight path between two points that are already on (or within the default extents of) the mesh. `exclude` leaves out polys
-     * with those flags (PolyFlags.Swim: water), start and end included: an end in water then has no path ('none').
+     * with those flags (PolyFlags.Swim: water), start and end included: an end in water then has no path ('none'). A shut door's
+     * polys (setDoorBlocking) are left out too, unless `throughShutDoors` (to tell whether one is what is in the way).
      */
-    findPath(start: Vec3, end: Vec3, halfExtents: Vec3 = DEFAULT_EXTENTS, exclude = 0): NavPath {
+    findPath(start: Vec3, end: Vec3, halfExtents: Vec3 = DEFAULT_EXTENTS, exclude = 0, throughShutDoors = false): NavPath {
         this.check();
         this.count[0] = 0;
         this.filter[0] = PolyFlags.All ^ PolyFlags.Disabled;
-        this.filter[1] = exclude;
+        this.filter[1] = exclude | (throughShutDoors ? 0 : PolyFlags.BlockingDoor);
         const s = this.lib.PathStraight(this.query, toRecast(start, this.start), toRecast(end, this.end), toRecast(halfExtents, this.ext),
-            exclude ? this.filter : DEFAULT_FILTER, DT_STRAIGHTPATH_ALL_CROSSINGS, this.count, this.pathPts, this.pathFlags);
+            this.filter, DT_STRAIGHTPATH_ALL_CROSSINGS, this.count, this.pathPts, this.pathFlags);
         const n = Math.min(this.count[0]!, MAX_POLY);
         if (!ok(s) || n === 0) return { status: 'none', points: [] };
         const points: NavPathPoint[] = [];
@@ -215,6 +230,55 @@ export class NavMesh {
         // Detour reports t = FLT_MAX when the ray reaches `end`, which makes the native hit point infinite.
         const clear = this.losFlag[0] !== 0;
         return { clear, hit: clear ? { x: end.x, y: end.y, z: end.z } : fromRecast(this.out) };
+    }
+
+    /**
+     * The polys of the door at `at` (a door's spot, region units): the Door-flagged polys within DOOR_POLY_EXTENTS of it, found once
+     * (blocking or not) and kept, as LocalPathfindingMgr.RegisterDoor does. Empty where the mesh has no door there.
+     */
+    doorPolys(at: Vec3): BigUint64Array {
+        this.check();
+        const key = `${Math.round(at.x)},${Math.round(at.y)},${Math.round(at.z)}`;
+        const known = this.doors.get(key);
+        if (known) return known;
+        const refs = new BigUint64Array(MAX_DOOR_POLYS);
+        const filter = new Uint16Array([PolyFlags.Door | PolyFlags.BlockingDoor, 0]);
+        this.count[0] = 0;
+        const s = this.lib.GetPolysInBox(this.query, toRecast(at, this.start), toRecast(DOOR_POLY_EXTENTS, this.ext), filter, refs, this.count, MAX_DOOR_POLYS);
+        const found = ok(s) ? refs.slice(0, Math.min(this.count[0]!, MAX_DOOR_POLYS)) : new BigUint64Array(0);
+        this.doors.set(key, found);
+        return found;
+    }
+
+    /**
+     * Shut (`blocking`) or open the door at `at` for every later query on this mesh: its polys swap Door ↔ BlockingDoor
+     * (LocalPathfindingMgr.UpdateDoorFlags). True when the mesh has polys there and the flags changed. The flags live in this process.
+     */
+    setDoorBlocking(at: Vec3, blocking: boolean): boolean {
+        const polys = this.doorPolys(at);
+        if (polys.length === 0) return false;
+        const remove = blocking ? PolyFlags.Door : PolyFlags.BlockingDoor;
+        const add = blocking ? PolyFlags.BlockingDoor : PolyFlags.Door;
+        const done = ok(this.lib.UpdateFlags(this.mesh, polys, polys.length, remove, add));
+        const key = `${Math.round(at.x)},${Math.round(at.y)},${Math.round(at.z)}`;
+        if (done && blocking) this.shut.set(key, { x: at.x, y: at.y, z: at.z });
+        else if (done) this.shut.delete(key);
+        return done;
+    }
+
+    /** Whether any door on this mesh is shut now (setDoorBlocking). */
+    hasShutDoors(): boolean {
+        return this.shut.size > 0;
+    }
+
+    /** A shut door (setDoorBlocking) within `radius` of `p` on the ground, the nearest; null with none. */
+    shutDoorNear(p: { x: number; y: number }, radius: number): Vec3 | null {
+        let best: Vec3 | null = null, bestD = radius;
+        for (const d of this.shut.values()) {
+            const dist = Math.hypot(d.x - p.x, d.y - p.y);
+            if (dist <= bestD) { best = d; bestD = dist; }
+        }
+        return best;
     }
 
     dispose(): void {
