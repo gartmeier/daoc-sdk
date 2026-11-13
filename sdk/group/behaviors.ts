@@ -12,6 +12,7 @@ import { styleQueue, type StyleChoice, type StyleChooser } from '../actions';
 import { NO_INSTRUMENT, resurrectCost, STYLE_NEEDS_WEAPON } from '../actions-helpers';
 import { ANYTIME_STYLE, fighterStyle, tankStyles } from './styles';
 import { abortable, executionContext } from '../execution-context';
+import { doorBetween } from '../doors';
 import { diedLately, isAlive, untouchable } from './blackboard';
 import { CC_IMMUNE_MS, CC_WALK, canControl, immuneKinds, isMezzEffect } from './cc';
 import { clearOf, keepDangers, type KeepSettings } from './keeps';
@@ -2095,6 +2096,12 @@ async function walkInColumn(ctx: MemberContext<TacticsSettings>): Promise<boolea
     const to = pace ? keepOnMap(me.regionId, spot, pace.to) : spot;
     const speedFactor = pace?.speedFactor ?? 1;
     const last: { x: number; y: number; speedFactor?: number } | undefined = ctx.memory.get(COLUMN_MOVE);
+    // A keep door between (our portal keep's on the way out or home): walkTo opens it, as a player does; a raw move would pass it.
+    if (doorBetween(me.regionId, me, { x: to.x, y: to.y, z: driver.z }, me.realm)) {
+        ctx.memory.delete(COLUMN_MOVE);
+        await walkTowardSlot(ctx, to, 2500, { detail: `travel: through the door behind ${col.driver}` });
+        return true;
+    }
     if (!last || dist(last, to) > 40 || Math.abs((last.speedFactor ?? 1) - speedFactor) >= 0.05 || !ctx.sdk.getMovement()?.moving) {
         const sent = await ctx.sdk.sendMoveTo(to.x, to.y, driver.z, { tolerance: 40, ...(speedFactor < 1 ? { speedFactor } : {}) });
         if (!sent.success) { ctx.memory.delete(COLUMN_MOVE); ctx.result('walk', sent); return null; }
