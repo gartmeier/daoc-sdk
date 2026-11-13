@@ -274,6 +274,12 @@ export interface RaidView {
     done?: readonly string[];
     /** The raid has stood at the stage already: from then on it is inside, whatever its centre. */
     staged?: boolean;
+    /**
+     * Every member of the raid, all units answering the muster (ours included), when the caller knows them. The stage then
+     * waits for STAGE_SHARE of the raid's living within RAID_COMING of the stage, not of this unit's alone: live 04:19 a unit
+     * of six (Midgard) staged on its own, went in alone at rank 1 and lost four in 16 s while the others were on the way.
+     */
+    raid?: readonly RaidMember[];
 }
 
 export type RaidPhase = 'approach' | 'stage' | 'assault' | 'lord' | 'taken';
@@ -316,6 +322,8 @@ export const FOCUS_REACH = 1650;
  * from the stage. The outer fighters' posts are 1600+ from the stage, their aggro 1000.
  */
 export const STAGE_NEAR = 1000;
+/** With the whole raid known (RaidView.raid), the stage waits for those of it this near (on the way, not back at the portal keep). */
+export const RAID_COMING = 12_000;
 
 const isFoe = (s: SiegeSeen, realm: PlayerRealm) => s.kind === 'npc' && !s.isPet && !s.isDead && (s.healthPercent ?? 100) > 0
     && !s.isPeaceful && s.isTargetable !== false && s.realm !== 'none' && s.realm !== realm && (s.level ?? 2) > 1;
@@ -404,6 +412,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     if (!staged) {
         const alive = view.members.filter(m => m.alive);
         const there = alive.filter(m => Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= STAGE_NEAR).length;
+        // The whole raid (when known): wait at the stage for the share of it on the way.
+        const coming = view.raid?.filter(m => m.alive && Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= RAID_COMING) ?? [];
+        const raidThere = coming.filter(m => Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= STAGE_NEAR).length;
         // Nobody there yet and the body not past the stage: walk on (each member by routeFrom from itself).
         if (there === 0 && toStage > AT_SPOT && !(keep && pastStage(plan, keep, centre))) {
             const next = routeFrom(plan, centre)[0] ?? plan.stage;
@@ -411,6 +422,7 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         }
         // Some there: they wait, the rest come.
         if (there > 0 && there < Math.ceil(alive.length * STAGE_SHARE) && toStage > AT_SPOT) return walk('stage', plan.stage, `${there}/${alive.length} at the stage`);
+        if (there > 0 && coming.length && raidThere < Math.ceil(coming.length * STAGE_SHARE)) return walk('stage', plan.stage, `${raidThere}/${coming.length} of the raid at the stage`);
     }
 
     const memberIds = new Set(view.members.map(m => m.id));

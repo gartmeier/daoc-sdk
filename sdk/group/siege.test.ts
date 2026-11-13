@@ -229,6 +229,22 @@ describe('raidOrders', () => {
         expect(raidOrders(plan, view({ members: coming, staged: false })).phase).toBe('stage');
     });
 
+    test('with the whole raid known, a unit at the stage waits for the raid on the way (live 04:19)', () => {
+        const unit = at(plan.stage, 6);
+        const others = at(plan.route[0]!, 10).map(m => ({ ...m, id: m.id + 100 }));
+        const far = at({ x: 20_000, y: 20_000, z: 3000 }, 5).map(m => ({ ...m, id: m.id + 200 }));
+        const o = raidOrders(plan, view({ members: unit, raid: [...unit, ...others, ...far] }));
+        expect(o.phase).toBe('stage');
+        expect(o.why).toContain("6/16 of the raid at the stage");
+        // The others there too: in it goes. Those back at the portal keep don't count.
+        const arrived = at(plan.stage, 10).map(m => ({ ...m, id: m.id + 100 }));
+        expect(raidOrders(plan, view({ members: unit, raid: [...unit, ...arrived, ...far] })).phase).toBe('assault');
+        // Without the raid: as before, the unit alone.
+        expect(raidOrders(plan, view({ members: unit })).phase).toBe('assault');
+        // Staged already: the raid count is not asked again.
+        expect(raidOrders(plan, view({ members: unit, raid: [...unit, ...others], staged: true })).phase).toBe('assault');
+    });
+
     test('first the outer fighters, from outside the gate', () => {
         const o = raidOrders(plan, view({ members: at(plan.stage, 10) }));
         expect(o.phase).toBe('assault');
