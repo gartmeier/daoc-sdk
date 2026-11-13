@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { nextBuff, planBuffs, providerFor, surplusConcentration, type BuffTask } from './buffs';
+import { nextBuff, planBuffs, providerFor, REBUFF_AFTER_LOSS_MS, strippedMembers, surplusConcentration, type BuffTask } from './buffs';
 import { report } from './fixtures';
 import type { BuffSpell, MemberReport, Role } from './types';
 
@@ -164,5 +164,28 @@ describe('leftover concentration on the pets', () => {
         expect(surplusConcentration(tasks, active, { current: 1 }, g).map(a => a.ownerName)).toEqual(['underhill ally']);
         const membersUp = tasks.map(t => (t.pet ? t : { ...t, covered: true, ours: true }));
         expect(surplusConcentration(membersUp, active, { current: 1 }, g).map(a => a.ownerName)).toEqual(['Cuchulainn']);
+    });
+});
+
+describe('a member stripped of our buffs (dead and rezzed)', () => {
+    test('held some, now none and some to go back up: stripped until they are back or the window ends', () => {
+        const held = new Map<string, number>(), lost = new Map<string, number>();
+        const up = planBuffs('Oisin', group({ Niamh: { effects: ["Oak's Stoutness", 'Dexterity of the Ferret'] } }));
+        expect(strippedMembers(up, held, lost, 0)).toEqual(new Set());
+        expect(held.get('Niamh')).toBe(2);
+        // Dead: no tasks on her, nothing changes.
+        expect(strippedMembers(planBuffs('Oisin', group({ Niamh: { isDead: true } })), held, lost, 1000)).toEqual(new Set());
+        // Rezzed, bare: stripped, and still after one is back.
+        expect(strippedMembers(planBuffs('Oisin', group()), held, lost, 2000)).toEqual(new Set(['Niamh']));
+        expect(strippedMembers(planBuffs('Oisin', group({ Niamh: { effects: ["Oak's Stoutness"] } })), held, lost, 3000)).toEqual(new Set(['Niamh']));
+        // All back: done.
+        expect(strippedMembers(up, held, lost, 4000)).toEqual(new Set());
+        expect(lost.size).toBe(0);
+        // Never buffed by us (just joined): not stripped, the quiet phases see to it. Bare too long: the window ends.
+        const h2 = new Map<string, number>(), l2 = new Map<string, number>();
+        expect(strippedMembers(planBuffs('Oisin', group()), h2, l2, 0).size).toBe(0);
+        strippedMembers(up, h2, l2, 0);
+        expect(strippedMembers(planBuffs('Oisin', group()), h2, l2, 10).has('Niamh')).toBe(true);
+        expect(strippedMembers(planBuffs('Oisin', group()), h2, l2, 20 + REBUFF_AFTER_LOSS_MS).has('Niamh')).toBe(false);
     });
 });

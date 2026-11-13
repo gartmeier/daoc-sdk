@@ -152,6 +152,35 @@ export function planBuffs(caster: string, members: MemberReport[], opts: BuffOpt
     return tasks;
 }
 
+/** A member stripped of our concentration buffs (a death ends them all) is rebuffed in any phase for this long after. */
+export const REBUFF_AFTER_LOSS_MS = 180_000;
+
+/**
+ * The members who lost every concentration buff of ours they held (a death and a rez, the buffs dropping out of range),
+ * with some of ours still to go back up: buff() rebuffs those in a fight too, as players do the moment one stands up (the
+ * user, rezzed in the Faste raid and never rebuffed: buffs ran only in quiet phases, 2026-11-13). `held` keeps how many
+ * of ours each member held when last looked at, `lost` when it went to none; both are the caller's, between turns.
+ */
+export function strippedMembers(tasks: readonly BuffTask[], held: Map<string, number>, lost: Map<string, number>, now: number): Set<string> {
+    const by = new Map<string, { up: number; missing: number }>();
+    for (const t of tasks) {
+        if (t.pet || t.spell.concentration <= 0) continue;
+        const c = by.get(t.target) ?? { up: 0, missing: 0 };
+        if (t.covered && t.ours) c.up++; else if (!t.covered) c.missing++;
+        by.set(t.target, c);
+    }
+    const out = new Set<string>();
+    for (const [name, c] of by) {
+        if ((held.get(name) ?? 0) > 0 && c.up === 0) lost.set(name, now);
+        held.set(name, c.up);
+        const at = lost.get(name);
+        if (at === undefined) continue;
+        if (!c.missing || now - at > REBUFF_AFTER_LOSS_MS) lost.delete(name);
+        else out.add(name);
+    }
+    return out;
+}
+
 /**
  * The server's cap on a caster's concentration effects, whatever its pool has left: "You can only cast up to 20 simultaneous
  * concentration spells!" (SpellHandler.cs:31 MAX_CONC_SPELLS, :836-839). A Cleric with ~32 planned hit it every round (arena

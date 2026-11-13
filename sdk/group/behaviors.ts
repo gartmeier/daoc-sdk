@@ -16,7 +16,7 @@ import { doorBetween } from '../doors';
 import { diedLately, isAlive, untouchable } from './blackboard';
 import { CC_IMMUNE_MS, CC_WALK, canControl, immuneKinds, isMezzEffect } from './cc';
 import { clearOf, keepDangers, type KeepSettings } from './keeps';
-import { type BuffTask, nextBuff, planBuffs, surplusConcentration } from './buffs';
+import { type BuffTask, nextBuff, planBuffs, strippedMembers, surplusConcentration } from './buffs';
 import { combatSpot, dangerStops, effectiveLimits, focusSettled, safeSpot, trackFocus } from './positioning';
 import { dotFamily } from './spells';
 import { keepForLater } from './gear-care';
@@ -2398,15 +2398,23 @@ export const buff = (): Behavior<TacticsSettings> => ({
     name: 'buff',
     interruptible: false,
     async run(ctx) {
-        if (!QUIET_PHASES.has(ctx.orders().phase) || ctx.threats().length) return false;
         const me = ctx.me();
-        const tasks = planBuffs(me.name, ctx.members(), { needs: ctx.settings.buffNeeds, selfOnly: ctx.settings.buffSelfOnly, ownConc: ctx.sdk.getState()?.concentrationEffects ?? [] });
+        const planned = planBuffs(me.name, ctx.members(), { needs: ctx.settings.buffNeeds, selfOnly: ctx.settings.buffSelfOnly, ownConc: ctx.sdk.getState()?.concentrationEffects ?? [] });
+        const held: Map<string, number> = ctx.memory.get('buffHeld') ?? new Map();
+        const lost: Map<string, number> = ctx.memory.get('buffLost') ?? new Map();
+        ctx.memory.set('buffHeld', held);
+        ctx.memory.set('buffLost', lost);
+        const stripped = strippedMembers(planned, held, lost, Date.now());
+        const quiet = QUIET_PHASES.has(ctx.orders().phase) && !ctx.threats().length;
+        // Out of the quiet phases: only the concentration buffs of a member stripped of ours (rezzed, say), with no melee on us and no cast of ours running.
+        if (!quiet && (!stripped.size || hammeredBy(ctx) || castRunning(ctx) || me.attacking)) return false;
+        const tasks = quiet ? planned : planned.map(t => (!t.pet && t.spell.concentration > 0 && stripped.has(t.target) ? t : { ...t, covered: true }));
         if (!tasks.length) return false;
         const conc = { current: me.concentration ?? 0, max: me.maxConcentration ?? 0, effects: ctx.sdk.getState()?.concentrationEffects?.length ?? 0 };
         const retry: Map<string, number> = ctx.memory.get('buffRetry') ?? new Map();
         ctx.memory.set('buffRetry', retry);
         // Free concentration held by buffs another member should provide (or nobody needs).
-        const drop = surplusConcentration(tasks, ctx.sdk.getState()?.concentrationEffects ?? [], conc, ctx.members())
+        const drop = quiet && surplusConcentration(tasks, ctx.sdk.getState()?.concentrationEffects ?? [], conc, ctx.members())
             .find(d => Date.now() >= (retry.get(`drop:${d.name}:${d.ownerName}`) ?? 0));
         if (drop) {
             ctx.doing('buff', null, `drop ${drop.name} on ${drop.ownerName}`);
