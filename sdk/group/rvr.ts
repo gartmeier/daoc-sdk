@@ -46,7 +46,7 @@ import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, lo
 import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
 import { alliesNear, CALL_SETTINGS, flushAnswers, helpStep, noteArrival, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
-import { raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
+import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -679,6 +679,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         if (onUs(c)) return inMain.has(onWhom(c)!) || near;
         if (c.isPet && c.threat) return near;
         if (c.kind !== 'player' || inKeep(c) || (ctx.windingDown && !c.threat && c.objectId !== o.focus)) return false;
+        // Raiding: a player not on us fights us only within RAID_FOE_REACH; the raid goes on past one farther off.
+        if (raid && dist(c, centre) > RAID_FOE_REACH) return false;
         return near;
     };
 
@@ -818,7 +820,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     ]);
 
     // ── Hunting: enemy players in sight beyond engageRadius. Too many: fall back (toward home unless they stand that way) ──
-    const seen = enemies.filter(c => !inKeep(c) && dist(c, centre) <= s.huntRadius);
+    // Raiding: no hunt and no fall-back for those in sight; one that comes within RAID_FOE_REACH is fought (inFight).
+    const seen = raid ? [] : enemies.filter(c => !inKeep(c) && dist(c, centre) <= s.huntRadius);
     if (seen.length) {
         // The group we just ran from is sized up whole: those of it we mezzed, and those out of view, still count (FLED_MS).
         const recalled = fled ? [

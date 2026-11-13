@@ -19,6 +19,13 @@ import type { GroupStrategy } from '../strategy';
 import type { Contact, MemberReport, OrdersUpdate, Point3, Role } from '../types';
 import { answering, type RealmCall } from './help';
 
+/**
+ * At the muster's go, an enemy player counts only on one of us or within this of the body (2D): the raid goes on past those
+ * farther off, hunts none and falls back from none. R1, attempt 6 (2026-11-13 ~03:15): with all realms out, the main groups
+ * dropped the muster at the first enemy in sight (hibernia hunted, hibernia-2 sat), and only the squads raided.
+ */
+export const RAID_FOE_REACH = 1500;
+
 /** A door the tanks and melee break (Orders.settings.raidDoor). */
 export interface RaidDoor {
     doorId: number;

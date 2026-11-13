@@ -9,7 +9,8 @@ import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { Behavior } from '../member';
 import type { Contact, GroupPicture, MemberReport, Orders, Point3 } from '../types';
 import type { RealmCall } from './help';
-import { breakDoor, raidStep, withBreakDoor, withRaid, type RaidDoor } from './raid';
+import { breakDoor, RAID_FOE_REACH, raidStep, withBreakDoor, withRaid, type RaidDoor } from './raid';
+import { decidePack, rvrPack } from '../pack';
 
 const TH = FASTE.regionId;
 const plan = raidPlan('midgard')!;
@@ -141,6 +142,22 @@ describe('raid: a strategy that sets Orders.settings itself (Hibernia withMakeUp
         expect(nulled.decide(ctx(picture(five(plan.rally)), mustered())).settings).toMatchObject({ raid: FASTE.keep });
         const { strategy: over } = realmCalls(wrapped(makeUp) as any, 'hibernia', { calls: () => [], answer: () => {} });
         expect(over.decide(ctx(picture(five(plan.rally)), { realm: 'midgard' }, { settings: a.settings })).settings).toBe(makeUp);
+    });
+});
+
+describe('raid: enemy players at the go (attempt 6: the main groups dropped the muster at the first one in sight)', () => {
+    const enemyAt = (id: number, dx: number) => contact(id, { kind: 'player', name: 'Briton', realm: 'albion', level: 24, regionId: TH, x: plan.stage.x + dx, y: plan.stage.y, z: plan.stage.z, hp: 90 });
+    const rvr = (contacts: Contact[]) => decideRvr({ picture: picture(five(plan.stage), contacts), orders: picture([]).orders, memory: mustered(), now: Date.now(), windingDown: false, settings: mergeSettings(RVR_SETTINGS, {} as any) } as any);
+    const pk = (contacts: Contact[]) => decidePack({ picture: picture(five(plan.stage), contacts), orders: picture([]).orders, memory: mustered(), now: Date.now(), windingDown: false, settings: mergeSettings(rvrPack.settings, {} as any) } as any);
+
+    test('decideRvr: one in sight 3000 off is no hunt; the raid goes on. One within RAID_FOE_REACH is fought', () => {
+        expect(rvr([enemyAt(901, 3000)]).reason).toContain('raid');
+        expect(rvr([enemyAt(901, RAID_FOE_REACH - 300)])).toMatchObject({ phase: 'engage', focus: 901 });
+    });
+
+    test('decidePack: the same', () => {
+        expect(pk([enemyAt(901, 3000)]).reason).toContain('raid');
+        expect(pk([enemyAt(901, RAID_FOE_REACH - 300)]).reason).not.toContain('raid');
     });
 });
 

@@ -27,7 +27,7 @@ import { aggroZones } from './terrain';
 import { lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, roadsOut } from './tactics/roads';
 import { withHasten } from './tactics/hasten';
-import { raidCall } from './tactics/raid';
+import { RAID_FOE_REACH, raidNow } from './tactics/raid';
 import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
@@ -287,7 +287,9 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const here = alive.filter(m => m.regionId === regionId);
     const leader = here.find(m => m.role === 'tank') ?? here[0]!;
     const level = Math.min(...here.map(m => m.level));
-    const keeps = keepDangers(regionId, realm, s);
+    // Raiding (tactics/raid.ts): the raid's keep has no circle for us, as in decideRvr: an enemy by the stage is no enemy "in the keep".
+    const raiding = raidNow(mem, realm, regionId);
+    const keeps = keepDangers(regionId, realm, raiding ? { ...s, raid: raiding.plan.keep } : s);
     const inKeep = (c: Point) => !clearOf(c, keeps);
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, leader.z, { radius: 8000 });
     const dry = staysDry(s);
@@ -346,8 +348,9 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // spread: an enemy player is known, so casters take their wider slots (spreadOnSight) from the first sight on.
     const say = (u: OrdersUpdate): OrdersUpdate => ({ ...u, ...(runnerNote ? { reason: `${u.reason}; ${runnerNote.text}` } : {}), column: column(u), spread: foes.length > 0, waiting: [...(u.waiting ?? []).filter(w => w.why !== 'pickup'), ...pickupWait] });
     const areaRadius = 350;
-    // The raid (tactics/raid.ts): the muster said go and no enemy player is about: decideRvr plays it, guards and doors included.
-    if (raidCall(mem) && !foes.length) return say(calm());
+    // The raid (tactics/raid.ts): the muster said go and no enemy player is on us or within RAID_FOE_REACH: decideRvr plays it,
+    // guards and doors included. Those farther off are no reason to drop it (attempt 6: hibernia hunted, hibernia-2 sat).
+    if (raiding && !foes.some(c => onUs(c) || dist(c, centre) <= RAID_FOE_REACH)) return say(calm());
 
     // Chasers are the Hero's: the anchor stands on the focus, so his leash lets him at it (never into a keep's circle).
     // A focus in a river: the bank nearest it, so he goes in no farther than his leash.
