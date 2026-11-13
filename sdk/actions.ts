@@ -363,6 +363,13 @@ export function layerRoute(regionId: number, from: Vec3, to: Vec3, maxLength = I
     return { waypoints: path.points.map(q => ({ x: q.x, y: q.y, z: q.z })) };
 }
 
+/** While still moving, an arrival on the ground plane counts only within this of the destination's height (a stair's lower turn). */
+const ARRIVE_DZ = 100;
+/** Whether `to` is on another level than `from` that the navmesh reaches by a route (a floor above or below on a stair): then a walk is due though it is near on the ground. */
+function layerRouteNeeded(regionId: number, from: Vec3, to: Vec3): boolean {
+    const way = layerRoute(regionId, from, to);
+    return way !== 'straight' && way !== 'none';
+}
 /** Doors one walk goes through at most (a keep's gate, its building's door, a postern, and back out). */
 const MAX_DOOR_HOPS = 4;
 /** How long the jump through our own door may take: 47 ms live (2026-11-13). */
@@ -6207,7 +6214,7 @@ export class BotActions {
         if (!Number.isFinite(tolerance) || tolerance < 0) return at({ message: 'tolerance must be a non-negative number', reason: 'bad_args' });
         if (!p0 || !s0.inGame) return at({ message: 'Not in game', reason: 'not_in_game' });
         if (p0.isDead) return at({ message: 'Cannot walk while dead', reason: 'dead' });
-        if (Math.hypot(dest.x - p0.x, dest.y - p0.y) <= tolerance && via.length === 0) {
+        if (Math.hypot(dest.x - p0.x, dest.y - p0.y) <= tolerance && via.length === 0 && (options.z === undefined || Math.abs(p0.z - options.z) <= ARRIVE_DZ || !layerRouteNeeded(p0.regionId, p0, { x: dest.x, y: dest.y, z: options.z }))) {
             // Still heading somewhere else (an earlier sendMoveTo or follow): stay here.
             if (s0.movement.moving) await this.sdk.sendStop();
             return at({ success: true, message: 'Already at destination' });
@@ -6262,7 +6269,10 @@ export class BotActions {
                 if (p.isDead || p.deathCount !== deathCount0) return at({ message: `Died en route to (${dest.x}, ${dest.y})`, reason: 'died', reissues });
                 if (p.regionId !== region0) return at({ message: `Region changed to ${p.regionId} en route`, reason: 'region_changed', reissues });
                 const d = Math.hypot(dest.x - p.x, dest.y - p.y);
-                if (d <= tolerance + 2 && (!s.movement.moving || remainingVia.length === 0)) return at({ success: true, message: 'Arrived', reissues });
+                // Still on the move toward a destination on another level (a spiral stair passes over the same spot lower down): not there yet.
+                // Only with more of the route ahead than its last point (the stair's turns): a cliff we walk under keeps its old arrival.
+                const wrongLevel = s.movement.moving && s.movement.waypoints.length > 1 && options.z !== undefined && Math.abs(p.z - options.z) > ARRIVE_DZ;
+                if (d <= tolerance + 2 && !wrongLevel && (!s.movement.moving || remainingVia.length === 0)) return at({ success: true, message: 'Arrived', reissues });
                 if (s.movement.moving && s.movement.waypoints.length) lastSeenRemaining = s.movement.waypoints;
                 // Progress is the route still ahead, not the straight distance: a path that
                 // first leads away from the destination (followPath detours) is not stuck.

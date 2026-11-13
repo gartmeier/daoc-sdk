@@ -32,3 +32,21 @@ describe.skipIf(!meshReady)('layerRoute on the Faste\'s navmesh', () => {
         expect(layerRoute(252, BELOW, { x: 33971, y: 38815, z: 4100 })).toBe('none');
     });
 });
+
+describe('walkTo on a spiral stair', () => {
+    test('passing over the destination lower down is no arrival while the walk goes on up', async () => {
+        const { FakeWorld } = await import('./fake-world');
+        const { BotActions } = await import('../actions');
+        const w = new FakeWorld();
+        try {
+            w.stepSize = 60;
+            Object.assign(w.player, { x: 900, y: 1000, z: 100 });
+            await Bun.sleep(30);
+            const turn = (z: number) => [{ x: 1100, y: 1000, z }, { x: 1100, y: 1100, z: z + 30 }, { x: 1000, y: 1100, z: z + 60 }, { x: 1000, y: 1000, z: z + 90 }];
+            const stair = { name: 'stair', findPath: () => ({ success: true, waypoints: [...turn(100), ...turn(300), ...turn(500)] }) };
+            const r = await new BotActions(w.sdk).walkTo(1000, 1000, { z: 590, tolerance: 20, pathProvider: stair as any });
+            expect(r.success).toBe(true);
+            expect(w.player.z).toBe(590);
+        } finally { w.dispose(); }
+    });
+});
