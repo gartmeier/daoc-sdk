@@ -54,7 +54,10 @@ export interface SongSettings {
 
 export const SONG_SETTINGS: SongSettings = { powerBelow: 70, healthBelow: 80, holdMs: 30_000, enduranceBelow: 30, ccFirst: false };
 
-const usesPower = (m: MemberReport) => m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc;
+/** A caster: by its spells, an observed member (no capabilities: a human) by its role. */
+const usesPower = (m: MemberReport) => (m.observed ? m.role !== 'tank' && m.role !== 'melee' : m.capabilities.heal || m.capabilities.nuke || m.capabilities.cc);
+/** In a fight a living caster below this power % asks for the power song ahead of endurance: casting drains it all fight. */
+export const FIGHT_POWER_BELOW = 95;
 
 /** Song kinds for this phase and the group's state, best first. */
 export function wantedSongs(phase: string, members: MemberReport[], s: SongSettings = SONG_SETTINGS, endurance = 100): SongKind[] {
@@ -63,8 +66,14 @@ export function wantedSongs(phase: string, members: MemberReport[], s: SongSetti
     const tired: SongKind[] = endurance < ENDURANCE_REST_FULL ? ['endurance'] : [];
     if (phase === 'retreat') return ['speed', 'endurance'];
     if (phase === 'travel') return ['speed', ...tired];
-    if (phase === 'engage' || phase === 'pull') return endurance < s.enduranceBelow ? ['endurance', 'armor', 'combatHeal', 'damage'] : ['armor', 'endurance', 'combatHeal', 'damage'];
     const alive = members.filter(m => !m.isDead);
+    if (phase === 'engage' || phase === 'pull') {
+        // Endurance first only when the singer or a fighter runs low; else power while a caster spends it (the user, playing
+        // Niamh: "need mana song, endu is full": Rhythm of Nature at 100 % endurance every fight, 2026-11-13).
+        const tiredFight = endurance < s.enduranceBelow || alive.some(m => (m.role === 'tank' || m.role === 'melee') && m.endurance < s.enduranceBelow);
+        const power: SongKind[] = alive.some(m => usesPower(m) && m.mana < FIGHT_POWER_BELOW) ? ['power'] : [];
+        return tiredFight ? ['endurance', 'armor', ...power, 'combatHeal', 'damage'] : ['armor', ...power, 'endurance', 'combatHeal', 'damage'];
+    }
     const out: SongKind[] = [];
     if (alive.some(m => usesPower(m) && m.mana < s.powerBelow)) out.push('power');
     if (alive.some(m => m.hp < s.healthBelow)) out.push('health');

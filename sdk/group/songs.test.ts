@@ -41,6 +41,18 @@ describe('song choice', () => {
         expect(chooseSong(OISIN, 'engage', group({ Niamh: { mana: 5 } }))).toBe('endurance');
     });
 
+    test('in a fight: power while a caster spends it, endurance first only when the singer or a fighter runs low', () => {
+        expect(chooseSong(WITH_POWER, 'engage', group({ Niamh: { mana: 60 } }))).toBe('power');
+        expect(chooseSong(WITH_POWER, 'engage', group())).toBe('endurance');
+        expect(chooseSong(WITH_POWER, 'engage', group({ Niamh: { mana: 60 } }), SONG_SETTINGS, 20)).toBe('endurance');
+        expect(chooseSong(WITH_POWER, 'pull', group({ Niamh: { mana: 60 }, Cuchulainn: { endurance: 10 } }))).toBe('endurance');
+        // An observed member (a human: no capabilities) counts by its role.
+        const human = (role: Role) => [...group(), report('Vue', { role, mana: 50, observed: true, capabilities: { heal: false, cc: false, nuke: false, buffs: [], buffSpells: [] } })];
+        expect(chooseSong(WITH_POWER, 'engage', human('nuker'))).toBe('power');
+        expect(chooseSong(WITH_POWER, 'recover', human('nuker'))).toBe('power');
+        expect(chooseSong(WITH_POWER, 'engage', human('melee'))).toBe('endurance');
+    });
+
     test('between fights: power for low casters, else health for the hurt, else endurance', () => {
         expect(chooseSong(WITH_POWER, 'recover', group({ Niamh: { mana: 40 }, Cuchulainn: { hp: 50 } }))).toBe('power');
         expect(chooseSong(WITH_POWER, 'recover', group({ Cuchulainn: { hp: 50 } }))).toBe('health');
