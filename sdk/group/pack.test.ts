@@ -601,6 +601,15 @@ describe('decidePack: nobody walks alone', () => {
         expect(decide(swim(39_400)).reason).toMatch(/hunt|stalk|raid/);
     });
 
+    test.skipIf(isWet(THID, { x: 34_000, y: 27_200 }) || isWet(THID, { x: 34_000, y: 26_400 }))('one in sight last tick stays in sight 1000 past huntRadius (live 20:44: a Norseman at 4964-5000, hunt and roam each second)', () => {
+        const foe = (y: number) => [enemy(430, 'midgard', { regionId: THID, x: 34_000, y })];
+        const decide = (contacts: Contact[], mem: Record<string, any>) => decidePack(ctx(picture(thid(), contacts), { memory: mem, settings: { patrol: null } }));
+        const memory: Record<string, any> = { realm: 'hibernia', pack: 'stalk' };
+        expect(decide(foe(27_200), memory).reason ?? '').not.toMatch(/^roam/);
+        expect(decide(foe(26_400), memory).reason ?? '').not.toMatch(/^roam/);
+        expect(decide(foe(26_400), { realm: 'hibernia', pack: 'stalk' }).reason ?? '').toMatch(/^roam/);
+    });
+
     test('a released member at the keep is told to wait, and the pack goes to get it', () => {
         const m: any = { realm: 'hibernia' };
         const members = thid({ Menta: { x: keep.x, y: keep.y } });

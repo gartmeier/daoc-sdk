@@ -49,6 +49,8 @@ export interface RoamSettings {
     holdMs: number;
     /** A sighting counts this long (ms). */
     sightingMs: number;
+    /** Sightings within this of each other are one area (the director keeps one per 2000 cell); passing within this of one passes it. */
+    area: number;
     /** Only a sighting this near is worth turning for (no long crossings back and forth). */
     sightingReach: number;
     /** A place is given up after this, plus the walk at giveUpSpeed (units/s): stuck, or a detour that never ends. */
@@ -56,7 +58,7 @@ export interface RoamSettings {
     giveUpSpeed: number;
 }
 
-export const ROAM_SETTINGS: RoamSettings = { reach: 900, holdMs: 10_000, sightingMs: 300_000, sightingReach: 9000, giveUpMs: 30_000, giveUpSpeed: 100 };
+export const ROAM_SETTINGS: RoamSettings = { reach: 900, holdMs: 10_000, sightingMs: 150_000, area: 3000, sightingReach: 9000, giveUpMs: 30_000, giveUpSpeed: 100 };
 
 /** memory.roam */
 export interface RoamMemory {
@@ -68,8 +70,8 @@ export interface RoamMemory {
     side: number;
     /** Circuit places passed on this lap of their side. */
     done: string[];
-    /** Sighting cells passed, and when: a sighting there older than that is no news. */
-    passed: Record<string, number>;
+    /** Where we passed a sighting area, and when: a sighting within `area` of one, and older, is no news. */
+    passed: (Point & { at: number })[];
     /** The roam's last tick: a gap longer than PAUSE_MS (something else had the group) moves `until` on by it. */
     tick?: number;
 }
@@ -128,11 +130,17 @@ export function roamPlaces(regionId: number, realm: PlayerRealm, ring: readonly 
     return out.filter(ok).map(p => ({ ...p, side: sideOf(regionId, p) }));
 }
 
-/** Fresh sightings (within sightingMs) as places, on dry ground (`ok`), by 2000-unit cell. */
+/**
+ * Fresh sightings (within sightingMs) as places, on dry ground (`ok`), one per area: the freshest of those within `area` of it
+ * stands for them, with all their enemies (live 20:44, hibernia went "past X, on to Y" every 2-5 s through 2000-cells 1200-2500 apart).
+ */
 export function sightingPlaces(regionId: number, sightings: readonly RoamSighting[], now: number, ok: (p: Point) => boolean, s: RoamSettings = ROAM_SETTINGS): RoamPlace[] {
-    return sightings
-        .filter(x => now - x.at < s.sightingMs && ok(x))
-        .map(x => ({ key: `seen:${Math.round(x.x / 2000)}:${Math.round(x.y / 2000)}`, what: `where ${x.n} ${x.n === 1 ? 'enemy was' : 'enemies were'} seen ${Math.round((now - x.at) / 60_000)} min ago`, x: x.x, y: x.y, at: x.at, side: sideOf(regionId, x) }));
+    const areas: RoamSighting[] = [];
+    for (const x of sightings.filter(x => now - x.at < s.sightingMs && ok(x)).sort((a, b) => b.at - a.at || b.n - a.n)) {
+        const a = areas.find(a => dist(a, x) <= s.area);
+        if (a) a.n += x.n; else areas.push({ ...x });
+    }
+    return areas.map(x => ({ key: `seen:${Math.round(x.x)}:${Math.round(x.y)}`, what: `where ${x.n} ${x.n === 1 ? 'enemy was' : 'enemies were'} seen ${Math.round((now - x.at) / 1000)} s ago`, x: x.x, y: x.y, at: x.at, side: sideOf(regionId, x) }));
 }
 
 const isSighting = (p: RoamPlace | null | undefined) => p?.at !== undefined;
@@ -141,7 +149,7 @@ const isSighting = (p: RoamPlace | null | undefined) => p?.at !== undefined;
 export function nextPlace(r: RoamMemory, o: { centre: Point; places: readonly RoamPlace[]; sightings: readonly RoamPlace[]; circuit: readonly PlayerRealm[]; blocked?: (p: Point) => boolean }, s: RoamSettings = ROAM_SETTINGS): RoamPlace | null {
     const away = (p: RoamPlace) => dist(p, o.centre) > s.reach && !o.blocked?.(p);
     const nearest = (ps: readonly RoamPlace[]) => (ps.length ? ps.reduce((a, b) => (dist(a, o.centre) <= dist(b, o.centre) ? a : b)) : null);
-    const news = o.sightings.filter(p => away(p) && dist(p, o.centre) <= s.sightingReach && !((r.passed[p.key] ?? -Infinity) >= p.at!));
+    const news = o.sightings.filter(p => away(p) && dist(p, o.centre) <= s.sightingReach && !r.passed.some(q => q.at >= p.at! && dist(q, p) <= s.area));
     const seen = nearest(news);
     if (seen) return seen;
     const sides = o.circuit.length ? o.circuit : [undefined];
@@ -172,7 +180,7 @@ export function shouldLeave(r: RoamMemory, o: { centre: Point; now: number; bett
  */
 export function roamStep(mem: Record<string, any>, o: { regionId: number; centre: Point; places: readonly RoamPlace[]; sightings?: readonly RoamSighting[]; circuit?: readonly PlayerRealm[]; now: number; ok?: (p: Point) => boolean; blocked?: (p: Point) => boolean; settings?: RoamSettings }): RoamStep | null {
     const s = o.settings ?? ROAM_SETTINGS;
-    const r: RoamMemory = mem.roam?.passed ? mem.roam : (mem.roam = { place: null, since: o.now, until: o.now, side: 0, done: [], passed: {} });
+    const r: RoamMemory = Array.isArray(mem.roam?.passed) ? mem.roam : (mem.roam = { place: null, since: o.now, until: o.now, side: 0, done: [], passed: [] });
     const circuit = o.circuit ?? [];
     // The give-up clock runs only while the roam does: a rest, a break, a hunt or a fight in between pauses it (live 20:22,
     // camelot-2 "gave up on" a sighting after a 2-min field rest it never walked in).
@@ -189,10 +197,11 @@ export function roamStep(mem: Record<string, any>, o: { regionId: number; centre
     }
     // Passing through counts: every place we come within reach of, on the way to anything.
     for (const p of o.places) if (dist(p, o.centre) <= s.reach && !r.done.includes(p.key)) r.done.push(p.key);
-    for (const p of sightings) if (dist(p, o.centre) <= s.reach) r.passed[p.key] = o.now;
-    for (const [k, at] of Object.entries(r.passed)) if (o.now - at > s.sightingMs) delete r.passed[k];
+    // A sighting area passed (any sighting within reach), or one given up: none within `area` of it is news until seen again.
+    if (sightings.some(p => dist(p, o.centre) <= s.reach)) r.passed.push({ x: Math.round(o.centre.x), y: Math.round(o.centre.y), at: o.now });
+    if (gaveUp && isSighting(was)) r.passed.push({ x: was!.x, y: was!.y, at: o.now });
+    r.passed = r.passed.filter(q => o.now - q.at <= s.sightingMs).slice(-50);
     if (gaveUp && !isSighting(was) && !r.done.includes(was!.key)) r.done.push(was!.key);
-    if (gaveUp && isSighting(was)) r.passed[was!.key] = o.now;
     const pickArgs = { centre: o.centre, places: o.places, sightings, circuit, blocked: o.blocked };
     const better = was && !isSighting(was) && o.now - r.since >= s.holdMs ? nextPlace({ ...r, done: [...r.done] }, pickArgs, s) : null;
     if (!shouldLeave(r, { centre: o.centre, now: o.now, better, blocked: o.blocked }, s)) return step(was!, o.centre, circuit, 'to');

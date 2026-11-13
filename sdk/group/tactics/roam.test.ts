@@ -4,10 +4,10 @@ import { decideRvr, defaultPatrol, RVR_SETTINGS, THIDRANKI, type RvrSettings } f
 import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { GroupPicture, MemberReport, Point } from '../types';
 import type { PlayerRealm } from '../keeps';
-import { nextPlace, roamCircuit, roamPlaces, roamStep, ROAM_SETTINGS, shouldLeave, sideOf, type RoamMemory, type RoamPlace } from './roam';
+import { nextPlace, roamCircuit, roamPlaces, roamStep, ROAM_SETTINGS, shouldLeave, sideOf, sightingPlaces, type RoamMemory, type RoamPlace } from './roam';
 
 const place = (key: string, x: number, y: number, side?: PlayerRealm): RoamPlace => ({ key, what: key, x, y, side });
-const fresh = (): RoamMemory => ({ place: null, since: 0, until: 0, side: 0, done: [], passed: {} });
+const fresh = (): RoamMemory => ({ place: null, since: 0, until: 0, side: 0, done: [], passed: [] });
 const seen = (x: number, y: number, at: number, n = 3) => ({ x, y, n, at });
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 
@@ -38,7 +38,7 @@ describe('the roam\'s place picker (rule 1)', () => {
         const far: RoamPlace = { ...place('seen:9:9', 0, ROAM_SETTINGS.sightingReach + 2000, 'albion'), at: 1000 };
         expect(nextPlace(fresh(), args({ x: 0, y: 0 }, [far, near]))?.key).toBe('seen:1:1');
         expect(nextPlace(fresh(), args({ x: 0, y: 0 }, [far]))?.key).toBe('h1');
-        const r = { ...fresh(), passed: { 'seen:1:1': 2000 } };
+        const r = { ...fresh(), passed: [{ x: 4000, y: 3000, at: 2000 }] };
         expect(nextPlace(r, args({ x: 0, y: 0 }, [near]))?.key).toBe('h1');
         // Seen again there after we passed: news again.
         expect(nextPlace(r, args({ x: 0, y: 0 }, [{ ...near, at: 3000 }]))?.key).toBe('seen:1:1');
@@ -47,6 +47,27 @@ describe('the roam\'s place picker (rule 1)', () => {
     test('never where we stand, never a blocked place', () => {
         expect(nextPlace(fresh(), args({ x: 2100, y: 0 }))?.key).toBe('h2');
         expect(nextPlace(fresh(), { ...args({ x: 0, y: 0 }), blocked: p => p.x < 3000 })?.key).toBe('h2');
+    });
+});
+
+describe('sightings by area (live 20:44: "past X, on to Y" every 2-5 s through cells 1200-2500 apart, 2-4 min old)', () => {
+    test('those within 3000 of the freshest are one place with all their enemies; none older than 150 s', () => {
+        const now = 200_000;
+        const ps = sightingPlaces(1, [seen(0, 0, now - 60_000, 2), seen(1300, 0, now - 20_000, 5), seen(2500, 1000, now - 90_000, 3), seen(9000, 0, now - 10_000, 1), seen(20_000, 0, now - 160_000, 6)], now, () => true);
+        expect(ps).toHaveLength(2);
+        const area = ps.find(p => p.x === 1300)!;
+        expect(area.what).toMatch(/^where 10 enemies were seen 20 s ago/);
+        expect(ps.some(p => p.x === 9000)).toBe(true);
+    });
+
+    test('passing one area: its neighbours within 3000 are no news, so the roam goes on round the circuit', () => {
+        const mem: Record<string, any> = {};
+        const ps = [place('h1', 0, 8000), place('h2', 0, -8000)];
+        const now = 100_000;
+        const cells = [seen(4000, 0, now - 30_000, 3), seen(7200, 0, now - 100_000, 2), seen(8500, 800, now - 110_000, 2)];
+        expect(roamStep(mem, { regionId: 1, centre: { x: 0, y: 0 }, places: ps, sightings: cells, now })!.place.key).toBe('seen:4000:0');
+        const on = roamStep(mem, { regionId: 1, centre: { x: 4800, y: 0 }, places: ps, sightings: cells, now: now + 20_000 })!;
+        expect(on.place.key).not.toMatch(/^seen:/);
     });
 });
 

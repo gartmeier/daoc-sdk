@@ -29,7 +29,7 @@ import { offRoadsOut, roadsOut } from './tactics/roads';
 import { withHasten } from './tactics/hasten';
 import { RAID_FOE_REACH, raidNow, underRaidKeep } from './tactics/raid';
 import { planBuffs } from './buffs';
-import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { decideRvr, focusHealed, groupRegion, HUNT_KEEP, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import { countFor, groupSize, type Count } from './size';
@@ -331,6 +331,11 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const runner = (c: Contact) => (mem.runners?.[c.objectId]?.until ?? 0) > now && !onUs(c) && dist(c, centre) > k.closeIn;
     if (runnerNote && mem.hunted?.ids?.includes(runnerNote.id)) mem.hunted = undefined;
     const free = foes.filter(c => !c.cc && !runner(c)).sort((a, b) => dist(a, centre) - dist(b, centre));
+    // One in sight last tick stays in sight to HUNT_KEEP beyond huntRadius, as in decideRvr (live 20:44:48-52: a Norseman at
+    // 4964-5000 flipped the pack between hunting him and the roam each second).
+    const lastSeen = new Set<number>(mem.packSeen ?? []);
+    const inHunt = (c: Contact) => dist(c, centre) <= s.huntRadius + (lastSeen.has(c.objectId) ? HUNT_KEEP : 0);
+    mem.packSeen = foes.filter(inHunt).map(c => c.objectId);
     const stay: Point3 = onLand(centre, centre);
     // Where the pack sits to rest or regroup: off every enemy's way out of its portal keep (tactics/roads.ts), as decideRvr.
     let restMemo: { at: Point3; why: string } | undefined;
@@ -456,7 +461,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // ── Picking off: every enemy in sight crowd-controlled, but the focus. Break one on purpose and kill it, everyone on it and no
     // raid clock, then the next, one at a time, until none is left (ccHolds lets the members break it). User, live in Thidranki: with
     // all of them mezzed `free` was empty, so the pack stood by them and rebuffed until they woke. Winding down, only the focus in hand.
-    const sight = foes.filter(c => dist(c, centre) <= s.huntRadius);
+    const sight = foes.filter(inHunt);
     // A focus given up as healed (keepFocus's dropped) is no longer in hand: free, it is the raid's to keep or replace. Counted
     // as in hand, it emptied `loose`, the pick broke a mezz on another, and the next tick it was loose again: a flip each tick.
     const givenUp = (mem.dropped?.[o.focus ?? -1] ?? 0) > now;
@@ -590,7 +595,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     if (dead.length) mem.hadDead = true;
     if (mem.hadDead && !dead.length && !far.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.hadDead = false; mem.pack = 'rebuff'; mem.rebuffAt = now; return say({ ...none, phase: 'recover', anchor: rest().at, reason: 'rebuffing: someone is back' }); }
     if (pickups.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.pack = 'home'; mem.legKind = null; stepLeg(trip, 'home', homeSpot!, { from: centre, movers: main, replan: Infinity }); return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'pick up the released', reason: `picking up ${pickups.map(m => m.name).join(', ')}` }); }
-    const seen = free.filter(c => dist(c, centre) <= s.huntRadius);
+    const seen = free.filter(inHunt);
     if (!seen.length) {
         mem.holdSince = undefined;
         // Prey we hunted gone from sight (out of view, past huntRadius or into its keep): the quarry, whose trail or way in
@@ -638,7 +643,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     if (seen.some(c => onUs(c) && underGuards(c))) return startPull('on us under the guards: out of their reach first');
     // Prey: all that is in sight is a couple of stragglers and we clearly outnumber them. No cooldown, no stand-off and no
     // raid clock for those: turn round and kill them, the Hero too. Live, 5 v 2 at the end of a round was refused as "still cooling down".
-    const inSight = foes.filter(c => dist(c, centre) <= s.huntRadius);
+    const inSight = foes.filter(inHunt);
     const prey = inSight.length <= k.maxChasers && main.length >= inSight.length + 2 && !main.some(m => m.hp < k.preyHp);
     if (prey && !ctx.windingDown) {
         if (d <= k.reach) {
