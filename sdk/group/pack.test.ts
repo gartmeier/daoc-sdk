@@ -172,8 +172,10 @@ describe('decidePack: a pet in it', () => {
             const members = team({}, NEAR_KEEP, THID);
             const pet = decidePack(ctx(picture(members, inCircle({ target: null, targetPet: 'Encha' })), { memory: { pack: 'stalk' } }));
             const member = decidePack(ctx(picture(members, inCircle({ target: 'Encha', targetPet: null })), { memory: { pack: 'stalk' } }));
-            expect(member).toMatchObject({ phase: 'engage', focus: 51 });
-            expect(pet).toMatchObject({ phase: 'engage', focus: 51 });
+            // On us under the keep's guards: out of their reach first, then the kill of who follows (S3, the user at 20:09: "we got the guards' adds").
+            expect(member).toMatchObject({ phase: 'retreat' });
+            expect(member.reason).toMatch(/^pull back: on us under the guards/);
+            expect(pet.reason).toBe(member.reason);
         });
     });
 });

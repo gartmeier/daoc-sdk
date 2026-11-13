@@ -111,7 +111,7 @@ export interface RaidMember {
 /** Raid members' places are rounded to this. */
 export const RAID_ROUND = 50;
 
-export type MusterHold = 'defenders' | 'winner' | 'lord' | 'progress';
+export type MusterHold = 'defenders' | 'winner' | 'lord' | 'progress' | 'unseen';
 
 /**
  * How far a raid unit got, from its orders' reason (tactics/raid.ts `raid <phase>: rank N: ...; M left`): phase × 10 + rank, and
@@ -256,6 +256,20 @@ export interface DirectorSettings {
     defenceMemoryMs: number;
     defenceMaxMs: number;
     /**
+     * The go needs a fresh look: one of our living within defenceRadius of the target in the last lookFreshMs. Without one, once
+     * the raid stands at the rally, the rally moves to lookFrom out from the target toward it, and the raid looks for itself
+     * (hold 'unseen'). The user, playing Niamh at 20:09: the go read "0 defenders" from a look 27 min old, the raid walked into
+     * Albion's defenders with Midgard across the water: "We were the sandwich, and then we got the guards' adds."
+     */
+    lookFreshMs: number;
+    /** 0 for lookFreshMs: no look needed. */
+    lookFrom: number;
+    /**
+     * A look: one of our living within this of the target. Players see 6000 (WorldMgr.VISIBILITY_DISTANCE); the nearest dry ground
+     * to the Faste on Albion's and Hibernia's side is 5500 out (lookSpot), its water lies inside that.
+     */
+    lookRadius: number;
+    /**
      * The moment to raid (stint 2026-11-13, S3): the go waits for few defenders seen at the target, at most fewShare of
      * the raid's living (at least fewMin), unless the owners are seen busy elsewhere: ownersAwayMin of the owner's realm
      * in a fight more than ownersAwayFrom from the target with the third realm within ownersAwayPair of them, seen within
@@ -312,7 +326,7 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     campRadius: 5000, campFoes: 2, campMs: 15_000,
     quorum: 0.7, rallyMaxMs: 240_000, goMaxMs: 900_000, raidBreak: 0.3, raidEveryMs: 0,
     lordGraceMs: 30_000, lordMaxMs: 600_000, progressGraceMs: 180_000, progressMaxMs: 1_800_000,
-    defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000,
+    defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000, lookFreshMs: 120_000, lookFrom: 4000, lookRadius: 5800,
     fewShare: 0.5, fewMin: 2, ownersAwayMin: 3, ownersAwayFrom: 8000, ownersAwayPair: 2500,
     onWayMs: 120_000, onWayMin: 1000,
     defend: true, defendRadius: 4500, defendMin: 2, defendMemoryMs: 30_000, defendReach: 14_000, defendShare: 0.5, defendClearMs: 45_000, defendMaxMs: 900_000, defendMinSize: 4, defendBigFoes: 6, defendClearBigMs: 180_000,
@@ -350,6 +364,25 @@ export interface RaidPlan {
     target: Point3;
     /** Units in the raid; all the director's units by default. */
     units?: string[];
+}
+
+/**
+ * Where a raid looks at its target from: `from` out from it toward the rally, turned up to 60 degrees either way for dry ground
+ * (the Faste's water lies across the straight line from Albion's and Hibernia's rallies); farther out by 250 at a time while
+ * none is dry, the rally at last.
+ */
+export function lookSpot(regionId: number, rally: Point3, target: Point3, from: number): Point3 {
+    const d = dist2(rally, target) || 1;
+    if (d <= from) return rally;
+    const a0 = Math.atan2(rally.y - target.y, rally.x - target.x);
+    for (let r = from; r < d; r += 250) {
+        for (const deg of [0, 15, -15, 30, -30, 45, -45, 60, -60]) {
+            const a = a0 + deg * Math.PI / 180;
+            const p = { x: Math.round(target.x + Math.cos(a) * r), y: Math.round(target.y + Math.sin(a) * r), z: rally.z };
+            if (isDry(regionId, p)) return p;
+        }
+    }
+    return rally;
 }
 
 /** A raid on the Faste when no plan is given: rally 5500 from its centre toward our portal keep. */
@@ -432,6 +465,8 @@ interface Open {
         lefts?: Map<string, { step: number; left: number }>;
         /** Since when the defenders hold the rally. */
         heldSince?: number;
+        /** The look spot the rally moved to for a fresh look (lookFrom), once. */
+        look?: Point3;
         /** Enemy players seen near the target, by key: last seen and realm. */
         seen: Map<string, { at: number; realm: string }>;
         /** Owner-realm players seen in a fight with the third realm far from the target, by key: last seen. */
@@ -884,7 +919,15 @@ export class RealmDirector {
         if (call.stage === 'rally') {
             const waited = now - o.raid.stagedAt;
             const ready = living > 0 && (there >= s.quorum * living || (waited >= s.rallyMaxMs && there >= 0.5 * living));
-            const why = living > 0 ? musterHold({ defenders, third, ownersAway, living }, s) : null;
+            // No fresh look at the target: the counts above are nobody's; the raid goes to look (the rally moves up, once).
+            const stale = s.lookFreshMs > 0 && (this.lookedAt === null || now - this.lookedAt > s.lookFreshMs);
+            const why: MusterHold | null = living > 0 ? (stale && ready ? 'unseen' : stale ? null : musterHold({ defenders, third, ownersAway, living }, s)) : null;
+            if (why === 'unseen' && !o.raid.look) {
+                const look = lookSpot(this.regionId, o.raid.rally, o.raid.target, s.lookFrom);
+                o.raid.look = look;
+                o.raid.rally = look;
+                call.at = look;
+            }
             if (why) o.raid.heldSince ??= now;
             else delete o.raid.heldSince;
             if (why) hold(why, true); else if (call.hold) hold(call.hold, false);
@@ -892,7 +935,7 @@ export class RealmDirector {
                 if (call.hold) hold(call.hold, false);
                 events.push(this.close(o, 'defended', board, now));
                 this.raidEndedAt = now;
-            } else if (ready && !why) {
+            } else if (ready && !why && !stale) {
                 call.stage = 'go';
                 call.at = { ...o.raid.target };
                 o.raid.stagedAt = now;
@@ -1006,7 +1049,7 @@ export class RealmDirector {
         if (!plan) return;
         for (const f of foesNear(board.foes, plan.target, s.defenceRadius)) this.targetSeen.set(f.key, { at: now, realm: f.realm });
         for (const [k, v] of this.targetSeen) if (now - v.at > s.defenceMemoryMs) this.targetSeen.delete(k);
-        if (board.units.some(u => u.running && u.members.some(m => !m.isDead && dist2(m, plan!.target) <= s.defenceRadius))) this.lookedAt = now;
+        if (board.units.some(u => u.running && u.members.some(m => !m.isDead && dist2(m, plan!.target) <= s.lookRadius))) this.lookedAt = now;
     }
 
     private stepDefend(board: RealmBoardView, now: number, events: DirectorEvent[]): void {

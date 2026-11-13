@@ -12,7 +12,8 @@ const foes = (x: number, y: number, n: number, from = 1, over: Partial<FoeSpec> 
     Array.from({ length: n }, (_, i) => ({ id: from + i, x: x + i * 50, y, ...over }));
 
 const UNITS = ['camelot', 'camelot-2', 'camelot-s1', 'camelot-s2'];
-const director = (over: Partial<ConstructorParameters<typeof RealmDirector>[0]> = {}) => new RealmDirector({ realm: 'albion', units: UNITS, write: false, ...over });
+// The fresh look (lookFreshMs) is off here but where a test turns it on: most tests' raids never stand within sight of the target.
+const director = (over: Partial<ConstructorParameters<typeof RealmDirector>[0]> = {}) => new RealmDirector({ realm: 'albion', units: UNITS, write: false, ...over, settings: { lookFreshMs: 0, ...over.settings } });
 /** A middle-of-the-map spot, far from every keep. */
 const MID = { x: 30000, y: 30000 };
 
@@ -220,6 +221,26 @@ describe('muster', () => {
         out = d.update({ camelot: frame({ id: 'camelot', members: at(33000, 44000, 6, 'G') }), 'camelot-s1': frame({ id: 'camelot-s1', members: at(33100, 44000, 3, 'S') }) }, 90_000, []);
         expect(out.calls[0]).toMatchObject({ stage: 'go', at: plan.target });
         expect(out.events.find(e => e.kind === 'stage')).toMatchObject({ stage: 'go', atRally: 9, of: 9 });
+    });
+
+    test('no go on a stale look: the rally moves up to 4000 from the target, the raid looks, then goes (the user at 20:09: "We were the sandwich")', () => {
+        const d = director({ settings: { lookFreshMs: 120_000 } });
+        // A rally out of sight of the target (6700 off; a look is within 5800).
+        const plan = { rally: { x: 33000, y: 45000, z: 0 }, target: { x: 33089, y: 38271, z: 3720 } };
+        d.startMuster(plan);
+        const atRally = { camelot: frame({ id: 'camelot', members: at(33000, 45000, 6, 'G') }), 'camelot-s1': frame({ id: 'camelot-s1', members: at(33100, 45000, 3, 'S') }) };
+        let out = d.update(atRally, 0, []);
+        expect(out.events.find(e => e.kind === 'hold')).toMatchObject({ why: 'unseen', on: true });
+        out = d.update(atRally, 30_000, []);
+        expect(out.calls[0]!.stage).toBe('rally');
+        const look = out.calls[0]!.at;
+        expect(Math.hypot(look.x - plan.target.x, look.y - plan.target.y)).toBeGreaterThanOrEqual(3990);
+        expect(Math.hypot(look.x - plan.target.x, look.y - plan.target.y)).toBeLessThan(4500);
+        // At the look spot (within sight), nobody there: go.
+        const atLook = { camelot: frame({ id: 'camelot', members: at(look.x, look.y, 6, 'G') }), 'camelot-s1': frame({ id: 'camelot-s1', members: at(look.x + 100, look.y, 3, 'S') }) };
+        d.update(atLook, 60_000, []);
+        out = d.update(atLook, 61_000, []);
+        expect(out.calls[0]!.stage).toBe('go');
     });
 
     test('the muster call carries the raid: every member of each running unit asked, places rounded', () => {

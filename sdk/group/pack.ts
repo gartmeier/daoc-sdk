@@ -486,6 +486,8 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         const done = elapsed >= k.raidMs + (focus && focus.hp < k.finishHp ? k.finishMs : 0);
         if (close >= k.closeCount) return startPull(`${close} enemies on our casters`);
         if (k.outnumbered !== undefined && reachable.length >= main.length + k.outnumbered) return startLeave(`outnumbered: ${reachable.length} free in reach vs ${main.length}`);
+        // One on us under a keep's guards: out of their reach first, then kill who follows (no guards' adds in a player fight).
+        if (reachable.some(underGuards)) return startPull('on us under the guards: out of their reach first');
         // Nobody left in reach: on with the stalk, which finds the next target.
         if (!foes.length || (!reachable.length && elapsed >= k.idleMs)) mem.pack = 'stalk';
         else {
@@ -631,6 +633,8 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         mem.movingOff = false;
         return say({ ...none, phase: 'recover', anchor: rest().at, objective: 'rest', waiting: who.map(m => ({ name: m.name, why: powerWhy(m) })), reason: `resting: ${who.map(m => m.name).join(', ')} (nearest enemy ${Math.round(d)} away)${rest().why}` });
     }
+    // One on us under a keep's guards, whatever the odds: out of their reach first, then kill who follows (the user at 20:09).
+    if (seen.some(c => onUs(c) && underGuards(c))) return startPull('on us under the guards: out of their reach first');
     // Prey: all that is in sight is a couple of stragglers and we clearly outnumber them. No cooldown, no stand-off and no
     // raid clock for those: turn round and kill them, the Hero too. Live, 5 v 2 at the end of a round was refused as "still cooling down".
     const inSight = foes.filter(c => dist(c, centre) <= s.huntRadius);

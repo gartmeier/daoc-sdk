@@ -227,9 +227,10 @@ describe('raid: enemy players at the go (attempt 6: the main groups dropped the 
         expect(rvr([enemyAt(901, RAID_FOE_REACH - 300)])).toMatchObject({ phase: 'engage', focus: 901 });
     });
 
-    test('decidePack: the same', () => {
+    test("decidePack: one 3000 off is no hunt; one under the keep's guards is no fight unless on us, then out of their reach first (the user at 20:09: we got the guards' adds)", () => {
         expect(pk([enemyAt(901, 3000)]).reason).toContain('raid');
-        expect(pk([enemyAt(901, RAID_FOE_REACH - 300)]).reason).not.toContain('raid');
+        expect(pk([enemyAt(901, RAID_FOE_REACH - 300)]).focus ?? null).not.toBe(901);
+        expect(pk([{ ...enemyAt(901, RAID_FOE_REACH - 300), target: 'M0', threat: true } as Contact]).reason).toMatch(/^pull back: on us under the guards/);
     });
 });
 
