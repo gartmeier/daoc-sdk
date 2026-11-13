@@ -105,3 +105,9 @@ describe('hasten: the behaviour', () => {
         expect(await hasten().run(fake({ npcs: [] }).ctx)).toBe(false);
     });
 });
+
+test('hasten: after an interact with no speed, no new try for the rest of the run; after a failed walk, 10 min (live 2026-11-13: 890 no_effect, members walked in and out every 30 s)', async () => {
+    const src = await Bun.file(new URL('./hasten.ts', import.meta.url)).text();
+    expect(src).toMatch(/HASTEN_GIVE_UP_MS = 24 \* 3_600_000/);
+    expect(src).toMatch(/HASTEN_RETRY_MS = 600_000/);
+});

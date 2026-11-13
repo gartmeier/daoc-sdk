@@ -18,8 +18,14 @@ export const HASTENER_REACH = 1200;
 const HASTENER_RANGE = 150;
 /** Not with an enemy player this near any of us: the fight comes first. */
 const HASTEN_FOE_CLEAR = 2500;
-/** After a failed try, leave it this long. */
-const HASTEN_RETRY_MS = 30_000;
+/** After a failed walk, leave it this long. */
+const HASTEN_RETRY_MS = 600_000;
+/**
+ * After an interact with no speed to show for it, leave it for the rest of the run. Live 2026-11-13: 890 no_effect and no
+ * success all day; every 30 s each member walked ~600 into the portal keep and back, and a unit on its break flipped between
+ * resting and "back to the portal keep" (the user, playing Niamh in hibernia, saw it).
+ */
+const HASTEN_GIVE_UP_MS = 24 * 3_600_000;
 /** The effect shows within this of the interact. */
 const HASTEN_WAIT_MS = 3000;
 /** With no effect names to go by, a max speed this high is the hastener's (100 + 147; a Bard's or Skald's speed is far below). */
@@ -73,7 +79,7 @@ export const hasten = <S = any>(): Behavior<S> => ({
         }
         await ctx.sdk.sendInteract(h.objectId);
         const sped = await ctx.sdk.waitForCondition(s => hasRealmSpeed(s.effects ?? [], s.player), HASTEN_WAIT_MS).then(() => true, () => false);
-        if (!sped) ctx.memory.set('hastenRetry', Date.now() + HASTEN_RETRY_MS);
+        if (!sped) ctx.memory.set('hastenRetry', Date.now() + HASTEN_GIVE_UP_MS);
         ctx.result('hasten', sped ? { success: true, message: 'Speed of the Realm' } : { success: false, reason: 'no_effect', message: `No Speed of the Realm ${HASTEN_WAIT_MS / 1000} s after the interact` }, h.objectId);
         return true;
     },
