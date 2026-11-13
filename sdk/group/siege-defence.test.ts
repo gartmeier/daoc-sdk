@@ -352,3 +352,27 @@ describe.skipIf(!meshReady || getOccluderStore().forZone(252) === null)('the bol
         expect(mesh.findPath(mesh.closestPoint({ x: 33100, y: 38250, z: 3722 })!, mesh.closestPoint(b, { x: 32, y: 32, z: 64 })!).status).toBe('found');
     });
 });
+
+describe('raidStep end to end: the long-reach members go up for the roof archer', () => {
+    test('walls done, the gate broken, the inner tower\'s Hunter in view: a nuker of reach 1875 gets it and the bolt spot as its own', async () => {
+        const { raidStep } = await import('./tactics/raid');
+        const { report, contact } = await import('./fixtures');
+        const raid = defencePlanOf();
+        const roofE = FASTE.targets.find(x => x.label === 'roof-e')!;
+        const caps = (reach: number) => ({ heal: false, cc: false, nuke: true, buffs: [], buffSpells: [], reach });
+        const roles = ['tank', 'melee', 'healer', 'nuker', 'nuker'] as const;
+        const members = roles.map((role, i) => report(`M${i}`, { role, className: 'Warrior', objectId: 10 + i, regionId: 252, x: 33100 + i * 40, y: 38250, z: 3722, level: 24, capabilities: caps(i === 3 ? 1875 : 1500) as any, doorsBroken: [252000301] }));
+        const hunter = contact(55, { kind: 'npc', name: 'Hunter', realm: 'albion', level: 28, regionId: 252, ...roofE.at, keepGuard: true });
+        const mem: Record<string, any> = { raid: { callId: 'x', staged: true, broken: [] as number[] } };
+        const { update, orders } = raidStep({ plan: raid, mem, members, guards: [hunter] });
+        expect(orders.bolt?.focus?.id).toBe(55);
+        const own = (update as any).memberOwn as Record<string, { focus: number; anchor: Point3 }>;
+        expect(Object.keys(own)).toEqual(['M3']);
+        expect(own.M3).toEqual({ focus: 55, anchor: roofE.bolt! });
+    });
+});
+
+function defencePlanOf() {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('./siege').raidPlan('midgard');
+}
