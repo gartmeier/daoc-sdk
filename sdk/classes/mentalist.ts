@@ -16,6 +16,10 @@ import { selfBuffDue } from './paladin';
 import { modifiedSpec } from '../actions';
 import { petControl, petsAllowed } from '../group/pets';
 import type { NearbyNpc } from '../types';
+import { conLevel } from '../actions-helpers';
+import { aggroAt } from '../group/terrain';
+import { segDist } from '../group/baseplan';
+import type { Point } from '../group/types';
 
 export interface MentalistKit {
     character: Character;
@@ -253,11 +257,40 @@ export interface CharmChoice {
     /** Ids tried lately. */
     skipIds?: ReadonlySet<number>;
     radius?: number;
+    /** Where she stands: the charmed mob walks from its spot to her, past whatever stands on that line. */
+    from?: Point;
+    /** A neighbour's aggro reach, null when it is passive (aggroAt, from the spawn data). Without it every monster counts as aggressive at CHARM_UNKNOWN_AGGRO. */
+    aggroOf?: (o: NearbyNpc) => { range: number } | null;
+}
+
+/**
+ * Room round the mob, past a neighbour's aggro range: mobs roam (pve's aggroPad). Every Thidranki bwca, boar and tomte
+ * spawn has AggroRange 500, so that is 800 from its kin.
+ */
+export const CHARM_LONE_PAD = 300;
+/** A neighbour's aggro range when no spawn data says (aggroOf left out). */
+export const CHARM_UNKNOWN_AGGRO = 500;
+
+/**
+ * The aggressive mob that would set on the charmed one: once it is a player's pet every aggressive monster in its aggro
+ * range takes it as a target (StandardMobBrain.CheckNpcAggro), at its spot or on its walk to her. Live 2026-11-13 19:39
+ * (field-20261113-193026): a perturbed bwca charmed in its camp, and three more of the camp came for it in 40 s. One that
+ * cons grey to the charmed mob never aggroes (CanAggroTarget).
+ */
+export function charmNeighbour(c: NearbyNpc, npcs: readonly NearbyNpc[], choice: Pick<CharmChoice, 'from' | 'aggroOf'>): NearbyNpc | null {
+    return npcs.find(o => {
+        if (o.objectId === c.objectId || o.realm !== 'none' || o.isPet || o.isPeaceful || conLevel(c.level, o.level) <= -3) return false;
+        const a = choice.aggroOf ? choice.aggroOf(o) : { range: CHARM_UNKNOWN_AGGRO };
+        if (!a) return false;
+        const reach = a.range + CHARM_LONE_PAD;
+        return Math.hypot(o.x - c.x, o.y - c.y) < reach || (!!choice.from && segDist(o, c, choice.from) < reach);
+    }) ?? null;
 }
 
 /**
  * The mob to charm: a monster (realm none, attackable, not a pet, not named: a capital first letter is refused), at most
- * `maxLevel`, near her, at full health and on nobody (not in combat, no target, not busy). The strongest first, then the nearest.
+ * `maxLevel`, near her, at full health and on nobody (not in combat, no target, not busy), with no aggressive mob near it or
+ * on its walk to her (charmNeighbour), so its camp stays put. The strongest first, then the nearest.
  */
 export function charmTarget(npcs: readonly NearbyNpc[], c: CharmChoice): NearbyNpc | null {
     const radius = c.radius ?? CHARM_RADIUS;
@@ -265,7 +298,7 @@ export function charmTarget(npcs: readonly NearbyNpc[], c: CharmChoice): NearbyN
         .filter(n => n.realm === 'none' && !n.isPet && !n.isPeaceful && n.isTargetable && !/^\p{Lu}/u.test(n.name)
             && n.level <= c.maxLevel && n.level > 0 && n.distance <= radius && n.healthPercent >= CHARM_FRESH
             && !n.inCombat && n.targetObjectId === null && !c.busy.has(n.objectId)
-            && !c.skipNames?.has(n.name) && !c.skipIds?.has(n.objectId))
+            && !c.skipNames?.has(n.name) && !c.skipIds?.has(n.objectId) && !charmNeighbour(n, npcs, c))
         .sort((a, b) => b.level - a.level || a.distance - b.distance)[0] ?? null;
 }
 
@@ -309,7 +342,10 @@ export const charmUp = ({ maxResist = CHARM_SAFE_RESIST }: { maxResist?: number 
         if (focus !== null) busy.add(focus);
         const names = later<string>(ctx.memory, 'charmSkipNames');
         const ids = later<number>(ctx.memory, 'charmSkipIds');
-        const mob = charmTarget(ctx.sdk.getNearbyNpcs(), { maxLevel: safe, busy, skipNames: liveKeys(names, now), skipIds: liveKeys(ids, now) });
+        const mob = charmTarget(ctx.sdk.getNearbyNpcs(), {
+            maxLevel: safe, busy, skipNames: liveKeys(names, now), skipIds: liveKeys(ids, now),
+            from: me, aggroOf: o => aggroAt(me.regionId, o.name, o),
+        });
         if (!mob) return false;
         const risk = charmResist(me.level, spec, mob.level);
         ctx.doing('charm', mob.objectId, `${sp.spell.name} on ${mob.name} (L${mob.level}, ${risk.toFixed(1)} % a pulse)`);

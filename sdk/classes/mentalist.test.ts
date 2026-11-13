@@ -202,6 +202,29 @@ describe('the charm (the user, playing Niamh: Imaginary Enemy on a bwca and matu
         expect(charmTarget([npc(1)], { maxLevel: 21, busy: new Set() })?.objectId).toBe(1);
     });
 
+    test('a lone one: no aggressive mob within its aggro range + 300 of it or of its walk to her, so the camp stays put', () => {
+        // Live 2026-11-13: a perturbed bwca charmed in its camp, three of its camp came for it. Every bwca spawn has AggroRange 500.
+        const at = (id: number, x: number, y: number, o: Partial<NearbyNpc> = {}) => npc(id, { name: 'perturbed bwca', x, y, ...o });
+        const aggroOf = (o: NearbyNpc) => o.name === 'mature boar' ? null : { range: 500 };
+        const from = { x: 0, y: 0 };
+        const pick = (list: NearbyNpc[]) => charmTarget(list, { maxLevel: 21, busy: new Set(), from, aggroOf })?.objectId ?? null;
+        // The camp: 1 and 2 stand 400 apart; 3 stands 1000 from them, the outermost one on her side.
+        expect(pick([at(1, 1000, 0), at(2, 1400, 0), at(3, 0, 1000, { level: 18 })])).toBe(3);
+        // 810 apart: 1 is alone, and 2 would walk to her past 1.
+        expect(pick([at(1, 1000, 0), at(2, 1810, 0)])).toBe(1);
+        expect(pick([at(1, 1000, 0), at(2, 1790, 0)])).toBeNull();
+        expect(pick([at(1, 1000, 0), at(2, 1810, 0)].reverse())).toBe(1);
+        // On its walk to her: 2 (too high to take) stands 700 off the line from 1 to her, 990 from 1.
+        expect(pick([at(1, 1400, 0), at(2, 700, 700, { level: 22 })])).toBeNull();
+        // A passive neighbour, one grey to it, a peaceful one or a pet don't count.
+        expect(pick([at(1, 1000, 0), npc(2, { x: 1100, y: 0 })])).toBe(1);
+        expect(pick([at(1, 1000, 0, { level: 21 }), at(2, 1100, 0, { level: 10 })])).toBe(1);
+        expect(pick([at(1, 1000, 0), at(2, 1100, 0, { isPeaceful: true }), at(3, 900, 0, { isPet: true })])).toBe(1);
+        // Without aggro data every monster counts as aggressive at 500.
+        expect(charmTarget([npc(1, { x: 1000, y: 0 }), npc(2, { x: 1700, y: 0 })], { maxLevel: 21, busy: new Set() })).toBeNull();
+        expect(charmTarget([npc(1, { x: 1000, y: 0, level: 21 }), npc(2, { x: 1900, y: 0 })], { maxLevel: 21, busy: new Set() })?.objectId).toBe(1);
+    });
+
     test('in the pack nuker list: charmUp in the chores, petControl on the side tick from the start', () => {
         const list = withCharacter(packBehaviors().nuker as any, mentalist().character);
         expect(list.map(b => b.name)).toContain('charmUp');
