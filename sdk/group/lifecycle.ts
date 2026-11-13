@@ -44,6 +44,8 @@ import type { Point3 } from './types';
 import { WAVE_DIR, writeWave, type RealmWave } from './waves';
 
 export const LIFECYCLE_DIR = process.env.DAOC_LIFECYCLE_DIR ?? join(import.meta.dir, '..', '..', 'groups', 'lifecycle');
+/** S6's lfg watcher's state (sdk/group/lfg-watch.ts): `held` are the bots stepped out for a human. */
+export const LFG_STATE = join(import.meta.dir, '..', '..', 'groups', 'lfg', 'state.json');
 
 // ──────────────────────────────────────────────────────────────────────────────────────────────────────────── settings
 
@@ -274,6 +276,11 @@ export interface RealmStep {
     /** How many play soon (the target an hour ahead, if more): a class the second group will need stays on before the ramp. */
     needsAt?: number;
     pinned: { away: ReadonlySet<string>; stay: ReadonlySet<string> };
+    /**
+     * Bots S6's lfg stepped out for a human (groups/lfg/state.json `held`): a session that ends now (leaving, logged out
+     * safely, at once, never extended), never logged in while held; once let go they rest as usual.
+     */
+    lfg?: ReadonlySet<string>;
     /** Last log-out and log-in steps (ms), kept by the caller between steps. */
     lastOut: number;
     lastIn: number;
@@ -319,7 +326,7 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
         else if (l.state === 'joining' && inGame) { set(l, 'online', now + between(rand, s.session), 'session'); l.sessions++; ev('joined', l, `session of ${Math.round((l.until - now) / 60_000)} min`); }
         else if (l.state === 'joining' && now - l.since > s.joinTimeoutMs) { set(l, 'offline', now + 2 * 60_000, 'log-in not seen'); ev('lost', l, 'asked to log in, not in game after the timeout'); }
         else if (l.state === 'leaving' && !inGame) { set(l, 'offline', now + between(rand, s.rest), 'rest'); ev('left', l, `back in ${Math.round((l.until - now) / 60_000)} min at the earliest`); }
-        else if (l.state === 'offline' && inGame && now - l.since > 3 * 60_000) {
+        else if (l.state === 'offline' && inGame && now - l.since > 3 * 60_000 && !o.lfg?.has(l.bot)) {
             // In game though we logged it out (the supervisor brought it back, or someone logged it in): it plays.
             set(l, 'online', now + between(rand, s.session), 'adopted'); l.sessions++; ev('adopt', l, 'in game while offline by us: plays a session');
         }
@@ -330,9 +337,16 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
     const needs = Array.from({ length: mains }, () => o.needs).flat();
     /** Would the realm's needs stay as covered without `l`? */
     const breaks = (l: Life) => openNeeds(playing().filter(x => x !== l), needs).length > openNeeds(playing(), needs).length;
-    const rested = (l: Life) => l.state === 'offline' && !o.pinned.away.has(l.bot) && (now >= l.until || now - l.since >= s.rest.minMs);
+    const rested = (l: Life) => l.state === 'offline' && !o.pinned.away.has(l.bot) && !o.lfg?.has(l.bot) && (now >= l.until || now - l.since >= s.rest.minMs);
     const sameClassRested = (l: Life) => lives.some(x => x !== l && rested(x) && x.className.toLowerCase() === l.className.toLowerCase());
     const logIn = (l: Life, why: string) => { set(l, 'joining', now, why); actions.push({ kind: 'logIn', bot: l.bot, realm: l.realm, why }); ev('join', l, why); };
+
+    // 2a. Stepped out for a human (lfg): leaves now, whatever its session or class.
+    for (const l of lives) {
+        if (!o.lfg?.has(l.bot) || o.pinned.away.has(l.bot) || !(l.state === 'online' || l.state === 'joining' || l.state === 'entering')) continue;
+        const played = Math.round((now - l.since) / 60_000);
+        set(l, 'leaving', now, 'lfg'); ev('leave', l, `lfg: a human takes its place (played ${played} min)`);
+    }
 
     // 2. Sessions over: leave, unless the floor or a needed class holds them, and nobody rested can take over.
     let outThisStep = now - lastOut < s.stepMs;
@@ -587,6 +601,8 @@ export interface LifecycleOptions {
     waveDir?: string;
     everyMs?: number;
     log?: (line: string) => void;
+    /** S6's lfg state (its `held` bots step out for a human); groups/lfg/state.json by default. */
+    lfgState?: string;
     /** Plan and log only: no log-ins or log-outs (also while <dir>/off exists). */
     shadow?: boolean;
     rand?: () => number;
@@ -730,6 +746,7 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
             const now = Date.now();
             const inGame = await (opts.inGame ?? gatewayInGame)();
             const pins = pinned();
+            const lfg = new Set(readJson<{ held?: string[] }>(opts.lfgState ?? LFG_STATE)?.held ?? []);
             const shadow = !!opts.shadow || existsSync(join(dir, 'off'));
             if (!started) {
                 started = true;
@@ -760,7 +777,9 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
                 if (!shadow) try { writeWave(waveFile(r.realm, w, now), waveDir); } catch (e) { log(`lifecycle ${r.realm}: wave file: ${(e as Error).message}`); }
 
                 // Sessions.
-                const humansIn = humans[r.realm] ?? 0;
+                // A bot lfg stepped out made room for a human: the human plays in its seat, so nobody comes in for it.
+                const lfgIn = r.bots.filter(b => lfg.has(b.bot)).length;
+                const humansIn = Math.max(humans[r.realm] ?? 0, lfgIn);
                 const t = Math.min(r.bots.length, Math.max(s.floor, curveAt(now, s.curve, s.floor) + b.shift) - humansIn);
                 const soon = Math.min(r.bots.length, Math.max(s.floor, curveAt(now + 60 * 60_000, s.curve, s.floor) + b.shift) - humansIn);
                 target[r.realm] = t;
@@ -771,7 +790,7 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
                     if (p.regionId !== THIDRANKI) outside.add(bot);
                     else if (logOutUnsafe(p, r.realm, keepOwner, s.keepClear)) unsafe.add(bot);
                 }
-                const res = stepRealm(realmLives(r.realm), { target: t, inGame, outside, unsafe, held, needs: groupNeeds(r.requires, r.bots), needsAt: soon, pinned: pins, lastOut: lastOut[r.realm]!, lastIn: lastIn[r.realm]! }, now, rand, s);
+                const res = stepRealm(realmLives(r.realm), { target: t, inGame, outside, unsafe, lfg, held, needs: groupNeeds(r.requires, r.bots), needsAt: soon, pinned: pins, lastOut: lastOut[r.realm]!, lastIn: lastIn[r.realm]! }, now, rand, s);
                 lastOut[r.realm] = res.lastOut; lastIn[r.realm] = res.lastIn;
                 for (const e of res.events) { record({ ...e, kind: e.kind, target: t }); log(`lifecycle ${r.realm}: ${e.bot} ${e.kind}: ${e.why}`); }
                 for (const a of res.actions) {

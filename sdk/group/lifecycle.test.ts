@@ -219,6 +219,24 @@ describe('sessions', () => {
         expect(r.events.some(e => e.bot === 'amergin')).toBe(false);
     });
 
+    test('lfg: a held bot leaves now, is logged out, and never comes in while held; then it rests as usual', () => {
+        const now = at(20);
+        const lives = initialLives(HIB.slice(0, 3), 'hibernia', new Set(['amergin', 'fiacra', 'cathbad']), now - 20 * MIN, seeded(3));
+        const lfg = new Set(['cathbad']);
+        const base = { target: 3, held: new Set<string>(), needs: [] as string[][], pinned: { away: new Set<string>(), stay: new Set<string>() }, lastOut: now, lastIn: now, lfg };
+        const r = stepRealm(lives, { ...base, inGame: new Set(['amergin', 'fiacra', 'cathbad']) }, now, seeded(3));
+        expect(lives[2]!.state).toBe('leaving');
+        expect(r.actions).toEqual([{ kind: 'logOut', bot: 'cathbad', realm: 'hibernia', why: 'lfg' }]);
+        stepRealm(lives, { ...base, inGame: new Set(['amergin', 'fiacra']) }, now + MIN, seeded(3));
+        expect(lives[2]!.state).toBe('offline');
+        // Still held two hours on: never asked in, though the realm is one short.
+        const later = stepRealm(lives, { ...base, inGame: new Set(['amergin', 'fiacra']), lastIn: 0 }, now + 120 * MIN, seeded(3));
+        expect(later.actions.some(a => a.bot === 'cathbad')).toBe(false);
+        // Let go: it comes in as any rested bot.
+        const free = stepRealm(lives, { ...base, lfg: new Set<string>(), inGame: new Set(['amergin', 'fiacra']), lastIn: 0 }, now + 121 * MIN, seeded(3));
+        expect(free.actions).toEqual([expect.objectContaining({ kind: 'logIn', bot: 'cathbad' })]);
+    });
+
     test('a leaving bot near a keep waits to log out', () => {
         const now = at(20);
         const lives = initialLives(HIB.slice(0, 1), 'hibernia', new Set(['amergin']), now, seeded(3));
