@@ -141,3 +141,5 @@ Hibernia won 51 of the 85 arena rounds it played (Midgard 20, Camelot 14); round
 - **Measured, offline at the Faste (navmesh and walls, 387 floor spots, three enemies 1400 away):** seen in 65 %, a better spot in reach in 40 % of those, fully hidden in 24 %; 1.2 ms a search.
 - **`sightClock`, everywhere, on the side tick:** at each fight's end a note in the run log, `<Name>: in enemy sight 12.0 s of 41.5 s in the fight (29 %)`, with `, at the keep` for a keep fight. `grep "in enemy sight"` over a unit's run logs.
 - **To look for:** `stand (n)` in her Actions at the keep, the sight share of keep fights against field fights.
+
+**The walls (40e3a01, 2026-11-13):** in a raid the stand counts the enemy keep's wall casters and roof archers as foes (`siege.ts` `wallSight`), and no spot one of them sees is taken. A guard seeing her is enough to step, with no enemy player in view. It came from Amergin, killed by wall-e-n's Runemaster through a merlon gap 1300 from the raid's stand. Not seen live yet.
