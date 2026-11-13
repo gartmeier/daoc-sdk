@@ -3,8 +3,7 @@ import { getTerrainStore } from '../terrain';
 import { BATTLEGROUND_LAYOUTS, keepDangers, THIDRANKI, type PlayerRealm } from './keeps';
 import {
     brokenDoors, doorDamage, doorHealth, FASTE, inLordReach, raidCentre, raidOrders, raidPlan, routeFrom, STAGE_SHARE,
-    type RaidMember, type RaidView, type SiegeSeen,
-} from './siege';
+    type RaidMember, type RaidView, type SiegeSeen, pastStage } from './siege';
 import { isWet } from './water';
 
 const REALMS: PlayerRealm[] = ['albion', 'midgard', 'hibernia'];
@@ -138,6 +137,35 @@ describe('raidOrders', () => {
         expect(o.stand).toEqual(plan.route[0]!);
         expect(o.ranged.focus).toBeNull();
         expect(raidOrders(plan, view({ members: at(plan.route[1]!, 10) })).stand).toEqual(plan.route[2]!);
+    });
+
+    test('a body near the keep on another side is not past the stage: it walks the route (live 2026-11-13 01:58)', () => {
+        const hib = raidPlan('hibernia')!;
+        // Hibernia's body came in from the south-west, 2600 from the keep and 5300 from the stage.
+        const o = raidOrders(hib, view({ members: at({ x: 31101, y: 39959, z: 3200 }, 10) }));
+        expect(o.phase).toBe('approach');
+        expect(o.ranged.step).toBeNull();
+        // On the stage→keep corridor, or inside the walls, it is past the stage.
+        expect(raidOrders(hib, view({ members: at({ x: 34650, y: 38250, z: 3722 }, 10) })).phase).toBe('assault');
+        expect(raidOrders(hib, view({ members: at({ x: 32238, y: 38298, z: 4592 }, 10), seen: [...garrison('albion', labelsUpTo(6)), ...doors], broken: [252000301, 252000302] })).phase).toBe('lord');
+    });
+
+    test('pastStage: the corridor between stage and keep, the keep itself, nothing beyond the stage', () => {
+        const keep = { x: 33089, y: 38271 };
+        expect(pastStage(plan, keep, { x: 34650, y: 38250 })).toBe(true);
+        expect(pastStage(plan, keep, { x: 32300, y: 38300 })).toBe(true);
+        expect(pastStage(plan, keep, { x: 31101, y: 39959 })).toBe(false);
+        for (const r of ['albion', 'midgard', 'hibernia'] as const)
+            for (const p of FASTE.approach[r].route.slice(0, -1)) expect(pastStage(plan, keep, p)).toBe(false);
+    });
+
+    test('a peaceful or untargetable NPC at a post (the Hastener at the gate) is no guard', () => {
+        const members = at(plan.stage, 10);
+        const t = FASTE.targets.find(x => x.label === 'outer-se')!;
+        const seen = [...garrison('albion', labelsUpTo(1)), { id: 77, name: 'Hastener', realm: 'albion', kind: 'npc' as const, level: 50, isPeaceful: true, x: t.at.x, y: t.at.y, z: t.at.z }];
+        expect(raidOrders(plan, view({ members, seen, staged: true })).ranged.step!.rank).toBe(2);
+        seen[seen.length - 1] = { ...seen[seen.length - 1]!, isPeaceful: false, isTargetable: false };
+        expect(raidOrders(plan, view({ members, seen, staged: true })).ranged.step!.rank).toBe(2);
     });
 
     test('at the stage it waits for STAGE_SHARE of the living', () => {

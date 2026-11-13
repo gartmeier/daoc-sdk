@@ -248,6 +248,9 @@ export interface SiegeSeen extends Point3 {
     isDead?: boolean;
     isPet?: boolean;
     level?: number;
+    /** NPC flags (NearbyNpc): a peaceful or untargetable NPC (a Hastener at the gate) is never a guard. */
+    isPeaceful?: boolean;
+    isTargetable?: boolean;
     /** Whom it attacks, when the client knows (NearbyNpc.targetObjectId). */
     targetObjectId?: number | null;
     doorId?: number | null;
@@ -300,7 +303,24 @@ const AT_SPOT = 600;
 export const STAGE_SHARE = 0.75;
 
 const isFoe = (s: SiegeSeen, realm: PlayerRealm) => s.kind === 'npc' && !s.isPet && !s.isDead && (s.healthPercent ?? 100) > 0
-    && s.realm !== 'none' && s.realm !== realm && (s.level ?? 2) > 1;
+    && !s.isPeaceful && s.isTargetable !== false && s.realm !== 'none' && s.realm !== realm && (s.level ?? 2) > 1;
+
+/** The way in past the stage: the stage→keep corridor, this wide each side, and this near the keep's centre (inside its walls). */
+export const CORRIDOR = 1200;
+
+/**
+ * Whether `p` is on the way in past the stage: beside the line from the stage to the keep (between the two), or
+ * inside the keep. A body anywhere else near the keep (one that came in from another side, live 2026-11-13 01:58)
+ * is not past the stage and still walks the route.
+ */
+export function pastStage(plan: Pick<RaidPlan, 'stage'>, keep: Point, p: Point): boolean {
+    if (Math.hypot(p.x - keep.x, p.y - keep.y) <= CORRIDOR) return true;
+    const dx = keep.x - plan.stage.x, dy = keep.y - plan.stage.y, len2 = dx * dx + dy * dy;
+    if (!len2) return false;
+    const t = ((p.x - plan.stage.x) * dx + (p.y - plan.stage.y) * dy) / len2;
+    if (t < 0 || t > 1) return false;
+    return Math.hypot(p.x - (plan.stage.x + t * dx), p.y - (plan.stage.y + t * dy)) <= CORRIDOR;
+}
 
 /** The centre of the living members (their mean), or null with none alive. */
 export function raidCentre(members: readonly RaidMember[]): Point3 | null {
@@ -337,7 +357,7 @@ export function atPost(plan: Pick<RaidPlan, 'targets' | 'lordName' | 'realm'>, t
  * SEEN_FROM counts as done).
  *
  * - taken: the keep is ours.
- * - approach: not yet staged, nobody at the stage and the centre short of it: walk the route. `stand` is the body's
+ * - approach: not yet staged, nobody at the stage and the centre not past it (pastStage): walk the route. `stand` is the body's
  *   next waypoint; each member walks routeFrom(plan, itself), so stragglers follow the same bridge.
  * - stage: some at the stage, fewer than STAGE_SHARE of the living: those wait, the rest come (routeFrom each).
  * - assault: the lowest rank with a target not done. Ranged take its first ranged-or-all target, melee its first
@@ -356,13 +376,11 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
 
     const toStage = Math.hypot(centre.x - plan.stage.x, centre.y - plan.stage.y);
     const keep = planKeep(plan);
-    const fromKeep = keep ? Math.hypot(centre.x - keep.x, centre.y - keep.y) : Infinity;
-    const stageFromKeep = keep ? Math.hypot(plan.stage.x - keep.x, plan.stage.y - keep.y) : 0;
     if (!view.staged) {
         const alive = view.members.filter(m => m.alive);
         const there = alive.filter(m => Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= AT_SPOT).length;
-        // Nobody there yet and the body still out on the route: walk on (each member by routeFrom from itself).
-        if (there === 0 && toStage > AT_SPOT && fromKeep > stageFromKeep - AT_SPOT) {
+        // Nobody there yet and the body not past the stage: walk on (each member by routeFrom from itself).
+        if (there === 0 && toStage > AT_SPOT && !(keep && pastStage(plan, keep, centre))) {
             const next = routeFrom(plan, centre)[0] ?? plan.stage;
             return walk('approach', next, `${Math.round(toStage)} to the stage`);
         }
