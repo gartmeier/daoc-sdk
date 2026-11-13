@@ -252,6 +252,9 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     for (const id of passedDoors(plan, view.members)) if (!r.broken.includes(id)) r.broken.push(id);
     const whole = raidMembers(o.call, o.unit ?? '', o.members, plan.stage);
     if (whole) view.raid = whole;
+    // Doors the whole raid passed (another unit's living members behind them) are broken for our walks too (S2: hibernia-s1 joined
+    // late at 21:53 and started at rank 1, its walks blocked by "a shut door at (34333, 38275)" while hibernia stood at the lord).
+    for (const id of passedDoors(plan, whole ?? [])) if (!r.broken.includes(id)) r.broken.push(id);
     const alive = o.members.filter(m => !m.isDead);
     const centre = alive.length ? { x: alive.reduce((a, m) => a + m.x, 0) / alive.length, y: alive.reduce((a, m) => a + m.y, 0) / alive.length, z: alive.reduce((a, m) => a + m.z, 0) / alive.length } : null;
     // Melee take a caster on a wall or the roof only by a found route from where we stand, the shut doors as walls (R5's
