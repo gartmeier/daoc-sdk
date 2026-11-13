@@ -422,6 +422,7 @@ Surveyed from the server source, the DB and the navmesh, then walked and capture
 - **Guards respawn 5-25 min after death** (`guard_respawn` 15 ± 10). In the stateless ranks each respawn reopens its rank, so the raid holds on the lord once 2 of us, and a fifth, stand within his reach.
 - **Broken doors:** a door repairs only 5 % per 30 min out of combat, and our client drops door state. A later raid learns a door is broken from a swing's "the Keep Door is already dead!" line (`DOOR_BROKEN_RE`). After 30 min the gate is back at 5 % and breaks in a few swings.
 - **Busy zones:** with all realms playing, a pack must keep the raid unless enemy players are on it or near the body (R3's 245e89e). Otherwise it drops the muster at the first enemy in sight.
+- **The retake (03:51:04, Albion, 19 bots, the probe's eighth attempt):** it took 4 min 6 s from the go. Twelve minutes after a capture few guards are back (respawn 5-25 min), and the doors are at full health from the capture's reset. The raid walked past the shut gate to the lord, and two melee killed him. Albion's lord is "Lady Thidranki". The keep stays at level 1 under `starting_keep_level=1`.
 - **Still open:** casters don't climb to the roof, and the lord counts only damage from within 400 in 3D. The rank-1 stand is about 1600 from the east wall casters (reach 1850). Each unit keeps its own memory of done ranks and broken doors.
 
 ## The wolf pack (`sdk/group/pack.ts`, `rvrPack`)
