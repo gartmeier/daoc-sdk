@@ -305,6 +305,9 @@ const SEEN_FROM = 2500;
 const AT_SPOT = 600;
 /** The raid goes in from the stage once this share of the living stand there. */
 export const STAGE_SHARE = 0.75;
+/** The raid stays on the lord once this many of the living (and this share of them) stand within his reach. */
+export const AT_LORD_MIN = 2;
+export const AT_LORD_SHARE = 0.2;
 /** A static guard on us further than this from the step's stand is no focus: a nuke's 1500 and a step closer. */
 export const FOCUS_REACH = 1650;
 /**
@@ -430,7 +433,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     };
     // One of us by the lord (within his reach): the lord it is, whatever came back behind us. Guards respawn 5-25 min after
     // they die (guard_respawn 15 ± 10): live 03:01 an outer fighter back at its post took the raid off the roof, the lord at 46 %.
-    const atLord = view.members.some(m => m.alive && inLordReach(plan, m));
+    // Not one of us alone (a stray, live 03:33: it turned the whole raid on the roof's Scouts with the gate still shut).
+    const living = view.members.filter(m => m.alive);
+    const atLord = living.filter(m => inLordReach(plan, m)).length >= Math.max(AT_LORD_MIN, Math.ceil(living.length * AT_LORD_SHARE));
     const open = atLord ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
     const rank = open.length ? Math.min(...open.map(t => t.rank)) : null;
     const inRank = open.filter(t => t.rank === rank);

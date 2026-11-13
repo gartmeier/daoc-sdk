@@ -286,6 +286,9 @@ describe('raidOrders', () => {
         const o = raidOrders(plan, view({ members: roof, seen: garrison(), staged: true }));
         expect(o.phase).toBe('lord');
         expect(o.ranged.focus!.name).toBe('Lady Thidranki');
+        // One stray up there alone: the ranks (live 03:33).
+        const stray = [...at(plan.roof, 1), ...at({ x: 33100, y: 38250, z: 3722 }, 7).map(m => ({ ...m, id: m.id + 100 }))];
+        expect(raidOrders(plan, view({ members: stray, seen: garrison(), staged: true })).phase).toBe('assault');
         // Nobody up there: the ranks again.
         expect(raidOrders(plan, view({ members: at({ x: 33100, y: 38250, z: 3722 }, 8), seen: garrison(), staged: true })).phase).toBe('assault');
     });
