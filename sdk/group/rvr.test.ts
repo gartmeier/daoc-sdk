@@ -1461,6 +1461,20 @@ describe('decideRvr: roaming by a main group first (S3, live 13:24)', () => {
     });
 });
 
+describe('decideRvr: a roam place we stay at holds while the friend is within 6000 (19:43: hibernia flipped every 6-12 s)', () => {
+    // In Thidranki (a roam needs a battleground's places), round 30000, 30000: the centre is 29680, 30000.
+    const T = 252, base = { x: 30_000, y: 30_000 };
+    const spot = (x: number) => ({ unit: 'hibernia-2', x, y: 30_000, z: 0, alive: 6, size: 6, fight: false, phase: 'travel' });
+    const staying = (now: number) => ({ place: { key: 'seen:1', what: 'where 3 enemies were seen', x: 29_680, y: 30_000, weight: 2 }, reachedAt: now - 10_000, stayUntil: now + 50_000, last: ['seen:1'] });
+    test('the friend 4800 off: we stay; 6500 off: we close on it', () => {
+        const p = picture(team({}, base, T));
+        const near = decideRvr(ctx(p, { settings: { patrol: null }, memory: { realmUnits: [spot(29_680 + 4_800)], roam: staying(p.at) } }));
+        expect(near.reason).toMatch(/^roam: at where 3 enemies were seen, looking about/);
+        const far = decideRvr(ctx(p, { settings: { patrol: null }, memory: { realmUnits: [spot(29_680 + 6_500)], roam: staying(p.at) } }));
+        expect(far.reason).toMatch(/^roam near: hibernia-2/);
+    });
+});
+
 describe('decideRvr: a keep guard on one of us is fought (S3, the user at 17:08: a Huscarl on Niamh, the group moved off)', () => {
     const guard = (id: number, x: number, target: string | null) => contact(id, { kind: 'npc', name: 'Huscarl', realm: 'midgard', level: 28, regionId: R, x, y: 10_000, z: 0, hp: 46, keepGuard: true, target, inCombat: true } as any);
     test('one on us is fought, alone or not (the user: no running from a guard once it has aggro); one on nobody is not', () => {

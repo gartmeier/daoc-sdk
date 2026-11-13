@@ -51,7 +51,7 @@ import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDef
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { planBuffs } from './buffs';
-import { FRIEND_NEAR, meetingPlaces, placeOk, roamStep, sightingPlaces, type RoamPlace } from './tactics/roam';
+import { FRIEND_NEAR, STAY_FRIEND_FAR, meetingPlaces, placeOk, roamStep, sightingPlaces, type RoamPlace } from './tactics/roam';
 import { loiter, waveOrder, waveWatch, type RealmWave } from './waves';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
@@ -1134,7 +1134,12 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // so a call finds help near. Stint 2026-11-13, S3: help stood 6000-9000 away and most fights ended before it came.
     const roam = s.roam === false ? null : roamGoal(mem, centre, homeAt, undefined, now);
     // Already on our way to a roam place near that friend (tactics/roam.ts): no need to close on it first.
-    const placeNearFriend = !!roam && !!mem.roam?.place && dist(mem.roam.place, roam.friend) <= FRIEND_NEAR;
+    // Staying at it, or judged near the friend once: it holds while the friend is within STAY_FRIEND_FAR (no flip as the friend moves).
+    const roamAt = mem.roam?.place as RoamPlace | null | undefined;
+    const stayingAt = !!roamAt && mem.roam.reachedAt !== undefined && (mem.roam.stayUntil ?? 0) > now;
+    const nearReach = roamAt && (stayingAt || mem.roamNearKey === roamAt.key) ? STAY_FRIEND_FAR : FRIEND_NEAR;
+    const placeNearFriend = !!roam && !!roamAt && dist(roamAt, roam.friend) <= nearReach;
+    mem.roamNearKey = placeNearFriend ? roamAt!.key : undefined;
     if (roam && !placeNearFriend && clearOf(roam.goal, keeps)) {
         stepLeg(trip, 'roam', roam.goal, { from: centre, movers: main, replan: 1500 });
         return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `stay within reach of ${roam.friend.unit}${gone}`, reason: `roam near: ${roam.friend.unit} is ${Math.round(roam.d)} away, closing to 3000` };

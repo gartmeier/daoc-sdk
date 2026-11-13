@@ -115,6 +115,12 @@ export function sightingPlaces(sightings: readonly RoamSighting[], now: number, 
 
 /** A place this near a friendly group counts as near it. */
 export const FRIEND_NEAR = 4500;
+/**
+ * A place we stay at (looking about), or one already judged near the friend, holds while the friend is within this of it: the
+ * friend walking in and out of FRIEND_NEAR flipped hibernia between the place and closing on it every 6-12 s (19:43, the user's
+ * report through the player-feedback session).
+ */
+export const STAY_FRIEND_FAR = 6000;
 
 /** The next place: weighted, at random, from those within maxLeg (the nearest few else), never the last `memory` ones nor where we stand. */
 export function pickPlace(places: readonly RoamPlace[], centre: Point, last: readonly string[], rand: () => number, s: RoamSettings = ROAM_SETTINGS, friends: readonly Point[] = []): RoamPlace | null {
