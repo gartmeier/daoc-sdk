@@ -461,3 +461,44 @@ describe('the units\' side', () => {
         w2.stop();
     });
 });
+
+describe('the defence call (S3, 2026-11-13)', () => {
+    const faste = { x: 33089, y: 38271 };
+    const UNITS6 = ['camelot', 'camelot-2', 'camelot-s1', 'camelot-s2', 'camelot-s3', 'camelot-s4'];
+    const frames = (attackers: number) => ({
+        'camelot-s1': frame({ id: 'camelot-s1', members: at(faste.x + 3000, faste.y, 2, 'S'), foes: foes(faste.x + 1500, faste.y, attackers) }),
+        camelot: frame({ id: 'camelot', members: at(faste.x + 6000, faste.y, 6, 'G') }),
+        'camelot-2': frame({ id: 'camelot-2', members: at(faste.x - 9000, faste.y, 6, 'H') }),
+        'camelot-s2': frame({ id: 'camelot-s2', members: at(faste.x, faste.y + 8000, 2, 'T') }),
+        'camelot-s3': frame({ id: 'camelot-s3', members: at(faste.x, faste.y - 13000, 1, 'U') }),
+        'camelot-s4': frame({ id: 'camelot-s4', members: at(faste.x, faste.y + 30000, 1, 'V') }),
+    });
+
+    test('attackers at our keep: the nearest units are asked in, not all; it closes quiet once none is seen', () => {
+        const d = director({ units: UNITS6, targetOwner: () => 'albion', settings: { sight: false } });
+        let out = d.update(frames(5), 0, []);
+        const c = out.calls.find(x => x.kind === 'defend')!;
+        expect(c).toMatchObject({ why: 'keep', foes: 5, ours: 2 });
+        // The unit there is asked in too (it counts already); 5 + 1 - 2 there: the nearest group of 6 is enough.
+        expect(c.asked).toEqual(['camelot-s1', 'camelot']);
+        // Ten attackers: more, but at most half of the six running units.
+        const d2 = director({ units: UNITS6, targetOwner: () => 'albion', settings: { sight: false } });
+        out = d2.update(frames(10), 0, []);
+        expect(out.calls.find(x => x.kind === 'defend')!.asked).toEqual(['camelot-s1', 'camelot', 'camelot-s2']);
+        // Not ours: no call; lost: it closes.
+        expect(director({ units: UNITS6, targetOwner: () => 'midgard', settings: { sight: false } }).update(frames(5), 0, []).calls).toHaveLength(0);
+        out = d.update(frames(0), 30_000, []);
+        expect(out.calls.find(x => x.kind === 'defend')).toBeDefined();
+        out = d.update(frames(0), 80_000, []);
+        expect(out.events.find(e => e.kind === 'close')).toMatchObject({ end: 'quiet' });
+    });
+
+    test('one attacker is no defence; the keep lost closes it', () => {
+        let owner = 'albion';
+        const d = director({ units: UNITS6, targetOwner: () => owner, settings: { sight: false } });
+        expect(d.update(frames(1), 0, []).calls).toHaveLength(0);
+        expect(d.update(frames(3), 1000, []).calls).toHaveLength(1);
+        owner = 'hibernia';
+        expect(d.update(frames(3), 2000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'lost' });
+    });
+});

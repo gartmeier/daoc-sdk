@@ -13,11 +13,12 @@
 
 import type { Realm } from '../../types';
 import type { Behavior } from '../member';
-import { meleeReach, planKeep, raidOrders, raidPlan, routeFrom, type RaidMember, type RaidOrders, type RaidPlan, type RaidView, type SiegeSeen } from '../siege';
+import { meleeReach, planKeep, RAID_COMING, raidOrders, raidPlan, routeFrom, type RaidMember, type RaidOrders, type RaidPlan, type RaidView, type SiegeSeen } from '../siege';
 import type { PlayerRealm } from '../keeps';
 import type { GroupStrategy } from '../strategy';
-import type { Contact, MemberReport, OrdersUpdate, Point3, Role } from '../types';
+import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from '../types';
 import { answering, type RealmCall } from './help';
+import type { RaidRez } from '../behaviors';
 
 /**
  * At the muster's go, an enemy player counts only on one of us or within this of the body (2D): the raid goes on past those
@@ -42,6 +43,8 @@ export interface RaidDoor {
 export interface RaidPatch {
     raid: string;
     raidDoor: RaidDoor | null;
+    /** The raid's other units' rezzers and corpses (behaviors.ts RaidRez): rez in the raid across its units. */
+    raidRez?: RaidRez | null;
 }
 
 /** The raid memory (memory.raid), for one muster call. */
@@ -84,13 +87,24 @@ export function guardOwner(plan: RaidPlan, guards: readonly Contact[]): Realm {
     return [...n].sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'none';
 }
 
+/**
+ * The raid's other units' rezzers (alive, knowing a rez) and corpses, from the muster call (director.ts RaidMember), by
+ * object id; null without any. Stint 2026-11-13 (S3): the dead walked 12000-20000 back while a rezzer of another unit stood by.
+ */
+export function raidRez(call: Pick<RealmCall, 'raid'> | null | undefined, unit: string): RaidRez | null {
+    const others = (call?.raid ?? []).filter(m => m.unit !== unit && m.id);
+    const rezzers = others.filter(m => m.alive && m.rez).map(m => m.id!).sort((a, b) => a - b);
+    const corpses = others.filter(m => !m.alive).map(m => ({ id: m.id!, name: m.name ?? '', level: m.level ?? 0 })).sort((a, b) => a.id - b.id);
+    return rezzers.length || corpses.length ? { rezzers, corpses } : null;
+}
+
 /** The settings patch for this step, the same object while nothing in it changes. */
-export function raidPatch(r: RaidMemory, keep: string, o: RaidOrders): RaidPatch {
+export function raidPatch(r: RaidMemory, keep: string, o: RaidOrders, rez: RaidRez | null = null): RaidPatch {
     const step = o.melee.step?.kind === 'door' && o.melee.step.doorId !== undefined ? o.melee.step : null;
-    const key = `${keep}:${step?.doorId ?? ''}`;
+    const key = `${keep}:${step?.doorId ?? ''}:${rez ? `${rez.rezzers.join(',')}/${rez.corpses.map(c => c.id).join(',')}` : ''}`;
     if (r.patch && r.patchKey === key) return r.patch;
     const raidDoor: RaidDoor | null = step ? { doorId: step.doorId!, label: step.label, x: step.at.x, y: step.at.y, z: step.at.z, stand: step.stand } : null;
-    r.patch = { raid: keep, raidDoor };
+    r.patch = { raid: keep, raidDoor, ...(rez ? { raidRez: rez } : {}) };
     r.patchKey = key;
     return r.patch;
 }
@@ -100,10 +114,53 @@ export function raidPatch(r: RaidMemory, keep: string, o: RaidOrders): RaidPatch
  * the director's picture, a few seconds old). Undefined when the call carries none: each unit then stages on its own count.
  * R1, run D 04:19: midgard staged alone and lost four in 16 s at rank 1 while midgard-2 and the squads were 13000-18000 out.
  */
-export function raidMembers(call: Pick<RealmCall, 'raid'> | null | undefined, unit: string, ours: readonly MemberReport[]): RaidMember[] | undefined {
+export function raidMembers(call: Pick<RealmCall, 'raid'> | null | undefined, unit: string, ours: readonly MemberReport[], stage?: Point): RaidMember[] | undefined {
     if (!call?.raid?.length) return undefined;
-    const others = call.raid.filter(m => m.unit !== unit).map((m, i) => ({ id: -(i + 1), x: m.x, y: m.y, z: m.z, alive: m.alive }));
+    // A member on its way (director.ts onWay: its unit still closing on the target) counts at any distance: placed just inside
+    // siege.ts RAID_COMING on its line to the stage. Run D3 05:30 (R3): the squads, then hibernia, then hibernia-2 went in as
+    // three waves, each passing the wait on its own count because the others were 13000-25000 out.
+    const near = (m: { x: number; y: number; z: number }): { x: number; y: number; z: number } => {
+        if (!stage) return m;
+        const d = Math.hypot(m.x - stage.x, m.y - stage.y);
+        if (d <= RAID_COMING) return m;
+        const k = (RAID_COMING - 100) / d;
+        return { x: Math.round(stage.x + (m.x - stage.x) * k), y: Math.round(stage.y + (m.y - stage.y) * k), z: m.z };
+    };
+    const others = call.raid.filter(m => m.unit !== unit).map((m, i) => ({ id: -(i + 1), ...(m.onWay && m.alive ? near(m) : { x: m.x, y: m.y, z: m.z }), alive: m.alive }));
     return [...ours.map(m => ({ id: m.objectId, x: m.x, y: m.y, z: m.z, alive: !m.isDead })), ...others];
+}
+
+/** A unit of this many members or fewer is a squad: it doesn't lead a raid (raidStep's squad hold). */
+export const SQUAD_MAX = 3;
+/** A main group has at least this many members in the raid. */
+const MAIN_MIN = 4;
+/** The squads' hold: the last waypoint of the approach at least this far from the stage (out of the defenders' reach). */
+export const SQUAD_HOLD_FROM = 3000;
+
+/** Where a squad waits for a main group to pass: the last approach waypoint at least SQUAD_HOLD_FROM from the stage; the rally else. */
+export function squadHold(plan: Pick<RaidPlan, 'rally' | 'route' | 'stage'>): Point3 {
+    const way = [plan.rally, ...plan.route];
+    for (let i = way.length - 1; i >= 0; i--) if (Math.hypot(way[i]!.x - plan.stage.x, way[i]!.y - plan.stage.y) >= SQUAD_HOLD_FROM) return way[i]!;
+    return plan.rally;
+}
+
+/**
+ * A squad doesn't lead: while the raid has a main group on its way (a unit of MAIN_MIN or more with a living member on its
+ * way or within RAID_COMING) and none of its living stands as near the stage as the hold point, the squad waits at the hold.
+ * Null: go on. R3, run D3 05:32: Hibernia's squads stood 2300 from the stage and about ten Albions wiped them there.
+ */
+export function squadWait(plan: Pick<RaidPlan, 'rally' | 'route' | 'stage'>, call: Pick<RealmCall, 'raid'> | null | undefined, unit: string): { hold: Point3; why: string } | null {
+    const raid = call?.raid ?? [];
+    const size = new Map<string, number>();
+    for (const m of raid) size.set(m.unit, (size.get(m.unit) ?? 0) + 1);
+    const hold = squadHold(plan);
+    const holdD = Math.hypot(hold.x - plan.stage.x, hold.y - plan.stage.y);
+    const toStage = (m: { x: number; y: number }) => Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y);
+    const mains = raid.filter(m => m.unit !== unit && (size.get(m.unit) ?? 0) >= MAIN_MIN && m.alive && (m.onWay || toStage(m) <= RAID_COMING));
+    if (!mains.length) return null;
+    if (mains.some(m => toStage(m) <= holdD + 300)) return null;
+    const lead = mains.reduce((a, b) => (toStage(a) <= toStage(b) ? a : b));
+    return { hold, why: `squad waits for ${lead.unit} to pass (it is ${Math.round(toStage(lead))} from the stage)` };
 }
 
 const at = (p: { x: number; y: number }) => `(${Math.round(p.x)}, ${Math.round(p.y)})`;
@@ -123,7 +180,7 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
         broken: r.broken,
         staged: r.staged,
     };
-    const whole = raidMembers(o.call, o.unit ?? '', o.members);
+    const whole = raidMembers(o.call, o.unit ?? '', o.members, plan.stage);
     if (whole) view.raid = whole;
     const alive = o.members.filter(m => !m.isDead);
     const centre = alive.length ? { x: alive.reduce((a, m) => a + m.x, 0) / alive.length, y: alive.reduce((a, m) => a + m.y, 0) / alive.length, z: alive.reduce((a, m) => a + m.z, 0) / alive.length } : null;
@@ -132,10 +189,15 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     if (centre) view.reach = to => meleeReach(plan.regionId, centre, to, { broken: r.broken, ours: view.owner === plan.realm });
     const ro = raidOrders(plan, view);
     if (ro.phase === 'assault' || ro.phase === 'lord') r.staged = true;
-    const settings = raidPatch(r, plan.keep, ro) as unknown as Record<string, unknown>;
+    const settings = raidPatch(r, plan.keep, ro, raidRez(o.call, o.unit ?? '')) as unknown as Record<string, unknown>;
     const objective = `raid ${plan.keep}: ${ro.phase}`;
     const door = ro.melee.step?.kind === 'door' ? `; melee on the ${ro.melee.step.label}` : '';
     const reason = `raid ${ro.phase}: ${ro.why}${door}`;
+    // Squads don't lead: short of the stage, they wait at the hold until a main group passes it (squadWait).
+    const wait = (ro.phase === 'approach' || ro.phase === 'stage') && !r.staged && o.members.length <= SQUAD_MAX ? squadWait(plan, o.call, o.unit ?? '') : null;
+    if (wait && centre && Math.hypot(centre.x - plan.stage.x, centre.y - plan.stage.y) <= Math.hypot(wait.hold.x - plan.stage.x, wait.hold.y - plan.stage.y) + 600) {
+        return { orders: ro, update: { phase: 'recover', focus: null, anchor: { x: wait.hold.x, y: wait.hold.y, z: wait.hold.z }, facing: { x: plan.stage.x, y: plan.stage.y }, settings, objective, reason: `raid ${ro.phase}: ${wait.why}, at ${at(wait.hold)}` } };
+    }
     if (ro.phase === 'approach' || ro.phase === 'stage') {
         // Each leg of our own bridge in turn: the body's next waypoint (routeFrom); at the stage, the stage.
         const next = ro.phase === 'stage' ? plan.stage : routeFrom(plan, centre ?? plan.rally)[0] ?? plan.stage;

@@ -23,7 +23,7 @@ export interface RealmCall {
      * Muster only, when the director writes it: every member of every unit it asked that is running, by unit. The raid's stage
      * waits for the whole raid with it (siege.ts RaidView.raid, tactics/raid.ts raidMembers). Absent: each unit counts its own.
      */
-    raid?: readonly { unit: string; x: number; y: number; z: number; alive: boolean }[];
+    raid?: readonly RaidCallMember[];
     /** As our realm saw it: enemy players near `at`, and ours alive there. */
     foes: number;
     ours: number;
@@ -36,6 +36,22 @@ export interface RealmCall {
     helpers?: readonly UnitSpot[];
     since?: number;
     updatedAt?: number;
+}
+
+/** A raid member as the muster call carries it (director.ts RaidMember). */
+export interface RaidCallMember {
+    unit: string;
+    x: number;
+    y: number;
+    z: number;
+    alive: boolean;
+    name?: string;
+    id?: number;
+    level?: number;
+    /** Knows a rez. */
+    rez?: boolean;
+    /** Alive, its unit still closing on the target: the stage waits for it at any distance. */
+    onWay?: boolean;
 }
 
 /** A running unit of the realm as the director's calls file carries it (director.ts UnitSpot). */

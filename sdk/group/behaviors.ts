@@ -474,6 +474,41 @@ export function fightGoesOn(phase: string, threats: readonly Pick<Contact, 'stal
     return FIGHT_PHASES.has(phase) || threats.some(t => !t.stale && t.regionId === regionId);
 }
 
+/**
+ * Rez in the raid (stint 2026-11-13, S3): the raid's other units' rezzers and corpses, by object id, as a raiding unit's
+ * orders carry them (Orders.settings.raidRez, tactics/raid.ts). A corpse holds its release for a rezzer of any unit in the
+ * raid, seen near it; a rezzer takes another unit's corpse it sees once none of its own needs it.
+ */
+export interface RaidRez {
+    rezzers: number[];
+    corpses: { id: number; name: string; level: number }[];
+}
+
+const raidRezOf = (settings: unknown): RaidRez | null => (settings as { raidRez?: RaidRez | null } | null)?.raidRez ?? null;
+
+/** A rezzer of another raid unit, alive and within `radius` of `at`, as our client sees it; its name, or undefined. */
+export function raidRezzerNear(sdk: { getObject(id: number): { kind: string; isDead?: boolean; x: number; y: number; name: string } | null }, rr: RaidRez | null, at: Point, radius: number): string | undefined {
+    for (const id of rr?.rezzers ?? []) {
+        const o = sdk.getObject(id);
+        if (o && o.kind === 'player' && !o.isDead && dist(o, at) <= radius) return o.name;
+    }
+    return undefined;
+}
+
+/** Another raid unit's corpses we see, as members for the rez pick (a stand-in report: no role, no rez of its own). */
+export function raidCorpses(sdk: { getObject(id: number): { kind: string; isDead?: boolean; x: number; y: number; z?: number } | null }, rr: RaidRez | null, regionId: number): MemberReport[] {
+    const out: MemberReport[] = [];
+    for (const c of rr?.corpses ?? []) {
+        const o = sdk.getObject(c.id);
+        if (!o || o.kind !== 'player' || !o.isDead) continue;
+        out.push({
+            name: c.name, objectId: c.id, level: c.level, regionId, x: o.x, y: o.y, z: o.z ?? 0, isDead: true, role: 'melee',
+            activity: { kind: 'idle', targetId: null, detail: 'raid', since: 0 }, capabilities: { heal: false, cc: false, nuke: false, rez: false, buffs: [], buffSpells: [] },
+        } as unknown as MemberReport);
+    }
+    return out;
+}
+
 /** A death this fresh may not have reached the board yet: the rezzer who died with us can read alive a snapshot longer. */
 const NO_REZZER_GRACE_MS = 3000;
 
@@ -507,7 +542,8 @@ export const release = (): Behavior => ({
         // Nobody releases until the fight is over: a rez can come then, and nobody walks back into it alone. Unless no rez can come:
         // nobody who knows one is alive (noRezzerLeft), so the hold only keeps a member out of the next fight. W2's 8 v 8 (2026-11-11):
         // corpses waited out the fight with every rezzer dead, up to fightHoldMs (300 s in rvr-roam).
-        const noRez = s.fightHoldMs > 0 && now - diedAt >= NO_REZZER_GRACE_MS && noRezzerLeft(ctx.members(), ctx.name);
+        const raidRez = raidRezOf(ctx.settings);
+        const noRez = s.fightHoldMs > 0 && now - diedAt >= NO_REZZER_GRACE_MS && noRezzerLeft(ctx.members(), ctx.name) && !raidRezzerNear(ctx.sdk, raidRez, me, s.radius);
         if (!noRez && s.fightHoldMs > 0 && now - diedAt < s.fightHoldMs && fightGoesOn(ctx.orders().phase, ctx.threats(), ctx.members(), me.regionId)) {
             ctx.memory.set('fightHeldAt', now);
             ctx.doing(AWAIT_FIGHT, null, ctx.orders().phase);
@@ -518,8 +554,10 @@ export const release = (): Behavior => ({
         const waited = now - Math.max(diedAt, heldAt > diedAt ? heldAt : 0);
         const coming = claimedBy(ctx, 'rez', me.objectId, REZ_CLAIM_MS).length > 0;
         const rezzer = s.holdMs > 0 && waited < s.holdMs ? rezzerNear(ctx.members(), { name: ctx.name, regionId: me.regionId, x: me.x, y: me.y, level: me.level }, s) : undefined;
-        if (coming || rezzer) {
-            ctx.doing('await_rez', null, rezzer?.name ?? '');
+        // In a raid, a rezzer of any of its units near us is worth the wait too (Orders.settings.raidRez).
+        const raidRezzer = !rezzer && s.holdMs > 0 && waited < s.holdMs ? raidRezzerNear(ctx.sdk, raidRez, me, s.radius) : undefined;
+        if (coming || rezzer || raidRezzer) {
+            ctx.doing('await_rez', null, rezzer?.name ?? (raidRezzer ? `${raidRezzer} (raid)` : ''));
             return true;
         }
         ctx.memory.delete('rezzedAt');
@@ -568,12 +606,14 @@ export const rez = (): Behavior<TacticsSettings> => ({
         const now = Date.now();
         // Holding off: the corpses are all busy releasing, and a release doesn't look at offers.
         if (holdMs <= 0) return false;
-        const corpse = ctx.members()
+        // Our own dead first; in a raid, another unit's we see once none of ours is left to take (raidCorpses).
+        const pick = (list: MemberReport[]) => list
             .filter(m => m.isDead && m.regionId === me.regionId && dist(me, m) <= radius && m.activity.kind !== 'release')
             .filter(m => now >= (ctx.memory.get(`rezRetry:${m.objectId}`) ?? 0))
             .filter(m => !claimedBy(ctx, 'rez', m.objectId, REZ_CLAIM_MS).length && !claimedBy(ctx, 'rez_prep', m.objectId, REZ_PREP_MS).length)
             .filter(m => willPayRez(me.manaPercent, me.level, m.level, s))
             .sort(rezOrder(me))[0];
+        const corpse = pick(ctx.members()) ?? pick(raidCorpses(ctx.sdk, raidRezOf(ctx.settings), me.regionId));
         if (!corpse) return false;
         const on = ctx.bot.getAttackers()[0] ?? ctx.bot.getPlayerAttackers()[0];
         if (on) return ctx.skip(`rez: ${on.name} is on us`);

@@ -9,7 +9,8 @@ import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { Behavior } from '../member';
 import type { Contact, GroupPicture, MemberReport, Orders, Point3 } from '../types';
 import type { RealmCall } from './help';
-import { breakDoor, RAID_FOE_REACH, raidMembers, raidStep, withBreakDoor, withRaid, type RaidDoor } from './raid';
+import { breakDoor, RAID_FOE_REACH, raidMembers, raidPatch, raidRez, raidStep, squadHold, squadWait, withBreakDoor, withRaid, type RaidDoor } from './raid';
+import { raidCorpses, raidRezzerNear } from '../behaviors';
 import { decidePack, rvrPack } from '../pack';
 import { getNavmeshStore } from '../../navmesh';
 
@@ -283,5 +284,74 @@ describe('raid: breakDoor', () => {
         f.memory.set('doorOn', 55);
         expect(await breakDoor().run(f.ctx)).toBe(false);
         expect(f.log).toEqual(['attack false']);
+    });
+});
+
+describe('raid: units on their way, and squads that do not lead (S3, 2026-11-13)', () => {
+    const unit = (name: string, n: number, at: { x: number; y: number }, over: object = {}) => Array.from({ length: n }, (_, i) => ({ unit: name, x: at.x + i * 30, y: at.y, z: 3000, alive: true, ...over }));
+    const far = { x: plan.stage.x + 20_000, y: plan.stage.y };
+
+    test('a unit on its way counts at any distance: at the stage, wait for it; one that stopped closing does not hold us', () => {
+        const outer = FASTE.targets.find(t => t.label === 'outer-armswoman')!;
+        const mem = () => ({ raid: { callId: 'x', staged: false, broken: [] as number[] } });
+        const run = (raid: any[]) => raidStep({ plan, mem: mem(), members: five(plan.stage), guards: [guard(301, outer.at)], call: { raid }, unit: 'midgard' }).update;
+        expect(run(unit('midgard-2', 6, far, { onWay: true })).reason).toContain('of the raid at the stage');
+        expect(run(unit('midgard-2', 6, far))).toMatchObject({ phase: 'engage', focus: 301 });
+        const w = raidMembers({ raid: unit('midgard-2', 1, far, { onWay: true }) }, 'midgard', [], plan.stage)!;
+        expect(Math.hypot(w[0]!.x - plan.stage.x, w[0]!.y - plan.stage.y)).toBeLessThan(12_000);
+    });
+
+    test('squadHold: the last approach waypoint 3000 or more from the stage', () => {
+        for (const realm of ['albion', 'midgard', 'hibernia'] as const) {
+            const p = raidPlan(realm)!;
+            const h = squadHold(p);
+            expect(Math.hypot(h.x - p.stage.x, h.y - p.stage.y)).toBeGreaterThanOrEqual(3000);
+        }
+        expect(squadHold(raidPlan('hibernia')!)).toMatchObject({ x: 34500, y: 35200 });
+    });
+
+    test('a squad waits at the hold while a main group is on its way behind it; goes once one passed it, or with no main group coming', () => {
+        const hold = squadHold(plan);
+        const behind = unit('midgard', 6, { x: plan.rally.x + 3000, y: plan.rally.y }, { onWay: true });
+        expect(squadWait(plan, { raid: behind }, 'midgard-s1')).toMatchObject({ hold });
+        expect(squadWait(plan, { raid: unit('midgard', 6, plan.stage) }, 'midgard-s1')).toBeNull();
+        expect(squadWait(plan, { raid: unit('midgard', 6, far) }, 'midgard-s1')).toBeNull();          // not on its way
+        expect(squadWait(plan, { raid: unit('midgard-s2', 2, far, { onWay: true }) }, 'midgard-s1')).toBeNull();   // only squads
+        // raidStep: a squad of two past the hold walks back to it and waits.
+        const mem = { raid: { callId: 'x', staged: false, broken: [] as number[] } };
+        const two = five(plan.stage).slice(0, 2);
+        const u = raidStep({ plan, mem, members: two, guards: [], call: { raid: behind }, unit: 'midgard-s1' }).update;
+        expect(u).toMatchObject({ phase: 'recover', anchor: { x: hold.x, y: hold.y } });
+        expect(u.reason).toContain('squad waits for midgard');
+    });
+});
+
+describe('raid: rez across the raid\'s units (S3, 2026-11-13)', () => {
+    test('raidRez: other units\' rezzers alive and their dead, by id; none of ours; null without any', () => {
+        const raid = [
+            { unit: 'midgard', x: 0, y: 0, z: 0, alive: true, id: 1, rez: true, name: 'Ours', level: 24 },
+            { unit: 'midgard-2', x: 0, y: 0, z: 0, alive: true, id: 7, rez: true, name: 'Eir', level: 24 },
+            { unit: 'midgard-2', x: 0, y: 0, z: 0, alive: false, id: 5, rez: true, name: 'Groa', level: 24 },
+            { unit: 'midgard-s1', x: 0, y: 0, z: 0, alive: false, id: 9, name: 'Leif', level: 23 },
+        ];
+        expect(raidRez({ raid }, 'midgard')).toEqual({ rezzers: [7], corpses: [{ id: 5, name: 'Groa', level: 24 }, { id: 9, name: 'Leif', level: 23 }] });
+        expect(raidRez({ raid: raid.slice(0, 1) }, 'midgard')).toBeNull();
+        // The patch keeps one object while the ids don't change.
+        const r = { callId: 'x', staged: false, broken: [] as number[] };
+        const o = { melee: { step: null } } as any;
+        const a = raidPatch(r, FASTE.keep, o, raidRez({ raid }, 'midgard'));
+        expect(raidPatch(r, FASTE.keep, o, raidRez({ raid: raid.map(m => ({ ...m, x: 100 })) }, 'midgard'))).toBe(a);
+        expect(raidPatch(r, FASTE.keep, o, null)).not.toBe(a);
+    });
+
+    test('raidRezzerNear and raidCorpses read what our client sees', () => {
+        const objs: Record<number, any> = { 7: { kind: 'player', isDead: false, x: 1000, y: 0, name: 'Eir' }, 5: { kind: 'player', isDead: true, x: 300, y: 0, z: 10 }, 9: null };
+        const sdk = { getObject: (id: number) => objs[id] ?? null };
+        const rr = { rezzers: [7], corpses: [{ id: 5, name: 'Groa', level: 24 }, { id: 9, name: 'Leif', level: 23 }] };
+        expect(raidRezzerNear(sdk, rr, { x: 0, y: 0 }, 4000)).toBe('Eir');
+        expect(raidRezzerNear(sdk, rr, { x: 0, y: 0 }, 500)).toBeUndefined();
+        expect(raidRezzerNear(sdk, null, { x: 0, y: 0 }, 4000)).toBeUndefined();
+        const cs = raidCorpses(sdk, rr, 252);
+        expect(cs.map(c => [c.name, c.objectId, c.isDead, c.x])).toEqual([['Groa', 5, true, 300]]);
     });
 });

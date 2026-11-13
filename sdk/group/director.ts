@@ -30,12 +30,13 @@ export const DIRECTOR_DIR = process.env.DAOC_DIRECTOR_DIR ?? join(import.meta.di
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────── the interface
 
-export type CallKind = 'help' | 'muster';
+/** defend: our keep is attacked; the units nearest it are asked in (not all of them, so a feint doesn't empty the field). */
+export type CallKind = 'help' | 'muster' | 'defend';
 /**
  * sighted: a bigger group seen coming (within sightRadius, more of one realm than ours there), before any fight: help is
  * asked on first sight, not once we are losing (stint 2026-11-13, S3: help was 6000-9000 away and most fights ended first).
  */
-export type CallWhy = 'sighted' | 'outnumbered' | 'caught' | 'camped' | 'raid';
+export type CallWhy = 'sighted' | 'outnumbered' | 'caught' | 'camped' | 'raid' | 'keep';
 export type AnswerState = 'coming' | 'declined' | 'arrived' | 'left';
 
 export interface RealmCall {
@@ -212,6 +213,21 @@ export interface DirectorSettings {
     /** A raid unit counts as on its way while it came onWayMin closer to the target in the last onWayMs (or set out within it). */
     onWayMs: number;
     onWayMin: number;
+    /**
+     * The defence call: while our realm holds the raid plan's keep (targetOwner), defendMin or more enemy players seen
+     * within defendRadius of it (in the last defendMemoryMs) open a 'defend' call. The nearest free units within
+     * defendReach are asked in until our bodies there outnumber them, at most defendShare of the running units (at
+     * least one). It closes defendClearMs after the last attacker was seen ('quiet'), when the keep is lost ('lost'), or
+     * after defendMaxMs. Help calls elsewhere go on with the units not asked.
+     */
+    defend: boolean;
+    defendRadius: number;
+    defendMin: number;
+    defendMemoryMs: number;
+    defendReach: number;
+    defendShare: number;
+    defendClearMs: number;
+    defendMaxMs: number;
     /** In 'go', the raid broke once its living fell below this share of those it went with. */
     raidBreak: number;
     /** Raids on a rhythm: a new muster this long after the last one ended (or the director started). 0 = only startMuster. */
@@ -230,13 +246,14 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000,
     fewShare: 0.5, fewMin: 2, ownersAwayMin: 3, ownersAwayFrom: 8000, ownersAwayPair: 2500,
     onWayMs: 120_000, onWayMin: 1000,
+    defend: true, defendRadius: 4500, defendMin: 2, defendMemoryMs: 30_000, defendReach: 14_000, defendShare: 0.5, defendClearMs: 45_000, defendMaxMs: 900_000,
 };
 
 /** A unit's orders reason in siege.ts's lord phase (tactics/raid.ts writes `raid <phase>: ...`). */
 const LORD_PHASE = /\braid lord\b/;
 
 /** How bad a help call's reason is: an open call takes a worse one, never a milder. */
-const WHY_RANK: Record<CallWhy, number> = { sighted: 0, outnumbered: 1, caught: 2, camped: 2, raid: 3 };
+const WHY_RANK: Record<CallWhy, number> = { sighted: 0, outnumbered: 1, caught: 2, camped: 2, raid: 3, keep: 3 };
 
 /** The foes of the realm with most of them here (all of them when one realm). */
 export function biggestRealm(foes: readonly SeenFoe[]): SeenFoe[] {
@@ -382,6 +399,8 @@ export class RealmDirector {
     private targetOwner?: () => string | null;
     /** When the last muster ended (or the director started): the rhythm counts from it. */
     private raidEndedAt = Date.now();
+    /** Enemy players seen near our keep, by key: last seen (the defence call). */
+    private keepSeen = new Map<string, number>();
 
     constructor(opts: DirectorOptions) {
         this.realm = opts.realm;
@@ -503,8 +522,9 @@ export class RealmDirector {
             o.oursMax = Math.max(o.oursMax, o.call.ours);
         }
 
-        // Muster.
+        // Muster; our keep's defence.
         this.stepMuster(board, now, events);
+        this.stepDefend(board, now, events);
 
         // Every open call: losses, arrivals, asks, close.
         for (const o of [...this.open.values()]) {
@@ -516,8 +536,8 @@ export class RealmDirector {
                     if (!o.lossesBefore.has(k)) { o.lossesBefore.add(k); o.lost++; }
                 }
             }
-            // A muster's losses: every unit in the raid.
-            if (call.kind === 'muster') {
+            // A muster's losses: every unit in the raid (a defence's: every unit asked in).
+            if (call.kind !== 'help') {
                 for (const a of call.asked) {
                     for (const l of units.get(a)?.losses ?? []) {
                         const k = `${a}/${l.name}@${l.at}`;
@@ -612,6 +632,7 @@ export class RealmDirector {
         const s = this.settings;
         const busy = new Set<string>();
         for (const x of this.open.values()) {
+            // A defence ask doesn't keep a unit from help (until the units answer defence calls: S2's defence path in rvr.ts).
             if (x === o || x.call.kind !== 'help') continue;
             busy.add(x.call.from);
             for (const a of x.call.asked) busy.add(a);
@@ -655,7 +676,7 @@ export class RealmDirector {
     private close(o: Open, end: string, board: RealmBoardView, now: number): DirectorEvent {
         this.open.delete(o.call.id);
         // A muster counts the whole raid; a help call the caller and those who arrived.
-        const involved = o.call.kind === 'muster' ? [...o.call.asked] : [o.call.from, ...o.arrived.keys()];
+        const involved = o.call.kind !== 'help' ? [...o.call.asked] : [o.call.from, ...o.arrived.keys()];
         let kills: number | null = null;
         for (const u of board.units) {
             if (!involved.includes(u.unit) || !u.totals) continue;
@@ -792,6 +813,81 @@ export class RealmDirector {
                 this.raidEndedAt = now;
             }
         }
+    }
+
+    /** Our keep (the raid plan's target keep) while our realm holds it: the defence call. */
+    private ourKeep(): Point3 | null {
+        let owner: string | null = null;
+        try { owner = this.targetOwner?.() ?? null; } catch { /* unknown */ }
+        if (owner !== this.realm) return null;
+        const faste = BATTLEGROUND_LAYOUTS[this.regionId]?.keeps.find(k => !k.portal);
+        return faste ? { x: faste.x, y: faste.y, z: faste.z } : null;
+    }
+
+    private stepDefend(board: RealmBoardView, now: number, events: DirectorEvent[]): void {
+        const s = this.settings;
+        let o = [...this.open.values()].find(x => x.call.kind === 'defend');
+        const keep = s.defend ? this.ourKeep() : null;
+        if (!keep) {
+            this.keepSeen.clear();
+            if (o) events.push(this.close(o, s.defend ? 'lost' : 'off', board, now));
+            return;
+        }
+        const near = foesNear(board.foes, keep, s.defendRadius);
+        for (const f of near) this.keepSeen.set(f.key, now);
+        for (const [k, at] of this.keepSeen) if (now - at > s.defendMemoryMs) this.keepSeen.delete(k);
+        const attackers = this.keepSeen.size;
+        const units = new Map(board.units.map(u => [u.unit, u]));
+        const ours = board.units.reduce((t, u) => t + (u.running ? u.members.filter(m => !m.isDead && dist2(m, keep) <= s.defendRadius).length : 0), 0);
+        if (!o) {
+            if (attackers < s.defendMin) return;
+            o = {
+                call: {
+                    id: `${this.realm}-${++this.seq}`, kind: 'defend', from: 'director', why: 'keep', at: { ...keep }, target: { ...keep },
+                    foes: attackers, ours, foeRoles: roleCount(near), want: 0, asked: [], coming: [], since: now, updatedAt: now,
+                },
+                heldAt: now, arrived: new Map(), lost: 0, killsAtOpen: new Map(), foesMax: attackers, oursMax: ours,
+                lossesBefore: new Set(board.units.flatMap(u => u.losses.map(l => `${u.unit}/${l.name}@${l.at}`))),
+            };
+            for (const u of board.units) if (u.totals) o.killsAtOpen.set(u.unit, u.totals.playerKills);
+            this.open.set(o.call.id, o);
+            events.push({ kind: 'open', call: o.call.id, from: 'director', why: 'keep', at: o.call.at, foes: attackers, ours, foeRoles: o.call.foeRoles });
+        }
+        const call = o.call;
+        call.foes = attackers;
+        call.ours = ours;
+        if (near.length) call.foeRoles = roleCount(near);
+        if (near.length) o.heldAt = now;
+        o.foesMax = Math.max(o.foesMax, attackers);
+        o.oursMax = Math.max(o.oursMax, ours);
+        const end = now - o.heldAt > s.defendClearMs ? 'quiet' : now - call.since > s.defendMaxMs ? 'timeout' : null;
+        if (end) { events.push(this.close(o, end, board, now)); this.keepSeen.clear(); return; }
+        // Ask in the nearest free units until ours there (and those on the way) outnumber the attackers: at most defendShare of
+        // the running units, so a feint doesn't empty the field. A unit already there counts without being asked.
+        call.asked = call.asked.filter(a => { const u = units.get(a); return !!u && u.running && u.alive > 0; });
+        const running = board.units.filter(u => u.running && u.alive > 0).length;
+        const cap = Math.max(1, Math.ceil(running * s.defendShare));
+        const coming = [...new Set([...call.asked, ...call.coming])].reduce((t, a) => {
+            const u = units.get(a);
+            return t + (!u || !u.centre || dist2(u.centre, keep) <= s.defendRadius ? 0 : u.alive);
+        }, 0);
+        let want = attackers + 1 - ours - coming;
+        if (want > 0 && call.asked.length < cap) {
+            const free = board.units
+                .filter(u => u.running && u.centre && u.alive >= Math.max(1, Math.ceil(u.size * s.helperAlive)) && u.hp >= s.helperHp && !call.asked.includes(u.unit))
+                .filter(u => !u.inFight || dist2(u.centre!, keep) <= s.defendRadius)
+                .filter(u => ![...this.open.values()].some(x => x !== o && x.call.kind === 'help' && (x.call.from === u.unit || x.call.coming.includes(u.unit))))
+                .map(u => ({ u, d: dist2(u.centre!, keep) }))
+                .filter(x => x.d <= s.defendReach)
+                .sort((a, b) => a.d - b.d);
+            for (const { u, d } of free) {
+                if (want <= 0 || call.asked.length >= cap) break;
+                call.asked.push(u.unit);
+                if (d > s.defendRadius) want -= u.alive;
+                events.push({ kind: 'ask', call: call.id, unit: u.unit, dist: Math.round(d) });
+            }
+        }
+        call.want = Math.max(0, want);
     }
 
     private readAnswers(): AnswersFile[] {
