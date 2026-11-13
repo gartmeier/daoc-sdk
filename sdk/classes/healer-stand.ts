@@ -18,6 +18,7 @@ import { hammeredBy, type TacticsSettings } from '../group/behaviors';
 import { keepAt } from '../group/keeps';
 import type { Behavior, MemberContext } from '../group/member';
 import type { MemberReport } from '../group/types';
+import { wallSight } from '../group/siege';
 import { isWet } from '../group/water';
 import { getNavmeshStore, PolyFlags } from '../navmesh';
 import { fixtureSolid, lineOfSight, terrainGround, type Seen } from '../vision';
@@ -79,6 +80,8 @@ export interface SpotOptions {
     walk?: (from: Seen, to: Seen) => boolean;
     /** A bound on where she may stand (a defence seat's leash). */
     within?: (p: Seen) => boolean;
+    /** How many of an enemy keep's wall casters and roof archers see a spot (siege.ts wallSight); none by default. */
+    walls?: (p: Seen) => number;
 }
 
 /**
@@ -88,15 +91,17 @@ export interface SpotOptions {
  * step; only one seen by fewer than now.
  */
 export function standSpot(regionId: number, me: Seen, members: readonly (Pick<MemberReport, 'x' | 'y'> & { z?: number })[], foes: readonly Foe[], o: SpotOptions = {}): { x: number; y: number; z: number; seen: number } | null {
-    if (!foes.length) return null;
     const reach = o.reach ?? STAND_REACH, step = o.step ?? STAND_STEP, los = o.los ?? lineOfSight;
     const floor = o.floor ?? ((p, z) => floorAt(regionId, p, z));
     const wet = o.wet ?? (p => isWet(regionId, p));
     const walk = o.walk ?? ((a, b) => shortWalk(regionId, a, b));
     const within = o.within ?? (() => true);
+    const walls = o.walls ?? (() => 0);
     const kept = members.filter(m => d3(m, me) <= reach);
     const nearest = (p: P2) => Math.min(...foes.map(f => Math.hypot(f.x - p.x, f.y - p.y)));
-    const now = seenBy(regionId, me, foes, los).length;
+    // A wall guard that sees her counts as a foe here, and no spot one sees is taken (S2, live 16:43: Amergin killed by
+    // wall-e-n's Runemaster through a merlon gap, 1300 from the raid's stand).
+    const now = seenBy(regionId, me, foes, los).length + walls(me);
     if (!now) return null;
     const closest = nearest(me) - NO_CLOSER;
     let best: { x: number; y: number; z: number; seen: number; d: number } | null = null;
@@ -108,7 +113,7 @@ export function standSpot(regionId: number, me: Seen, members: readonly (Pick<Me
             const z = floor(p, me.z);
             if (z === null) continue;
             const at = { ...p, z };
-            if (!within(at) || kept.some(m => d3(m, at) > reach)) continue;
+            if (!within(at) || kept.some(m => d3(m, at) > reach) || walls(at) > 0) continue;
             const seen = seenBy(regionId, at, foes, los).length;
             if (seen >= now || (best && (seen > best.seen || (seen === best.seen && r >= best.d)))) continue;
             if (!walk(me, at)) continue;
@@ -170,8 +175,11 @@ export const standOutOfSight = (): Behavior<TacticsSettings> => ({
         const hurt = ctx.members().some(m => !m.isDead && m.regionId === region && d3(m, me) <= STAND_REACH && m.hp < (m.role === 'tank' ? s.tank : s.other));
         if (hurt && !castAtMe(ctx)) return false;
         const foes = sightFoes(ctx);
-        if (!foes.length) return false;
-        const spot = standSpot(region, me, others, foes, seat ? { within: p => d3(p, seat.at) <= seat.leash } : {});
+        // An enemy keep's wall guards (no keep of ours is in a raid: ctx.settings.raid); ours are no danger.
+        const ours = !(ctx.settings as { raid?: unknown }).raid;
+        const walls = (p: Seen) => wallSight(region, p, ours).length;
+        if (!foes.length && !walls(me)) return false;
+        const spot = standSpot(region, me, others, foes, { walls, ...(seat ? { within: (p: Seen) => d3(p, seat.at) <= seat.leash } : {}) });
         if (!spot) return ctx.skip('stand: no cover in reach of the group');
         ctx.memory.set('standAt', Date.now());
         ctx.doing('move', null, `out of sight (${spot.seen} of ${foes.length} see the spot)`);

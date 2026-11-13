@@ -110,3 +110,19 @@ describe('healer stand: only in keep fights', () => {
         expect(standSpot(1, { x: 0, y: 1400, z: 0 }, [], [foe(1500, -500)], { ...flat, walk: () => false })).toBeNull();
     });
 });
+
+describe('healer stand: an enemy keep wall guards (siege.ts wallSight)', () => {
+    test('a wall guard that sees her moves her, with no enemy player in sight, to a spot none sees', () => {
+        const me = { x: 200, y: -1400, z: 0 };
+        const walls = (p: { x: number }) => (p.x > 100 ? 1 : 0);
+        const s = standSpot(1, me, [], [], { ...flat, walls })!;
+        expect(s).not.toBeNull();
+        expect(s.x).toBeLessThanOrEqual(100);
+        expect(standSpot(1, me, [], [], flat)).toBeNull();
+    });
+
+    test('a spot hidden from the players but seen from the wall is never taken', () => {
+        const me = { x: 0, y: 1400, z: 0 };
+        expect(standSpot(1, me, [], [foe(1500, -500)], { ...flat, walls: p => (p.x === me.x && p.y === me.y ? 0 : 1) })).toBeNull();
+    });
+});
