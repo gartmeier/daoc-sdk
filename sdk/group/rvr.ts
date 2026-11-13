@@ -47,7 +47,7 @@ import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
 import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, noteArrival, roamGoal, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
 import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
-import { defenceReachOf, defendCall, defendPatch, meleeHeld, overDefence, withDefence } from './tactics/defend';
+import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDefence, withDefence } from './tactics/defend';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { loiter, waveOrder, waveWatch, type RealmWave } from './waves';
@@ -656,8 +656,13 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const toward = helper ? `toward ${helper.unit} coming to help` : 'toward our portal keep';
     // Defending our keep (tactics/defend.ts): no retreat and no hunt; each member holds its stand.
     const defending = !!defendCall(mem);
-    const defenceReach = defending && realm !== 'none' ? defenceReachOf(realm as PlayerRealm) : null;
-    const outnumbered = (n: number) => s.retreat.enabled && !defending && n >= main.length + allies + margin;
+    // On the way in (farther than DEFENCE_APPROACH from the keep) the unit travels and fights as a body, by the odds as ever; inside,
+    // each member holds its stand, nobody falls back, and only enemies within the keep's reach or on us are fought (S2, live 14:19).
+    const way = defending && realm !== 'none' ? defenceWay(realm as PlayerRealm, { x: centre.x, y: centre.y, z: leader.z }) : null;
+    const defendingInside = !!way?.inside;
+    mem.defenceInside = defendingInside;
+    const defenceReach = defendingInside ? defenceReachOf(realm as PlayerRealm) : null;
+    const outnumbered = (n: number) => s.retreat.enabled && !defendingInside && n >= main.length + allies + margin;
     const withAllies = allies ? ` + ${allies} of ours` : '';
     const counted = (big: readonly Contact[], all: readonly Contact[]) => (big.length === all.length ? enemiesText(all.length) : `${big.length} of ${enemiesText(all.length)}`);
     const homeAt = home?.arrival ?? null;
@@ -689,7 +694,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const inFight = (c: Contact) => {
         if (c.stale || !isAlive(c) || c.regionId !== regionId) return false;
         // Defending our keep: only those within its reach (walls, courtyard, the gate's outside); never out after them.
-        if (defenceReach && !defenceReach(c)) return false;
+        if (defenceReach && !defenceReach(c) && !onUs(c)) return false;
         const near = dist(c, centre) <= s.engageRadius + (c.threat || c.objectId === o.focus ? FOCUS_SLACK : 0);
         if (onUs(c)) return inMain.has(onWhom(c)!) || near;
         if (c.isPet && c.threat) return near;
@@ -839,7 +844,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 
     // ── Hunting: enemy players in sight beyond engageRadius. Too many: fall back (toward home unless they stand that way) ──
     // Raiding: no hunt and no fall-back for those in sight; one that comes within RAID_FOE_REACH is fought (inFight).
-    const seen = raid || defending ? [] : enemies.filter(c => !inKeep(c) && dist(c, centre) <= s.huntRadius);
+    const seen = raid || defendingInside ? [] : enemies.filter(c => !inKeep(c) && dist(c, centre) <= s.huntRadius);
     if (seen.length) {
         // The group we just ran from is sized up whole: those of it we mezzed, and those out of view, still count (FLED_MS).
         const recalled = fled ? [
@@ -859,7 +864,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         // With stayDry, those swimming aren't hunted into the river: with only such in sight, the group waits on dry ground for them (waitAshore).
         const ashore = seen.filter(c => !swimming(c));
         const wet = seen.length - ashore.length;
-        if (!ashore.length && waitAshore(mem, wet, now)) {
+        // On the way in to our keep's defence: fall back from a bigger group (above), never hunt or wait for one.
+        if (!defending && !ashore.length && waitAshore(mem, wet, now)) {
             const them = centroid(seen);
             return { ...calm, phase: 'travel', anchor: standHere(), facing: { x: Math.round(them.x), y: Math.round(them.y) }, objective: `wait for ${enemiesText(wet)} swimming${gone}`, reason: `wait ashore: ${enemiesText(wet)} swimming ${Math.round(dist(centre, them))} away` };
         }
@@ -867,7 +873,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const them = centroid(ashore);
         const d = Math.round(dist(centre, them));
         const unready = new Set([...deadHere, ...far].map(m => m.name).concat(low.map(w => w.name)));
-        if (ashore.length && unready.size <= HUNT_UNREADY) {
+        if (ashore.length && unready.size <= HUNT_UNREADY && !defending) {
             if (s.ambush && quarryLike(ashore)) mem.hunted = { ids: ashore.map(c => c.objectId), at: now };
             // Lying in wait for a squad that came back: while it comes on toward a pass by us, hold; don't walk out at it.
             const q: Quarry | undefined = mem.quarry;
@@ -921,7 +927,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const rest = restAt();
         return { ...calm, phase: 'recover', anchor: rest.at, waiting: [...far.map(m => ({ name: m.name, why: 'away' })), ...low], objective: `wait at the ring for ${names(far)}${gone}`, reason: `waiting at the ring for ${names(far)}, ${Math.round(dist(centre, centroid(far)))} away${low.length ? `, and ${low.map(w => `${w.name}'s ${w.why}`).join(', ')}` : ''}${rest.why}` };
     }
-    if (far.length && !pairRing && !defending) {
+    if (far.length && !pairRing && !defendingInside) {
         // A far tank walks back by himself: a leg toward a middle with him in it meets nobody. Only him to meet, they go to meet him: there is no base to wait at.
         const walking = farTank(here, s.gatherRadius);
         const meeting = far.filter(m => m !== walking);
@@ -937,6 +943,14 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     if (answer?.kind === 'go') {
         stepLeg(trip, 'call', answer.goal, { from: centre, movers: main, replan: 1500 });
         return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `${answer.objective}${gone}`, reason: answer.reason };
+    }
+    // Our keep's defence, on the way in: legs as a body over our bridge to the entry outside the gate (tactics/defend.ts defenceWay).
+    // (The call may be answered only now, on this tick: the way is read again.)
+    const inWay = answer?.kind === 'hold' && answer.call.kind === 'defend' ? way ?? (realm !== 'none' ? defenceWay(realm as PlayerRealm, { x: centre.x, y: centre.y, z: leader.z }) : null) : null;
+    if (inWay) mem.defenceInside = inWay.inside;
+    if (answer && inWay && !inWay.inside) {
+        stepLeg(trip, 'defend', inWay.next, { from: centre, movers: main, replan: 1500 });
+        return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `${answer.objective}${gone}`, reason: `${answer.reason}; in as a body, ${inWay.left} from the keep` };
     }
     if (answer?.kind === 'hold') {
         const spot = dry ? drySpot(regionId, answer.at, { toward: centre, ok: c => clearOf(c, keeps) }) : answer.at;
@@ -1169,7 +1183,7 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         const ourRealm = mem.realm && mem.realm !== 'none' ? mem.realm : realmOfGroup(ctx.picture.members);
         const defence = !raidCall(mem) && defendCall(mem) && ourRealm !== 'none' ? defendPatch(mem, ourRealm, ctx.picture.members, ctx.picture.contacts) : null;
         if (raidCall(mem) && mem.raid?.patch) out = { ...out, settings: overRaid(mem, out.settings ?? null, mem.raid.patch) };
-        else if (defence) out = { ...out, settings: overDefence(mem, out.settings ?? null, defence), ...(out.phase !== 'engage' ? { anchor: null } : {}) };
+        else if (defence) out = { ...out, settings: overDefence(mem, out.settings ?? null, defence), ...(out.phase !== 'engage' && mem.defenceInside ? { anchor: null } : {}) };
         else if ((ctx.orders.settings?.raid || ctx.orders.settings?.defence) && (out.settings === undefined || (out.settings as { raid?: unknown; defence?: unknown } | null)?.raid || (out.settings as { defence?: unknown } | null)?.defence)) out = { ...out, settings: null };
         if (!defence) mem.defencePatch = undefined;
         flushAnswers(mem, src);

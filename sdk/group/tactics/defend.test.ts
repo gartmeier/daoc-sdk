@@ -41,24 +41,39 @@ describe('the defence call, the units\' side (S3, 2026-11-13)', () => {
         expect(defendPatch(mem, 'albion', five(), [])).toBe(a);
     });
 
-    test('realmCalls: answering it, the orders carry the seats and no anchor; the group neither hunts nor falls back; the stand behaviour comes first', () => {
+    test('realmCalls: inside, the orders carry the seats and no anchor, and the group neither hunts nor falls back; the stand behaviour comes first', () => {
         const { strategy } = realmCalls(rvrRoaming as any, 'camelot', { calls: () => [defend], answer: () => {} });
         const ctx = (p: GroupPicture, memory: Record<string, any>, orders: Partial<Orders> = {}): CoordinatorContext<RvrSettings> =>
             ({ picture: p, orders: { ...p.orders, ...orders }, memory, now: p.at, windingDown: false, settings: mergeSettings(RVR_SETTINGS, {} as any) });
         const memory: Record<string, any> = {};
-        let o = strategy.decide(ctx(picture(five()), memory));
+        const inside = five(33700, 38300);
+        let o = strategy.decide(ctx(picture(inside), memory));
         expect((o.settings as any)?.defence?.seats?.Wiz?.job).toBe('wall');
         expect(o.anchor).toBeNull();
         expect(o.reason).toContain('the defence of our keep');
-        // Seven Midgard 3000 out: no hunt and no fall back while defending.
-        const seven = [1, 2, 3, 4, 5, 6, 7].map(i => contact(500 + i, { kind: 'player', realm: 'midgard', name: 'Norseman', level: 24, regionId: TH, x: 39500 + i * 30, y: 38300, z: 3300, hp: 100 }));
-        o = strategy.decide(ctx(picture(five(), seven), memory));
-        expect(o.reason).not.toMatch(/^(fall back|hunt)/);
+        // Seven Midgard 2400 out of the walls (beyond the keep's reach, on none of us): no hunt, no fall back.
+        const seven = [1, 2, 3, 4, 5, 6, 7].map(i => contact(500 + i, { kind: 'player', realm: 'midgard', name: 'Norseman', level: 24, regionId: TH, x: 36100 + i * 30, y: 38300, z: 3300, hp: 100 }));
+        o = strategy.decide(ctx(picture(inside, seven), memory));
+        expect(o.reason).not.toMatch(/^(fall back|hunt|retreat)/);
         expect((o.settings as any)?.defence).toBeDefined();
         expect(strategy.behaviors.tank.map(b => b.name).slice(0, 2)).toEqual(['release', 'defence-stand']);
-        // Without the call: decideRvr alone hunts or falls back as before.
-        expect(decideRvr(ctx(picture(five(), seven), {})).reason).toMatch(/^(fall back|hunt|wait ashore)/);
         expect(withDefenceStand([]).map(b => b.name)).toEqual(['defence-stand']);
+    });
+
+    test('on the way in (farther than 2200 from the keep) the unit travels as a body, with an anchor, and falls back from a bigger group by the odds (S2, live 14:19)', () => {
+        const { strategy } = realmCalls(rvrRoaming as any, 'camelot', { calls: () => [defend], answer: () => {} });
+        const ctx = (p: GroupPicture, memory: Record<string, any>): CoordinatorContext<RvrSettings> =>
+            ({ picture: p, orders: p.orders, memory, now: p.at, windingDown: false, settings: mergeSettings(RVR_SETTINGS, {} as any) });
+        const far = five(40000, 36000);
+        const memory: Record<string, any> = {};
+        let o = strategy.decide(ctx(picture(far), memory));
+        expect(o.phase).toBe('travel');
+        expect(o.anchor).not.toBeNull();
+        expect(o.reason).toContain('in as a body');
+        // Seven Midgard in sight on the way: by the odds (fall back), never a hunt.
+        const seven = [1, 2, 3, 4, 5, 6, 7].map(i => contact(500 + i, { kind: 'player', realm: 'midgard', name: 'Norseman', level: 24, regionId: TH, x: 43500 + i * 30, y: 36000, z: 3300, hp: 100 }));
+        o = strategy.decide(ctx(picture(far, seven), memory));
+        expect(o.reason).not.toMatch(/^hunt/);
     });
 
     test('defending, the group fights only enemies within the keep reach: not two gate-breakers out at the stage (S2 rehearsal)', () => {

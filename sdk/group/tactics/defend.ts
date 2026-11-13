@@ -5,13 +5,13 @@
 // doors to its stand, and the kit fights from there. The orders keep no anchor outside a fight, so holdFormation doesn't
 // pull members off their stands; the group neither hunts nor falls back while it defends (rvr.ts decideRvr).
 
-import { defenceSettings, holdDefenceStand, type DefenceSettings } from '../defence';
+import { DEFENCE_APPROACH, defenceSettings, holdDefenceStand, type DefenceSettings } from '../defence';
 import type { PlayerRealm } from '../keeps';
 import type { Behavior } from '../member';
 import { doorBetween } from '../../doors';
-import { defenceOrders, defencePlan, inDefenceReach, openOwnDoors, type DefenceJob } from '../siege';
+import { defenceOrders, defencePlan, defenceRouteFrom, inDefenceReach, openOwnDoors, type DefenceJob } from '../siege';
 import type { GroupStrategy } from '../strategy';
-import type { Contact, MemberReport, Role } from '../types';
+import type { Contact, MemberReport, Point3, Role } from '../types';
 import { answering, type RealmCall } from './help';
 
 /** Enemies within this of the lord count as the keep's attackers (siege.ts threat: outside, inside, roof). */
@@ -78,6 +78,20 @@ export function defenceReachOf(realm: PlayerRealm): ((c: { x: number; y: number 
  */
 export function meleeHeld(regionId: number, from: { x: number; y: number; z: number }, focus: { x: number; y: number; z: number }): boolean {
     return doorBetween(regionId, from, focus) !== null;
+}
+
+/**
+ * Where the unit is on its way in (S2, live 14:19-14:26: members who walked in alone from 25000 out were rooted, stuck or
+ * killed on the way): within DEFENCE_APPROACH of the keep's centre it is `inside`, and each member goes to its own stand
+ * (holdDefenceStand acts only there); farther out the unit travels in as a body, leg by leg over its own bridge to the entry
+ * outside the gate (`next`: defenceRouteFrom's next waypoint). Null without a plan for our realm.
+ */
+export function defenceWay(realm: PlayerRealm, centre: Point3): { inside: boolean; next: Point3; left: number } | null {
+    const plan = defencePlan(realm);
+    if (!plan) return null;
+    const d = Math.hypot(centre.x - plan.centre.x, centre.y - plan.centre.y);
+    const way = defenceRouteFrom(plan, centre);
+    return { inside: d <= DEFENCE_APPROACH, next: way[0] ?? plan.entry, left: Math.round(d) };
 }
 
 /** `base` with the defence patch on top: the same object while neither changes (members rebuild their settings on a new one). */
