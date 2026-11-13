@@ -433,6 +433,10 @@ const POST_NEAR = 1600;
 const OFF_POST_NEAR = 1500;
 /** A guard this far above or below the raid's centre stands on another level (a floor, the wall-walk): reached only by a route. */
 const LEVEL_DZ = 150;
+/** On the roof: within this of its stand on the ground and no more than ROOF_UP under its height. */
+const ROOF_AREA = 500, ROOF_UP = 150;
+/** One of us this near the lord (3D) stands by him: he is reachable. */
+const LORD_BESIDE = 600;
 /** The raid is at a spot when its centre is this near. */
 const AT_SPOT = 600;
 /** The raid goes in from the stage once this share of the living stand there. */
@@ -703,12 +707,21 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const lordStep = plan.targets.find(t => t.kind === 'lord')!;
     const lord = foes.find(s => plan.lordName.test(s.name)) ?? atPost(plan, lordStep, foes);
     const t: RaidTask = { step: lordStep, focus: lord, stand: plan.roof };
-    // The roof archers (optional, fought from the roof): the ranged take them first, the melee stay on the lord.
-    const archerStep = plan.targets.find(x => x.optional && x.kind === 'archer' && atPost(plan, x, foes)) ?? null;
+    // The roof archers (optional) are the ranged half's first only once one of us is up there: from below nobody sees them, and
+    // the unit sat "roof-e on the roof first ... melee hold" with not_visible while the user went in to the lord and died alone
+    // (live 21:22, "no one helping in the throne room"). Until then everyone goes for the lord, and roof-e is the long-reach
+    // members' side job from above the gate (RaidOrders.bolt).
+    const onRoof = living.some(m => m.z > plan.roof.z - ROOF_UP && Math.hypot(m.x - plan.roof.x, m.y - plan.roof.y) <= ROOF_AREA);
+    const archerStep = onRoof ? plan.targets.find(x => x.optional && x.kind === 'archer' && atPost(plan, x, foes)) ?? null : null;
     const archer = archerStep ? atPost(plan, archerStep, foes) : null;
     const ranged: RaidTask = archer ? { step: archerStep, focus: archer, stand: plan.roof } : t;
+    // One of us already by the lord walked there: he is reachable, whatever the route check made of the raid's centre.
+    const byLord = !!lord && living.some(m => Math.hypot(m.x - lord.x, m.y - lord.y, m.z - lord.z) <= LORD_BESIDE);
+    const melee: RaidTask = { ...t, focus: byLord || meleeOk(lord) ? lord : null };
+    const boltStep = !onRoof ? plan.targets.find(x => x.bolt && !done.has(x.label) && atPost(plan, x, foes)) ?? null : null;
+    const bolt: RaidTask | null = boltStep ? { step: boltStep, focus: atPost(plan, boltStep, foes), stand: boltStep.bolt! } : null;
     const why = archer ? `${archerStep!.label} on the roof first, then ${lord?.name ?? 'the lord'}` : lord ? `${lord.name} on the roof` : 'up to the roof';
-    return { phase: 'lord', stand: plan.roof, ranged, melee: { ...t, focus: meleeOk(lord) ? lord : null }, why };
+    return { phase: 'lord', stand: plan.roof, ranged, melee, ...(bolt ? { bolt } : {}), why: `${why}${bolt ? `; bolt: ${bolt.step!.label}` : ''}` };
 }
 
 // ── Doors and walking (meleeReach) ───────────────────────────────────────────

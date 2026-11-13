@@ -451,12 +451,17 @@ describe('raidOrders with reach: melee take no static guard they cannot walk to'
         expect(o.melee.focus!.name).toBe('yard-1');
     });
 
-    test('the lord behind a shut door: ranged keep him, melee hold', () => {
+    test('the lord with no route: melee hold, unless one of us already stands by him (then he is reachable)', () => {
         const roof = [...at(plan.roof, 3), ...at({ x: 33100, y: 38250, z: 3722 }, 5).map(m => ({ ...m, id: m.id + 100 }))];
         const o = raidOrders(plan, view({ members: roof, seen: garrison(), staged: true, reach: () => false }));
         expect(o.phase).toBe('lord');
         expect(o.ranged.focus!.name).toBe('roof-e');
-        expect(o.melee.focus).toBeNull();
+        // Three of us on the roof by him (S2, 2026-11-13 21:22, "no one helping in the throne room"): the melee go.
+        expect(o.melee.focus?.name).toBe(o.melee.step!.label === 'lord' ? o.melee.focus?.name : 'x');
+        expect(o.melee.focus).not.toBeNull();
+        // Nobody by him and no route: hold.
+        const below = at({ x: 33100, y: 38250, z: 3722 }, 8);
+        expect(raidOrders(plan, view({ members: below, seen: garrison(), staged: true, broken: [252000301, 252000302], done: ['floor-3'], reach: () => false })).melee.focus).toBeNull();
     });
 });
 

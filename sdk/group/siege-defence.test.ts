@@ -414,3 +414,25 @@ describe('raidOrders: no bolt task before the wall casters are down', () => {
         expect(raidOrders(raid, { members, seen, owner: 'midgard', staged: true }).bolt).toBeUndefined();
     });
 });
+
+describe('raidOrders: the lord phase goes for the lord, the roof archer is a side job until one of us is up', () => {
+    const at = (l: string) => FASTE.targets.find(t => t.label === l)!;
+    test('nobody on the roof: ranged and melee on the lord, the bolt on roof-e; one of ours by the lord: the melee go though the route check says no', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('hibernia')!;
+        const lordPost = at('lord').at;
+        const jarl = { id: 50, name: 'Jarl Thidranki', realm: 'midgard', kind: 'npc' as const, ...lordPost };
+        const hunter = { id: 9, name: 'Hunter', realm: 'midgard', kind: 'npc' as const, ...at('roof-e').at };
+        const yard = Array.from({ length: 5 }, (_, i) => ({ id: 100 + i, x: 33100, y: 38250 + i * 10, z: 3722, alive: true }));
+        const base = { owner: 'midgard' as const, staged: true, broken: [252000301, 252000302], done: ['floor-3'] };
+        const o = raidOrders(raid, { ...base, members: yard, seen: [jarl, hunter], reach: () => true });
+        expect(o.phase).toBe('lord');
+        expect(o.ranged.focus?.id).toBe(50);
+        expect(o.bolt?.focus?.id).toBe(9);
+        // The user by the lord, the route check saying no: the melee still go.
+        const withUser = [...yard, { id: 200, x: lordPost.x + 200, y: lordPost.y, z: lordPost.z, alive: true }];
+        expect(raidOrders(raid, { ...base, members: withUser, seen: [jarl, hunter], reach: () => false }).melee.focus?.id).toBe(50);
+        // One of us on the roof: the ranged take the archer there first.
+        expect(raidOrders(raid, { ...base, members: withUser, seen: [jarl, hunter], reach: () => true }).ranged.focus?.id).toBe(9);
+    });
+});
