@@ -45,6 +45,14 @@ export const DEFENCE_GATHER = 4500;
 const nearKeep = (plan: Pick<DefencePlan, 'centre'>, p: { x: number; y: number }) => Math.hypot(p.x - plan.centre.x, p.y - plan.centre.y) <= DEFENCE_GATHER;
 const insideWalls = (plan: Pick<DefencePlan, 'centre'>, p: { x: number; y: number }) => Math.hypot(p.x - plan.centre.x, p.y - plan.centre.y) <= 1000;
 
+/** Enemy players this near the entry outside the gate hold it: no walk in through them. */
+export const GATE_HELD = 700;
+/** Whether enemy players (alive, fresh, of another realm) stand within GATE_HELD of the entry outside our gate. */
+export function raidAtGate(plan: Pick<DefencePlan, 'entry'>, contacts: readonly { kind: string; realm: string; x: number; y: number; stale?: boolean; hp?: number }[], realm: string): boolean {
+    return contacts.some(c => c.kind === 'player' && !c.stale && (c.hp ?? 1) > 0 && String(c.realm).toLowerCase() !== String(realm).toLowerCase()
+        && Math.hypot(c.x - plan.entry.x, c.y - plan.entry.y) <= GATE_HELD);
+}
+
 /** A leg of the walk in: short enough that a change of orders is heard between legs. */
 const LEG_MS = 20_000;
 /** Back to the stand when this far off it (beyond its leash). */
@@ -89,6 +97,10 @@ export const holdDefenceStand: Behavior = {
         // Attacked outside the walls (the raid at our gate): fight back first; inside them, on to the stand. Live 14:20:46 Grimhild
         // died walking to our own gate through the raid.
         if (!insideWalls(plan, me) && ctx.threats().some(c => c.targetId === me.objectId)) return false;
+        // The raid at our gate: no walk up to the door through it (a door's interact wants us standing by it, and roots hold us
+        // there). Outside the walls with enemy players by the gate, fight with the unit until it is clear. Live 16:42-16:44, midgard-45:
+        // Ragnar rooted on the way to our door for 30 s, Gudrun killed at its approach.
+        if (!insideWalls(plan, me) && raidAtGate(plan, ctx.picture().contacts, me.realm)) return false;
         ctx.doing('defence', null, `to ${seat.label}`);
         const w = await ctx.bot.walkTo(seat.at.x, seat.at.y, { z: seat.at.z, tolerance: 60, timeout: LEG_MS });
         // A timeout is the leg's end, not a failure: the next turn goes on from where it stopped.

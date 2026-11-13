@@ -42,3 +42,15 @@ describe('onStand', () => {
         expect(onStand({ x: 33752, y: 38464, z: 3968 }, wall, true)).toBe(false);
     });
 });
+
+describe('raidAtGate', () => {
+    test('enemy players by the entry hold the gate; ours, the dead and the stale do not', async () => {
+        const { raidAtGate } = await import('./defence');
+        const at = { x: plan.entry.x + 200, y: plan.entry.y };
+        expect(raidAtGate(plan, [{ kind: 'player', realm: 'hibernia', ...at, hp: 80 }], 'albion')).toBe(true);
+        expect(raidAtGate(plan, [{ kind: 'player', realm: 'albion', ...at, hp: 80 }], 'albion')).toBe(false);
+        expect(raidAtGate(plan, [{ kind: 'player', realm: 'hibernia', ...at, hp: 0 }], 'albion')).toBe(false);
+        expect(raidAtGate(plan, [{ kind: 'player', realm: 'hibernia', ...at, hp: 80, stale: true }], 'albion')).toBe(false);
+        expect(raidAtGate(plan, [{ kind: 'player', realm: 'hibernia', x: 36300, y: 38300, hp: 80 }], 'albion')).toBe(false);
+    });
+});
