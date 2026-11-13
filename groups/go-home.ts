@@ -14,6 +14,13 @@ const dirOf = (group: string) => join(import.meta.dir, group);
 
 const main = async ({ bot, sdk, args = {} }: ScriptContext) => {
     const def = loadGroup(dirOf(String(args.group)));
+    // A human in the group (observed, sdk/group/observed.ts): the bots stay with them and the next sortie starts where
+    // they stand; walking home would leave the human alone across the map (the user, 2026-11-13 21:00). The dead wait
+    // there too, for the next sortie's rez or release.
+    if (def.observed?.length) {
+        log(`${def.name}: ${def.observed.map(o => o.name).join(', ')} in the group: staying where we are`);
+        return { success: true, message: `${def.name} stays with ${def.observed.map(o => o.name).join(', ')}` };
+    }
     const { members, opened } = await connectGroup(def, { bot, sdk });
     try {
         await Promise.all(members.map(m => m.sdk.sendStop().catch(() => null)));
