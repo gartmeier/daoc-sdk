@@ -212,6 +212,12 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     // on a wall or the roof they can't reach is the ranged half's alone (live 08:36: midgard-2's melee climbed to wall-se).
     const npc = (f: SiegeSeen | null) => (f && f.kind === 'npc' ? f : null);
     const melee = npc(ro.melee.focus);
+    // The ranged half holds out of the walls' sight (siege.ts RaidTask.hold) while the melee climb to a wall caster: the casters and
+    // healers stay at ro.stand, the melee get the caster. The user at 17:3x: "Fiacra and Amergin are not safe, they are being hit by
+    // the Runemasters" (they followed the melee's focus into the courtyard).
+    if (ro.ranged.hold) {
+        return { orders: ro, update: { phase: 'engage', focus: null, meleeFocus: melee?.id ?? null, anchor: ro.stand, ...(melee ? { facing: { x: melee.x, y: melee.y } } : {}), settings, objective, reason: `${reason}; ranged out of sight: ${ro.ranged.hold}` } };
+    }
     const focus = npc(ro.ranged.focus) ?? melee;
     if (focus) {
         const meleeFocus = melee?.id ?? null;

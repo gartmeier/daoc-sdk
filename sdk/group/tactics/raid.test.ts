@@ -114,13 +114,13 @@ describe('raid: the orders, step by step', () => {
         expect(b.update).toMatchObject({ phase: 'recover', focus: null });
         expect('meleeFocus' in b.update).toBe(false);
         // The gate broken (rank 3), the yard pair gone, the walls left: the melee go up the wall-walk stair for the wall casters
-        // with the ranged (the user, 2026-11-13 17:25: "tanks need to go in. up the walls and kill the runemasters"; S2's siege.ts
-        // gives the courtyard-side wall casters to all). Before 17:25 they held (live 08:36 they had climbed the wall's side).
+        // (the user, 2026-11-13 17:25: "tanks need to go in. up the walls and kill the runemasters"), and the ranged half holds out of
+        // the walls' sight with no focus of its own (S2 1350a4a; the user: "Fiacra and Amergin are not safe").
         const members = five({ x: 34_420, y: 38_275, z: 3720 });
         members[1] = { ...members[1]!, doorsBroken: [252000301] };
         const c = step(members, [guard(302, wall.at, { name: 'Sorcerer' })], { raid: { callId: 'x', staged: true, broken: [] as number[] } });
-        expect(c.update).toMatchObject({ phase: 'engage', focus: 302, meleeFocus: undefined });
-        expect(c.update.reason).not.toContain('melee hold');
+        expect(c.update).toMatchObject({ phase: 'engage', focus: null, meleeFocus: 302 });
+        expect(c.update.reason).toContain('ranged out of sight');
         // Travelling: no meleeFocus named, so the board drops it.
         expect('meleeFocus' in step(five(plan.rally)).update).toBe(false);
     });
@@ -135,9 +135,9 @@ describe('raid: the orders, step by step', () => {
         expect(shut.orders.why).toBe('Wizard is on us');
         expect(shut.orders.ranged.focus?.id).toBe(303);
         expect(shut.update).toMatchObject({ phase: 'engage', focus: 303, meleeFocus: null });
+        // Through the broken gate: the melee climb to it, and the ranged half holds out of the walls' sight.
         const open = step(five(gateOut), [wizard], { raid: { callId: 'x', staged: true, broken: [252000301] } });
-        expect(open.update).toMatchObject({ phase: 'engage', focus: 303 });
-        expect(open.update.meleeFocus).toBeUndefined();
+        expect(open.update).toMatchObject({ phase: 'engage', focus: null, meleeFocus: 303 });
     });
 });
 
@@ -380,5 +380,18 @@ describe('raid: a pack fresh from its bind finishes its rebuff before the go (th
         expect(pk({ ...mustered(), pack: 'rebuff', rebuffAt: now - 25_000 }, buffer(five(home)), now).reason).toMatch(/^rebuffing.*buffs? to go \(Strength/);
         expect(pk({ ...mustered(), pack: 'rebuff', rebuffAt: now - 25_000 }, five(home), now).reason).toMatch(/^raid/);
         expect(pk({ ...mustered(), pack: 'rebuff', rebuffAt: now - 70_000 }, buffer(five(home)), now).reason).toMatch(/^raid/);
+    });
+});
+
+describe('raid: the ranged half out of the walls\' sight while the melee climb (S2 1350a4a; the user: "Fiacra and Amergin are not safe")', () => {
+    test('a wall caster the melee can reach, the gate broken: no focus for the unit, the melee on the caster, anchor out of sight', () => {
+        const hib = raidPlan('hibernia')!;
+        const t = FASTE.targets.find(x => x.label === 'wall-se')!;
+        const members = five({ x: 34000, y: 38200, z: 3720 }, { realm: 'hibernia' } as any).map((m, i) => ({ ...m, objectId: 100 + i }));
+        const mem = { raid: { callId: 'x', staged: true, broken: [252000301] } };
+        const u = raidStep({ plan: hib, mem, members, guards: [guard(7, t.at)], call: null, unit: 'hibernia' });
+        if (!u.orders.ranged.hold) return;   // no navmesh here: meleeReach can't find the stair, no hold (siege-defence.test covers raidOrders)
+        expect(u.update).toMatchObject({ phase: 'engage', focus: null, meleeFocus: 7, anchor: { x: hib.outOfSight!.x, y: hib.outOfSight!.y } });
+        expect(u.update.reason).toContain('ranged out of sight');
     });
 });
