@@ -1,5 +1,5 @@
 -- Undo of docs/bot-dyes.sql: each row back to its colour and emblem before the dye.
--- Generated 2026-11-13T22:22:17.458Z by docs/bot-dyes.gen.ts from the live DB: 913 inventory rows on 150 PrivLevel-1 characters (Niamh left out).
+-- Generated 2026-11-13T22:25:05.762Z by docs/bot-dyes.gen.ts from the live DB: 908 inventory rows on 153 PrivLevel-1 characters (Niamh left out).
 -- Run only while the gameserver is stopped (it caches logged-in inventories and would write the old colours back):
 --   docker compose -f server/docker/docker-compose.yml exec -T db mariadb -uroot -pdaoc-sdk opendaoc < docs/<this file>
 START TRANSACTION;
@@ -53,7 +53,13 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='d2aecfd3-7d8e-4579-a8
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='8ecb376f-8a07-413f-bc73-7c40a4ce1667';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='43b77930-aa60-4fcf-8a04-f280e5741de7';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='0e752ff5-c4d0-46dd-abf6-d00472a2a4fb';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='303be3ea-29db-48a8-a2d6-ab9a48759da0';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='8d8e7eb3-7974-44b9-b84d-be2d7638bfde';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='bdcb819c-6478-4275-b878-dbfb378e3dd0';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='46a84e96-21d4-41d6-bbcf-253d18422fff';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='78074a40-adbe-4bed-b70f-901d8eed72ef';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='ff0cb776-64d8-4a04-a269-4140c0a0ce62';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='114a5b0c-c34b-43bf-a24c-a054d612e074';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='0fc62ef6-9a05-4ea7-9142-c24d511936ba';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='3bea1089-fa31-4f9c-90a8-47c68f2df273';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='cfe9457c-2092-4216-8e72-9b46f8f51a6f';
@@ -72,6 +78,9 @@ UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='52c4eabf-ade3-41a5-a
 UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='a46644d2-ac79-40cd-95cc-088939222d52';
 UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='817caebd-e2c8-4704-b93b-58522605d335';
 UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='0d9b7146-0226-4e2e-a5a1-a10b12d286ed';
+UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='bb2f0798-1655-4ae0-af14-d7074de912ff';
+UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='9d848b02-96e2-4251-b485-b3a733be1fcb';
+UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='523b7d66-08b9-418a-9b2a-61947537109b';
 UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='f5f8826c-e39f-4512-b023-d7c65f3ac8ba';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='b3ed1e45-b6b8-4b1b-8fe6-c6d5e850fed0';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='e5574d8f-4d80-4a84-ac8c-353ab27d62b8';
@@ -104,13 +113,7 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='661b21c3-9029-4ece-80
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='aa208a6b-d14e-4b13-bb7a-d8ca0643c14b';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='e9d8bf72-87a8-4e71-9578-5af238e7e146';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='b3711b2c-f26b-4252-827c-e2026135975c';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='ebd58867-413e-45fd-8365-20d89cdc3be2';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='86896278-e572-41bd-acec-cd2a13c72dfb';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='c80edfeb-d752-43c8-a6c4-fdf54e6662cd';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='372e763f-cac0-407e-ae89-a7c5aa133597';
 UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='d12e0638-882a-426a-9fc2-1ded51a66a01';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='68a70733-bce8-482f-8c76-77183281728d';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='a97dcd31-1f29-4922-9a2f-117a6a99db45';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='9a20f2b6-db7e-4a84-b851-9ae7e938ac5a';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='a707b385-b4c4-421f-9391-2ffd803c8002';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='f1ef3ffa-d46d-4da4-ac76-fa3c10356766';
@@ -118,13 +121,7 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='764eff85-50ba-49e6-9a
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='1d01720b-7c00-4fc8-bb21-65f82581cdcb';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='09e6f732-142b-4447-b902-6e0c5ad8f05f';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='23788661-be93-42f8-9c72-d414d16ecafd';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='4aef4f0a-1cdf-42f8-96ba-d6a37d400758';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='1fc4ee9b-479a-4525-a4d7-d18d5fe9c2eb';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='a2ac5f35-768c-42d8-83dc-9849d20a445a';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='92f5d7a5-5faa-4471-ae7c-8a9a48b668df';
 UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='a98e84ad-8170-4496-80af-cc38335f3589';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='65cb145d-d2e5-4296-a5d5-81e0a4d6ad08';
-UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='0e90cb36-8ee8-498c-b939-42f48f2519be';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='648e84ab-bebb-4e76-a003-3431e6294675';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='6d338cbd-35bf-44f9-aeaa-da009696577d';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='bf079d42-553a-4ad8-9fde-ea3eb52a5042';
@@ -207,6 +204,12 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='3bb79cff-79ed-448b-87
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='827089eb-7399-4748-a50c-802836630703';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='8045dd16-2c61-46da-b604-9a8d20175429';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='354c7ec5-e2db-49d1-b5a1-a2bb5ff17e05';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='ae32ed1b-5e88-44f8-aec3-a943c4333c4b';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='1d3bf01c-85c6-4f1f-a42d-4a39303ecf35';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='a3cbc7bb-8ac5-4969-9517-d75de2cd2da9';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='2be9c5ce-bef4-4739-94f2-08aa8baa8fe4';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='124a6068-19d5-4914-bf5a-4bd096728baa';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='730e0f95-0d14-4f3b-a3a1-47c7f39309ec';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='c0e7cb92-5f0c-4ea8-b854-18097aefdc0f';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='67c480bd-4633-4075-9fee-37542455b8bf';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='a80ccfbe-54d0-4aa9-bf55-984c35cb5e8e';
@@ -341,7 +344,6 @@ UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='983adad4-0ebd-45b1-9
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='16f0d17e-c1f0-4af5-8f88-c510c5909ccd';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='3a7ca7ff-b77c-49a9-8198-1dc728d3b6fb';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='dcaa75f5-4514-4d56-b04e-e0b2a0403c65';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='7cb621c8-da33-4c43-a8f0-6dcdad2efd43';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='11f11fb3-2462-42ec-a8da-eed9081274e2';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='1e646a1b-3add-4cc2-9556-341455bfc187';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='9dd157ff-cb39-403f-8d60-d370de101d17';
@@ -419,13 +421,7 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='b89984ce-69d6-4b39-89
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='e0a7cc1f-a449-4856-a9c1-660d2ae5078f';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='4a67656b-7ce6-4124-ab8e-0bff1a5a7446';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='e922e1dd-e99b-49be-a701-9f976086dd10';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='e26f36b3-fc98-4c39-8648-dd1124e9965f';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='a56b8169-b91d-45ec-bdf5-55a343cda072';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='c3a76e46-877e-4192-a2af-aaf4fc53d4aa';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='45dbf5db-0152-4a6c-a27d-757b1a2e9d6f';
 UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='9eecfcaf-4279-43c2-a5d6-70b911ee68df';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='a23ea9f5-9ad5-4134-98e1-e5223e271496';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='0b940bf6-d7bc-4168-9143-963f6c97f17d';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='8cd7d107-b173-48c2-88a2-0a1abfaac03f';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='dba6ea41-e1fb-4419-852e-432b1c3a6634';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='8a2ee3ca-7bee-444e-88af-8f3a32bf52dd';
@@ -467,7 +463,13 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='0102c483-a657-4621-80
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='389a2577-13a1-4871-8995-807f6e10efb8';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='e151f1d8-1e15-40bf-a6f0-13afd60576d9';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='947ce434-7569-4c61-bd06-e02d9aa2d771';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='165e8124-3308-45f5-af03-cc3342807d68';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='263ec7f1-926e-4c5b-8865-90b60bece858';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='2489daa3-0700-44fe-b3ec-82bdaa288848';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='498fdf4d-87c8-44ac-a4e4-074c9d031638';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='ab91a638-ebcc-4aea-b43e-2d985f7042e8';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='2c25b16b-b70d-4188-98b0-45ad64ab437c';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='5b3c1073-4c38-4754-9424-c4f82dd44593';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='d68f6c6d-ada1-419f-b7f2-892c6c078a4b';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='2e87ca17-1d76-4ab8-8a7f-ac30856c6821';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='05b537cc-2ffa-464c-8ce3-bc3699968b7f';
@@ -475,11 +477,7 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='aeadebdc-638d-4b08-ab
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='94ca593c-6dea-41ba-8c08-0444473a7557';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='94c6796f-7f1c-4cf5-8d95-cf1e7161edc1';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='ff919f36-0879-48f1-8cbb-f18b5cb86441';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='5fda1420-36e7-4fcf-a3e8-b517caf7395e';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='447e7272-04d7-428e-8601-ee818a46fcce';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='a48c0f4e-6a61-4b34-a0a6-22ad8ec7d4f3';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='df4dac55-9365-46b2-858a-7e35057d1379';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='c7c5cb67-f74c-4d8b-8238-a8ef0a5bf873';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='5bcdb604-0726-49d3-aaa8-f2db4b8d35b5';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='22649ee5-89a7-4f20-ba0c-bb5aedd24479';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='15af5684-7c01-4ad1-b8f0-6fcae0e45582';
@@ -501,6 +499,12 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='db75492f-ce36-442c-b7
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='2d84e620-2c5e-46b2-8825-fa5c6c7ad8af';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='9e14fe91-ae1e-4459-b841-acd9d036686d';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='c8b2a4b7-de83-4836-8adf-7b496d4d1a48';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='53143694-ca5c-490f-a447-4cdf35e1ec17';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='f3eb3120-f597-42f4-88ed-f06b59b62ca7';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='d7f908f8-0080-4db4-a82d-16a07e5f39bd';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='da2af47f-c815-4b43-9cf6-374916d0eabb';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='5ae27bf3-daf1-46b3-81de-8ca0199bb90f';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='dc146e30-d7d3-451b-ba4e-fbf35beb86ac';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='269ee5ea-b801-453d-9929-935594445586';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='bfbf15b2-55c1-4c34-aaa9-e50037aabf5f';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='ed94f9c4-1d4d-4af7-85cf-68d3e30c5710';
@@ -512,7 +516,6 @@ UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='23f89ce5-69da-42f3-a
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='9bfd826e-9741-4873-9a60-327ee7c30895';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='71e94309-347b-486a-8524-b9a500b74c8c';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='5e0c34ce-8c86-41f1-86bb-2383e4d3236f';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='949cd8bb-bee4-41de-9c46-301fd556cbe0';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='20a70a44-d8ae-4470-9de2-e2b2ac7a3ac6';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='1049b91a-31b3-4281-8ef6-43ccad017931';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='5edb5625-e348-46ce-b5bf-be02bf353242';
@@ -534,17 +537,20 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='f64c7dbf-4852-49cc-b5
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='c315a0e6-8d26-4003-8a0d-564613b90e74';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='8e8c9ad6-ae0f-40a5-9c9a-70757468b18c';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='2ef53d0e-1ae6-480e-ac37-3603213bc720';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='159b6615-27bc-4045-930b-5adf50650371';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='7a92c452-769b-4019-a59a-705966c00acb';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='c8aa1c5a-1f73-465d-9a37-66533880ce48';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='bb5501b6-972b-4462-b787-24c4c5ebaa91';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='aeabb0d0-95d9-4023-b7a5-c4157228726c';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='74041532-1998-4ca9-a6fe-c7309150a8af';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='b6c3055e-7cb0-472e-b231-04da191a6936';
 UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='b5655a4a-893d-41a1-998e-2012ccfb98dd';
 UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='8a9aee1d-5a95-4459-8804-af71a26f352b';
 UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='a977e023-1c28-4913-83e6-0773d27872c1';
+UPDATE inventory SET Color=71, Emblem=0 WHERE Inventory_ID='32459558-a150-416c-8e1c-1e6769546909';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='8f4815b7-f233-45ee-b663-fd2d14af307f';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='bf75c71e-10ab-4177-a65d-efbd85fa86da';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='7f826742-7a4a-4bc1-85ef-24ba9c655632';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='06fe0830-e54d-4f5e-bb73-3a13746134fc';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='e95a2aa3-2d80-4c16-abf7-832361696e0e';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='97c6cb51-c16a-4258-9486-8f6723cd54fb';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='6c782632-4063-4006-a469-b688d380b1e0';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='d8b7cf2f-b3de-42b8-8bc7-7684630b598b';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='02b914e9-31b5-49a2-8737-7254f5c88fb6';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='f6a21163-a0bb-4239-ab3f-e254474a6d72';
@@ -563,6 +569,12 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='bf6fd66d-cd65-45cd-9f
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='f9ecb772-5c20-4f43-8e1c-d2466f71cf9a';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='ec50944d-6ffc-40d9-91e7-2ff8e1de657d';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='89b7fd59-da8d-4f42-8e5a-de34a7cf5121';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='076a2b9e-ebea-43d4-ac3f-2bba21761b13';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='d3b35d68-b053-4100-9857-7949a1916842';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='f865a359-66b2-4767-961a-c0b872bd7c5a';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='320b8ef1-008f-421c-a11a-2d11c25cf778';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='c6f42aeb-f8bc-4b65-b7b9-371485bf3d5e';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='e353b4ac-275d-4f47-a3a7-9ef67b7b3629';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='7b0cfbe3-87f0-4b43-bb8e-462f976604df';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='4059e296-194c-4d09-a586-07114e1933cb';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='68858544-6757-4bf0-be7a-ae552954b139';
@@ -751,13 +763,7 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='74396498-e53b-4e9a-a6
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='e4657dab-7d11-4881-82fc-66e50d4ba7e1';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='7955e431-9580-45d6-a23d-5237d9e2a4ac';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='f3be5751-e12a-4aa5-bc7a-4e5935328dfa';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='3a6b44ae-8a29-4ab6-85be-3855fdf644d2';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='9b787ad9-69b6-4b8c-ba6b-144aad31c85f';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='2163abe3-df69-4ec2-bf80-32bb62c684b1';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='149af781-5f01-49e9-a98f-b6422d0ff371';
 UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='b7f41506-c37d-483a-ae86-4a6a882b13b7';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='f4bba377-3993-4bf5-9bba-1e9e7337f6bf';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='e6e60f9f-84ca-48f7-a7e5-f4bcf9724604';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='87024b3a-eca1-4c46-9579-d657b6291650';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='a0946331-9d47-485f-b040-2d80777dcb19';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='80ab9d54-4778-466d-9aec-1489edac04d6';
@@ -826,20 +832,13 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='366bc0ae-68b0-423c-89
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='1ef67815-0499-41c6-877b-82031f12590e';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='c93a9084-2422-4573-ab46-3a1b8983ee9f';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='d1e8d0b4-4042-4829-8b0b-5d35753ac406';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='c1a5414e-9e4c-4dbd-b242-2420a0abbe17';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='4003ab7e-ea65-4cab-a365-5aa897dd4a6b';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='7005ff93-b745-4b69-8745-4f2e64912ef7';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='4bd5ab5f-0f4c-4a0c-837a-b1ce78a7c993';
-UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='423d91ed-76f2-421d-9c65-70a0723cafd1';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='d83e180d-7d8d-4bb3-93c2-3910d07d4d2d';
 UPDATE inventory SET Color=67, Emblem=0 WHERE Inventory_ID='47c7a83f-4203-4f0a-a2e6-b0055b9ae6cf';
 UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='65cc016d-c100-43ed-850a-d3272baac123';
 UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='65510172-4ae5-4039-b520-f24702c59aec';
 UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='e671aa31-e7e2-4547-b7e9-7eebec0d9aab';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='64373df0-f18a-443d-a449-a242ff5685ec';
 UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='78bcded6-2864-4dbb-8db2-6564f407356f';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='d697d09a-2f25-45ab-ad2f-8b2d97bca85e';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='09b354c3-b23c-4d08-ab1f-45a593c69c96';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='75455a1f-a0b9-4838-9eb3-965ddddb6a70';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='3f80b9bf-59ad-4f70-b2fc-b4cadf25f138';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='133fb375-0623-4ced-858d-69428f7967d4';
@@ -854,12 +853,7 @@ UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='dcc23738-23d5-4353-a2
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='85de84d3-8648-4dbe-8e7d-8a846653dfcb';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='42b15178-812a-4e4c-a30b-620d7ed5bd72';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='678e5ba6-4c72-4bb0-ae6c-b143c9796507';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='67a5f448-f6cb-4471-91af-70ce80674a08';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='c649c6d7-56d1-42d3-b9ae-61b4034a036a';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='0fa94b05-d8b2-4581-a417-909b3c254e48';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='146ab8bf-a99d-4e38-a6a7-511b3f0130ab';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='82baae38-85b2-4439-8f44-42bb46022ed8';
-UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='49259c3c-6a67-43e2-b480-00fa61f711cb';
+UPDATE inventory SET Color=53, Emblem=0 WHERE Inventory_ID='86b55a39-07c2-44df-a729-fc5f3771b75a';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='c65ae350-a722-4ea1-81e9-aff15f7c50b2';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='041fcfa4-0a80-4a87-a07a-9b131a74c1c2';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='dc4bbae1-81ef-41da-a9ca-7f22f9d747f2';
@@ -896,6 +890,7 @@ UPDATE inventory SET Color=6, Emblem=0 WHERE Inventory_ID='67e105cd-cf0c-48c9-87
 UPDATE inventory SET Color=2, Emblem=0 WHERE Inventory_ID='6a778697-bab8-434c-8b14-f474b7a9a8bc';
 UPDATE inventory SET Color=6, Emblem=0 WHERE Inventory_ID='ea1bcb24-b66c-4678-a07e-a2a1a83a31db';
 UPDATE inventory SET Color=2, Emblem=0 WHERE Inventory_ID='b0b87550-994d-41a5-bd69-3101c1337e92';
+UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='e08f0a7f-f41e-4b56-9b32-b735a6791d12';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='8aa66837-0fb5-4821-89bb-a35b3bf72dac';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='0e982a88-5bbd-4695-bf35-289be8430194';
 UPDATE inventory SET Color=0, Emblem=0 WHERE Inventory_ID='69082d40-cd7c-448e-90ed-310cc5b36bef';

@@ -1,7 +1,7 @@
-// Generates docs/bot-dyes.sql and docs/bot-dyes-undo.sql from the live DB and groups/*/group.json.
+// Generates docs/bot-dyes.sql and docs/bot-dyes-undo.sql from the live DB.
 // Read-only on the DB. Run: bun docs/bot-dyes.gen.ts   (writes both files, prints the dry-run count)
 // The SQL must run while the gameserver is stopped: it caches a logged-in character's inventory.
-import { readdirSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const ROOT = join(import.meta.dir, '..');
@@ -28,27 +28,25 @@ const C = {
     grayBlue: 139, oliveGray: 140,
 } as const;
 
-// Weighted palettes: the realm colour dominates, then neutrals, then a few personal picks.
-const MAIN: Record<number, [number, number][]> = {
-    1: [[C.crimson, 5], [C.royalRed, 4], [C.red, 2], [C.royalBlue, 2], [C.darkBlue, 2], [C.black, 2], [C.charcoal, 2],
-        [C.plum, 1], [C.darkGold, 1], [C.tan, 1], [C.darkBrown, 1], [C.royalPurple, 1]],
-    2: [[C.royalBlue, 5], [C.darkBlue, 4], [C.grayBlue, 3], [C.blue, 2], [C.charcoal, 2], [C.black, 2], [C.darkGray, 2],
-        [C.earthenBrown, 1], [C.rust, 1], [C.oliveGray, 1], [C.teal, 1], [C.lightGray, 1]],
-    3: [[C.forestGreen, 5], [C.royalGreen, 3], [C.oliveGreen, 3], [C.darkTeal, 2], [C.sageGreen, 2], [C.grayTeal, 1],
-        [C.turquoise, 1], [C.earthenBrown, 2], [C.brown, 1], [C.darkPurple, 1], [C.black, 1], [C.tan, 1]],
+// Two colours that go together per character, as players dyed: a cloak and a body colour (black cloak, golden vest).
+// Either colour may be the cloak; gloves, boots and helm take one of the two. Not tied to the realm.
+const PAIRS: [number, number][] = [
+    [C.black, C.lightGold], [C.black, C.darkGold], [C.black, C.crimson], [C.black, C.royalRed], [C.black, C.lightGray],
+    [C.black, C.royalBlue], [C.black, C.royalPurple], [C.royalBlue, C.lightGold], [C.darkBlue, C.lightGray],
+    [C.darkBlue, C.darkGold], [C.royalBlue, C.lightGray], [C.forestGreen, C.tan], [C.forestGreen, C.darkGold],
+    [C.forestGreen, C.earthenBrown], [C.royalGreen, C.lightGold], [C.oliveGreen, C.darkBrown], [C.crimson, C.darkGold],
+    [C.royalRed, C.charcoal], [C.crimson, C.lightGray], [C.darkPurple, C.lightGold], [C.deepViolet, C.lightGray],
+    [C.plum, C.charcoal], [C.darkBrown, C.tan], [C.darkTeal, C.tan], [C.grayBlue, C.charcoal], [C.rust, C.charcoal],
+    [C.darkTeal, C.darkGold], [C.sageGreen, C.darkBrown], [C.charcoal, C.lightGold], [C.darkGray, C.royalBlue],
+];
+// The three guilds groups/signature.ts formed keep their signature colour, now with a partner: [cloak, body].
+// Starter guilds (Clan Cotswold, Mularn Protectors, Tir na Nog Adventurers) are no guild in this sense.
+const GUILD_PAIR: Record<string, [number, number]> = {
+    'Crimson Order': [C.crimson, C.darkGold],
+    'Ravens of Jordheim': [C.black, C.royalBlue],
+    'Wolves of Tir na Nog': [C.darkGray, C.forestGreen],
 };
-// Gloves, boots and helm: usually a dark neutral or the body colour.
-const TRIM: Record<number, number[]> = {
-    1: [C.black, C.charcoal, C.darkBrown, C.darkGold, C.darkGray],
-    2: [C.black, C.charcoal, C.darkGray, C.earthenBrown, C.grayBlue],
-    3: [C.darkBrown, C.black, C.earthenBrown, C.darkTeal, C.oliveGray],
-};
-// Guild colours: a group that wears one shares it on the cloak (and some members on the tabard/torso too).
-const GUILD: Record<number, number[]> = {
-    1: [C.crimson, C.royalBlue, C.black, C.darkGold, C.royalPurple, C.royalRed],
-    2: [C.royalBlue, C.darkBlue, C.black, C.rust, C.grayBlue, C.charcoal],
-    3: [C.forestGreen, C.darkPurple, C.royalGreen, C.darkTeal, C.black, C.earthenBrown],
-};
+
 
 function hash(s: string): number {
     let h = 2166136261;
@@ -59,51 +57,26 @@ function hash(s: string): number {
 }
 const rnd = (key: string) => hash(key) / 2 ** 32;
 const pick = <T>(key: string, xs: readonly T[]) => xs[Math.floor(rnd(key) * xs.length)]!;
-function weighted(key: string, xs: [number, number][]): number {
-    const total = xs.reduce((s, [, w]) => s + w, 0);
-    let r = rnd(key) * total;
-    for (const [v, w] of xs) if ((r -= w) < 0) return v;
-    return xs[xs.length - 1]![0];
-}
-
-// Character name -> group (members before bench, first file wins).
-const charOf = new Map<string, string>();
-for (const bot of readdirSync(join(ROOT, 'bots'))) {
-    const env = join(ROOT, 'bots', bot, 'bot.env');
-    if (!existsSync(env)) continue;
-    const m = readFileSync(env, 'utf8').match(/^CHAR_NAME=(.+)$/m);
-    if (m) charOf.set(bot.toLowerCase(), m[1]!.trim());
-}
-const groupOf = new Map<string, string>();
-const groupFiles = readdirSync(join(ROOT, 'groups')).sort()
-    .filter((g) => existsSync(join(ROOT, 'groups', g, 'group.json')))
-    .map((g) => ({ g, j: JSON.parse(readFileSync(join(ROOT, 'groups', g, 'group.json'), 'utf8')) }));
-for (const key of ['members', 'bench'] as const)
-    for (const { g, j } of groupFiles)
-        for (const m of j[key] ?? []) {
-            const ch = charOf.get(String(m.bot).toLowerCase()) ?? String(m.bot);
-            const name = ch.charAt(0).toUpperCase() + ch.slice(1);
-            if (!groupOf.has(name)) groupOf.set(name, g);
-        }
-
-const rows = sql(`select c.Name, c.Realm, i.Inventory_ID, i.SlotPosition, i.Color, i.Emblem
+const rows = sql(`select c.Name, coalesce(g.GuildName, ''), i.Inventory_ID, i.SlotPosition, i.Color, i.Emblem
   from inventory i join dolcharacters c on c.DOLCharacters_ID = i.OwnerID join account a on a.Name = c.AccountName
+  left join guild g on g.GuildID = c.GuildID
   where a.PrivLevel = 1 and i.SlotPosition in (${SLOTS.join(',')}) order by c.Name, i.SlotPosition`);
 
-type Look = { body: number; trim: number; cloak: number; undyedArmour: boolean };
+type Look = { body: number; trim: number; cloak: number; undyedArmour: boolean; guild?: string };
 const looks = new Map<string, Look>();
-function lookFor(name: string, realm: number): Look {
+function lookFor(name: string, guildName: string): Look {
     let l = looks.get(name);
     if (l) return l;
-    const g = groupOf.get(name);
-    const guildOn = g !== undefined && rnd(`guild?${g}`) < 0.6;
-    const guild = g ? pick(`guild:${g}`, GUILD[realm]!) : undefined;
-    let body = weighted(`body:${name}`, MAIN[realm]!);
-    if (guildOn && rnd(`tabard:${name}`) < 0.35) body = guild!; // some wear the guild colour head to toe
-    const r = rnd(`trim?${name}`);
-    const trim = r < 0.35 ? body : pick(`trim:${name}`, TRIM[realm]!);
-    const cloak = guildOn ? guild! : rnd(`cloak?${name}`) < 0.5 ? body : weighted(`cloak:${name}`, MAIN[realm]!);
-    l = { body, trim, cloak, undyedArmour: rnd(`plain:${name}`) < 0.1 }; // a few never bothered with dye
+    const gp = GUILD_PAIR[guildName];
+    let cloak: number, body: number;
+    if (gp) [cloak, body] = gp;
+    else {
+        const [a, b] = pick(`pair:${name}`, PAIRS);
+        [cloak, body] = rnd(`flip:${name}`) < 0.5 ? [a, b] : [b, a];
+    }
+    const trim = rnd(`trim:${name}`) < 0.5 ? body : cloak;
+    // a few never bothered dyeing the armour, only the cloak (not in a guild that dyes together)
+    l = { body, trim, cloak, undyedArmour: !gp && rnd(`plain:${name}`) < 0.06, guild: gp ? guildName : undefined };
     looks.set(name, l);
     return l;
 }
@@ -112,11 +85,10 @@ const sets: string[] = [];
 const undo: string[] = [];
 const byColor = new Map<number, string[]>();
 const chars = new Set<string>();
-for (const [name, realmS, id, slotS, colorS, emblemS] of rows) {
+for (const [name, guildName, id, slotS, colorS, emblemS] of rows) {
     if (EXCLUDE.has(name!)) continue;
-    const realm = Number(realmS), slot = Number(slotS);
-    if (!MAIN[realm]) continue;
-    const l = lookFor(name!, realm);
+    const slot = Number(slotS);
+    const l = lookFor(name!, guildName ?? '');
     const color = slot === 26 ? l.cloak : l.undyedArmour ? 0 : BODY.has(slot) ? l.body : EXTREMITIES.has(slot) ? l.trim : 0;
     if (color === Number(colorS) && Number(emblemS) === 0) continue;
     chars.add(name!);
@@ -134,10 +106,10 @@ const head = (what: string) => `-- ${what}
 -- Run only while the gameserver is stopped (it caches logged-in inventories and would write the old colours back):
 --   docker compose -f server/docker/docker-compose.yml exec -T db mariadb -uroot -pdaoc-sdk opendaoc < docs/<this file>
 `;
-writeFileSync(join(ROOT, 'docs/bot-dyes.sql'), `${head('Dyed armour and cloaks for the bots: realm palettes, dark trim, a shared guild cloak for some groups.')}START TRANSACTION;\n${sets.join('\n')}\n-- expect ${total} rows changed in all\nCOMMIT;\n`);
+writeFileSync(join(ROOT, 'docs/bot-dyes.sql'), `${head('Dyed armour and cloaks for the bots: two colours that go together per character (cloak and body), a shared pair for each of the three guilds.')}START TRANSACTION;\n${sets.join('\n')}\n-- expect ${total} rows changed in all\nCOMMIT;\n`);
 writeFileSync(join(ROOT, 'docs/bot-dyes-undo.sql'), `${head('Undo of docs/bot-dyes.sql: each row back to its colour and emblem before the dye.')}START TRANSACTION;\n${undo.join('\n')}\nCOMMIT;\n`);
 
 const name = (c: number) => Object.entries(C).find(([, v]) => v === c)?.[0] ?? (c === 0 ? 'undyed' : String(c));
 console.log(`${total} rows, ${chars.size} characters`);
 if (process.argv.includes('--looks'))
-    for (const [n, l] of looks) console.log(`${n.padEnd(14)} ${(groupOf.get(n) ?? '-').padEnd(14)} body=${name(l.undyedArmour ? 0 : l.body)} trim=${name(l.undyedArmour ? 0 : l.trim)} cloak=${name(l.cloak)}`);
+    for (const [n, l] of looks) console.log(`${n.padEnd(14)} ${(l.guild ?? '-').padEnd(20)} body=${name(l.undyedArmour ? 0 : l.body)} trim=${name(l.undyedArmour ? 0 : l.trim)} cloak=${name(l.cloak)}`);
