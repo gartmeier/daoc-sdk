@@ -21,7 +21,7 @@
 
 import type { Realm } from '../types';
 import { getNavmeshStore, type NavMesh, type NavmeshStore } from '../navmesh';
-import { setOwnDoors } from '../doors';
+import { setOwnDoors, setShutDoors } from '../doors';
 import { BATTLEGROUND_LAYOUTS, keepAt, THIDRANKI, type Keep, type PlayerRealm } from './keeps';
 import type { Point, Point3, Role } from './types';
 
@@ -609,9 +609,10 @@ export function applyDoors(layout: Pick<SiegeLayout, 'doors'> & Partial<Pick<Sie
 
 /** Register (or, when the keep isn't ours, forget) the keep's doors we go through by interacting: every unbroken one of ours. */
 export function useOwnDoors(layout: Pick<SiegeLayout, 'doors' | 'keep' | 'regionId'>, doors: DoorState): void {
-    setOwnDoors(layout.regionId, layout.keep, doors.ours
-        ? layout.doors.filter(d => !doors.broken.includes(d.id)).map(d => ({ doorId: d.id, at: d.at, heading: d.heading }))
-        : []);
+    const asDoor = (d: SiegeDoor) => ({ doorId: d.id, at: d.at, heading: d.heading });
+    setOwnDoors(layout.regionId, layout.keep, doors.ours ? layout.doors.filter(d => !doors.broken.includes(d.id)).map(asDoor) : []);
+    // The enemy's shut doors: no chase goes straight through one (actions.ts doorBetween), as no walk does on the mesh.
+    setShutDoors(layout.regionId, layout.keep, shutDoors(layout, doors).map(asDoor));
 }
 
 /** A target this far (3D) off the mesh at its spot stands where no walk ends (a merlon, a ledge): not reachable on foot. */

@@ -95,7 +95,7 @@ import {
 import { castRoom, mobRunInMs } from './mob-speed';
 import { EquipmentSlot, isWeapon, ObjectType } from './types';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
-import { DOOR_REACH, doorApproach, doorOnRoute, doorSide, dropOwnDoor, ownDoors, type OwnDoor } from './doors';
+import { DOOR_REACH, doorApproach, doorBetween, doorOnRoute, doorSide, dropOwnDoor, ownDoors, type OwnDoor } from './doors';
 import { groundTargetSnap } from './ground';
 import { lineOfSight, terrainGround } from './vision';
 import { isDelveOf, parseDelve } from './delve';
@@ -2339,6 +2339,9 @@ export class BotActions {
                     // On another layer (a wall-walk, a stair, a floor) only by the navmesh's found route, never straight up its side.
                     const way = layerRoute(p.regionId, p, t);
                     if (way === 'none') return failWith(`${name} is on another level with no way there (${Math.round(t.z - p.z)} up)`, 'out_of_reach');
+                    // Never straight through a keep door: ours opens only by interact, an enemy's is a wall until it breaks (doors.ts).
+                    const door = way === 'straight' ? doorBetween(p.regionId, p, t) : null;
+                    if (door) return failWith(`${name} is beyond the door ${door.doorId}`, 'out_of_reach');
                     lastMoveDest = { x: t.x, y: t.y, z: t.z };
                     lastMoveAt = now;
                     sent.move = true;

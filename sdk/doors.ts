@@ -30,6 +30,31 @@ export const DOOR_HALF_WIDTH = 160;
 export const DOOR_Z = 120;
 
 const registry = new Map<number, Map<string, OwnDoor[]>>();
+/** Doors that are walls to us (an enemy keep's, unbroken), by region and keep: no straight move goes through one. */
+const shut = new Map<number, Map<string, OwnDoor[]>>();
+
+/** The doors under `key` in `regionId` are shut to us now (an enemy keep's, unbroken). Empty clears. */
+export function setShutDoors(regionId: number, key: string, doors: readonly OwnDoor[]): void {
+    let byKey = shut.get(regionId);
+    if (!byKey) shut.set(regionId, byKey = new Map());
+    if (doors.length) byKey.set(key, doors.slice());
+    else byKey.delete(key);
+}
+
+/** Every door that is a wall to us in `regionId`. */
+export function shutDoorsIn(regionId: number): OwnDoor[] {
+    const byKey = shut.get(regionId);
+    return byKey ? [...byKey.values()].flat() : [];
+}
+
+/**
+ * A door the straight move from `from` to `to` would pass through: one of ours (a real client goes through it only by
+ * interacting, which a chase doesn't) or one shut to us. Null when none: the move is as good as before.
+ */
+export function doorBetween(regionId: number, from: Vec3, to: Vec3): OwnDoor | null {
+    const doors = [...ownDoors(regionId), ...shutDoorsIn(regionId)];
+    return doors.length ? doorOnRoute(from, [to], doors)?.door ?? null : null;
+}
 
 /** The doors under `key` (a keep's name) in `regionId` are ours now: every later walk in this process uses them. Empty clears. */
 export function setOwnDoors(regionId: number, key: string, doors: readonly OwnDoor[]): void {
@@ -59,6 +84,7 @@ export function dropOwnDoor(regionId: number, doorId: number): void {
 /** Forget them all (tests). */
 export function clearOwnDoors(): void {
     registry.clear();
+    shut.clear();
 }
 
 /** The door's front as a unit vector on the ground (Point2D.GetPointFromHeading: x - sin, y + cos). */

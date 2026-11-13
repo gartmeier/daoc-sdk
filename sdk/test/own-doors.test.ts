@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test, type Mock } from 'bun:test';
 import { BotActions, getNavmeshStore, type NavmeshStore } from '../actions';
-import { clearOwnDoors, doorApproach, doorFront, doorLanding, doorOnRoute, doorSide, ownDoors, setOwnDoors, type OwnDoor } from '../doors';
+import { clearOwnDoors, doorApproach, doorBetween, doorFront, doorLanding, doorOnRoute, doorSide, ownDoors, setOwnDoors, shutDoorsIn, type OwnDoor } from '../doors';
 import { setDefaultPathProvider, StraightLinePathProvider } from '../pathfinding';
 import { FASTE, useOwnDoors } from '../group/siege';
 import { makeObject } from './fixtures';
@@ -73,6 +73,22 @@ describe('the keep\'s doors are ours to use only while the keep is', () => {
         expect(ids).not.toContain(252000302);
         expect(ids).toHaveLength(5);
         expect(ownDoors(FASTE.regionId).find(d => d.doorId === 252000301)!.heading).toBe(1024);
+    });
+
+    test('an enemy keep: its unbroken doors are shut to us, none ours; a straight move through the gate meets it', () => {
+        useOwnDoors(FASTE, { ours: false, broken: [] });
+        expect(ownDoors(FASTE.regionId)).toEqual([]);
+        expect(shutDoorsIn(FASTE.regionId).map(d => d.doorId)).toContain(252000301);
+        expect(doorBetween(252, p(34435, 38275), p(34183, 38275))?.doorId).toBe(252000301);
+        expect(doorBetween(252, p(34600, 38275), p(34435, 38275))).toBeNull();
+        useOwnDoors(FASTE, { ours: false, broken: [252000301] });
+        expect(doorBetween(252, p(34435, 38275), p(34183, 38275))).toBeNull();
+    });
+
+    test('our keep: a straight move through our own gate meets it too (a chase does not interact)', () => {
+        useOwnDoors(FASTE, { ours: true, broken: [] });
+        expect(shutDoorsIn(FASTE.regionId)).toEqual([]);
+        expect(doorBetween(252, p(33930, 38275), p(34435, 38236))?.doorId).toBe(252000301);
     });
 
     test('lost: none', () => {
