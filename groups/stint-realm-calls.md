@@ -12,6 +12,63 @@ Both use only what that realm's bots see, with one director per realm.
 
 Read first: `CLAUDE.md`, `docs/thidranki-population-handover.md` ("Lessons that cost us rounds", "Scaling constraints"), and the night brief's "For the next stint", "Morning report" and the sections after the check run. The plan doc is [Living Thidranki](https://claude.ai/artifact/SehSwg1Qwnin3upWutksXB). Its open questions are still unanswered, and nothing here depends on them.
 
+## Handover for the next stint (R1, 2026-11-13 11:30): read this first
+
+The night in one line: 60 bots ran 12 h on one machine without a drop, and the director's help calls brought a friend 27 % of the time against 6 % without it. The Faste fell three times, but the frozen window failed its gate (1 change of hands of 2). Details: "Morning report" below; each session's section has its own findings.
+
+**State now.**
+- Nothing runs: field mode stopped at 10:31, all 60 clients quit with exit 0, and the gateway and the keep-awake script are stopped. The gameserver and DB stay up in Docker, at `starting_keep_level=1` (L28 guards, L33 lord).
+- The Faste is **Midgard's** (captured 09:22:36), keep level 1.
+- All 60 characters have `GainRP = 0` (Thidranki takes realm level < 10).
+- origin/main is at d6ab2be (the walls merge). The 4 commits after it are local only.
+- The wall occluders are built in `server/navmesh/*.occluders` (43 zones, gitignored). Every client started from now on answers line of sight with walls.
+
+**How to start (the night's commands).**
+```bash
+bun gateway/gateway.ts > groups/stint-gateway.log 2>&1        # background
+bun client/swarm.ts gawain morgana nimue tuck mordred galahad tristram merlin taliesin vivien oisin fionn brigid lugh ciaran cuchulainn niamh scathach diarmuid aine ragnar sigrid skadi gudrun hodur ulfgar bragi hrafna sigurd thorgrim lancelot dagonet agravaine morgause enid gildas percival gareth elaine blaise fergus cathbad etain amergin fiacra conall laoghaire deirdre emer manannan bjorn grimhild eir groa egil leif vidar ivar mimir freydis > groups/stint-swarm.log 2>&1   # background; ready at 60 "in game (phase playing)"
+bun groups/field.ts --mix=6,6,3,2,1,1 --director=on --raid-every=30 --muster-after=3 --swarm-log=groups/stint-swarm.log -- --skill=average > groups/stint-field.log 2>&1   # background
+```
+- Stop with `touch groups/field.stop` (each unit ends its fight), then quit the clients: `bun client/dev/swarm-check.ts <the 60> --seconds=0 --quit`. Never kill a client.
+- `groups/field.ts` is private (git-excluded) and has **no import.meta.main guard**: importing it starts field mode.
+- Flags: `--director=on|off|ab`, `--raid-every=<min>` (a realm that holds the Faste skips its turn), `--muster=<realm>` for a one-off muster, and `--mix.<realm>=` per realm. Every realm must play in a raid run: a realm left out stands idle and gets hunted.
+- Keep the PC awake (Windows standby stopped earlier runs): a SetThreadExecutionState loop, as in the memory note "Unattended runs stay awake".
+
+**Committed but never seen live (the next stint's first check).**
+
+| What | Commits | Look for |
+|---|---|---|
+| Walls block line of sight (matches the user's real client on 13 checks) | c1a48b7, cf0bba3 | fewer deaths to wall Wizards; our casts refused through walls (`not_visible`) |
+| The Faste's ranks by line of sight | fb9173e, a2ad09e | the gate taken by melee alone, then the courtyard set; the west wall skipped |
+| Shut enemy doors are walls on the navmesh | 8e0a8d7, d7bc5af | nobody inside before the gate breaks |
+| Melee only on what they can reach | e80c2bf, 2baafeb | no climb up the inside wall |
+| Only a fighter pulls the raid off the lord | 48fa6a4 | the lord phase holds |
+| The lord hold (the clock waits up to 10 min more) and the go waits while the defenders outnumber us | 59b44a0 | raids ending `captured` instead of `timeout` |
+| Warden: face after the side step; no heal retried each second | 8a0212a | Aine's styles landing |
+| Turret and servant drop their list near crowd control | 23cef5c | `Broke cc` per sortie |
+
+**Open, by owner (each in its section below).**
+- **Pathing (R5 with R3), `sdk/actions.ts`:** `walkToObject`'s straight last step onto the target's z (around line 1505) and the melee chase (around line 2297). A layer step only on a short found route.
+- **Own doors (R5):** `sendInteract` at our own keep's doors (the 100-150 jump through). Not needed until a unit walks inside a keep it holds.
+- **The client reading door state (0x99):** a client change and a swarm restart.
+- **The raid's waves (R3):** the whole-raid wait should count units still on their way, and squads shouldn't lead (hold short of the stage until a main group passes). Also: why hibernia-s4 stood 14 min on the approach.
+- **R2:** a field.ts restart closes an open muster as `broken`, because the units stop before the director. Stop the director first (in field.ts, R1's file).
+- **R7:**
+  - The Reaver's aura goes out of step with the server.
+  - The Minstrel plays one song at a time (`pulse_cancelled`).
+  - The Savage chases into the river (the shared `assist`).
+- **R8:** Etain's `petAttack:out_of_range` (focus 1287-1545 from the turret), and Morgause's Vitality Theft `no_response` and `walk:water`.
+- **The raids' real problem (R5's table):** enemy players killed most raiders, and each death walks 12000-20000 back. Ideas: rez in the raid, a forward rally, or holding the go while the defenders outnumber us (59b44a0 starts this).
+
+**The user's calls, still open.**
+- Pushing the 4 local commits.
+- The upstream OpenDAoC PRs in `docs/upstream/`.
+- The plan doc's questions, including whether 150 bots fits Thidranki (memory "Pending items").
+- The next gate: two changes of hands in a frozen window, kept or changed?
+
+**Sessions:** R2-R8 and "Keep walls block line of sight" are idle with nothing in progress. They can be archived. The notes folder has `R5-faste.md` and `LOS-walls.md`.
+
+
 ## Milestone for the night
 
 1. **60 bots in Thidranki.** Thirty new characters: the 9 classes with no kit yet, and 21 more of the healer, support and group classes. All at level 24 with XP off, trained, in template gear at the caps, bound at the portal keep.
