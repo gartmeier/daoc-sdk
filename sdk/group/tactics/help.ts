@@ -290,6 +290,10 @@ export interface RoamSettings {
     homeClear: number;
 }
 
+/** Closing on a friend that got no nearer (by 200) in this long gives up ... */
+export const ROAM_STALL_MS = 20_000;
+/** ... for this long. */
+const ROAM_STALL_REST_MS = 120_000;
 /** A unit this big is a main group (a squad is 1-3). */
 const MAIN_SIZE = 4;
 
@@ -299,7 +303,10 @@ export const ROAM_SETTINGS: RoamSettings = { far: 4500, near: 3000, minAlive: 3,
  * Where to walk to stay within reach of the nearest friendly unit (memory.realmUnits), or null while it is near enough or
  * there is none. Once farther than `far` we close up to `near` of it, then patrol on (memory.roamClose holds the state).
  */
-export function roamGoal(mem: Record<string, any>, centre: Point, home: Point | null, s: RoamSettings = ROAM_SETTINGS): { goal: Point; friend: UnitSpot; d: number } | null {
+export function roamGoal(mem: Record<string, any>, centre: Point, home: Point | null, s: RoamSettings = ROAM_SETTINGS, now = Date.now()): { goal: Point; friend: UnitSpot; d: number } | null {
+    // Gave up closing lately (no nearer for ROAM_STALL_MS): roam on (live 17:55: hibernia stood still 3500-3900 from hibernia-2's
+    // centre, pulled 15000 off by a member at our portal keep).
+    if ((mem.roamStallUntil ?? 0) > now) return null;
     const out = ((mem.realmUnits ?? []) as UnitSpot[]).filter(u => u.alive >= s.minAlive && (!home || dist(u, home) > s.homeClear));
     // A main group first: a squad roams the edges and runs off (live 13:24, a group closed on midgard-s1 and lost it every few
     // seconds); a trio only when no main group is out.
@@ -308,7 +315,11 @@ export function roamGoal(mem: Record<string, any>, centre: Point, home: Point | 
     if (!friends.length) { mem.roamClose = undefined; return null; }
     const friend = friends.reduce((a, b) => (dist(a, centre) <= dist(b, centre) ? a : b));
     const d = dist(friend, centre);
-    if (d <= s.near || (!mem.roamClose && d <= s.far)) { mem.roamClose = undefined; return null; }
+    if (d <= s.near || (!mem.roamClose && d <= s.far)) { mem.roamClose = undefined; mem.roamBest = undefined; return null; }
+    // Getting no nearer: close enough for now.
+    const best: { unit: string; d: number; at: number } | undefined = mem.roamBest;
+    if (!best || best.unit !== friend.unit || d < best.d - 200) mem.roamBest = { unit: friend.unit, d, at: now };
+    else if (now - best.at >= ROAM_STALL_MS) { mem.roamClose = undefined; mem.roamBest = undefined; mem.roamStallUntil = now + ROAM_STALL_REST_MS; return null; }
     mem.roamClose = friend.unit;
     const k = (d - s.near) / d;
     return { goal: { x: Math.round(centre.x + (friend.x - centre.x) * k), y: Math.round(centre.y + (friend.y - centre.y) * k) }, friend, d };

@@ -203,8 +203,11 @@ export class RealmBoard {
         }
         this.losses.set(unit, lost);
         const living = members.filter(m => !m.isDead);
-        const centre = living.length
-            ? { x: living.reduce((s, m) => s + m.x, 0) / living.length, y: living.reduce((s, m) => s + m.y, 0) / living.length, z: living.reduce((s, m) => s + m.z, 0) / living.length }
+        // The main body's centre: the living within BODY_RADIUS of the member with most others that near, not all of them (live 17:55:
+        // hibernia-2's centre was pulled 15000 off by a member walking back from our portal keep).
+        const body = mainBodyOf(living);
+        const centre = body.length
+            ? { x: body.reduce((s, m) => s + m.x, 0) / body.length, y: body.reduce((s, m) => s + m.y, 0) / body.length, z: body.reduce((s, m) => s + m.z, 0) / body.length }
             : null;
         const phase = run ? run.orders.phase : null;
         const reason = run ? run.orders.reason ?? '' : '';
@@ -226,6 +229,20 @@ export class RealmBoard {
             totals,
         };
     }
+}
+
+/** Members within this of each other are one body. */
+export const BODY_RADIUS = 2500;
+
+/** The living about the member with most others within BODY_RADIUS: a group's main body, its stragglers left out. */
+export function mainBodyOf<T extends { x: number; y: number }>(living: readonly T[]): T[] {
+    if (living.length <= 2) return [...living];
+    let best: T[] = [];
+    for (const m of living) {
+        const near = living.filter(o => Math.hypot(o.x - m.x, o.y - m.y) <= BODY_RADIUS);
+        if (near.length > best.length) best = near;
+    }
+    return best;
 }
 
 /** 2D distance. */

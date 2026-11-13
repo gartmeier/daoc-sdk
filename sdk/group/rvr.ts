@@ -1101,7 +1101,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     }
     // Within reach of a friend (help.ts roamGoal): farther than 4500 from the nearest friendly unit, close up to 3000 of it first,
     // so a call finds help near. Stint 2026-11-13, S3: help stood 6000-9000 away and most fights ended before it came.
-    const roam = s.roam === false ? null : roamGoal(mem, centre, homeAt);
+    const roam = s.roam === false ? null : roamGoal(mem, centre, homeAt, undefined, now);
     // Already on our way to a roam place near that friend (tactics/roam.ts): no need to close on it first.
     const placeNearFriend = !!roam && !!mem.roam?.place && dist(mem.roam.place, roam.friend) <= FRIEND_NEAR;
     if (roam && !placeNearFriend && clearOf(roam.goal, keeps)) {

@@ -1496,3 +1496,15 @@ describe('decideRvr: buffed before leaving home, never a fight with our own real
         expect(decideRvr(ctx(picture(team(), [pet]))).focus ?? null).toBeNull();
     });
 });
+
+describe('decideRvr: closing on a friend gives up when it gets no nearer (S3, live 17:55: hibernia stood still 3500-3900 out)', () => {
+    test('no nearer by 200 in 20 s: roam on, and no closing for 2 min', () => {
+        const friend = { unit: 'hibernia-2', x: 20_000, y: 10_000, z: 0, alive: 6, size: 6, fight: false, phase: 'travel' };
+        const memory: Record<string, any> = { realmUnits: [friend] };
+        const at = (now: number) => decideRvr({ ...ctx(picture(team(), [], {}, now), { memory }), now });
+        expect(at(0).reason).toContain('roam near');
+        expect(at(10_000).reason).toContain('roam near');
+        expect(at(21_000).reason).not.toContain('roam near');
+        expect(at(60_000).reason).not.toContain('roam near');
+    });
+});

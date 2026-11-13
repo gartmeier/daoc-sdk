@@ -97,3 +97,10 @@ describe('RealmBoard', () => {
         expect(board.update({ a: frame({ id: 'a', runId: 'other', members: [{ name: 'A', x: 0, y: 0 }] }) }, 2000).units[0]!.totals).toBeNull();
     });
 });
+
+test('mainBodyOf: the members about the one with most others near; a straggler 15000 off is left out (live 17:55)', async () => {
+    const { mainBodyOf } = await import('./realm-board');
+    const ms = [{ x: 31_000, y: 28_000 }, { x: 31_300, y: 28_100 }, { x: 30_900, y: 28_400 }, { x: 17_500, y: 18_300 }];
+    expect(mainBodyOf(ms)).toHaveLength(3);
+    expect(mainBodyOf(ms.slice(2))).toHaveLength(2);
+});
