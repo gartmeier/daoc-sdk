@@ -7,7 +7,7 @@
 //
 // Kept apart from lifecycle.ts so the units' processes load only this (fs, keeps, behaviors), never the line-up code.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { formationSlot, type TacticsSettings } from './behaviors';
 import { homeOf, type PlayerRealm } from './keeps';
@@ -52,6 +52,8 @@ export function wavePath(realm: string, dir = WAVE_DIR): string {
 export function writeWave(w: RealmWave, dir = WAVE_DIR): void {
     const path = wavePath(w.realm, dir);
     mkdirSync(dirname(path), { recursive: true });
+    // A directory in its place blocked an older writer (13:36 on 11-13, a shadow run's waves): clear it.
+    if (existsSync(path) && statSync(path).isDirectory()) rmSync(path, { recursive: true, force: true });
     const tmp = `${path}.${process.pid}.tmp`;
     writeFileSync(tmp, JSON.stringify(w));
     renameSync(tmp, path);

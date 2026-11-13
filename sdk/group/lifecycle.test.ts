@@ -208,6 +208,17 @@ describe('sessions', () => {
         expect(lives[0]!.state).toBe('leaving');
     });
 
+    test('pinned away is left alone: not walked back in, not logged out, not counted', () => {
+        const now = at(20);
+        const lives = initialLives(HIB.slice(0, 2), 'hibernia', new Set(['amergin', 'fiacra']), now - 200 * MIN, seeded(3));
+        for (const l of lives) l.until = now - MIN;
+        const away = new Set(['amergin']);
+        const r = stepRealm(lives, { target: 0, inGame: new Set(['amergin', 'fiacra']), outside: new Set(['amergin']), held: new Set<string>(), needs: [] as string[][], pinned: { away, stay: new Set<string>() }, lastOut: 0, lastIn: 0 }, now, seeded(3));
+        expect(lives[0]!.state).toBe('online');
+        expect(r.actions.some(a => a.bot === 'amergin')).toBe(false);
+        expect(r.events.some(e => e.bot === 'amergin')).toBe(false);
+    });
+
     test('a leaving bot near a keep waits to log out', () => {
         const now = at(20);
         const lives = initialLives(HIB.slice(0, 1), 'hibernia', new Set(['amergin']), now, seeded(3));

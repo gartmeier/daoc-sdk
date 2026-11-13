@@ -86,7 +86,8 @@ describe('the role lists', () => {
     test('casters sit in a lull last before rest; tank and melee never', () => {
         for (const lists of [rvrBehaviors(), packBehaviors()]) {
             for (const role of ['healer', 'support', 'nuker'] as const) {
-                const names = lists[role].map(b => b.name);
+                // loiter (waves.ts) idles at the keep in a break, after everything: it never runs in a fight.
+                const names = lists[role].map(b => b.name).filter(n => n !== 'loiter');
                 expect(names.at(-2)).toBe('fightSit');
                 expect(names.at(-1)).toBe('rest');
             }

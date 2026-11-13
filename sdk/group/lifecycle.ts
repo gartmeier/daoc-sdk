@@ -26,8 +26,9 @@
 // groups/lifecycle/state.json (a field.ts restart picks it up), and logs to groups/lifecycle/log.jsonl and samples.jsonl.
 //
 // Hands-off overrides, re-read every step: groups/lifecycle/pinned.json { "away": [bots], "stay": [bots] }: `away` are
-// never logged in nor picked (the user's Niamh), `stay` are never logged out. groups/lifecycle/off: the life cycle plans
-// and logs but does nothing (shadow).
+// left entirely alone (never logged in or out, never walked back in, not counted, not picked: the user's Niamh, a bot on
+// a respec trip), `stay` are never logged out. Shadow (options.shadow, or groups/lifecycle/off) plans and logs but
+// changes nothing in the world: no log-ins or log-outs, no walks back in, and no wave file (the units play as before).
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -306,6 +307,7 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
     // 1. What is in game, and where.
     const enter = (l: Life, why: string) => { l.askedAt = now; actions.push({ kind: 'enter', bot: l.bot, realm: l.realm, why }); };
     for (const l of lives) {
+        if (o.pinned.away.has(l.bot)) continue;
         const inGame = o.inGame.has(l.bot);
         const outside = inGame && !!o.outside?.has(l.bot);
         if (l.state === 'joining' && outside) { set(l, 'entering', now, 'logged in outside the battleground'); ev('entering', l, 'logged in outside Thidranki: back in first'); enter(l, l.why); }
@@ -317,13 +319,13 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
         else if (l.state === 'joining' && inGame) { set(l, 'online', now + between(rand, s.session), 'session'); l.sessions++; ev('joined', l, `session of ${Math.round((l.until - now) / 60_000)} min`); }
         else if (l.state === 'joining' && now - l.since > s.joinTimeoutMs) { set(l, 'offline', now + 2 * 60_000, 'log-in not seen'); ev('lost', l, 'asked to log in, not in game after the timeout'); }
         else if (l.state === 'leaving' && !inGame) { set(l, 'offline', now + between(rand, s.rest), 'rest'); ev('left', l, `back in ${Math.round((l.until - now) / 60_000)} min at the earliest`); }
-        else if (l.state === 'offline' && inGame && now - l.since > 3 * 60_000 && !o.pinned.away.has(l.bot)) {
+        else if (l.state === 'offline' && inGame && now - l.since > 3 * 60_000) {
             // In game though we logged it out (the supervisor brought it back, or someone logged it in): it plays.
             set(l, 'online', now + between(rand, s.session), 'adopted'); l.sessions++; ev('adopt', l, 'in game while offline by us: plays a session');
         }
     }
 
-    const playing = () => lives.filter(l => l.state === 'online' || l.state === 'joining' || l.state === 'entering');
+    const playing = () => lives.filter(l => !o.pinned.away.has(l.bot) && (l.state === 'online' || l.state === 'joining' || l.state === 'entering'));
     const mains = mainsFor(Math.max(o.target, o.needsAt ?? 0));
     const needs = Array.from({ length: mains }, () => o.needs).flat();
     /** Would the realm's needs stay as covered without `l`? */
@@ -334,7 +336,7 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
 
     // 2. Sessions over: leave, unless the floor or a needed class holds them, and nobody rested can take over.
     let outThisStep = now - lastOut < s.stepMs;
-    for (const l of lives.filter(x => x.state === 'online' && now >= x.until && !o.pinned.stay.has(x.bot)).sort((a, b) => a.until - b.until)) {
+    for (const l of lives.filter(x => x.state === 'online' && now >= x.until && !o.pinned.stay.has(x.bot) && !o.pinned.away.has(x.bot)).sort((a, b) => a.until - b.until)) {
         if (outThisStep) break;
         const n = playing().length;
         const replace = lives.filter(rested).length > 0;
@@ -354,7 +356,7 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
 
     // 3. Over the target: one leaves early (played longest past earlyAfterMs, its class not needed).
     if (!outThisStep && playing().length > o.target) {
-        const l = lives.filter(x => x.state === 'online' && !o.pinned.stay.has(x.bot) && now - x.since >= s.earlyAfterMs && !breaks(x)).sort((a, b) => a.until - b.until)[0];
+        const l = lives.filter(x => x.state === 'online' && !o.pinned.stay.has(x.bot) && !o.pinned.away.has(x.bot) && now - x.since >= s.earlyAfterMs && !breaks(x)).sort((a, b) => a.until - b.until)[0];
         if (l) { const played = Math.round((now - l.since) / 60_000); set(l, 'leaving', now, 'early'); ev('leave', l, `early after ${played} min: ${playing().length + 1} playing for a target of ${o.target}`); lastOut = now; outThisStep = true; }
     }
 
@@ -374,7 +376,7 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
 
     // 5. Leaving bots no unit holds, standing where a log-in later is safe: log out (again, if the last ask didn't take).
     for (const l of lives) {
-        if (l.state !== 'leaving' || o.held.has(l.bot) || !o.inGame.has(l.bot)) continue;
+        if (l.state !== 'leaving' || o.held.has(l.bot) || !o.inGame.has(l.bot) || o.pinned.away.has(l.bot)) continue;
         if (o.unsafe?.has(l.bot)) {
             if (!l.waitedAt || now - l.waitedAt >= s.leaveRetryMs) { l.waitedAt = now; ev('wait', l, 'near a keep: a log-in there would land at the bind, waits to log out'); }
             continue;
@@ -755,7 +757,7 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
                 const w = stepWave(waves[r.realm]!, board, { realm: r.realm, musterOpen: open, now }, rand, s.wave);
                 if (w.id !== waves[r.realm]!.id) { record({ kind: 'wave', realm: r.realm, phase: w.phase, why: w.why, toward: w.toward, until: w.until }); log(`lifecycle ${r.realm}: wave ${w.id} ${w.phase} (${w.why})${w.toward ? ` toward (${w.toward.x}, ${w.toward.y})` : ''}`); }
                 waves[r.realm] = w;
-                try { writeWave(waveFile(r.realm, w, now), waveDir); } catch (e) { log(`lifecycle ${r.realm}: wave file: ${(e as Error).message}`); }
+                if (!shadow) try { writeWave(waveFile(r.realm, w, now), waveDir); } catch (e) { log(`lifecycle ${r.realm}: wave file: ${(e as Error).message}`); }
 
                 // Sessions.
                 const humansIn = humans[r.realm] ?? 0;
