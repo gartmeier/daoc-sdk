@@ -31,8 +31,10 @@ import type { AnswerState, RealmCall } from './director';
 import { roleOfClass, type FoeRole } from './class-read';
 import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, type PlayerRealm } from './keeps';
 import { decideRvr, legAnchor, mainBody, realmOfGroup, RVR_SETTINGS, runWay, rvrRoaming, spotAlong, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { raidPlan } from './siege';
 import { isLevel } from './slope';
 import { defineStrategy, type CoordinatorContext, type GroupStrategy } from './strategy';
+import { raidCall, withRaid } from './tactics/raid';
 import { aggroZones, type Danger } from './terrain';
 import { isDry, staysDry } from './water';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -552,12 +554,24 @@ export interface SquadOptions {
     answer?: (callId: string, state: AnswerState, why: string) => void;
 }
 
+/** The muster's target this near the raid plan's lord spot is that plan's keep (siege.ts raidPlan); farther, no plan here. */
+const RAID_TARGET = 3000;
+
 /** The squad's decide around `inner` (decideRvr by default, or a realm's own wrapper of it). */
 export function squadDecide(inner: (ctx: CoordinatorContext<any>) => OrdersUpdate = decideRvr, opts: SquadOptions = {}): (ctx: CoordinatorContext<SquadSettings>) => OrdersUpdate {
     return ctx => decideSquad(ctx, inner, opts);
 }
 
 export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx: CoordinatorContext<any>) => OrdersUpdate = decideRvr, opts: SquadOptions = {}): OrdersUpdate {
+    const u = squadTick(ctx, inner, opts);
+    // The inner decide's own answers (noteArrival at a raid): the squad tells the director itself (opts.answer).
+    ctx.memory.helpOut = undefined;
+    // The raid's patch (Orders.settings) ends with the go, as rvr.ts realmCalls ends it: guards off the picture, the keep's circle back.
+    if (!raidCall(ctx.memory) && ctx.orders.settings?.raid && u.settings === undefined) return { ...u, settings: null };
+    return u;
+}
+
+function squadTick(ctx: CoordinatorContext<SquadSettings>, inner: (ctx: CoordinatorContext<any>) => OrdersUpdate, opts: SquadOptions): OrdersUpdate {
     const { picture: p0, orders: o, memory: mem, now } = ctx;
     // A shade's servant is that enemy player (withServants): for the counts, the focus and the inner decide alike.
     const p = { ...p0, contacts: withServants(p0.contacts) };
@@ -852,6 +866,29 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         }
     }
     if (call && sq.call && (engaged || hit) && dist(centre, call.at) <= CALL_FIGHT) sq.call.lastFight = now;
+    // ── The raid at the muster's go (tactics/raid.ts): played as the main groups play it, by the inner decide (decideRvr
+    // raidNow and raidStep: over our own bridge to the stage, rank by rank, the doors for the tanks and melee), never straight
+    // at the lord's spot (callGoal). The Faste, attempt 1 at 02:00 on 11-13: 8 Hibernians dead to the guards in 51 s that
+    // way. A go with no raid plan for its keep here is left. Enemy players stay ours to judge (flee, avoid) as ever.
+    const goNow = !!call && !!sq.call && call.kind === 'muster' && call.stage === 'go';
+    const plan = goNow && realm !== 'none' ? raidPlan(realm as PlayerRealm) : null;
+    const raiding = !!plan && plan.regionId === regionId && (!call!.target || dist(call!.target, plan.target) <= RAID_TARGET);
+    if (goNow && !raiding) {
+        say(call!.id, 'left', 'no raid plan for its keep here');
+        sqCallsSeen[call!.id] = now + CALL_AGAIN_MS;
+        sq.call = undefined;
+        call = null;
+    }
+    if (raiding) {
+        // What decideRvr's raidNow reads (tactics/help.ts answering): the muster we answer, and it as the open calls.
+        if (mem.help?.id !== call!.id) mem.help = { id: call!.id, kind: 'muster', state: 'coming', since: now };
+        mem.realmCalls = [call];
+        // Our own legs (flee, avoid, close) into the raid's keep circle too, as the inner's.
+        trip.avoid = [...keepDangers(regionId, realm, { ...s, raid: plan!.keep }), ...campBerth(regionId, tripLevel)];
+    } else if (mem.help || mem.realmCalls) {
+        mem.help = undefined;
+        mem.realmCalls = undefined;
+    }
     /** Enemies in the call's fight: not kept clear of, and shown to the inner decide. */
     const inCallFight = (c: Point) => !!call && call.kind === 'help' && dist(c, call.at) <= CALL_FIGHT;
     // Answering a help call: keeps cleared as a group does (KEEP_CLEARANCE), so a fight by the meeting point is reachable.
@@ -911,14 +948,15 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
         const inRegionAlive = alive.filter(m => m.regionId === regionId);
         const spread = inRegionAlive.reduce((most, a) => Math.max(most, ...inRegionAlive.map(b => dist(a, b))), 0);
         sq.gathering = spread > s.gatherRadius || (!!sq.gathering && spread > TOGETHER);
-        if (sq.gathering && inRegionAlive.length > 1) {
+        // Inside a raid (staged) the ranged and the melee stand apart by its orders.
+        if (sq.gathering && inRegionAlive.length > 1 && !(raiding && mem.raid?.staged)) {
             const mid = centroid(inRegionAlive);
             const at = { x: Math.round(mid.x), y: Math.round(mid.y), z: zAt(mid) };
             const names = inRegionAlive.map(m => m.name).join(' and ');
             return { phase: 'gather', focus: null, puller: null, cc: [], retreatTo: null, waiting: [], anchor: at, facing: null, objective: `regroup: ${names}`, reason: `gather: ${names} ${Math.round(spread)} apart, together first (within ${TOGETHER})` };
         }
-        // On the way to a call; a muster's rally is held until it says go.
-        if (call && sq.call) {
+        // On the way to a call; a muster's rally is held until it says go (then the raid, above, through the inner decide).
+        if (call && sq.call && !raiding) {
             const d = dist(centre, call.at);
             const what = call.kind === 'muster' ? (call.stage === 'go' ? 'the raid' : 'the rally') : `${call.from}'s fight (${call.why}, ${call.ours} vs ${call.foes})`;
             if (d > CALL_ARRIVE || (call.kind === 'muster' && call.stage !== 'go')) {
@@ -1042,12 +1080,13 @@ export function decideSquad(ctx: CoordinatorContext<SquadSettings>, inner: (ctx:
 }
 
 /** The shared small-squad strategy: rvrRoaming's behaviours, with the squad's decide and settings. */
-export const squadRoaming: GroupStrategy<SquadSettings> = defineStrategy(rvrRoaming as unknown as GroupStrategy<SquadSettings>, {
+// The tanks' and melee's breakDoor for a raid at the muster's go (tactics/raid.ts withRaid), as the main groups have it.
+export const squadRoaming: GroupStrategy<SquadSettings> = withRaid(defineStrategy(rvrRoaming as unknown as GroupStrategy<SquadSettings>, {
     name: 'squad-roam',
     description: 'Small squads (1-3): roam the edges (roads to the enemy portal keeps, the banks where realms meet), take only fights the odds favour, run toward friends or our portal keep from those that turn.',
     settings: SQUAD_SETTINGS as any,
     decide: squadDecide(),
-});
+}));
 
 /** squadRoaming with a decide of its own (friends to run to, or a realm's inner decide). */
 export function squadStrategy(o: SquadOptions & { inner?: (ctx: CoordinatorContext<any>) => OrdersUpdate; name?: string } = {}): GroupStrategy<SquadSettings> {

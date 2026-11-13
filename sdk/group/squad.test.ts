@@ -9,6 +9,7 @@ import { mergeSettings, type CoordinatorContext } from './strategy';
 import type { Capabilities, Contact, GroupPicture, MemberReport, Orders, Point, Role } from './types';
 import { isDry } from './water';
 import { boards, rng, type RosterMember } from './tactics/compare';
+import { FASTE, raidPlan, routeFrom } from './siege';
 import { friendsIn, squadVariant } from './squad-run';
 
 // Region 9999 has no spawns and no battleground: no aggro zones, keeps or home get in the way.
@@ -818,7 +819,7 @@ describe('decideSquad: help calls (director.ts)', () => {
         expect(said.at(-1)![1]).toBe('left');
     });
 
-    test('a muster: to the rally however far, held there until go, then on to the target', () => {
+    test('a muster: to the rally however far, held there until go; a go with no raid plan for its keep here is left', () => {
         const said: Said[] = [];
         const memory: Record<string, any> = {};
         const rally = { x: BASE.x + 12_000, y: BASE.y, z: 0 }, target = { x: BASE.x + 16_000, y: BASE.y, z: 0 };
@@ -826,8 +827,47 @@ describe('decideSquad: help calls (director.ts)', () => {
         expect(run(picture(squad(['Merc']), []), [muster()], said, { memory }).reason).toStartWith('call: to the rally, 12000 away');
         const there = squad(['Merc'], {}, { x: rally.x + 200, y: rally.y });
         expect(run(picture(there, []), [muster()], said, { memory }).reason).toStartWith('call: at the rally, waiting for go');
-        expect(run(picture(there, []), [muster({ stage: 'go', at: target })], said, { memory }).reason).toStartWith('call: to the raid, 3800 away');
-        expect(said.map(x => x[1])).toEqual(['coming', 'arrived']);
+        // Not straight at the lord's spot through every guard (the Faste, attempt 1 at 02:00 on 11-13).
+        expect(run(picture(there, []), [muster({ stage: 'go', at: target })], said, { memory }).reason).not.toStartWith('call:');
+        expect(said.map(x => x[1])).toEqual(['coming', 'arrived', 'left']);
+        expect(memory.squad.call).toBeUndefined();
+    });
+
+    describe("the raid at the muster's go: as the main groups play it (tactics/raid.ts)", () => {
+        const plan = raidPlan('hibernia')!;
+        const TH = plan.regionId;
+        /** A Hibernian duo round `at` in Thidranki. */
+        const duo = (at: Point, over: Partial<MemberReport> = {}) => [
+            report('Hero', { role: 'tank', className: 'Hero', capabilities: caps(), objectId: 1, regionId: TH, x: at.x, y: at.y, z: 3200, level: 24, ...over }),
+            report('Druid', { role: 'healer', className: 'Druid', capabilities: caps({ heal: true }), objectId: 2, regionId: TH, x: at.x - 100, y: at.y, z: 3200, level: 24, ...over }),
+        ];
+        const muster = (over: Partial<RealmCall> = {}) => call({ id: 'hibernia-3', kind: 'muster', from: 'director', why: 'raid', at: plan.rally, stage: 'rally', target: plan.target, foes: 0, ours: 0, want: 0, ...over });
+
+        test('at go: over our own bridge to the next waypoint with the raid patch, not straight at the lord; the patch ends with the go', () => {
+            const said: Said[] = [];
+            const memory: Record<string, any> = {};
+            const there = duo(plan.rally);
+            expect(run(picture(there, []), [muster()], said, { memory }).reason).toStartWith('call: at the rally, waiting for go');
+            const d = run(picture(there, []), [muster({ stage: 'go', at: plan.target })], said, { memory });
+            expect(d.phase).toBe('travel');
+            expect(d.reason).toContain('raid approach');
+            const next = routeFrom(plan, { x: plan.rally.x - 50, y: plan.rally.y })[0]!;
+            expect(d.anchor).toMatchObject({ x: next.x, y: next.y });
+            expect(Math.hypot(d.anchor!.x - plan.target.x, d.anchor!.y - plan.target.y)).toBeGreaterThan(1500);
+            expect((d.settings as any)?.raid).toBe(FASTE.keep);
+            expect(said.map(x => x[1])).toEqual(['coming', 'arrived']);
+            // The muster closed: back to the roam, the patch off (guards off the picture, the keep's circle back).
+            const e = run(picture(there, []), [], said, { memory, orders: { settings: { raid: FASTE.keep, raidDoor: null } } });
+            expect(e.settings).toBeNull();
+            expect(e.reason ?? '').not.toContain('raid');
+            expect(memory.help).toBeUndefined();
+        });
+
+        test("the tanks' and melee's lists carry breakDoor, as the main groups' do", () => {
+            expect(squadRoaming.behaviors.tank.map(b => b.name)).toContain('breakDoor');
+            expect(squadRoaming.behaviors.melee.map(b => b.name)).toContain('breakDoor');
+            expect(squadRoaming.behaviors.healer.map(b => b.name)).not.toContain('breakDoor');
+        });
     });
 
     test('off (squad.calls false): no call is answered', () => {
