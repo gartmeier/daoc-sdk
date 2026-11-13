@@ -583,6 +583,12 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // A door broken is the raid past every rank before it: a guard of those respawning at its post (5-25 min) doesn't send the
     // raid back (live 14:33, hibernia back to rank 1 with the gate down). One that comes at us is still the focus (onUs, offPost).
     const passed = Math.max(0, ...plan.targets.filter(t => t.kind === 'door' && t.doorId !== undefined && broken.has(t.doorId)).map(t => t.rank));
+    // A wall caster or a guard inside the building not in view counts as gone only once one of us stands in the courtyard: from outside
+    // the gate they are out of view anyway. Live 00:47, albion-1 right after a server restart: both doors broken by the server's door
+    // state (0x99) passed every fighter's rank, the wall casters were back and not yet in view, and camelot read the lord phase at
+    // the stage; the muster's rush sent every unit into them (12 dead in 4 min).
+    const gateBehind = (SIEGE_LAYOUTS[plan.keep]?.doors ?? []).find(d => d.kind === 'gate')?.behind;
+    const inYard = !gateBehind || view.members.some(m => m.alive && behindDoor(gateBehind, m)) || (view.raid ?? []).some(m => m.alive && behindDoor(gateBehind, m));
     const isDone = (t: SiegeTarget): boolean => {
         // A broken door passes the ranks before it for their fighters (they respawn at their posts behind us), never for a static
         // guard still at its post: live 22:33, the building's door left broken by an earlier raid counted rank 3's wall casters done,
@@ -612,7 +618,12 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const doorSteps = plan.targets.filter(t => t.kind === 'door');
     // ... and no wall caster that sees the courtyard left: the wait before the rush (S3's "everyone OK") is where the body stands,
     // in the courtyard, and live 22:33 albion-149 skipped rank 3 for the rush and lost Elaine there while it waited.
-    const wallsDown = plan.targets.filter(t => t.kind === 'caster' && !t.optional).every(t => isDone(t));
+    // isDone's "not in view, so gone" for a wall caster or a guard inside the building holds only from the courtyard (inYard): strict
+    // for the walls before the rush, and for whether the ranks are all done (below). Steps still take the loose reading, so a wall
+    // caster in view is worked while the others are out of it.
+    const strictDone = (t: SiegeTarget): boolean => isDone(t) && (inYard || t.kind === 'door' || done.has(t.label) || !!t.optional
+        || (t.rank < passed && t.kind === 'fighter') || !(t.kind === 'caster' || t.rank >= 4));
+    const wallsDown = plan.targets.filter(t => t.kind === 'caster' && !t.optional).every(t => strictDone(t));
     // One of us already by the lord (the rush under way): a wall caster back at its post (guards respawn 5-25 min) doesn't call the
     // raid back to its rank. Live 21:51, the user in hibernia's raid: Fionn alone on the roof with the lord at 67 %, the ranged sent
     // back out of sight for wall-e-s ("everyone outside faste again instead of pushing"). It fights them from where it stands.
@@ -622,7 +633,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         && [...living, ...(view.raid ?? []).filter(m => m.alive)].some(m => Math.hypot(m.x - lordSeen.x, m.y - lordSeen.y, m.z - lordSeen.z) <= LORD_BESIDE);
     const doorsAll = doorSteps.length > 0 && doorSteps.every(t => t.doorId !== undefined && broken.has(t.doorId));
     const rush = !!view.rush || (doorsAll && (wallsDown || besideLord));
-    const open = atLord || rush ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
+    const loose = atLord || rush ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
+    // Every rank done only by the strict reading: from outside the gate an unseen wall caster still stands (live 00:47, albion-1).
+    const open = loose.length || atLord || rush ? loose : plan.targets.filter(t => t.kind !== 'lord' && !strictDone(t));
     const rank = open.length ? Math.min(...open.map(t => t.rank)) : null;
     const inRank = open.filter(t => t.rank === rank);
     // A guard behind a door still shut to us (the building's floor-3 fighter behind its door) is no step for either half: nobody gets

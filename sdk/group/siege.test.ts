@@ -348,6 +348,11 @@ describe('raidOrders', () => {
         const home = at({ x: 19000, y: 18700, z: 3000 }, 4).map(m => ({ ...m, id: m.id + 300 }));
         expect(raidOrders(plan, view({ members: [...stray, ...home], seen: hurt, staged: true, broken: [252000301, 252000302] })).phase).toBe('lord');
         expect(raidOrders(plan, view({ members: home, seen: hurt, staged: true, broken: [252000301, 252000302] })).phase).toBe('approach');
+        // Both doors broken (0x99) but the body still at the stage, the wall casters out of view: no rush. The walls are judged from the
+        // courtyard (live 00:47, albion-1 after a server restart: the rush from the stage into the wall casters).
+        const atStage = at({ x: 34700, y: 38275, z: 3620 }, 6).map(m => ({ ...m, id: m.id + 400 }));
+        const noWalls = garrison('albion', labelsUpTo(2));
+        expect(raidOrders(plan, view({ members: atStage, seen: noWalls, staged: true, broken: [252000301, 252000302] })).phase).not.toBe('lord');
         // The muster's rush (S3's RealmCall.rush): every unit up to the lord, whatever its own picture counts open (the gate shut to it,
         // the whole garrison back); ranged and melee on him, from the roof.
         const rushed = raidOrders(plan, view({ members: squad, seen: garrison(), staged: true, rush: true }));
