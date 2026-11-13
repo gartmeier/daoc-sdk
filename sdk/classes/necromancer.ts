@@ -16,6 +16,7 @@ import { dist } from '../group/battleground';
 import type { Character } from '../group/character';
 import type { Behavior, MemberContext } from '../group/member';
 import { onMap } from '../group/terrain';
+import { petOffCc } from './pet-cc';
 import type { Point } from '../group/types';
 import { focusToHit, hostileNear, HARM_TYPES, SUMMON_CLEAR_RADIUS, SUMMON_MAP_MARGIN, summonClear, through, waiting, type Through } from './summoner';
 
@@ -298,10 +299,22 @@ export const servantBuffs = (): Behavior<TacticsSettings> => ({
     },
 });
 
+/** A shade's servant attacks only a target within this of its owner (GamePlayer.CommandNpcAttack). */
+const ORDER_OWNER_REACH = 2000;
+
+/**
+ * The servant off crowd control (pet-cc.ts): servantFight orders only the focus, and the servant took its next target off its own list
+ * after a kill: 2 mezzes broken in 7 sorties of the frozen window (a Celt, an Elf). A wipe for crowd control near waits out its 3 s cast half.
+ */
+export const servantOffCc = () => petOffCc({
+    name: 'servantOffCc', reach: 1500, focusReach: Infinity, ownerReach: ORDER_OWNER_REACH,
+    busy: ctx => waiting(ctx.memory, 'servantCastUntil', Date.now()), when: ctx => isShade(ctx) && !ctx.bot.isDead(),
+});
+
 export function necromancer({ saveBelow = 0, aoe = false }: NecromancerOptions = {}): Character {
     return {
         role: 'nuker',
-        urgent: [servantLeash(), keepTether(), fallBack(), raiseServant()],
+        urgent: [servantLeash(), servantOffCc(), keepTether(), fallBack(), raiseServant()],
         react: [servantHeal()],
         fight: [servantFight({ saveBelow, aoe })],
         chores: [servantBuffs()],

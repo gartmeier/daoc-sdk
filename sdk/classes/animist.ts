@@ -9,8 +9,8 @@
 // The rest is the nuker's: assist's lifedrain, giving ground under a melee (theurgist.ts), Quickcast under fire.
 // learnings/classes/animist.md has the runs.
 
-import { ccHolds, claimedBy, foeInView, hammeredBy, stopSwinging, type TacticsSettings } from '../group/behaviors';
-import type { Contact } from '../group/types';
+import { ccHolds, foeInView, hammeredBy, stopSwinging, type TacticsSettings } from '../group/behaviors';
+import { ccOnIt, petOffCc } from './pet-cc';
 import { dist } from '../group/battleground';
 import type { Character } from '../group/character';
 import type { Behavior, MemberContext } from '../group/member';
@@ -18,6 +18,8 @@ import type { Point } from '../group/types';
 import { nukerFight, quickcastUnderFire } from './cabalist';
 import { focusToHit, hurtsOne, SUMMON_MAP_MARGIN, through, waiting, type Through } from './summoner';
 import { giveGround } from './theurgist';
+
+export { ccOnIt } from './pet-cc';
 import { onMap } from '../group/terrain';
 
 export interface AnimistOptions {
@@ -145,34 +147,12 @@ export const plantTurret = (): Behavior<TacticsSettings> => ({
     },
 });
 
-/** A mezz cast at it by another member this recently still counts as on its way. */
-const CC_CLAIM_MS = 4000;
-/** No second passive within this. */
-const OFF_CC_MS = 1000;
-
-/** Crowd control on it that holds, assigned to it, or being cast at it by another member: a turret shot would break it. */
-export function ccOnIt(ctx: MemberContext, c: Contact): boolean {
-    return ccHolds(ctx, c) || ctx.orders().cc.some(a => a.targetId === c.objectId) || claimedBy(ctx, 'cc', c.objectId, CC_CLAIM_MS).length > 0;
-}
-
 /**
- * On the side tick: the turret off whatever it shoots once that is under crowd control or about to be, the focus or not (a turret takes its
- * own next target when one dies). In plantTurret's turn this missed most: Etain's 2.5 s casts held the turn, and the turret broke crowd
- * control 5, 2 and 6 times in hibernia's field sorties (run B). Passive stops a turret within a shot (learnings/pets.md "Commanding").
+ * The turret off crowd control (pet-cc.ts): on the side tick, as in plantTurret's turn this missed most (Etain's 2.5 s casts held the turn,
+ * 5, 2 and 6 broken in hibernia's run B), and wiping its list whenever crowd control lands within its reach (10 broken in 7 sorties of
+ * the frozen window without that). Not b2ee129's return to the focus alone: that kept the list, 3 broken in its one sortie.
  */
-export const turretOffCc = (): Behavior<TacticsSettings> => ({
-    name: 'turretOffCc',
-    side: true,
-    interruptible: false,
-    async run(ctx) {
-        const petState = ctx.sdk.getPetState();
-        const onIt = ctx.contact(petState?.targetObjectId);
-        if (!petState || !onIt || petState.aggression === 'passive' || !ccOnIt(ctx, onIt) || waiting(ctx.memory, 'turretOffAt', Date.now() - OFF_CC_MS)) return false;
-        ctx.memory.set('turretOffAt', Date.now());
-        await ctx.sdk.sendPetCommand('passive');
-        return false;
-    },
-});
+export const turretOffCc = () => petOffCc({ name: 'turretOffCc', reach: TURRET_REACH, focusReach: TURRET_REACH - REACH_MARGIN / 2 });
 
 /** A fire-and-forget damage turret near the focus, in a long fight: an enemy player, FNF_MANA, fewer than FNF_UP of ours up. They pick their own targets. */
 export const fnfTurret = (floor = 0): Behavior<TacticsSettings> => ({
