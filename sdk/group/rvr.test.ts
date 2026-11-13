@@ -5,7 +5,7 @@ import { Blackboard, observeState } from './blackboard';
 import { contact, enemy, picture, report } from './fixtures';
 import type { RunReport } from './observer';
 import { memoryView } from './publish';
-import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, holdObservedFar, homeOf, keepDangers, pickRvrFocus, realmCalls, RVR_SETTINGS, rvrFindings, rvrRoaming, stepLeg, type RvrSettings } from './rvr';
+import { BATTLEGROUND_LAYOUTS, decideRvr, defaultPatrol, holdObservedFar, homeBuffHold, homeOf, keepDangers, pickRvrFocus, realmCalls, RVR_SETTINGS, rvrFindings, rvrRoaming, stepLeg, type RvrSettings } from './rvr';
 import type { RealmCall } from './tactics/help';
 import { countFor } from './size';
 import { mergeSettings, type CoordinatorContext } from './strategy';
@@ -1087,7 +1087,7 @@ describe('decideRvr: a Necromancer in shade (AbstractServerRules.cs:449-455)', (
 
 describe('decideRvr: an enemy pet\'s fire', () => {
     // Run 20261103-175746: "00:00 travel", "00:16 recover: waiting for Pethun's health", "00:36 engage on grove's hunter", "00:37 recover", "00:38 engage", "00:39 Pethun died".
-    const turret = (over: Partial<Contact> = {}) => enemy(70, 'hibernia', { kind: 'npc', name: "grove's hunter", level: 17, isPet: true, regionId: R, x: 10_700, y: 10_000, threat: true, target: null, targetId: null, ...over });
+    const turret = (over: Partial<Contact> = {}) => enemy(70, 'albion', { kind: 'npc', name: "grove's hunter", level: 17, isPet: true, regionId: R, x: 10_700, y: 10_000, threat: true, target: null, targetId: null, ...over });
 
     test('with its target unknown for the moment, a threat near the main body is a fight all the same', () => {
         expect(decideRvr(ctx(picture(team(), [turret()])))).toMatchObject({ phase: 'engage', focus: 70 });
@@ -1109,7 +1109,7 @@ describe('decideRvr: an enemy pet\'s fire', () => {
 
 describe('decideRvr: a rooted enemy', () => {
     const rooted = { cc: { by: 'Druid', kind: 'root', until: Date.now() + 20_000 } };
-    const onUs = (over: Partial<Contact> = {}) => enemy(70, 'hibernia', { kind: 'npc', name: "grove's hunter", level: 17, isPet: true, regionId: R, x: 10_700, y: 10_000, threat: true, target: 'Druid', ...over });
+    const onUs = (over: Partial<Contact> = {}) => enemy(70, 'albion', { kind: 'npc', name: "grove's hunter", level: 17, isPet: true, regionId: R, x: 10_700, y: 10_000, threat: true, target: 'Druid', ...over });
 
     // Run 20261103-174453: "00:08 engage on Celt: fight Celt#428 (hibernia L20, 100%): 0 of 1 enemy vs 2", "idle assist: focus is crowd-controlled"; Petbon 72 % at +9.4 to dead at +29 from turret hits.
     test('with every player cc\'d a free candidate on us comes before the cc\'d player', () => {
@@ -1469,5 +1469,25 @@ describe('decideRvr: a keep guard on one of us is fought (S3, the user at 17:08:
         expect(decideRvr(ctx(picture(team(), [guard(700, 9_900, null)]))).focus ?? null).toBeNull();
         // Raiding, the guards stay the raid's (raidStep).
         expect(decideRvr(ctx(picture(team(), [guard(700, 9_900, 'Menta')]), { memory: { raid: { callId: 'x' } } })).focus ?? null).toBeNull();
+    });
+});
+
+describe('decideRvr: buffed before leaving home, never a fight with our own realm (the user at 16:38)', () => {
+    const home = { x: 20_000, y: 20_000 };
+    const buffer = (members: MemberReport[]) => members.map(m => m.name === 'Druid' ? { ...m, capabilities: { ...m.capabilities, buffSpells: [{ name: 'Strength', slot: 'str' as any, target: 'Realm', concentration: 5 }] } } : m);
+    test('homeBuffHold: at home with a buff owed or being cast, up to 90 s from arriving; away from home or past it, none', () => {
+        const mem: Record<string, any> = {};
+        const owed = buffer(team({}, home));
+        expect(homeBuffHold(mem, owed, owed, home, home, 0)).toMatch(/^buff up before leaving: 0 casting, 1 buff to go \(Strength on Tank\)/);
+        expect(homeBuffHold(mem, owed, owed, home, home, 60_000)).not.toBeNull();
+        expect(homeBuffHold(mem, owed, owed, home, home, 91_000)).toBeNull();
+        expect(homeBuffHold({}, team({}, home), team({}, home), home, home, 0)).toBeNull();
+        expect(homeBuffHold({}, owed, owed, { x: 30_000, y: 30_000 }, home, 0)).toBeNull();
+        const casting = team({ Bard: { activity: { kind: 'buff', targetId: null, detail: '', since: 0 } as any } }, home);
+        expect(homeBuffHold({}, casting, casting, home, home, 0)).toMatch(/1 casting/);
+    });
+    test('a monster of our realm (an observed member\'s charmed pet) is never a focus', () => {
+        const pet = contact(80, { kind: 'npc', name: 'perturbed bwca', realm: 'hibernia', level: 23, regionId: R, x: 10_300, y: 10_000, threat: true, target: 'Tank' } as any);
+        expect(decideRvr(ctx(picture(team(), [pet]))).focus ?? null).toBeNull();
     });
 });

@@ -162,7 +162,7 @@ describe('decideSquad: picking fights', () => {
     });
 
     test("a hidden stealther keeps a focus it can open on: a low one, or its friend's soft target", () => {
-        const assassin = () => [report('Hodur', { role: 'melee', className: 'Shadowblade', capabilities: caps(), objectId: 1, regionId: R, x: BASE.x, y: BASE.y, z: 0, level: 24 })];
+        const assassin = () => [report('Hodur', { role: 'melee', className: 'Infiltrator', capabilities: caps(), objectId: 1, regionId: R, x: BASE.x, y: BASE.y, z: 0, level: 24 })];
         // A fighter at 5 % beside a fresh caster: the inner decide's low one stays (run A, 19:57: Hodur went off a Highlander at 5 %).
         const low = [foe(51, 1200, { hp: 5 }), foe(52, 1300, guess('caster'))];
         const d = decide(picture(assassin(), low));
@@ -173,7 +173,7 @@ describe('decideSquad: picking fights', () => {
 
     test('a hidden squad that leaves a fight walks away hidden, never a retreat (which would show it)', () => {
         const t0 = 1_000_000;
-        const assassin = () => [report('Hodur', { role: 'melee', className: 'Shadowblade', capabilities: caps(), objectId: 1, regionId: R, x: BASE.x, y: BASE.y, z: 0, level: 24 })];
+        const assassin = () => [report('Hodur', { role: 'melee', className: 'Infiltrator', capabilities: caps(), objectId: 1, regionId: R, x: BASE.x, y: BASE.y, z: 0, level: 24 })];
         const memory: Record<string, any> = {};
         expect(decide(picture(assassin(), [foe(51, 1200, guess('caster'))], {}, t0), { memory, now: t0 }).phase).toBe('engage');
         // Engaged, still hidden, and a group of five closes in.

@@ -50,6 +50,7 @@ import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics
 import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDefence, withDefence } from './tactics/defend';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
+import { planBuffs } from './buffs';
 import { loiter, waveOrder, waveWatch, type RealmWave } from './waves';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
@@ -605,6 +606,27 @@ export function guardOnUs(c: Contact): boolean {
     return !!c.keepGuard && !c.stale && isAlive(c) && (!!c.target || !!c.targetPet);
 }
 
+/** Within this of our portal keep's arrival a group is home, and buffs up before it leaves. */
+export const HOME_BUFF_RADIUS = 3000;
+/** It waits for owed buffs at most this long after arriving home; past it they catch up on the way. */
+export const HOME_BUFF_MAX_MS = 90_000;
+
+/**
+ * Why the group stays home to buff (a reason), or null: at our portal keep, within HOME_BUFF_MAX_MS of arriving (memory.homeBuffSince),
+ * while a member is casting a buff or one of ours still owes a member a buff (buffs.ts planBuffs, not yet on it; members and observed).
+ */
+export function homeBuffHold(mem: Record<string, any>, members: readonly MemberReport[], here: readonly MemberReport[], centre: Point, home: Point | null, now: number): string | null {
+    if (!home || dist(centre, home) > HOME_BUFF_RADIUS) { mem.homeBuffSince = undefined; return null; }
+    mem.homeBuffSince ??= now;
+    if (now - mem.homeBuffSince >= HOME_BUFF_MAX_MS) return null;
+    const living = members.filter(m => !m.isDead);
+    const casting = here.filter(m => m.activity?.kind === 'buff');
+    const owed = here.flatMap(c => planBuffs(c.name, living).filter(t => !t.covered && t.rank < 99 && !t.pet).map(t => `${t.spell.name} on ${t.target}`));
+    if (!casting.length && !owed.length) return null;
+    const left = Math.ceil((HOME_BUFF_MAX_MS - (now - mem.homeBuffSince)) / 1000);
+    return `buff up before leaving: ${casting.length} casting${owed.length ? `, ${owed.length} buff${owed.length === 1 ? '' : 's'} to go (${owed.slice(0, 2).join(', ')})` : ''}, ${left} s at most`;
+}
+
 export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const { orders: o, memory: mem, settings: s, now } = ctx;
     // A shade's servant is that Necromancer here: counted, sized up and focused as the player (shadeBodies).
@@ -704,6 +726,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const swimming = (c: Contact) => dry && isWet(regionId, c);
     const inFight = (c: Contact) => {
         if (c.stale || !isAlive(c) || c.regionId !== regionId) return false;
+        // Never one of our realm: an observed member's charmed pet read as a monster (16:38, "perturbed bwca is of our realm").
+        if (c.realm === realm) return false;
         // Defending our keep: only those within its reach (walls, courtyard, the gate's outside); never out after them.
         if (defenceReach && !defenceReach(c) && !onUs(c)) return false;
         const near = dist(c, centre) <= s.engageRadius + (c.threat || c.objectId === o.focus ? FOCUS_SLACK : 0);
@@ -852,6 +876,12 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         ...(usesMana(m) && m.mana < s.ready.mana ? [{ name: m.name, why: m.activity.detail === SAVING_POWER ? 'pet power' : 'power' }] : []),
         ...(waitsForPet(m, s.pet) ? [{ name: m.name, why: 'pet' }] : []),
     ]);
+
+    // ── Buffed before leaving home (the user, playing Niamh at 16:38: "I have no buffs. We're not leaving without buffs."): at our portal
+    // keep, while a buff of ours is still owed to a member (observed ones included) or one is being cast, rest and buff there before any
+    // way out (hunt, wave, gather, call, muster, raid, patrol), at most HOME_BUFF_MAX_MS from arriving. Fights (above) come first. ──
+    const homeHold = homeBuffHold(mem, p.members, here, centre, homeAt, now);
+    if (homeHold) return { ...calm, phase: 'recover', anchor: restAt().at, waiting: low, objective: `buff up at our portal keep${gone}`, reason: homeHold };
 
     // ── Hunting: enemy players in sight beyond engageRadius. Too many: fall back (toward home unless they stand that way) ──
     // Raiding: no hunt and no fall-back for those in sight; one that comes within RAID_FOE_REACH is fought (inFight).
