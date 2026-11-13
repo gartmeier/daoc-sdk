@@ -11,8 +11,9 @@ import { reachOfBuild } from './reach';
 import { FOE, kitStyles, ME, seenBy, swing } from './style-fixtures';
 import {
     angleOn, atHisSide, attackerOn, AWAY_LEG, awayLeg, BUBBLE_EVERY_MS, bladeturns, bubbleNow, DAMAGE_ADD_MISSING_MS, damageAdd, damageAddNow, FINISH_HP, GLOWING_BLADE,
-    HEAL_GAP, HEAL_GAP_SNARED, LAST_STAND_ALONE, LAST_STAND_CHARGE, LAST_STAND_HEAL_HP, LAST_STAND_SEEN, lastStand, lastStandMove, onHerOwn, sideSpot, warden, wardenStyle,
+    HEAL_GAP, HEAL_GAP_SNARED, healWaitMs, LAST_STAND_ALONE, LAST_STAND_CHARGE, LAST_STAND_HEAL_HP, LAST_STAND_SEEN, lastStand, lastStandMove, onHerOwn, sideSpot, warden, wardenStyle,
 } from './warden';
+import { headingBetween } from '../index';
 
 const build = () => reachOfBuild(getBuild('Warden', 'Support')!, 24);
 /** A pick as the Spellbook makes it, from the build's known spells. */
@@ -179,9 +180,9 @@ describe('warden last stand', () => {
         expect(awayLeg(me, him, () => true)).toBe(null);
     });
 
-    const fake = (o: { members?: MemberReport[]; hp?: number; hisHp?: number; at?: number; events?: any[]; messages?: string[] }) => {
+    const fake = (o: { members?: MemberReport[]; hp?: number; hisHp?: number; at?: number; events?: any[]; messages?: string[]; attacking?: boolean; seen?: any; cast?: any }) => {
         const did: string[] = [];
-        const me = { objectId: ME, x: 0, y: 0, z: 0, regionId: 252, healthPercent: o.hp ?? 60, health: 360, maxHealth: 600, attacking: false };
+        const me = { objectId: ME, x: 0, y: 0, z: 0, regionId: 252, healthPercent: o.hp ?? 60, health: 360, maxHealth: 600, attacking: o.attacking ?? false };
         const him = { objectId: FOE, name: 'Highlander', kind: 'player', x: o.at ?? 120, y: 0, regionId: 252, hp: o.hisHp ?? 90, stale: false, cc: null, target: 'Aine' } as unknown as Contact;
         const ctx: any = {
             name: 'Aine',
@@ -194,12 +195,13 @@ describe('warden last stand', () => {
             memory: new Map<string, any>(),
             sdk: {
                 getState: () => ({ combatEvents: o.events ?? [], gameMessages: (o.messages ?? []).map(text => ({ text })), equipment: hands }),
-                getNearbyNpc: () => null, getNearbyPlayer: () => null, getSkills: () => ({ styles: styles() }), sendAttack: async () => ({}),
+                getNearbyNpc: () => null, getNearbyPlayer: (id: number) => (id === FOE ? o.seen ?? null : null), getSkills: () => ({ styles: styles() }), sendAttack: async () => ({}),
             },
             bot: {
                 isDead: () => false,
-                castSpell: async (sp: { name: string }, target: number) => { did.push(`cast ${sp.name} on ${target}`); return { success: true }; },
+                castSpell: async (sp: { name: string }, target: number) => { did.push(`cast ${sp.name} on ${target}`); return o.cast ?? { success: true }; },
                 walkTo: async (x: number, y: number) => { did.push(`walk ${x},${y}`); return { success: true }; },
+                face: async (t: { objectId: number }) => { did.push(`face ${t.objectId}`); return { success: true }; },
             },
             doing() {}, result() {},
         };
@@ -232,6 +234,38 @@ describe('warden last stand', () => {
         f = fake({ ...landed, hp: 95, hisHp: 60 });
         expect(await lastStand({ now: () => t, swing: f.swing as never }).run(f.ctx)).toBe(true);
         expect(f.did).toEqual([`swing at ${FOE} (Highlander)`]);
+    });
+
+    test('healWaitMs: the seconds of "You must wait N seconds", 0 for any other result', () => {
+        expect(healWaitMs({ reason: 'must_wait', message: 'You must wait 3 seconds to cast a spell!' })).toBe(3000);
+        expect(healWaitMs({ reason: 'must_wait', message: '' })).toBe(1000);
+        expect(healWaitMs({ reason: 'interrupted', message: 'You must wait 3 seconds' })).toBe(0);
+        expect(healWaitMs({})).toBe(0);
+    });
+
+    test('a heal refused on its wait isn\'t tried again until the wait is over: snared, she walks a leg away meanwhile', async () => {
+        let t = 100_000;
+        const landed = { events: [swing(ME, FOE, 'styledHit', t - 1000)], messages: ['You perform your Glowing Blade perfectly!'] };
+        const f = fake({ ...landed, at: HEAL_GAP_SNARED, cast: { success: false, reason: 'must_wait', message: 'You must wait 3 seconds to cast a spell!' } });
+        const b = lastStand({ now: () => t, swing: f.swing as never });
+        expect(await b.run(f.ctx)).toBe(true);
+        t += 1000;
+        expect(await b.run(f.ctx)).toBe(true);
+        expect(f.did).toEqual([`cast Major Regeneration on ${ME}`, `walk ${-AWAY_LEG},0`]);
+        t += 2000;
+        f.did.length = 0;
+        expect(await b.run(f.ctx)).toBe(true);
+        expect(f.did).toEqual([`cast Major Regeneration on ${ME}`]);
+    });
+
+    test('the side step ends facing him: a swing needs him in front of her ("X is not in view!" live)', async () => {
+        // He stands 120 off on +x and faces her, so she is in front of him: not his side.
+        const seen = { objectId: FOE, kind: 'player', name: 'Highlander', x: 120, y: 0, z: 0, heading: headingBetween({ x: 120, y: 0 }, { x: 0, y: 0 }), distance: 120 };
+        const f = fake({ attacking: true, seen });
+        expect(await lastStand({ now: () => 100_000, swing: f.swing as never }).run(f.ctx)).toBe(true);
+        expect(f.did[0]).toBe(`swing at ${FOE} (Highlander)`);
+        expect(f.did[1]).toMatch(/^walk /);
+        expect(f.did[2]).toBe(`face ${FOE}`);
     });
 
     test('in the squads\' healer list: above flee, below the emergency heal (which skips while a melee is on her)', () => {

@@ -244,12 +244,18 @@ export function lastStand(o: { now?: () => number; swing?: Behavior<TacticsSetti
             const t = now();
             const snared = t < (snares.get(him.objectId) ?? -Infinity);
             const heal = ctx.spells.heal(me.maxHealth ? me.maxHealth - me.health : undefined);
-            const move = lastStandMove({ alone: true, distance: dist(me, him), snared, myHp: me.healthPercent, hisHp: him.hp, canHeal: !!heal });
+            // A heal on its wait (after an interrupt: "You must wait N seconds") counts as none until then, so the swing or the
+            // leg away goes on: live, three tries in 3 s, each refused.
+            const healReady = t >= (ctx.memory.get('lastStandHealAt') ?? 0);
+            const move = lastStandMove({ alone: true, distance: dist(me, him), snared, myHp: me.healthPercent, hisHp: him.hp, canHeal: !!heal && healReady });
             if (!move) return false;
             if (move === 'heal') {
                 await stopSwinging(ctx);
                 ctx.doing('heal', me.objectId, `${heal!.spell.name} on myself, ${him.name} ${snared ? 'snared' : 'not snared'} ${Math.round(dist(me, him))} away`);
-                ctx.result('lastStand', await ctx.bot.castSpell(heal!.spell, me.objectId), me.objectId);
+                const r = await ctx.bot.castSpell(heal!.spell, me.objectId);
+                const wait = healWaitMs(r);
+                if (wait) ctx.memory.set('lastStandHealAt', now() + wait);
+                ctx.result('lastStand', r, me.objectId);
                 return true;
             }
             if (move === 'away') {
@@ -269,11 +275,21 @@ export function lastStand(o: { now?: () => number; swing?: Behavior<TacticsSetti
                 const to = sideSpot(seen, me);
                 ctx.doing('move', him.objectId, `to ${him.name}'s side for Glowing Blade`);
                 await ctx.bot.walkTo(to.x, to.y, { z: me.z, tolerance: 25, timeout: 1200 });
+                // The walk leaves her facing the spot, and a swing needs him within 120 degrees in front (WeaponAction.cs:389-392):
+                // live, "X is not in view!" right after the step.
+                await ctx.bot.face({ objectId: him.objectId });
                 return true;
             }
             return done;
         },
     };
+}
+
+/** How long a refused heal waits, from "You must wait N seconds to cast a spell!" (reason must_wait); 0 for any other result. */
+export function healWaitMs(r: { reason?: string; message?: string }): number {
+    if (r.reason !== 'must_wait') return 0;
+    const s = Number(/wait (\d+) second/.exec(r.message ?? '')?.[1]);
+    return (Number.isFinite(s) && s > 0 ? s : 1) * 1000;
 }
 
 export interface WardenOptions {

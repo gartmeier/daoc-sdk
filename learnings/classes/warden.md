@@ -102,10 +102,10 @@ Thidranki Warden Blade and a medium shield, 621 health in scale. Blades 10: Glow
   - **Five swings were refused with "X is not in view!"** A melee swing needs the target within 120° in front of her as well as in sight (`WeaponAction.cs:389-392`), and after the side step she faces the spot she walked to.
   - **Three heal tries in 3 s, each `must_wait`,** after an interrupted cast.
   - **Her deaths in those sorties** came with a member still within 2000, or under the squad's `retreat`, which ranks above `lastStand`.
-  - **To do:**
-    - Face him after the step and before each swing, or drop the step.
-    - While the heal waits, swing.
-    - Then see whether Glowing Blade lands against a bot at all.
+  - **Fixed 2026-11-13 (tests only, live at the next stint):**
+    - After the side step she faces him (`bot.face`).
+    - A heal refused with `must_wait` counts as none until its seconds are over (`healWaitMs`). Meanwhile the swing or the leg away goes on.
+  - **To see at the next stint:** whether "not in view" is gone, and whether Glowing Blade lands against a bot at all.
   - **Still open:** does fighting it out at even health beat getting away?
 - **Her bladeturn in fights:** give it a result name of its own (now `buff`), so its recasts can be counted.
 
