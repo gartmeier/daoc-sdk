@@ -591,6 +591,17 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         .filter(t => t.kind === 'caster' && t.who !== 'ranged')
         .map(t => focusOf(t))
         .filter((f): f is SiegeSeen => !!f && !!view.reach && meleeOk(f));
+    // The hold for the walls goes on whatever static guard (a roof archer, a far wall caster) shoots at one of us: the ranged would
+    // otherwise leave their spot out of sight for the courtyard, into the wall casters' sight, after a guard they may never see
+    // (live 18:35, albion-1: "Hunter is on us" two seconds after the hold began). A fighter on us still turns everyone.
+    if (first && rank !== null && wallsHold(meleeStep)) {
+        const firstPost = postOf(plan, first);
+        if (firstPost && firstPost.kind !== 'fighter' && !(meleeOk(first) && firstPost.kind === 'caster' && firstPost.rank === rank)) {
+            const melee: RaidTask = { ...task(meleeStep, rangedStep), ...(splitOf().length > 1 ? { split: splitOf() } : {}) };
+            const ranged: RaidTask = { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${meleeStep!.label} on the wall` };
+            return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `${first.name} is on us; ranged out of sight, the melee on ${meleeStep!.label}` };
+        }
+    }
     if (first) {
         const stand = (rangedStep ?? meleeStep)?.stand ?? plan.roof;
         const t: RaidTask = { step: rangedStep ?? meleeStep, focus: first, stand };

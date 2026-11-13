@@ -252,3 +252,22 @@ function raidPlanOf() {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     return require('./siege').raidPlan('hibernia');
 }
+
+describe('raidOrders: a roof archer on us keeps the hold for the walls', () => {
+    test('the ranged stay out of sight and the melee stay on the wall caster', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('hibernia')!;
+        const at = (label: string) => FASTE.targets.find(x => x.label === label)!.at;
+        const members = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, x: 33700, y: 38800 + i * 10, z: 3722, alive: true }));
+        const seen = [
+            { id: 7, name: 'Runemaster', realm: 'midgard', kind: 'npc' as const, ...at('wall-se') },
+            { id: 9, name: 'Hunter', realm: 'midgard', kind: 'npc' as const, ...at('roof-e'), targetObjectId: 101 },
+        ];
+        // The roof is no route for the melee: reach says no there, yes on the wall.
+        const reach = (to: { z: number }) => to.z < 4200;
+        const o = raidOrders(raid, { members, seen, owner: 'midgard', staged: true, broken: [252000301], reach });
+        expect(o.ranged.hold).toBeDefined();
+        expect(o.ranged.focus).toBeNull();
+        expect(o.melee.focus?.id).toBe(7);
+    });
+});
