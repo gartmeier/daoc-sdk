@@ -13,7 +13,7 @@
 
 import type { Realm } from '../../types';
 import type { Behavior } from '../member';
-import { meleeReach, planKeep, RAID_COMING, raidOrders, raidPlan, routeFrom, type RaidMember, type RaidOrders, type RaidPlan, type RaidView, type SiegeSeen } from '../siege';
+import { meleeReach, passedDoors, planKeep, RAID_COMING, raidOrders, raidPlan, routeFrom, type RaidMember, type RaidOrders, type RaidPlan, type RaidView, type SiegeSeen } from '../siege';
 import type { PlayerRealm } from '../keeps';
 import type { GroupStrategy } from '../strategy';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from '../types';
@@ -180,6 +180,9 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
         broken: r.broken,
         staged: r.staged,
     };
+    // A living member behind a door proves it passed (siege.ts passedDoors): broken, for the walks and the melee's reach too, whether
+    // or not anyone read "The Keep Door is broken!" (the user in hibernia's raid: members past the gate, "melee on the gate" still).
+    for (const id of passedDoors(plan, view.members)) if (!r.broken.includes(id)) r.broken.push(id);
     const whole = raidMembers(o.call, o.unit ?? '', o.members, plan.stage);
     if (whole) view.raid = whole;
     const alive = o.members.filter(m => !m.isDead);

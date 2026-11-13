@@ -402,3 +402,12 @@ describe('raid: the ranged half out of the walls\' sight while the melee climb (
         expect(u.update.reason).toContain('ranged out of sight');
     });
 });
+
+describe('raid: a member behind the gate proves it broken (S2 d1b5821; the user: "Now the inner door")', () => {
+    test('raidStep counts the gate broken for the walks once a living member stands behind it, without the chat line', () => {
+        const mem = { raid: { callId: 'x', staged: true, broken: [] as number[] } };
+        const members = five({ x: 33_700, y: 38_275, z: 3720 });
+        raidStep({ plan, mem, members, guards: [], call: null, unit: 'midgard' });
+        expect(mem.raid.broken).toContain(252000301);
+    });
+});
