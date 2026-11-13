@@ -510,6 +510,22 @@ export function raidCorpses(sdk: { getObject(id: number): { kind: string; isDead
     return out;
 }
 
+/** The release's detail when half the group is down with no rezzer coming (the voice and the logs read it). */
+export const HALF_DOWN = 'half the group down, no rezzer coming: release, meet at our portal keep';
+
+/**
+ * Half the group or more dead (observed members counted) and no rezzer coming soon: none alive within `radius` of the corpse who
+ * knows a rez, or the group running (orders retreat) so none will stop for it. Then waiting for the fight's end or a rez only
+ * keeps the dead out of the regroup at home.
+ */
+export function halfDownNoRez(members: readonly Pick<MemberReport, 'name' | 'isDead' | 'capabilities' | 'regionId' | 'x' | 'y'>[], corpse: string, at: Point & { regionId: number }, phase: string, radius: number): boolean {
+    if (!members.length) return false;
+    const dead = members.filter(m => m.isDead).length;
+    if (dead * 2 < members.length) return false;
+    if (phase === 'retreat') return true;
+    return !members.some(m => m.name !== corpse && !m.isDead && m.capabilities?.rez && m.regionId === at.regionId && dist(m, at) <= radius);
+}
+
 /** A death this fresh may not have reached the board yet: the rezzer who died with us can read alive a snapshot longer. */
 const NO_REZZER_GRACE_MS = 3000;
 
@@ -544,6 +560,14 @@ export const release = (): Behavior => ({
         // nobody who knows one is alive (noRezzerLeft), so the hold only keeps a member out of the next fight. W2's 8 v 8 (2026-11-11):
         // corpses waited out the fight with every rezzer dead, up to fightHoldMs (300 s in rvr-roam).
         const raidRez = raidRezOf(ctx.settings);
+        // Half the group or more down and no rezzer coming soon (none alive near us, or the group running): release now and meet at our
+        // portal keep. The user, playing Niamh at 17:0x: "more than half the group is dead. should release and regroup at the PK."
+        if (now - diedAt >= NO_REZZER_GRACE_MS && halfDownNoRez(ctx.members(), ctx.name, me, ctx.orders().phase, s.radius) && !raidRezzerNear(ctx.sdk, raidRez, me, s.radius)) {
+            ctx.memory.delete('rezzedAt');
+            ctx.doing('release', null, HALF_DOWN);
+            ctx.result('release', await ctx.bot.releaseAndRespawn());
+            return true;
+        }
         const noRez = s.fightHoldMs > 0 && now - diedAt >= NO_REZZER_GRACE_MS && noRezzerLeft(ctx.members(), ctx.name) && !raidRezzerNear(ctx.sdk, raidRez, me, s.radius);
         if (!noRez && s.fightHoldMs > 0 && now - diedAt < s.fightHoldMs && fightGoesOn(ctx.orders().phase, ctx.threats(), ctx.members(), me.regionId)) {
             ctx.memory.set('fightHeldAt', now);

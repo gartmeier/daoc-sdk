@@ -1,7 +1,7 @@
 // Corpses waiting for a rez and the members who bring them back, on a stub MemberContext.
 // Region 9999 has no spawns, so safeSpot and safePath see no danger.
 import { describe, expect, test } from 'bun:test';
-import { AWAIT_FIGHT, awaitingRez, fightGoesOn, healer, release, rez, rezPressure, rezzerNear, REZ_SETTINGS, type TacticsSettings } from './behaviors';
+import { AWAIT_FIGHT, awaitingRez, fightGoesOn, halfDownNoRez, healer, release, rez, rezPressure, rezzerNear, REZ_SETTINGS, type TacticsSettings } from './behaviors';
 import { PACK_SETTINGS } from './pack';
 import { Blackboard } from './blackboard';
 import { contact, enemy, picture, report } from './fixtures';
@@ -540,5 +540,24 @@ describe('rez', () => {
         expect(results[0]).toMatchObject({ kind: 'rez', success: false, reason: 'no_answer' });
         expect(await rez().run(ctx)).toBe(false);
         expect(calls.resurrect).toHaveLength(1);
+    });
+});
+
+describe('release: half the group down and no rezzer coming (the user at 17:0x: "should release and regroup at the PK")', () => {
+    const dead = (n: string) => body(n, { x: 0, y: 0 });
+    test('halfDownNoRez: half or more dead, and no living rezzer near or the group running', () => {
+        const at = { x: 0, y: 0, regionId: R };
+        const four = [dead('Self'), dead('B'), dead('C'), dead('D'), report('Mage', { regionId: R }), report('Tank', { regionId: R })];
+        expect(halfDownNoRez(four, 'Self', at, 'engage', 4000)).toBe(true);
+        expect(halfDownNoRez([...four.slice(0, 5), cleric()], 'Self', at, 'engage', 4000)).toBe(false);
+        expect(halfDownNoRez([...four.slice(0, 5), cleric()], 'Self', at, 'retreat', 4000)).toBe(true);
+        expect(halfDownNoRez([...four.slice(0, 5), cleric({ x: 9000 })], 'Self', at, 'engage', 4000)).toBe(true);
+        expect(halfDownNoRez([dead('Self'), report('A', { regionId: R }), report('B', { regionId: R })], 'Self', at, 'engage', 4000)).toBe(false);
+    });
+    test('in RvR, in a fight: four of six down and the Bard running: the corpse releases now, not after the fight', async () => {
+        const members = [dead('Self'), dead('B'), dead('C'), dead('D'), cleric(), report('Tank', { regionId: R })];
+        const { ctx, calls } = stub({ dead: true, diedAgoMs: 5000, members, settings: RVR_SETTINGS as any, orders: { phase: 'retreat' }, threats: true });
+        await release().run(ctx);
+        expect(calls.release).toBe(1);
     });
 });
