@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
 // "lfg" live (lfg.ts is the pure part): a human whispers a bot of their realm, a unit takes them in, a bot steps out.
 //
-//   bun sdk/group/lfg-watch.ts [--groups=hibernia,camelot,midgard] [--units=hibernia] [--root=<dir>] [--control=<dir>] [--dry]
+//   bun sdk/group/lfg-watch.ts [--groups=hibernia,camelot,midgard] [--units=hibernia] [--presence=swarm|lifecycle] [--root=<dir>] [--control=<dir>] [--dry]
 //
 // --units: only those units take a human (the user's hour: --units=hibernia). --dry: answers and edits logged, not made.
 //
 // Every few seconds it reads, over the gateway (read only, no control), the recent chat of each online bot of the
 // realms' units: whispers to it and /region lines. For a human's ask it places them (placeHuman), then:
 //   1. group.json of the unit names them under "observed" (under the unit's .editing lock, so no line-up write races it);
-//   2. the bot stepping out logs off through the swarm's control files (client/swarm-control.ts, S1's log-out);
+//   2. the bot stepping out goes to the bench and logs off: through the swarm's control files (client/swarm-control.ts,
+//      S1's log-out), or with --presence=lifecycle by the life cycle, which reads `held` in state.json;
 //   3. the whispered bot answers (gateway /dm), and the unit's run winds down: its next sortie invites the human
 //      (formGroup), with one bot fewer (field.ts counts observed members in the unit's size);
 //   4. the unit leader's group window (gateway /state) says when they joined and when they left; once gone (or never
@@ -70,6 +71,12 @@ interface Options {
     gateway: string;
     control: string;
     dry: boolean;
+    /**
+     * Who logs the bot stepping out off and back on: 'swarm' asks the swarm's control folder itself; 'lifecycle' only
+     * holds it in state.json (`held`) and leaves the log-out and log-in to the life cycle, which does them safely (away
+     * from keeps, back into Thidranki).
+     */
+    presence: 'swarm' | 'lifecycle';
     everyMs: number;
     log: (s: string) => void;
 }
@@ -185,7 +192,7 @@ export function startLfgWatch(o: Options) {
                 def.bench = [...(def.bench ?? []).filter(m => m.bot !== out.bot), out];
             }
         });
-        if (p.stepOut && !o.dry) requestControl('logout', p.stepOut, o.control);
+        if (p.stepOut && !o.dry && o.presence === 'swarm') requestControl('logout', p.stepOut, o.control);
         r.unit = p.unit;
         r.stepOut = p.stepOut;
         r.stage = 'invited';
@@ -197,7 +204,7 @@ export function startLfgWatch(o: Options) {
 
     const release = (r: LfgRecord, end: string) => {
         if (r.unit) editGroup(r.unit, def => { def.observed = (def.observed ?? []).filter(x => x.name.toLowerCase() !== r.name.toLowerCase()); });
-        if (r.stepOut && !o.dry) requestControl('login', r.stepOut, o.control);
+        if (r.stepOut && !o.dry && o.presence === 'swarm') requestControl('login', r.stepOut, o.control);
         r.stage = 'done';
         r.end = end;
         note('released', { name: r.name, unit: r.unit, stepOut: r.stepOut, end, minutes: r.joinedAt ? Math.round((Date.now() - r.joinedAt) / 60_000) : 0 });
@@ -288,6 +295,7 @@ if (import.meta.main) {
         gateway: flag('gateway') ?? process.env.GATEWAY_HTTP ?? 'http://127.0.0.1:7780',
         control: flag('control') ?? DEFAULT_CONTROL_DIR,
         dry: args.includes('--dry'),
+        presence: flag('presence') === 'lifecycle' ? 'lifecycle' : 'swarm',
         everyMs: Number(flag('every') ?? 4000),
         log: s => console.log(`${new Date().toISOString().slice(11, 19)} ${s}`),
     });
