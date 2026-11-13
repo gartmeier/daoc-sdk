@@ -47,6 +47,7 @@ import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
 import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, noteArrival, roamGoal, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
 import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
+import { defendCall, defendPatch, overDefence, withDefence } from './tactics/defend';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { loiter, waveOrder, waveWatch, type RealmWave } from './waves';
@@ -653,7 +654,9 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const helper = helperPoint(mem, centre);
     const fallTo: Point | null = helper ?? home?.arrival ?? null;
     const toward = helper ? `toward ${helper.unit} coming to help` : 'toward our portal keep';
-    const outnumbered = (n: number) => s.retreat.enabled && n >= main.length + allies + margin;
+    // Defending our keep (tactics/defend.ts): no retreat and no hunt; each member holds its stand.
+    const defending = !!defendCall(mem);
+    const outnumbered = (n: number) => s.retreat.enabled && !defending && n >= main.length + allies + margin;
     const withAllies = allies ? ` + ${allies} of ours` : '';
     const counted = (big: readonly Contact[], all: readonly Contact[]) => (big.length === all.length ? enemiesText(all.length) : `${big.length} of ${enemiesText(all.length)}`);
     const homeAt = home?.arrival ?? null;
@@ -830,7 +833,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 
     // ── Hunting: enemy players in sight beyond engageRadius. Too many: fall back (toward home unless they stand that way) ──
     // Raiding: no hunt and no fall-back for those in sight; one that comes within RAID_FOE_REACH is fought (inFight).
-    const seen = raid ? [] : enemies.filter(c => !inKeep(c) && dist(c, centre) <= s.huntRadius);
+    const seen = raid || defending ? [] : enemies.filter(c => !inKeep(c) && dist(c, centre) <= s.huntRadius);
     if (seen.length) {
         // The group we just ran from is sized up whole: those of it we mezzed, and those out of view, still count (FLED_MS).
         const recalled = fled ? [
@@ -912,7 +915,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const rest = restAt();
         return { ...calm, phase: 'recover', anchor: rest.at, waiting: [...far.map(m => ({ name: m.name, why: 'away' })), ...low], objective: `wait at the ring for ${names(far)}${gone}`, reason: `waiting at the ring for ${names(far)}, ${Math.round(dist(centre, centroid(far)))} away${low.length ? `, and ${low.map(w => `${w.name}'s ${w.why}`).join(', ')}` : ''}${rest.why}` };
     }
-    if (far.length && !pairRing) {
+    if (far.length && !pairRing && !defending) {
         // A far tank walks back by himself: a leg toward a middle with him in it meets nobody. Only him to meet, they go to meet him: there is no base to wait at.
         const walking = farTank(here, s.gatherRadius);
         const meeting = far.filter(m => m !== walking);
@@ -1155,12 +1158,18 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         // The raid's patch (Orders.settings, tactics/raid.ts) over whatever the strategy's own wrappers set there: Hibernia's
         // withMakeUp and Camelot's withOurMakeUp put their patch (or null) on every tick, and the board showed no guard (attempt 3,
         // 2026-11-13 02:39-02:41: "nothing to hit in view" at every rank). It ends with the muster's go: guards off, the circle back.
+        // Our keep's defence (tactics/defend.ts): the seats in settings.defence, and no anchor outside a fight, so holdFormation
+        // leaves the members on their stands.
+        const ourRealm = mem.realm && mem.realm !== 'none' ? mem.realm : realmOfGroup(ctx.picture.members);
+        const defence = !raidCall(mem) && defendCall(mem) && ourRealm !== 'none' ? defendPatch(mem, ourRealm, ctx.picture.members, ctx.picture.contacts) : null;
         if (raidCall(mem) && mem.raid?.patch) out = { ...out, settings: overRaid(mem, out.settings ?? null, mem.raid.patch) };
-        else if (ctx.orders.settings?.raid && (out.settings === undefined || (out.settings as { raid?: unknown } | null)?.raid)) out = { ...out, settings: null };
+        else if (defence) out = { ...out, settings: overDefence(mem, out.settings ?? null, defence), ...(out.phase !== 'engage' ? { anchor: null } : {}) };
+        else if ((ctx.orders.settings?.raid || ctx.orders.settings?.defence) && (out.settings === undefined || (out.settings as { raid?: unknown; defence?: unknown } | null)?.raid || (out.settings as { defence?: unknown } | null)?.defence)) out = { ...out, settings: null };
+        if (!defence) mem.defencePatch = undefined;
         flushAnswers(mem, src);
         return out;
     };
     // The main groups' own lists (by role and by member) get hasten too (tactics/hasten.ts withHastener), and the tanks' and
     // melee's breakDoor for a raid (tactics/raid.ts withRaid).
-    return { strategy: { ...withRaid(withHastener(strategy)), decide }, stop: () => { stopped = true; try { src?.stop?.(); } catch { /* already stopped */ } } };
+    return { strategy: { ...withDefence(withRaid(withHastener(strategy))), decide }, stop: () => { stopped = true; try { src?.stop?.(); } catch { /* already stopped */ } } };
 }

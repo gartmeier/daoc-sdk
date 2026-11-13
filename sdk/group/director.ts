@@ -228,6 +228,8 @@ export interface DirectorSettings {
     defendShare: number;
     defendClearMs: number;
     defendMaxMs: number;
+    /** Only units this big are asked in (main groups: squads don't answer a defence yet). */
+    defendMinSize: number;
     /** In 'go', the raid broke once its living fell below this share of those it went with. */
     raidBreak: number;
     /** Raids on a rhythm: a new muster this long after the last one ended (or the director started). 0 = only startMuster. */
@@ -246,7 +248,7 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000,
     fewShare: 0.5, fewMin: 2, ownersAwayMin: 3, ownersAwayFrom: 8000, ownersAwayPair: 2500,
     onWayMs: 120_000, onWayMin: 1000,
-    defend: true, defendRadius: 4500, defendMin: 2, defendMemoryMs: 30_000, defendReach: 14_000, defendShare: 0.5, defendClearMs: 45_000, defendMaxMs: 900_000,
+    defend: true, defendRadius: 4500, defendMin: 2, defendMemoryMs: 30_000, defendReach: 14_000, defendShare: 0.5, defendClearMs: 45_000, defendMaxMs: 900_000, defendMinSize: 4,
 };
 
 /** A unit's orders reason in siege.ts's lord phase (tactics/raid.ts writes `raid <phase>: ...`). */
@@ -874,7 +876,7 @@ export class RealmDirector {
         let want = attackers + 1 - ours - coming;
         if (want > 0 && call.asked.length < cap) {
             const free = board.units
-                .filter(u => u.running && u.centre && u.alive >= Math.max(1, Math.ceil(u.size * s.helperAlive)) && u.hp >= s.helperHp && !call.asked.includes(u.unit))
+                .filter(u => u.running && u.centre && u.size >= s.defendMinSize && u.alive >= Math.max(1, Math.ceil(u.size * s.helperAlive)) && u.hp >= s.helperHp && !call.asked.includes(u.unit))
                 .filter(u => !u.inFight || dist2(u.centre!, keep) <= s.defendRadius)
                 .filter(u => ![...this.open.values()].some(x => x !== o && x.call.kind === 'help' && (x.call.from === u.unit || x.call.coming.includes(u.unit))))
                 .map(u => ({ u, d: dist2(u.centre!, keep) }))

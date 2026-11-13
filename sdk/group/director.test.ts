@@ -479,12 +479,16 @@ describe('the defence call (S3, 2026-11-13)', () => {
         let out = d.update(frames(5), 0, []);
         const c = out.calls.find(x => x.kind === 'defend')!;
         expect(c).toMatchObject({ why: 'keep', foes: 5, ours: 2 });
-        // The unit there is asked in too (it counts already); 5 + 1 - 2 there: the nearest group of 6 is enough.
-        expect(c.asked).toEqual(['camelot-s1', 'camelot']);
+        // Main groups only (squads don't answer a defence yet); 5 + 1 - 2 there: the nearest group of 6 is enough.
+        expect(c.asked).toEqual(['camelot']);
         // Ten attackers: more, but at most half of the six running units.
         const d2 = director({ units: UNITS6, targetOwner: () => 'albion', settings: { sight: false } });
         out = d2.update(frames(10), 0, []);
-        expect(out.calls.find(x => x.kind === 'defend')!.asked).toEqual(['camelot-s1', 'camelot', 'camelot-s2']);
+        expect(out.calls.find(x => x.kind === 'defend')!.asked).toEqual(['camelot', 'camelot-2']);
+        // A third main group: up to half the running units (4 of 7), so all three.
+        const d3 = director({ units: [...UNITS6, 'camelot-3'], targetOwner: () => 'albion', settings: { sight: false } });
+        out = d3.update({ ...frames(14), 'camelot-3': frame({ id: 'camelot-3', members: at(faste.x, faste.y - 7000, 6, 'W') }) }, 0, []);
+        expect(out.calls.find(x => x.kind === 'defend')!.asked).toHaveLength(3);
         // Not ours: no call; lost: it closes.
         expect(director({ units: UNITS6, targetOwner: () => 'midgard', settings: { sight: false } }).update(frames(5), 0, []).calls).toHaveLength(0);
         out = d.update(frames(0), 30_000, []);

@@ -10,7 +10,8 @@ import type { Point, Point3 } from '../types';
 /** A call as the director publishes it (director.ts RealmCall): only the fields read here. */
 export interface RealmCall {
     id: string;
-    kind: 'help' | 'muster';
+    /** defend: our keep is attacked and the director asks us in (tactics/defend.ts). */
+    kind: 'help' | 'muster' | 'defend';
     /** The calling unit (help), 'director' (muster). */
     from: string;
     why: string;
@@ -116,6 +117,9 @@ export function chooseCall(calls: readonly RealmCall[], unit: string, centre: Po
     const held = current && open.find(c => c.id === current.id);
     if (held) return held;
     const near = (a: RealmCall, b: RealmCall) => dist(callGoal(a), centre) - dist(callGoal(b), centre);
+    // Our keep's defence first, when it asks us (any distance: the director asked the nearest).
+    const defend = open.find(c => c.kind === 'defend' && c.asked.includes(unit));
+    if (defend) return defend;
     const help = open.filter(c => c.kind === 'help').sort(near);
     const asked = help.find(c => c.asked.includes(unit) && dist(c.at, centre) <= s.maxWay);
     if (asked) return asked;
@@ -174,6 +178,7 @@ export type HelpStep =
 const where = (p: Point) => `(${Math.round(p.x)}, ${Math.round(p.y)})`;
 const callText = (c: RealmCall) => c.kind === 'muster'
     ? `the muster${c.stage === 'go' ? ', going in' : ', at the rally point'}`
+    : c.kind === 'defend' ? `the defence of our keep (${c.foes} attackers, ${c.ours} of ours there)`
     : `${c.from} (${c.why}, ${c.foes} vs ${c.ours})`;
 
 /**
@@ -200,6 +205,8 @@ export function helpStep(mem: Record<string, any>, o: { unit: string; centre: Po
     noteArrival(mem, centre, now, s);
     const goal = callGoal(call);
     const d = Math.round(dist(centre, goal));
+    // The defence: each member walks to its stand itself (tactics/defend.ts, holdDefenceStand), never the group to `at`.
+    if (call.kind === 'defend') return { kind: 'hold', call, at: goal, objective: `answer ${callText(call)}`, reason: `call ${call.id}: ${callText(call)}, ${d} away${mem.defenceWhy ? `; ${mem.defenceWhy}` : ''}` };
     if (a.state !== 'arrived') {
         return { kind: 'go', call, goal, objective: `answer ${callText(call)} at ${where(goal)}`, reason: `call ${call.id}: ${callText(call)}, ${d} away` };
     }
