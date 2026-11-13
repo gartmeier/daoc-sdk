@@ -216,10 +216,27 @@ export interface NearbyObject extends WorldObjectBase {
     realm: Realm;
     /** Door id when this object is a door. */
     doorId: number | null;
+    /** A door's last 0x99 (BotWorldState.doors): true open (a keep door broken), false shut. Absent for a door with no 0x99 yet, any other object, and from an older client. */
+    open?: boolean;
     /** True when this is likely loot on the ground (bag/coins/drop). */
     isLoot: boolean;
     /** True when the server says this loot belongs to us. */
     ownedByUs: boolean;
+}
+
+/**
+ * A door's state from the server's 0x99 DoorState, the packet the real client draws the door by (PacketLib168.cs:1772).
+ * The server sends one when the door comes into range (ClientService.cs:892) and to everyone within 6000 on each change
+ * (GameDoorBase.cs:76, GameKeepDoor.cs:563): a keep door opens when its health reaches 0 and shuts again when repaired.
+ * So a late joiner reads the door as it is once within 6000. Kept after the door leaves view, until a region change; a change
+ * while we were further than 6000 away doesn't reach us, but coming back into range resends it, so trust `receivedAt` against when we were last near.
+ */
+export interface DoorState {
+    /** DbDoor InternalID (NearbyObject.doorId). */
+    doorId: number;
+    open: boolean;
+    /** When the last 0x99 for it came (client ms epoch). */
+    receivedAt: number;
 }
 
 // ── Items ───────────────────────────────────────────────────────────────────
@@ -799,6 +816,8 @@ export interface BotWorldState {
     nearbyNpcs: NearbyNpc[];
     nearbyPlayers: NearbyPlayer[];
     nearbyObjects: NearbyObject[];
+    /** Every door this region whose 0x99 DoorState reached us, in view or not (sdk.getDoorState). Cleared on a region change. Absent from an older client. */
+    doors?: DoorState[];
     /** Backpack (slots 40-79). */
     inventory: InventoryItem[];
     /** Equipped items (slots 10-37). */

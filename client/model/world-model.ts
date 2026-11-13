@@ -4,7 +4,7 @@
 
 import type {
     Ability, CombatEvent, DialogBox, Effect, GameMessage, GroupMember, InventoryItem, MerchantItem,
-    MerchantState, Money, NearbyNpc, NearbyObject, NearbyPlayer, NpcDialog, PetAggression, PetLoss, PetLossCause, PlayerGear,
+    DoorState, MerchantState, Money, NearbyNpc, NearbyObject, NearbyPlayer, NpcDialog, PetAggression, PetLoss, PetLossCause, PlayerGear,
     PetState, PetWalk, Realm, SkillsState,
     Specialization, Spell, SpellDetails, Stats, Style, StyleDetails, TextWindow, TradeWindow, TrainerState, Vec3,
 } from '../../sdk/types';
@@ -18,7 +18,7 @@ import {
     type ConcentrationEntry,
 } from '../protocol/incoming/combat';
 import {
-    decodeModelChange, decodeModelTypeChange, decodeNpcCreate, decodeObjectCreate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate,
+    decodeDoorState, decodeModelChange, decodeModelTypeChange, decodeNpcCreate, decodeObjectCreate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate,
     decodePlayerHeading, decodePlayerPosition, decodeRemoveObject, decodeObjectDataUpdate, decodeEquipmentUpdate,
 } from '../protocol/incoming/objects';
 import {
@@ -110,7 +110,7 @@ export const SPEC_BY_INTERNAL_INDEX: Readonly<Record<number, string>> = {
 /** Server packets we recognise but do not model (IPacketLib.cs eServerPackets): visuals, sounds, keeps, housing, social. */
 const IGNORED_OPCODES = new Set<number>([
     0x03, 0x05, 0x08, 0x09, 0x0A, 0x0F, 0x12, 0x13, 0x18, 0x1E, 0x1F, 0x45, 0x46, 0x49, 0x4A, 0x4C, 0x4E, 0x59, 0x5C,
-    0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x86, 0x8D, 0x92, 0x99,
+    0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x86, 0x8D, 0x92,
     0x9E, 0xC3, 0xC5, 0xC6, 0xC8, 0xC9, 0xD1, 0xD3, 0xE2, 0xE3, 0xEF, 0xF0, 0xF3, 0xF5, 0xF7, 0xF9,
 ]);
 
@@ -365,6 +365,8 @@ export class WorldModel {
     gear = new Map<number, PlayerGear>();
     sessionToOid = new Map<number, number>();
     objects = new Map<number, ObjectEntry>();
+    /** Each door's last 0x99, by door id (ObjectEntry.doorId). Outlives the door's entry: the server resends it only on coming into range and on a change. */
+    doors = new Map<number, DoorState>();
     /** All inventory slots (equipment, backpack, vault, ...). */
     items = new Map<number, InventoryItem>();
     usableSkills: UsableSkillEntry[] = [];
@@ -444,6 +446,7 @@ export class WorldModel {
         this.gear.clear();
         this.sessionToOid.clear();
         this.objects.clear();
+        this.doors.clear();
         this.trade = null;
         this.merchant = { isOpen: false, merchantObjectId: null, windowType: 0, items: [] };
         this.closeTrainer();
@@ -819,6 +822,13 @@ export class WorldModel {
                     objectId: d.objectId, name: d.name, model: d.model, realm: d.realm, x: d.x, y: d.y, z: d.z,
                     heading: d.heading, doorId: d.doorId, isLoot, ownedByUs: d.ownedByUs, lastUpdate: now,
                 });
+                return true;
+            }
+            case ServerOp.DoorState: {
+                const d = decodeDoorState(p);
+                const prev = this.doors.get(d.doorId);
+                this.doors.set(d.doorId, { doorId: d.doorId, open: d.open, receivedAt: now });
+                if (prev && prev.open !== d.open) this.signal(d.open ? 'door_open' : 'door_closed');
                 return true;
             }
             case ServerOp.PlayerCreate172: {
@@ -1550,13 +1560,19 @@ export class WorldModel {
         const now = this.now();
         const out: NearbyObject[] = [];
         for (const o of this.objects.values()) {
+            const door = o.doorId === null ? undefined : this.doors.get(o.doorId);
             out.push({
                 kind: 'object', objectId: o.objectId, name: o.name, x: o.x, y: o.y, z: o.z, heading: o.heading,
                 distance: Math.round(dist3(pos, o)), distance2d: Math.round(dist2(pos, o)), lastSeenAgo: now - o.lastUpdate,
                 model: o.model, realm: realmName(o.realm), doorId: o.doorId, isLoot: o.isLoot, ownedByUs: o.ownedByUs,
+                ...(door ? { open: door.open } : {}),
             });
         }
         return out.sort((a, b) => a.distance - b.distance);
+    }
+
+    doorStates(): DoorState[] {
+        return [...this.doors.values()].map(d => ({ ...d }));
     }
 
     inventoryList(min: number, max: number): InventoryItem[] {

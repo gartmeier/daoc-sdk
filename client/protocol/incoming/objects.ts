@@ -155,6 +155,18 @@ export function decodeObjectDelete(p: Uint8Array): { objectId: number } {
     return { objectId: new PacketReader(p).u16() };
 }
 
+/**
+ * 0x99 DoorState (PacketLib168.cs:1772-1798): u32 door id (DbDoor InternalID, as in 0xD9), u8 1 open / 0 closed, u8 sound flag, 0xFF, 0x00.
+ * Sent when a door comes into range (ClientService.cs:892) and to everyone within 6000 on each change (GameDoorBase.cs:76,
+ * GameKeepDoor.cs:563: a keep door opens when broken, closes when repaired).
+ */
+export function decodeDoorState(p: Uint8Array): { doorId: number; open: boolean; flag: number } {
+    const r = new PacketReader(p);
+    const doorId = r.u32();
+    const open = r.u8() === 1;
+    return { doorId, open, flag: r.u8() };
+}
+
 /** 0xD9 ObjectCreate (PacketLib176.cs:73-149): static items, doors, loot. */
 export interface ObjectCreate {
     objectId: number;

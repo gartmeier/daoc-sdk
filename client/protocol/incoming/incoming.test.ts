@@ -5,7 +5,7 @@ import { describe, expect, test } from 'bun:test';
 import { PacketWriter, decodeCp1252, encodeCp1252, PacketReader } from '../buffer';
 import { decodeCharacterOverview, decodeCryptKey, decodeDupNameCheckReply, decodeLoginDenied, decodeLoginGranted, decodePingReply, decodeRealm, decodeSessionId } from './login';
 import { decodeCharacterJump, decodeEncumbrance, decodeLosRequest, decodeMaxSpeed, decodePositionAndObjectId, decodeQuit, decodeRegionChanged, decodeTime } from './world';
-import { decodeModelChange, decodeNpcCreate, decodeObjectCreate, decodeObjectDataUpdate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate, decodePlayerHeading, decodePlayerPosition, decodeRemoveObject } from './objects';
+import { decodeDoorState, decodeModelChange, decodeNpcCreate, decodeObjectCreate, decodeObjectDataUpdate, decodeObjectDelete, decodeObjectUpdate, decodePlayerCreate, decodePlayerHeading, decodePlayerPosition, decodeRemoveObject } from './objects';
 import { decodeInventoryUpdate, decodeMoney, decodePointsUpdate, decodeStatsUpdate, decodeStatusUpdate, decodeVariousUpdate } from './player';
 import { decodeDialog, decodeMessage, decodeTextWindow, extractKeywords, parseResurrectionOffer, parseSpeech, chatTypeName } from './chat';
 import { decodeAttackMode, decodeChangeGroundTarget, decodeChangeTarget, decodeCombatAnimation, decodeConcentrationList, decodeDisableSkills, decodeInterrupt, decodePlayerDeath, decodeSpellCastAnimation, decodeSpellEffect, decodeUpdateIcons } from './combat';
@@ -136,6 +136,12 @@ describe('object packets', () => {
         expect(decodeObjectCreate(loot)).toMatchObject({ objectId: 9, x: 1000, y: 2000, z: 10, model: 488, realm: 1, ownedByUs: true, name: 'bag of coins', doorId: null });
         const door = W().u16(10).u16(0).u16(0).u16(0).u32(1).u32(2).u16(3).u16(0).u32(0).pascal('door').u8(4).u32(123456789).toBytes();
         expect(decodeObjectCreate(door).doorId).toBe(123456789);
+    });
+
+    test('0x99 DoorState (PacketLib168.cs:1772): u32 door id, u8 1 open, u8 flag, 0xFF, 0x00', () => {
+        // Faste's Albion portal door 250000101 = 0x0EE6B2E5, as SendDoorState writes it.
+        expect(decodeDoorState(Uint8Array.of(0x0E, 0xE6, 0xB2, 0xE5, 0x01, 0x01, 0xFF, 0x00))).toEqual({ doorId: 250000101, open: true, flag: 1 });
+        expect(decodeDoorState(Uint8Array.of(0x0E, 0xE6, 0xB2, 0xE5, 0x00, 0x00, 0xFF, 0x00))).toEqual({ doorId: 250000101, open: false, flag: 0 });
     });
 
     test('0x4B PlayerCreate (PacketLib1124.cs:333)', () => {

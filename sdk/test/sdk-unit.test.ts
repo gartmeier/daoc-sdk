@@ -4,7 +4,7 @@ import { BotSDK, bestNameMatch, deriveGatewayUrl, headingBetween, isAttackable, 
 import { executionContext } from '../execution-context';
 import { ChatHistory } from '../chat-history';
 import type { ActionResult, BotActionType, BotWorldState } from '../types';
-import { makeMessage, makeNpc, makePlayer, makeState } from './fixtures';
+import { makeMessage, makeNpc, makeObject, makePlayer, makeState } from './fixtures';
 
 /** An SDK that looks connected but whose socket swallows everything. */
 function stubSdk(actionTimeout: number, mode: 'control' | 'observe' = 'control') {
@@ -177,6 +177,17 @@ describe('BotSDK.sendAction dispatch failures', () => {
 });
 
 describe('BotSDK state reads', () => {
+    test('door states from 0x99 DoorState', () => {
+        const { sdk } = stubSdk(5000);
+        const doors = [{ doorId: 250000101, open: true, receivedAt: 1000 }, { doorId: 250000102, open: false, receivedAt: 2000 }];
+        feed(sdk, makeState({ doors, nearbyObjects: [makeObject({ objectId: 900, name: 'Keep Door', isLoot: false, ownedByUs: false, doorId: 250000101, open: true })] }));
+        expect(sdk.getDoorState(250000101)).toEqual({ doorId: 250000101, open: true, receivedAt: 1000 });
+        expect(sdk.getDoorState(250000102)?.open).toBe(false);
+        expect(sdk.getDoorState(1)).toBeNull();
+        expect(sdk.getDoorStates()).toEqual(doors);
+        expect(sdk.getNearbyObjects()[0]!.open).toBe(true);
+    });
+
     test('find* helpers and filters', () => {
         const { sdk } = stubSdk(5000);
         feed(sdk, makeState());
@@ -192,6 +203,8 @@ describe('BotSDK state reads', () => {
         expect(sdk.findNearbyPlayer('other')?.objectId).toBe(300);
         expect(sdk.findNearbyObject('coins', { loot: true })?.objectId).toBe(400);
         expect(sdk.getNearbyLoot().map(o => o.objectId)).toEqual([400]);
+        expect(sdk.getDoorState(250000101)).toBeNull();
+        expect(sdk.getDoorStates()).toEqual([]);
         expect(sdk.findStyle('back')?.skillIndex).toBe(7);
         expect(sdk.findAbility('sprint')?.skillIndex).toBe(4);
         expect(sdk.findEffect('strength')?.remainingSeconds).toBe(60);

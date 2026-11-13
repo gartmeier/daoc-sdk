@@ -75,6 +75,7 @@ export const ServerOp = {
     PlayerModelTypeChange: 0x8D,
     PlayerRevive: 0x89,
     CharacterPointsUpdate: 0x91,
+    DoorState: 0x99,
     ObjectUpdate: 0xA1,
     RemoveObject: 0xA2,
     Quit: 0xA4,

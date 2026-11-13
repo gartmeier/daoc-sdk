@@ -19,6 +19,7 @@ import type {
     ConnectionMode,
     ConnectionState,
     DialogBox,
+    DoorState,
     ResurrectionOffer,
     Effect,
     GameMessage,
@@ -769,6 +770,20 @@ export class BotSDK {
     /** Loot on the ground, nearest first. */
     getNearbyLoot(): NearbyObject[] {
         return (this.state?.nearbyObjects ?? []).filter(o => o.isLoot).sort((a, b) => a.distance - b.distance);
+    }
+
+    /**
+     * A door's state by its door id (NearbyObject.doorId), from the server's 0x99 DoorState: `open` true is open (a keep door broken), false shut (repaired).
+     * The packet the real client draws the door by: it comes when the door comes within 6000 and on every change near it, so it is right for a late joiner too.
+     * Kept out of view until a region change; null before any 0x99 for it, or from an older client.
+     */
+    getDoorState(doorId: number): DoorState | null {
+        return this.state?.doors?.find(d => d.doorId === doorId) ?? null;
+    }
+
+    /** Every door of this region whose 0x99 DoorState reached us, in view or not. Empty from an older client. */
+    getDoorStates(): DoorState[] {
+        return this.state?.doors ?? [];
     }
 
     /** Any nearby NPC, player or object by object id. */

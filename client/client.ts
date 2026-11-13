@@ -261,6 +261,7 @@ export class DaocClient {
             nearbyNpcs: m.nearbyNpcs(pos),
             nearbyPlayers: m.nearbyPlayers(pos),
             nearbyObjects: m.nearbyObjects(pos),
+            doors: m.doorStates(),
             inventory: m.inventoryList(40, 79),
             equipment: m.inventoryList(10, 37),
             vault: m.inventoryList(110, 149),

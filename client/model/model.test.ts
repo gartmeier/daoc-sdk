@@ -368,6 +368,33 @@ function statsPacket(base: number[], buff: number[], item: number[] = Array(8).f
 }
 
 describe('WorldModel fixes', () => {
+    test('0x99 DoorState: open or shut by door id, on its object too, kept out of view until a region change', () => {
+        let now = 1000;
+        const signals: string[] = [];
+        const m = new WorldModel({ onSignificant: r => signals.push(r) }, () => now);
+        const DOOR = 252000301;
+        const doorState = (open: boolean) => W().u32(DOOR).u8(open ? 1 : 0).u8(0).u8(0xFF).u8(0).toBytes();
+        m.handle(ServerOp.ObjectCreate, W().u16(900).u16(0).u16(0).u16(ME.z).u32(ME.x + 300).u32(ME.y).u16(3).u16(2 << 4).u32(0).pascal('Keep Door').u8(4).u32(DOOR).toBytes());
+        expect(m.nearbyObjects(ME)[0]!.open).toBeUndefined();
+        expect(m.handle(ServerOp.DoorState, doorState(true))).toBe(true);
+        expect(m.doorStates()).toEqual([{ doorId: DOOR, open: true, receivedAt: 1000 }]);
+        expect(m.nearbyObjects(ME)[0]).toMatchObject({ doorId: DOOR, open: true });
+        // The first one is how it stands, no change.
+        expect(signals).toEqual([]);
+        now = 5000;
+        m.handle(ServerOp.DoorState, doorState(false));
+        expect(m.doorStates()).toEqual([{ doorId: DOOR, open: false, receivedAt: 5000 }]);
+        expect(m.nearbyObjects(ME)[0]!.open).toBe(false);
+        expect(signals).toEqual(['door_closed']);
+        // Out of view the server sends no 0x99 again until the door comes back into range: what we know stays.
+        m.handle(ServerOp.ObjectDelete, W().u16(900).u16(1).toBytes());
+        expect(m.nearbyObjects(ME)).toEqual([]);
+        expect(m.doorStates()).toEqual([{ doorId: DOOR, open: false, receivedAt: 5000 }]);
+        m.clearWorld();
+        expect(m.doorStates()).toEqual([]);
+        expect(m.decodeErrors).toBe(0);
+    });
+
     test('0xFB: a stat debuff (negative buff column) lowers the stat instead of wrapping to ~65 000', () => {
         const m = new WorldModel();
         m.handle(ServerOp.StatsUpdate, statsPacket([60, 60, 60, 60, 60, 60, 60, 60], [-15, 0, 0, 0, 0, 0, 0, 10]));
