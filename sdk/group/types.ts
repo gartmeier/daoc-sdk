@@ -61,6 +61,8 @@ export interface Capabilities {
     pet?: 'main' | 'fnf' | null;
     /** Its jobs in a keep's defence, best first (siege.ts defenceJobs, from its own spells); absent in reports from before it. */
     defence?: import('./siege').DefenceJob[];
+    /** How far its longest damaging spell or a bow reaches (siege.ts RaidOrders.bolt); absent in reports from before it. */
+    reach?: number;
 }
 
 /** One member's view of itself, built from its own snapshots. */

@@ -319,3 +319,36 @@ describe('passedDoors: a member behind a door proves it passed', () => {
         expect(o.melee.step?.label).not.toBe('gate');
     });
 });
+
+describe('raidOrders: the bolt on the east roof archer from above the gate', () => {
+    test('after the wall casters, before the lord: a bolt task at its spot; not while a wall caster stands', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('hibernia')!;
+        const t = FASTE.targets.find(x => x.label === 'roof-e')!;
+        const hunter = { id: 9, name: 'Hunter', realm: 'midgard', kind: 'npc' as const, ...t.at };
+        const door = { id: 901, name: 'Keep Door', realm: 'midgard', kind: 'object' as const, x: 32654, y: 38180, z: 3720, doorId: 252000302 };
+        const members = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, x: 33100, y: 38250 + i * 10, z: 3722, alive: true }));
+        const o = raidOrders(raid, { members, seen: [hunter, door], owner: 'midgard', staged: true, broken: [252000301] });
+        expect(o.bolt?.focus?.id).toBe(9);
+        expect(o.bolt?.stand).toEqual(t.bolt!);
+        const wall = FASTE.targets.find(x => x.label === 'wall-e-n')!;
+        const with_ = raidOrders(raid, { members, seen: [hunter, door, { id: 7, name: 'Runemaster', realm: 'midgard', kind: 'npc' as const, ...wall.at }], owner: 'midgard', staged: true, broken: [252000301] });
+        expect(with_.bolt).toBeUndefined();
+    });
+});
+
+describe.skipIf(!meshReady || getOccluderStore().forZone(252) === null)('the bolt spot', () => {
+    test('sees roof-e both ways at 1650-1875 and is reached by the stair from the courtyard once the gate is broken', async () => {
+        const { applyDoors } = await import('./siege');
+        const mesh = navStore.at(252, 33089, 38271)!;
+        applyDoors(FASTE, { ours: false, broken: [252000301] }, mesh);
+        const t = FASTE.targets.find(x => x.label === 'roof-e')!;
+        const b = t.bolt!;
+        const d = Math.hypot(b.x - t.at.x, b.y - t.at.y, b.z - t.at.z);
+        expect(d).toBeGreaterThan(1500);
+        expect(d).toBeLessThanOrEqual(1875);
+        expect(lineOfSight(252, b, t.at)).toBe(true);
+        expect(lineOfSight(252, t.at, b)).toBe(true);
+        expect(mesh.findPath(mesh.closestPoint({ x: 33100, y: 38250, z: 3722 })!, mesh.closestPoint(b, { x: 32, y: 32, z: 64 })!).status).toBe('found');
+    });
+});

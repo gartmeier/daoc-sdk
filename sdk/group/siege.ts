@@ -51,6 +51,11 @@ export interface SiegeTarget {
      */
     outside?: Point3;
     /**
+     * A spot that sees this guard only at a bolt's or a bow's reach (1650-1875), not a nuke's: a roof archer seen from the wall-walk
+     * above the gate. For the members whose reach is that long, once the walls' casters are down (RaidOrders.bolt).
+     */
+    bolt?: Point3;
+    /**
      * Known at its post but no step of the raid: it holds up no rank. It sees too little of where the raid stands to matter
      * (the west wall), or it is fought from the roof in the lord phase (the roof archers). A guard on us within reach is still
      * the focus, as any other.
@@ -174,7 +179,10 @@ export const FASTE: SiegeLayout = {
         { label: 'floor-3', kind: 'fighter', at: { x: 32308, y: 38560, z: 4272 }, aggro: 1000, rank: 4, stand: KEEP_DOOR_OUT, who: 'all' },
         // The roof archers are seen from the roof only (roof-n and roof-s see none of the courtyard, roof-e 30 points): fought in
         // the lord phase from ROOF, the ranged first on them, the melee on the lord.
-        { label: 'roof-e', kind: 'archer', at: { x: 32526, y: 38271, z: 4592 }, aggro: 2100, rank: 6, stand: ROOF, who: 'ranged', optional: true },
+        // roof-e is seen from the east wall-walk by the gate only (33 spots, 1647-1700 away, lineOfSight both ways; the user, 2026-11-13:
+        // "you can only see it from above the entrance ... only in bolt distance"), and those spots are in every east wall caster's
+        // sight: a bolt or a bow takes it from there once the wall casters are down. roof-n and roof-s are seen from nowhere but the roof.
+        { label: 'roof-e', kind: 'archer', at: { x: 32526, y: 38271, z: 4592 }, aggro: 2100, rank: 6, stand: ROOF, who: 'ranged', optional: true, bolt: { x: 34016, y: 38610, z: 3978 } },
         { label: 'roof-n', kind: 'archer', at: { x: 32218, y: 37987, z: 4592 }, aggro: 2100, rank: 6, stand: ROOF, who: 'ranged', optional: true },
         { label: 'roof-s', kind: 'archer', at: { x: 32213, y: 38573, z: 4592 }, aggro: 2100, rank: 6, stand: ROOF, who: 'ranged', optional: true },
         // Everyone on the roof: he takes no damage from beyond 400.
@@ -407,6 +415,11 @@ export interface RaidOrders {
     stand: Point3;
     ranged: RaidTask;
     melee: RaidTask;
+    /**
+     * For members whose reach is a bolt's or a bow's (1650 and more): a guard only that reach takes, from its `bolt` spot, once the
+     * ranks with wall casters are done and before the lord. Absent otherwise. The others go on with ranged and melee.
+     */
+    bolt?: RaidTask;
     why: string;
 }
 
@@ -622,6 +635,13 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         const w = live[0];
         return w ? { step: w.t, focus: w.f, stand: w.t.outside! } : null;
     };
+    // The bolt's work: a live guard with a `bolt` spot, once no wall caster of an earlier or this rank stands (their sight covers
+    // those spots) and before the lord.
+    const boltWork = (): RaidTask | null => {
+        if (rank === null || open.some(t => t.kind === 'caster' && !t.optional && t.rank <= rank)) return null;
+        const t = plan.targets.find(x => x.bolt && !done.has(x.label) && atPost(plan, x, foes));
+        return t ? { step: t, focus: atPost(plan, t, foes), stand: t.bolt! } : null;
+    };
     // The wall casters the melee can go for now, one each: those of this rank, alive at their posts, reachable.
     const splitOf = (): SiegeSeen[] => rank === null || !doorsDown(rank) ? [] : inRank
         .filter(t => t.kind === 'caster' && t.who !== 'ranged')
@@ -670,7 +690,8 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         }
         const why = [rangedStep && `ranged: ${ranged.hold ? `out of sight while ${ranged.hold}` : rangedStep.label}`, meleeStep && meleeStep !== rangedStep && `melee: ${meleeStep.label}`].filter(Boolean).join(', ');
         // "N left": the rank's targets still standing, for the director's progress hold (a wall caster down is progress too).
-        return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `rank ${rank}: ${why}; ${inRank.length} left` };
+        const bolt = boltWork();
+        return { phase: 'assault', stand: ranged.stand, ranged, melee, ...(bolt ? { bolt } : {}), why: `rank ${rank}: ${why}; ${inRank.length} left${bolt ? `; bolt: ${bolt.step!.label}` : ''}` };
     }
     const lordStep = plan.targets.find(t => t.kind === 'lord')!;
     const lord = foes.find(s => plan.lordName.test(s.name)) ?? atPost(plan, lordStep, foes);

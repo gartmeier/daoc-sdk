@@ -407,8 +407,19 @@ export class MemberAgent<S = any> {
     private ownCapabilities(): Capabilities {
         const can = this.spells.capabilities();
         const cc = can.cc && this.behaviors.some(b => b.name === 'crowdControl');
-        const own = { ...can, cc, ccKinds: cc ? can.ccKinds : [], root: cc && can.root, rez: !!can.rez && this.behaviors.some(b => b.name === 'rez'), defence: this.defenceJobs() };
+        const own = { ...can, cc, ccKinds: cc ? can.ccKinds : [], root: cc && can.root, rez: !!can.rez && this.behaviors.some(b => b.name === 'rez'), defence: this.defenceJobs(), reach: this.reach() };
         return petsAllowed(this.ctx.settings) && this.member.character?.pet !== false ? own : { ...own, pet: null };
+    }
+
+    /** How far our longest damaging spell (or a bow) reaches: siege.ts RaidOrders.bolt wants 1650 and more. */
+    private reach(): number {
+        try {
+            const archer = (this.member.sdk.getState()?.skills.specializations ?? []).some(sp => BOW_LINES.test(sp.name) && sp.level > 1);
+            const spells = this.spells.all().filter(s => s.target === 'Enemy' && s.damage > 0 && /^(DirectDamage|Bolt|Lifedrain|DamageOverTime|DirectDamageWithDebuff|DamageSpeedDecrease)$/.test(s.type));
+            return Math.max(archer ? 1875 : 0, ...spells.map(s => s.range));
+        } catch {
+            return 0;
+        }
     }
 
     /** Our jobs in a keep's defence (siege.ts defenceJobs), from our own spells and a bow line: the coordinator seats us by them. */
