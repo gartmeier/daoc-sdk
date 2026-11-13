@@ -236,10 +236,14 @@ export interface DirectorSettings {
     quorum: number;
     rallyMaxMs: number;
     /**
-     * Muster: the go needs at least this many at the rally, whatever the share (S2, 21:45: albion-115 went on "2 of 2 at the rally",
-     * a squad alone answering, two bots against the Faste). Short of it fewMaxMs from the muster's start: it closes 'too few'.
+     * Muster: the go needs a floor at the rally, whatever the share (S2, 21:45: albion-115 went on "2 of 2 at the rally", a squad alone
+     * answering, two bots against the Faste): goShare of the realm's living out (every running unit), at least goFloor, at most goMin.
+     * So 8 with 12 or more out, 5 at night with 7-8 out (S1: the curve plays 7-8 a realm 02:00-07:00). Short of it fewMaxMs from the
+     * muster's start: it closes 'too few'.
      */
     goMin: number;
+    goFloor: number;
+    goShare: number;
     fewMaxMs: number;
     /** The muster ends by itself after this long in 'go'. */
     goMaxMs: number;
@@ -330,7 +334,7 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     sight: true, sightRadius: 5000, sightMin: 3, sightReach: 9000,
     clearMs: 15_000, maxMs: 180_000,
     campRadius: 5000, campFoes: 2, campMs: 15_000,
-    quorum: 0.7, rallyMaxMs: 240_000, goMin: 8, fewMaxMs: 600_000, goMaxMs: 900_000, raidBreak: 0.3, raidEveryMs: 0,
+    quorum: 0.7, rallyMaxMs: 240_000, goMin: 8, goFloor: 5, goShare: 0.7, fewMaxMs: 600_000, goMaxMs: 900_000, raidBreak: 0.3, raidEveryMs: 0,
     lordGraceMs: 30_000, lordMaxMs: 600_000, progressGraceMs: 180_000, progressMaxMs: 1_800_000,
     defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000, lookFreshMs: 120_000, lookFrom: 4000, lookRadius: 5800,
     fewShare: 0.5, fewMin: 2, ownersAwayMin: 3, ownersAwayFrom: 8000, ownersAwayPair: 2500,
@@ -924,7 +928,9 @@ export class RealmDirector {
         };
         if (call.stage === 'rally') {
             const waited = now - o.raid.stagedAt;
-            const ready = living > 0 && there >= s.goMin && (there >= s.quorum * living || (waited >= s.rallyMaxMs && there >= 0.5 * living));
+            const out = board.units.filter(u => u.running).reduce((t, u) => t + u.alive, 0);
+            const floor = Math.min(s.goMin, Math.max(s.goFloor, Math.ceil(s.goShare * out)));
+            const ready = living > 0 && there >= floor && (there >= s.quorum * living || (waited >= s.rallyMaxMs && there >= 0.5 * living));
             // No fresh look at the target: the counts above are nobody's; the raid goes to look (the rally moves up, once).
             const stale = s.lookFreshMs > 0 && (this.lookedAt === null || now - this.lookedAt > s.lookFreshMs);
             const why: MusterHold | null = living > 0 ? (stale && ready ? 'unseen' : stale ? null : musterHold({ defenders, third, ownersAway, living }, s)) : null;
@@ -941,7 +947,7 @@ export class RealmDirector {
                 if (call.hold) hold(call.hold, false);
                 events.push(this.close(o, 'defended', board, now));
                 this.raidEndedAt = now;
-            } else if (waited >= s.fewMaxMs && there < s.goMin) {
+            } else if (waited >= s.fewMaxMs && there < floor) {
                 if (call.hold) hold(call.hold, false);
                 events.push(this.close(o, 'too few', board, now));
                 this.raidEndedAt = now;

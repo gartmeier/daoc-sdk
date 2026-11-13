@@ -255,6 +255,12 @@ describe('muster', () => {
         out = d.update(two, 600_000, []);
         expect(out.calls).toHaveLength(0);
         expect(out.events.find(e => e.kind === 'close')).toMatchObject({ end: 'too few' });
+        // At night (S1: 7-8 a realm out), the floor is 5: five of seven at the rally go.
+        const night = director({ settings: { goMin: 8 } });
+        night.startMuster(plan);
+        const five = { camelot: frame({ id: 'camelot', members: at(33000, 44000, 5, 'G') }), 'camelot-s1': frame({ id: 'camelot-s1', members: at(37000, 52000, 2, 'S') }) };
+        night.update(five, 0, []);
+        expect(night.update(five, 300_000, []).calls[0]!.stage).toBe('go');
     });
 
     test('the muster call carries the raid: every member of each running unit asked, places rounded', () => {
