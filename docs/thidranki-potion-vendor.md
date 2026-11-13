@@ -1,50 +1,90 @@
-# Thidranki potion vendor in Druim Ligen
+# Thidranki vendors and healers in the portal keeps
 
-Added 2026-11-13 at the user's request: a potion merchant in Hibernia's portal keep for Thidranki, Druim Ligen (region 200), selling endurance and power potions for levels 20-24. It lives only in the DB, so a DB reseed (`down -v` and a fresh import from `server/db`) loses it. To put it back, run the SQL below and restart the gameserver.
+Added 2026-11-13 at the user's request, in two steps:
 
-## What stands there
+1. A potion vendor in Druim Ligen, Hibernia's portal keep outside Thidranki, spawned live.
+2. In each of Thidranki's three portal keeps (inside the battleground, region 252): a healer, a potion merchant and a poison merchant. The training dummies there went away. The point: "so no one has to leave the battleground".
+
+All of it lives only in the DB, so a DB reseed (`down -v` and a fresh import from `server/db`) loses it. Two files put it back:
+
+| File | What it does |
+|---|---|
+| [thidranki-portal-keep-npcs.sql](thidranki-portal-keep-npcs.sql) | The six merchant lists, the nine NPCs in the battleground's portal keeps, and the dummies' removal. Rerunnable |
+| [thidranki-pk-dummies.sql](thidranki-pk-dummies.sql) | The 15 deleted dummy rows, to put them back |
+
+```bash
+docker compose -f server/docker/docker-compose.yml exec -T db mariadb -uroot -pdaoc-sdk opendaoc < docs/thidranki-portal-keep-npcs.sql
+```
+
+Then restart the gameserver, or wait for the next restart. New `mob` rows load only at start. Eithne in Druim Ligen needs her own `INSERT`, given below.
+
+## What the potion merchants sell
+
+Each realm gets its own version of the same four level-20 Draughts (`Draught_of_...`, with suffix `''` for Albion, `2` for Midgard, `3` for Hibernia). Lists: `ThidPotionsAlb`, `ThidPotionsMid`, `ThidPotionsHib`.
+
+| Slot | Potion | Effect | Charges | Price |
+|---|---|---|---|---|
+| 0 | Draught of Endurance | instant: restores 40 endurance (spell 8056) | 9 | 80 s |
+| 1 | Draught of Invigoration | over time: endurance regen +2 for 20 min (spell 8079) | 9 | 1 g 20 s |
+| 2 | Draught of Power | instant: restores 50 power (spell 8060) | 9 | 80 s |
+| 3 | Draught of Replenishment | over time: power regen +2 for 20 min (spell 8083) | 9 | 1 g 20 s |
+
+Why these four:
+
+- **Item level.** A potion with no `LevelRequirement` needs the item's own level (`GamePlayer.UseSlot`, `Math.Min(MAX_LEVEL, useItem.Level)`). So the level-30 `Improved_` and level-40 `Strong_` versions are no use at 20-24.
+  - That rules out the true zero-cast potions as well. "Elixir of Instant ..." and "Greater/Superior Elixir of Instant ..." are all level 40.
+- **No zero-cast potion at level 20.** The DB has none. The "instant" ones here restore their whole amount at once, after the 3 s every Draught takes to use, and can't be drunk while swinging (`CantUseInCombat`).
+- **Separate timers.** The instant and the over-time potion are on different shared potion timers (`SharedTimerGroup` 3 and 4). So one of each can be drunk together, with a 60 s reuse each.
+- **Charges for the price.** Draughts carry 9 charges and Potions 6, both for the same 80 s. Elixirs carry 10 for 4 g 56 s.
+
+## What the poison merchants sell
+
+Lists `ThidPoisonsAlb`, `ThidPoisonsMid`, `ThidPoisonsHib`: every poison the realms' poison merchants sell, 32 in all, in that realm's own version.
+
+- **Page 0:** levels 1-22 (lethal, weakening, imbalancing, infectious, up to minor enervating).
+- **Page 1:** levels 23-50 (crippling, venoms, serums, enervating, lifebane).
+
+The order follows `HibPoison2`, the one list that has both pages. Albion splits them over Onyg and Melannon, Midgard over Svewn/Sissel. Riber in Druim Ligen sells the Albion (`''`) versions; the new Hibernian list uses the `3` ones. An assassin uses up to its own level and its Envenom level with items (sdk/classes/poison.ts). At 20-24 the useful poisons run up to minor crippling poison, level 23. Poison goes straight onto the weapon (`/use` the poison with the weapon), so no other item is needed.
+
+## The NPCs in Thidranki's portal keeps
+
+Copies of each realm's own NPCs: the realm's portal-keep healer (`DOL.GS.GameHealer`, which removes resurrection sickness and buys back lost constitution), a potion merchant's look from region 165, and the realm's portal-keep poison merchant. Each stands 170 from the keep's centre and faces it. The centre is where a release in the battleground lands (`GamePlayer.Release`, `eReleaseType.Battleground`: `keep.X/Y/Z`), so all three are inside the 192 interact range from there. All carry the peace flag (16).
+
+| Mob_ID | Name | Guild | Realm | Spot (region 252) | Heading | List |
+|---|---|---|---|---|---|---|
+| `thid-pk-alb-healer` | Sister Ellayne | Healer | 1 | 37131, 52362, 3946 | 3072 | |
+| `thid-pk-alb-potions` | Sabine | Potion Merchant | 1 | 37301, 52532, 3946 | 2048 | ThidPotionsAlb |
+| `thid-pk-alb-poisons` | Onyg | Poison Merchant | 1 | 37471, 52362, 3946 | 1024 | ThidPoisonsAlb |
+| `thid-pk-mid-healer` | Hagdar | Healer | 2 | 53883, 24680, 4323 | 3072 | |
+| `thid-pk-mid-potions` | Salazo | Potion Merchant | 2 | 54053, 24850, 4323 | 2048 | ThidPotionsMid |
+| `thid-pk-mid-poisons` | Svewn | Poison Merchant | 2 | 54223, 24680, 4323 | 1024 | ThidPoisonsMid |
+| `thid-pk-hib-healer` | Ilyana | Healer | 3 | 18192, 18257, 4323 | 3072 | |
+| `thid-pk-hib-potions` | Yoria | Potion Merchant | 3 | 18362, 18427, 4323 | 2048 | ThidPotionsHib |
+| `thid-pk-hib-poisons` | Riber | Poison Merchant | 3 | 18532, 18257, 4323 | 1024 | ThidPoisonsHib |
+
+Keep centres: Albion (37301, 52362), Midgard (54053, 24680), Hibernia (18362, 18257). The navmesh is flat open ground within 300 of each: z 3946, 4323 and 4323.
+
+The 15 training dummies (3 `DOL.GS.DPSDummy` and 2 `DOL.GS.HitbackDummy` per keep) are deleted. Their rows are in `thidranki-pk-dummies.sql`. The keeps outside the battleground (Castle Sauvage, Svasud Faste, Druim Ligen) keep their own dummies. They already had a healer and poison merchants, so nothing was added there apart from Eithne.
+
+## Eithne in Druim Ligen
 
 | | |
 |---|---|
-| NPC | **Eithne**, guild "Potion Merchant", `DOL.GS.GameMerchant`, realm 3 (Hibernia), level 34, peace flag |
+| NPC | **Eithne**, "Potion Merchant", `DOL.GS.GameMerchant`, realm 3, level 34, peace flag, model 315 with equipment `Yori` |
 | Mob_ID | `618385a9-71f5-44c1-9458-252881aea7b5` |
-| Spot | region 200, (333330, 420620, 5184), heading 1536 (toward the bind stone) |
-| Reach | 155 from the bind stone (333220, 420510) and 216 from Araisa, the medallion merchant. A player standing at the bind is inside the 192 interact range |
-| Look | model 315 with equipment template `Yori`, copied from Yoria, the Hibernian potion merchant in region 27 |
-| Item list | `ThidPotionsHib` (merchantitem ids `thid-potions-hib-0` to `-3`) |
+| Spot | region 200, (333330, 420620, 5184), heading 1536, facing the bind stone 155 away. A player at the bind is inside the interact range |
+| List | `ThidPotionsHib` (the list above) |
 
-| Slot | Item template | Name | Effect | Charges | Price |
-|---|---|---|---|---|---|
-| 0 | `Draught_of_Endurance3` | Draught of Endurance | instant: restores 40 endurance (spell 8056, 3 s use) | 9 | 80 s |
-| 1 | `Draught_of_Invigoration3` | Draught of Invigoration | over time: endurance regen +2 for 20 min (spell 8079) | 9 | 1 g 20 s |
-| 2 | `Draught_of_Power3` | Draught of Power | instant: restores 50 power (spell 8060, 3 s use) | 9 | 80 s |
-| 3 | `Draught_of_Replenishment3` | Draught of Replenishment | over time: power regen +2 for 20 min (spell 8083) | 9 | 1 g 20 s |
+She was spawned live, with no restart:
 
-### Why these four
+1. Set `gmlevel` to PrivLevel 3 and log it in.
+2. `/jump to 333330 420620 5184 200`, then `/mob create DOL.GS.GameMerchant 3`. That spawns a "New Mob" and saves it, which is where the Mob_ID comes from.
+3. `UPDATE mob` (the values below), then `/reload mob name New Mob` in the region. That reloads every in-world mob of exactly that name from the DB.
+4. Jump `gmlevel` back, quit it and set it back to PrivLevel 1.
 
-- They are the Hibernian (`...3`) level-20 versions out of the DB's own `PotionMerchantHib` list. That list also has `Improved_` level-30 versions.
-- A potion with no `LevelRequirement` needs the item's level (`GamePlayer.UseSlot`, `Math.Min(MAX_LEVEL, useItem.Level)`). Level-30 and level-40 potions are therefore useless at 20-24. That includes the true zero-cast "Elixir of Instant ..." and "Greater/Superior Elixir of Instant ..." items, which are all level 40.
-- The DB has no level-20 potion that restores with no cast time. The "instant" ones here restore their whole amount at once, after the 3 s every Draught takes to use, and can't be drunk while swinging (`CantUseInCombat`). The "over time" ones are 20-minute regen buffs.
-- Each instant/over-time pair is on its own shared potion timer (spells' `SharedTimerGroup` 3 and 4). So one of each can be drunk together, with a 60 s reuse each.
-- Draughts carry 9 charges and Potions 6, both for the same 80 s. Elixirs carry 10 for 4 g 56 s.
-
-## How it was put in live (no restart)
-
-1. Insert the `merchantitem` rows (below). Merchant lists are read from the DB whenever a window opens (`MerchantTradeItems`), so they need no reload.
-2. Set `gmlevel` to PrivLevel 3 and log it in. `/jump to 333330 420620 5184 200`, then `/mob create DOL.GS.GameMerchant 3`. That spawns a "New Mob" and saves it, which is where the Mob_ID comes from.
-3. `UPDATE mob ...` (the values below), then in region 200 `/reload mob name New Mob`. That command reloads, from the DB, every mob in the region whose in-world name is exactly that. Only ours matched.
-4. Check: `bot.openMerchant` on Eithne showed the four items at the prices above. Then jump `gmlevel` back to Thidranki, quit it and set it back to PrivLevel 1.
-
-## Reapply after a reseed
+Merchant lists are read from the DB whenever a window opens (`MerchantTradeItems`), so a new list needs no reload.
 
 ```sql
-INSERT INTO merchantitem (ItemListID, ItemTemplateID, PageNumber, SlotPosition, LastTimeRowUpdated, MerchantItem_ID) VALUES
- ('ThidPotionsHib', 'Draught_of_Endurance3',     0, 0, NOW(), 'thid-potions-hib-0'),
- ('ThidPotionsHib', 'Draught_of_Invigoration3',  0, 1, NOW(), 'thid-potions-hib-1'),
- ('ThidPotionsHib', 'Draught_of_Power3',         0, 2, NOW(), 'thid-potions-hib-2'),
- ('ThidPotionsHib', 'Draught_of_Replenishment3', 0, 3, NOW(), 'thid-potions-hib-3')
-ON DUPLICATE KEY UPDATE ItemListID = VALUES(ItemListID);
-
 INSERT INTO mob (Mob_ID, ClassType, TranslationId, Name, Suffix, Guild, ExamineArticle, MessageArticle,
   X, Y, Z, Speed, Heading, Region, Model, Size,
   Strength, Constitution, Dexterity, Quickness, Intelligence, Piety, Empathy, Charisma,
@@ -60,9 +100,15 @@ VALUES ('618385a9-71f5-44c1-9458-252881aea7b5', 'DOL.GS.GameMerchant', '', 'Eith
 ON DUPLICATE KEY UPDATE Name = VALUES(Name);
 ```
 
-Run it with `docker compose -f server/docker/docker-compose.yml exec -T db mariadb -uroot -pdaoc-sdk opendaoc < file.sql`, then `docker compose -f server/docker/docker-compose.yml restart gameserver`. Or spawn it live as described above, without the `mob` INSERT. To remove it: `DELETE FROM mob WHERE Mob_ID='618385a9-71f5-44c1-9458-252881aea7b5'; DELETE FROM merchantitem WHERE ItemListID='ThidPotionsHib';`, and it is gone after a restart.
+## Removing it all
+
+```sql
+DELETE FROM mob WHERE Mob_ID LIKE 'thid-pk-%' OR Mob_ID = '618385a9-71f5-44c1-9458-252881aea7b5';
+DELETE FROM merchantitem WHERE ItemListID LIKE 'ThidPo%';
+```
+
+Then run `thidranki-pk-dummies.sql` and restart the gameserver.
 
 ## Not done
 
-- Bots don't buy or drink these potions. That would be a follow-up in the class kits.
-- Albion's and Midgard's portal keeps (Castle Sauvage, Svasud Faste) have no such vendor.
+- Bots don't drink potions, buy at the new vendors, or use the healers. sdk/classes/poison.ts still sends a solo assassin out of the battleground to Onyg, Riber or Gwaell (Audliten) to restock. The portal keep's own poison merchant inside Thidranki would save that trip.
