@@ -716,7 +716,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // the unit sat "roof-e on the roof first ... melee hold" with not_visible while the user went in to the lord and died alone
     // (live 21:22, "no one helping in the throne room"). Until then everyone goes for the lord, and roof-e is the long-reach
     // members' side job from above the gate (RaidOrders.bolt).
-    const onRoof = living.some(m => m.z > plan.roof.z - ROOF_UP && Math.hypot(m.x - plan.roof.x, m.y - plan.roof.y) <= ROOF_AREA);
+    // Two of us up there at least: one alone (the user with a Ranger, live 22:13 "only the Ranger was with me at Lady Thidranki")
+    // turned the ranged below onto a roof archer they can't see. The lord stands on the roof, so this is the throne room too.
+    const onRoof = living.filter(m => m.z > plan.roof.z - ROOF_UP && Math.hypot(m.x - plan.roof.x, m.y - plan.roof.y) <= ROOF_AREA).length >= AT_LORD_MIN;
     const archerStep = onRoof ? plan.targets.find(x => x.optional && x.kind === 'archer' && atPost(plan, x, foes)) ?? null : null;
     const archer = archerStep ? atPost(plan, archerStep, foes) : null;
     const ranged: RaidTask = archer ? { step: archerStep, focus: archer, stand: plan.roof } : t;

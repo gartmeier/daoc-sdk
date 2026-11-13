@@ -432,8 +432,11 @@ describe('raidOrders: the lord phase goes for the lord, the roof archer is a sid
         // The user by the lord, the route check saying no: the melee still go.
         const withUser = [...yard, { id: 200, x: lordPost.x + 200, y: lordPost.y, z: lordPost.z, alive: true }];
         expect(raidOrders(raid, { ...base, members: withUser, seen: [jarl, hunter], reach: () => false }).melee.focus?.id).toBe(50);
-        // One of us on the roof: the ranged take the archer there first.
-        expect(raidOrders(raid, { ...base, members: withUser, seen: [jarl, hunter], reach: () => true }).ranged.focus?.id).toBe(9);
+        // One of us alone up there (the user with a Ranger, live 22:13): the ranged below stay on the lord, they go up to him.
+        expect(raidOrders(raid, { ...base, members: withUser, seen: [jarl, hunter], reach: () => true }).ranged.focus?.id).toBe(50);
+        // Two of us up there: the ranged take the archer there first.
+        const two = [...withUser, { id: 201, x: lordPost.x - 150, y: lordPost.y, z: lordPost.z, alive: true }];
+        expect(raidOrders(raid, { ...base, members: two, seen: [jarl, hunter], reach: () => true }).ranged.focus?.id).toBe(9);
     });
 });
 
