@@ -374,6 +374,8 @@ function layerRouteNeeded(regionId: number, from: Vec3, to: Vec3): boolean {
     const way = layerRoute(regionId, from, to);
     return way !== 'straight' && way !== 'none';
 }
+/** A chase through our own door (walkTo opens it): this long for the walk, then the fight's loop again. */
+const OWN_DOOR_CHASE_MS = 8000;
 /** Doors one walk goes through at most (a keep's gate, its building's door, a postern, and back out). */
 const MAX_DOOR_HOPS = 4;
 /** How long the jump through our own door may take: 47 ms live (2026-11-13). */
@@ -2352,7 +2354,16 @@ export class BotActions {
                     if (way === 'none') return failWith(`${name} is on another level with no way there (${Math.round(t.z - p.z)} up)`, 'out_of_reach');
                     // Never straight through a keep door: ours opens only by interact, an enemy's is a wall until it breaks (doors.ts).
                     const door = way === 'straight' ? doorBetween(p.regionId, p, t, p.realm) : null;
-                    if (door) return failWith(`${name} is beyond the door ${door.doorId}`, 'out_of_reach');
+                    if (door) {
+                        // Our own door: open it and go on, as a player does (walkTo interacts and takes the jump), then the fight
+                        // goes on from the other side. An enemy's shut door stays a wall. Live 17:44: the user's charmed boar's add
+                        // inside our portal keep, and Conall 'out_of_reach (beyond the door 252041602)' ten times.
+                        if (!ownDoors(p.regionId, p.realm).some(d => d.doorId === door.doorId)) return failWith(`${name} is beyond the door ${door.doorId}`, 'out_of_reach');
+                        const through = await this.walkTo(t.x, t.y, { z: t.z, tolerance: MELEE_APPROACH, timeout: OWN_DOOR_CHASE_MS });
+                        if (!through.success && through.reason === 'door') return failWith(`${name} is beyond the door ${door.doorId}, which did not open`, 'out_of_reach');
+                        lastMoveAt = 0;
+                        continue;
+                    }
                     lastMoveDest = { x: t.x, y: t.y, z: t.z };
                     lastMoveAt = now;
                     sent.move = true;

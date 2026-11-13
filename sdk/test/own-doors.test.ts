@@ -3,7 +3,7 @@ import { BotActions, getNavmeshStore, type NavmeshStore } from '../actions';
 import { clearOwnDoors, doorApproach, doorBetween, doorFront, doorLanding, doorOnRoute, doorSide, ownDoors, setOwnDoors, shutDoorsIn, type OwnDoor } from '../doors';
 import { setDefaultPathProvider, StraightLinePathProvider } from '../pathfinding';
 import { FASTE, useOwnDoors } from '../group/siege';
-import { makeObject } from './fixtures';
+import { makeNpc, makeObject } from './fixtures';
 import { FakeWorld } from './fake-world';
 
 // The Faste's gate: heading 1024, its front (the courtyard) to the west.
@@ -207,4 +207,55 @@ describe('portal keep doors', () => {
         const second = doorOnRoute(p(36920, 51962, 3944), [p(36920, 51300, 3944)], doors);
         expect(second?.door.doorId).toBe(252000101);
     });
+});
+
+describe('a melee chase through our own door', () => {
+    let navmeshAt: Mock<NavmeshStore['at']>;
+    beforeAll(() => {
+        setDefaultPathProvider(new StraightLinePathProvider({ estimateZ: null }));
+        navmeshAt = spyOn(getNavmeshStore(), 'at').mockReturnValue(null);
+    });
+    afterAll(() => {
+        setDefaultPathProvider(null);
+        navmeshAt.mockRestore();
+    });
+    afterEach(() => clearOwnDoors());
+
+    test('opens it, goes through and fights on; an enemy door stays a wall', async () => {
+        for (const ours of [true, false]) {
+            const w = new FakeWorld();
+            try {
+                Object.assign(w.player, { regionId: 252, x: 34500, y: 38275, z: 3720 });
+                w.state.nearbyObjects = [makeObject({ objectId: 77, name: 'Keep Door', doorId: GATE.doorId, x: GATE.at.x, y: GATE.at.y, z: GATE.at.z, heading: 1024, isLoot: false, ownedByUs: false })];
+                w.state.nearbyNpcs = [makeNpc({ objectId: 701, name: 'boar', level: 20, x: 34560, y: 38275, z: 3720 })];
+                if (ours) setOwnDoors(252, 'Thidranki Faste', [GATE]);
+                else useOwnDoors(FASTE, { ours: false, broken: [] });
+                w.handlers.interact = (a, world) => {
+                    if (a.type !== 'interact') return;
+                    const to = doorLanding(GATE, doorSide(GATE, world.player));
+                    setTimeout(() => { Object.assign(world.player, to); world.state.movement = { ...world.state.movement, moving: false, destination: null, waypoints: [], lastStopReason: 'teleported' }; }, 20);
+                };
+                let hits = 0;
+                w.onTick = world => {
+                    const p = world.player, npc = world.npc(701);
+                    if (!npc || !p.attacking || Math.hypot(npc.x - p.x, npc.y - p.y) > 128) return;
+                    // The first swing sends it running inside our gate; then it stands and takes the fight.
+                    if (hits++ === 0) { npc.x = 34100; return; }
+                    npc.healthPercent = Math.max(0, npc.healthPercent - 34);
+                    world.combat({ kind: 'melee', attackerObjectId: p.objectId, targetObjectId: 701, result: 'hit', targetHealthPercent: npc.healthPercent });
+                    if (npc.healthPercent === 0) { world.removeNpc(701); world.combat({ kind: 'death', attackerObjectId: null, targetObjectId: 701, targetHealthPercent: 0 }); }
+                };
+                await Bun.sleep(30);
+                const r = await new BotActions(w.sdk).killNpc(701, { timeout: 8000 });
+                if (ours) {
+                    expect(r.success).toBe(true);
+                    expect(w.sentOf('interact').length).toBeGreaterThan(0);
+                    expect(w.player.x).toBeLessThan(GATE.at.x);
+                } else {
+                    expect(r).toMatchObject({ success: false, reason: 'out_of_reach' });
+                    expect(w.player.x).toBeGreaterThan(GATE.at.x);
+                }
+            } finally { w.dispose(); }
+        }
+    }, 20_000);
 });
