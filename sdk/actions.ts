@@ -136,6 +136,7 @@ export type { ConColor, LivingTarget, NpcTarget, ObjectTarget, PetSpellKind, Pla
 export { StraightLinePathProvider, NavmeshPathProvider, getDefaultPathProvider, setDefaultPathProvider, navmeshGroundZ } from './pathfinding';
 export type { PathProvider, PathRequest, PathResult } from './pathfinding';
 export { NavmeshStore, NavMesh, getNavmeshStore, PolyFlags } from './navmesh';
+import { getNavmeshStore as navmeshStore } from './navmesh';
 export { groundAt, GROUND_TUNING, type Ground } from './ground';
 export { TerrainStore, getTerrainStore, type TerrainSample } from './terrain';
 
@@ -331,6 +332,37 @@ const MOVE_REFUSALS = [/you can't|you cannot|you are not|you must|can't go there
 const GROUP_INVITE_DIALOG = 0x05;
 /** Bound on one route plan when walkTo has no explicit timeout (its deadline follows the plan). */
 const PLAN_TIMEOUT_MS = 15_000;
+/** A target this much higher or lower than us stands on another layer (a wall-walk, a ledge, a floor): reached only by a found route. */
+const LAYER_DZ = 100;
+/** walkToObject's step onto a target close on the ground: a found route at most this times the 3D distance, plus LAYER_SLACK. */
+const LAYER_STEP_FACTOR = 1.5;
+const LAYER_SLACK = 100;
+
+/**
+ * How to reach `to` from `from` when it may stand on another layer. 'straight': the same layer, or no navmesh here to say (as before).
+ * Otherwise the navmesh's found route (shut doors are walls on it), or 'none': no found route, or one longer than `maxLength` (a
+ * wall-walk over our heads that only a long stair reaches, a merlon no walk ends on). Live 2026-11-13 08:36: straight moves to a
+ * wall Wizard's z took melee up the Faste's wall.
+ */
+export function layerRoute(regionId: number, from: Vec3, to: Vec3, maxLength = Infinity): { waypoints: Vec3[] } | 'straight' | 'none' {
+    if (Math.abs(to.z - from.z) <= LAYER_DZ) return 'straight';
+    const store = navmeshStore();
+    if (!store.available()) return 'straight';
+    const mesh = store.at(regionId, to.x, to.y);
+    if (!mesh) return 'straight';
+    const a = mesh.closestPoint(from, { x: 64, y: 64, z: 256 });
+    if (!a) return 'straight';
+    const b = mesh.closestPoint(to, { x: 64, y: 64, z: 128 });
+    if (!b || Math.abs(b.z - to.z) > 64) return 'none';
+    const path = mesh.findPath(a, b);
+    if (path.status !== 'found' || path.points.length === 0) return 'none';
+    let length = 0;
+    let prev: Vec3 = from;
+    for (const q of path.points) { length += Math.hypot(q.x - prev.x, q.y - prev.y, q.z - prev.z); prev = q; }
+    if (length > maxLength) return 'none';
+    return { waypoints: path.points.map(q => ({ x: q.x, y: q.y, z: q.z })) };
+}
+
 /** Doors one walk goes through at most (a keep's gate, its building's door, a postern, and back out). */
 const MAX_DOOR_HOPS = 4;
 /** How long the jump through our own door may take: 47 ms live (2026-11-13). */
@@ -1523,7 +1555,13 @@ export class BotActions {
                 // none when the target is out of reach. The server measures these ranges in 3D
                 // (Point3D.cs:114-140).
                 const targetZ = obj.z;
-                const r = await this.sdk.sendMoveTo(obj.x, obj.y, targetZ, { tolerance: Math.min(tolerance, 24) });
+                // Onto another layer only by a short found route (layerRoute): no straight climb up a wall to a caster on it.
+                const me = this.helpers.player();
+                const way = me ? layerRoute(me.regionId, me, obj, LAYER_STEP_FACTOR * Math.hypot(obj.x - me.x, obj.y - me.y, obj.z - me.z) + LAYER_SLACK) : 'straight';
+                if (way === 'none') {
+                    return { ...last, ...fail(`Cannot reach ${nameOf(obj)}: it stands on another level with no short way up or down (at ${obj.distance})`, 'out_of_reach', {}), target: obj };
+                }
+                const r = await this.sdk.sendMoveTo(obj.x, obj.y, targetZ, { tolerance: Math.min(tolerance, 24), ...(way === 'straight' ? {} : { waypoints: way.waypoints.slice(0, -1) }) });
                 if (!r.success) return { ...last, ...fail(`Cannot reach ${nameOf(obj)}: ${r.message}`, r.reason ?? 'dispatch_failed', {}), target: obj };
                 const adopted = await this.helpers.waitFor(s => (s.player && Math.abs(s.player.z - targetZ) <= 16) || over(s) || reached(s) ? true : null, Math.min(2000, left ?? 2000));
                 last = { success: true, message: 'Adopted target height', position: this.position(), distance: obj.distance2d, reissues: last.reissues };
@@ -2298,10 +2336,13 @@ export class BotActions {
                 if (Math.hypot(t.x - stood.x, t.y - stood.y) > maxChase) return failWith(`${name} ran beyond ${maxChase} units`, 'out_of_reach');
                 const destMoved = !lastMoveDest || Math.hypot(t.x - lastMoveDest.x, t.y - lastMoveDest.y) > 40;
                 if (!s.movement.moving || (destMoved && now - lastMoveAt > 400)) {
+                    // On another layer (a wall-walk, a stair, a floor) only by the navmesh's found route, never straight up its side.
+                    const way = layerRoute(p.regionId, p, t);
+                    if (way === 'none') return failWith(`${name} is on another level with no way there (${Math.round(t.z - p.z)} up)`, 'out_of_reach');
                     lastMoveDest = { x: t.x, y: t.y, z: t.z };
                     lastMoveAt = now;
                     sent.move = true;
-                    await this.sdk.sendMoveTo(t.x, t.y, t.z, { tolerance: 50 });
+                    await this.sdk.sendMoveTo(t.x, t.y, t.z, { tolerance: 50, ...(way === 'straight' ? {} : { waypoints: way.waypoints.slice(0, -1) }) });
                 }
                 continue;
             }
