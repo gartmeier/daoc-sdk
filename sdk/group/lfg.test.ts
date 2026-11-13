@@ -64,6 +64,15 @@ describe('what the watcher hears', () => {
         expect(absenceCounts({ state: 'live', firstAt: 0, timing: { windingDown: true } }, now)).toBe(false);
         expect(absenceCounts({ state: 'live', firstAt: now - FORMING_MS, timing: { windingDown: false } }, now)).toBe(true);
     });
+    test('a human in a group window who never asked: a stranger, until a record is open for them', async () => {
+        const { strangersIn } = await import('./lfg-watch');
+        const window = [{ name: 'Fergus', className: 'Hero' }, { name: 'Fiacra', className: 'Druid' }, { name: 'Niamh', className: 'Mentalist' }];
+        const ours = new Set(['fergus', 'fiacra']);
+        expect(strangersIn(window, ours, [])).toEqual([{ name: 'Niamh', className: 'Mentalist' }]);
+        expect(strangersIn(window, ours, [{ name: 'Niamh', stage: 'done' }])).toEqual([{ name: 'Niamh', className: 'Mentalist' }]);
+        expect(strangersIn(window, ours, [{ name: 'niamh', stage: 'joined' }])).toEqual([]);
+        expect(strangersIn(window, new Set([...ours, 'niamh']), [])).toEqual([]);
+    });
     test('a whisper and a /region line, never our own', async () => {
         const { heardLine } = await import('./lfg-watch');
         expect(heardLine({ type: 'send', text: 'Eimearx sends, "lfg"', sender: 'Eimearx' })).toEqual({ from: 'Eimearx', text: 'lfg' });

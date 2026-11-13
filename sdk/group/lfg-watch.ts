@@ -63,6 +63,23 @@ export interface LfgRecord {
     joinedAt?: number;
     lastInGroup?: number;
     end?: string;
+    /** Found in a unit's group window without asking (strangersIn): placed there, already joined, no whispers. */
+    adopted?: boolean;
+}
+
+/** A human in a unit's group window this long without an lfg record is adopted as if placed. */
+export const ADOPT_MS = 8000;
+/** An adoption that found no place (unit busy, another human there) is not tried again for this long. */
+export const ADOPT_RETRY_MS = 10 * 60_000;
+
+/**
+ * Humans in a group window: members who are none of our characters (every character the gateway knows) and have no open
+ * lfg record. Live 17:32: Niamh, released at a field restart, was invited again by the next sortie; in the window, not in
+ * observed, so no buff, heal, rez or pickup planned for her ("I joined a group and everybody is again unbuffed").
+ */
+export function strangersIn(group: readonly { name: string; className: string }[], ours: ReadonlySet<string>, records: readonly Pick<LfgRecord, 'name' | 'stage'>[]): { name: string; className: string }[] {
+    const open = new Set(records.filter(r => r.stage !== 'done').map(r => r.name.toLowerCase()));
+    return group.filter(m => m.name && !ours.has(m.name.toLowerCase()) && !open.has(m.name.toLowerCase()));
 }
 
 /** Who said what in a whisper (`Niamh sends, "lfg"`) or a /region line (`[Region] Niamh: lfg`); null for our own. */
@@ -125,6 +142,8 @@ export function startLfgWatch(o: Options) {
     };
     const startedAt = Date.now();
     const seen = new Set<string>();
+    /** `<unit>:<name>` of a human in a group window with no record: since when. */
+    const strangerSeen = new Map<string, number>();
 
     const get = async (path: string, headers: Record<string, string> = {}): Promise<any | null> => {
         try {
@@ -197,8 +216,15 @@ export function startLfgWatch(o: Options) {
     };
 
     const place = async (r: LfgRecord, g: string) => {
-        const units = (await lfgUnits(g)).filter(u => !o.only?.length || o.only.includes(u.unit));
+        // An adopted human is placed in the unit whose window they are in, or nowhere.
+        const units = (await lfgUnits(g)).filter(u => (!o.only?.length || o.only.includes(u.unit)) && (!r.adopted || u.unit === r.unit));
         const p = placeHuman(units, r.className!);
+        if (!p && r.adopted) {
+            note('not adopted', { name: r.name, className: r.className, unit: r.unit, units: units.map(u => `${u.unit}${u.running ? '' : ' (down)'}${u.observed.length ? ` (has ${u.observed.join(',')})` : ''}`) });
+            r.stage = 'done';
+            r.end = 'not adopted';
+            return;
+        }
         if (!p) {
             note('full', { name: r.name, className: r.className, units: units.map(u => `${u.unit}${u.running ? '' : ' (down)'}${u.observed.length ? ` (has ${u.observed.join(',')})` : ''}`) });
             await dm(r.via, r.name, LFG_SAY.full);
@@ -220,11 +246,17 @@ export function startLfgWatch(o: Options) {
         if (p.stepOut && !o.dry && o.presence === 'swarm') requestControl('logout', p.stepOut, o.control);
         r.unit = p.unit;
         r.stepOut = p.stepOut;
-        r.stage = 'invited';
         r.placedAt = Date.now();
-        await dm(r.via, r.name, LFG_SAY.placed(leaderName));
-        const wound = await windDown(p.unit, `lfg: ${r.name} joins`);
-        note('placed', { name: r.name, className: r.className, unit: p.unit, stepOut: p.stepOut, why: p.why, windDown: wound, ms: r.placedAt - r.asked });
+        if (r.adopted) {
+            // Already in the group: joined now, and no "inv coming" whisper.
+            r.stage = 'joined';
+            r.joinedAt = r.lastInGroup = r.placedAt;
+        } else {
+            r.stage = 'invited';
+            await dm(r.via, r.name, LFG_SAY.placed(leaderName));
+        }
+        const wound = await windDown(p.unit, `lfg: ${r.name} ${r.adopted ? 'is in the group' : 'joins'}`);
+        note(r.adopted ? 'adopted' : 'placed', { name: r.name, className: r.className, unit: p.unit, stepOut: p.stepOut, why: p.why, windDown: wound, ms: r.placedAt - r.asked });
     };
 
     const release = (r: LfgRecord, end: string) => {
@@ -280,6 +312,31 @@ export function startLfgWatch(o: Options) {
                 r.className ??= said.className ?? undefined;
                 if (r.className) await place(r, g);
                 else if (said.ask) await dm(r.via, r.name, LFG_SAY.whatClass);
+            }
+            // Humans in a unit's group window who never asked (invited again by a sortie after a release, or by hand): adopted
+            // as if placed, once seen ADOPT_MS, so the bots buff, heal, rez and pick them up.
+            const everyone = new Set([...ours, ...Object.values(status?.bots ?? {}).map((b: any) => String(b?.player ?? '').toLowerCase()).filter(Boolean)]);
+            for (const unit of units) {
+                if (o.only?.length && !o.only.includes(unit)) continue;
+                const def = readDef(unit);
+                const leader = def?.leader ?? def?.members[0]?.bot;
+                if (!leader || !online(leader)) continue;
+                const window = (await get(`/state/${user(leader)}`, auth(leader)))?.state?.group as { name: string; className: string }[] | undefined;
+                if (!window?.length) continue;
+                const here = strangersIn(window, everyone, st.records);
+                for (const k of [...strangerSeen.keys()]) if (k.startsWith(`${unit}:`) && !here.some(h => `${unit}:${h.name.toLowerCase()}` === k)) strangerSeen.delete(k);
+                for (const h of here) {
+                    const key = `${unit}:${h.name.toLowerCase()}`;
+                    const first = strangerSeen.get(key) ?? now;
+                    strangerSeen.set(key, first);
+                    if (now - first < ADOPT_MS) continue;
+                    const tried = st.records.find(x => x.name.toLowerCase() === h.name.toLowerCase() && x.end === 'not adopted' && now - x.asked < ADOPT_RETRY_MS);
+                    if (tried || !h.className) continue;
+                    const r: LfgRecord = { name: h.name, realm, via: leader, stage: 'class', className: h.className, unit, asked: now, adopted: true };
+                    st.records.push(r);
+                    strangerSeen.delete(key);
+                    await place(r, g);
+                }
             }
             // Those asked for their class, placed, in the group.
             for (const r of st.records) {
