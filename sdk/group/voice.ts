@@ -178,6 +178,8 @@ export interface GroupVoiceState {
 
 /** An encounter ends when no enemy player was in sight this long: the next one is "inc" again. */
 export const INC_RESET_MS = 25_000;
+/** A human's corpse is promised a rez only with a living rezzer of ours this close (same region). */
+export const REZ_NEAR = 3000;
 /** A focus line within this of the last says "switch", not "going in". */
 const SWITCH_MS = 30_000;
 
@@ -286,7 +288,17 @@ export function groupClaims(p: GroupPicture, st: GroupVoiceState, now = p.at): C
     if (o.phase !== 'engage' && o.phase !== 'retreat') {
         const rezzer = living.find(m => m.capabilities.rez);
         for (const m of p.members) {
-            if (m.isDead && m.observed) out.push({ key: `rez:${m.name}`, text: rezzer ? `${m.name}, don't release, rez coming` : `${m.name}, nobody can rez, release`, prio: 85, settleMs: 2000, cooldownMs: 90_000 });
+            if (!m.isDead || !m.observed) continue;
+            // A rez is promised only with a living rezzer near the corpse: live 15:55, Niamh died 25000 from a unit that
+            // walked out on its wave, was told "rez coming", and nobody came. Out of sight reads as another region.
+            const near = living.some(r => r.capabilities.rez && r.regionId === m.regionId && Math.hypot(r.x - m.x, r.y - m.y) <= REZ_NEAR);
+            if (near) out.push({ key: `rez:${m.name}`, text: `${m.name}, don't release, rez coming`, prio: 85, settleMs: 2000, cooldownMs: 90_000 });
+            else if (!rezzer) out.push({ key: `rez:${m.name}`, text: `${m.name}, nobody can rez, release`, prio: 85, settleMs: 2000, cooldownMs: 90_000 });
+            else {
+                const here = living.filter(r => r.regionId === living[0]!.regionId);
+                const place = placeName({ x: here.reduce((t, r) => t + r.x, 0) / here.length, y: here.reduce((t, r) => t + r.y, 0) / here.length }, st.realm, regionId);
+                out.push({ key: `rez-far:${m.name}`, text: `${m.name}, we can't get to you, release and catch up, we're ${place}`, prio: 85, settleMs: 2000, cooldownMs: 90_000 });
+            }
         }
         // The dead bots in one line: "rez Eir", "rez Eir and Leif", "rez Eir, Leif and Freydis".
         const dead = rezzer ? team.filter(m => m.isDead).map(m => m.name) : [];

@@ -163,6 +163,21 @@ describe('group chat', () => {
         for (let t = 0; t <= 8000; t += 500) { const l = w.hear(here(t)); if (l) said.push(l.text); }
         expect(said).toEqual(['short break here, out again in about 3 min']);
     });
+    test('a rez is promised to a human only with a rezzer near the corpse', () => {
+        const out = { phase: 'travel' as const, reason: 'wave: out toward where our realm last saw enemies' };
+        // The unit near our PK, Niamh dead at the Faste, 25000 off: release and catch up.
+        const at = (m: ReturnType<typeof report>) => ({ ...m, regionId: 252, x: 37301, y: 50362 });
+        const niamh = report('Niamh', { observed: true, isDead: true, regionId: 252, x: 33089, y: 30000 });
+        const far = ticks(gv(), t => picture([...team().map(at), niamh], [], out, t), 6000);
+        expect(far).toContain("Niamh, we can't get to you, release and catch up, we're at our PK");
+        expect(far.some(l => l.includes('rez coming'))).toBe(false);
+        // Out of sight: no promise either.
+        const gone = ticks(gv(), t => picture([...team().map(at), { ...niamh, regionId: -1 }], [], out, t), 6000);
+        expect(gone.some(l => l.includes('rez coming'))).toBe(false);
+        // Beside her: the promise.
+        const near = ticks(gv(), t => picture([...team().map(at), { ...niamh, x: 37800, y: 50362 }], [], out, t), 6000);
+        expect(near).toContain("Niamh, don't release, rez coming");
+    });
     test('the wipe', () => {
         const v = gv();
         const dead = team().map(m => ({ ...m, isDead: true }));
