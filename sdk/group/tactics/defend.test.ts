@@ -4,7 +4,7 @@ import { decideRvr, realmCalls, RVR_SETTINGS, rvrRoaming, type RvrSettings } fro
 import { defencePlan } from '../siege';
 import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { GroupPicture, MemberReport, Orders } from '../types';
-import { defendPatch, memberJobs, withDefenceStand } from './defend';
+import { defendPatch, meleeHeld, memberJobs, withDefenceStand } from './defend';
 import { chooseCall, CALL_SETTINGS, type RealmCall } from './help';
 
 const plan = defencePlan('albion')!;
@@ -72,5 +72,11 @@ describe('the defence call, the units\' side (S3, 2026-11-13)', () => {
         expect(strategy.decide(ctx(picture(inside, [at(601, 36300, 38300), at(602, 36350, 38300)]), memory)).phase).not.toBe('engage');
         const o = strategy.decide(ctx(picture(inside, [at(603, 34300, 38275)]), memory));
         expect(o).toMatchObject({ phase: 'engage', focus: 603 });
+    });
+
+    test('meleeHeld: a focus outside our shut gate is beyond a door once our doors are registered (defendPatch)', () => {
+        defendPatch({}, 'albion', five(33600, 38300), []);
+        expect(meleeHeld(TH, { x: 33900, y: 38275, z: 3720 }, { x: 34600, y: 38275, z: 3720 })).toBe(true);
+        expect(meleeHeld(TH, { x: 33900, y: 38275, z: 3720 }, { x: 33700, y: 38275, z: 3720 })).toBe(false);
     });
 });

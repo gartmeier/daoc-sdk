@@ -47,7 +47,7 @@ import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
 import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, noteArrival, roamGoal, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
 import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
-import { defenceReachOf, defendCall, defendPatch, overDefence, withDefence } from './tactics/defend';
+import { defenceReachOf, defendCall, defendPatch, meleeHeld, overDefence, withDefence } from './tactics/defend';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { loiter, waveOrder, waveWatch, type RealmWave } from './waves';
@@ -818,7 +818,10 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
             return [ccKey(a), { x: m?.x ?? 0, y: m?.y ?? 0, from: walks[ccKey(a)]?.from ?? now }];
         }));
         mem.ccBench = Object.fromEntries(Object.entries(bench).filter(([, until]) => until > now));
+        // Defending: the tanks and melee hold for a focus beyond a keep door (tactics/defend.ts meleeHeld).
+        const doorHeld = defending && meleeHeld(regionId, { x: centre.x, y: centre.y, z: leader.z }, focus);
         return {
+            ...(doorHeld ? { meleeFocus: null } : {}),
             phase: 'engage', focus: focus.objectId, puller: null, cc, retreatTo: null, waiting: [], anchor: mem.fightAnchor, facing: { x: focus.x, y: focus.y },
             objective: `fight ${players.length ? 'enemy players' : 'monsters'} at ${at(mem.fightAnchor)}${gone}`,
             reason: `${caught && outnumbered(big.length) ? 'caught: ' : ''}fight ${label(focus)}: ${players.length ? `${counted(big, players)} vs ${main.length}${withAllies}` : `${pool.length} attacking`}`,

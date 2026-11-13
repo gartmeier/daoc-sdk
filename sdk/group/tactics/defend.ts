@@ -8,7 +8,8 @@
 import { defenceSettings, holdDefenceStand, type DefenceSettings } from '../defence';
 import type { PlayerRealm } from '../keeps';
 import type { Behavior } from '../member';
-import { defenceOrders, defencePlan, inDefenceReach, type DefenceJob } from '../siege';
+import { doorBetween } from '../../doors';
+import { defenceOrders, defencePlan, inDefenceReach, openOwnDoors, type DefenceJob } from '../siege';
 import type { GroupStrategy } from '../strategy';
 import type { Contact, MemberReport, Role } from '../types';
 import { answering, type RealmCall } from './help';
@@ -51,6 +52,8 @@ export function defendPatch(mem: Record<string, any>, realm: PlayerRealm, member
     const o = defenceOrders(plan, { defenders, foes, owner: realm, seats: mem.defenceSeats as Map<number, string> | undefined });
     mem.defenceSeats = new Map([...o.seats].map(([id, s]) => [id, s.label]));
     const broken: number[] = [...new Set(here.flatMap(m => m.doorsBroken ?? []))];
+    // Our own doors in this process too (the members' walks open them; the coordinator's door check reads them: meleeHeld).
+    openOwnDoors(plan, broken);
     const names = new Map(here.map(m => [m.objectId, m.name]));
     const patch = defenceSettings(plan, o, names, broken, mem.defencePatch ?? null);
     mem.defencePatch = patch;
@@ -66,6 +69,15 @@ export function defendPatch(mem: Record<string, any>, realm: PlayerRealm, member
 export function defenceReachOf(realm: PlayerRealm): ((c: { x: number; y: number }) => boolean) | null {
     const plan = defencePlan(realm);
     return plan ? c => inDefenceReach(plan, c) : null;
+}
+
+/**
+ * Defending: a focus beyond a keep door (ours needs an interact, theirs is shut) is no target for the tanks and melee; they hold
+ * on their stands until the gate breaks. S2's rehearsal 2: the Armsman retried a Troll beyond our gate every second
+ * (`kill: out_of_reach ... beyond the door 252000301`).
+ */
+export function meleeHeld(regionId: number, from: { x: number; y: number; z: number }, focus: { x: number; y: number; z: number }): boolean {
+    return doorBetween(regionId, from, focus) !== null;
 }
 
 /** `base` with the defence patch on top: the same object while neither changes (members rebuild their settings on a new one). */
