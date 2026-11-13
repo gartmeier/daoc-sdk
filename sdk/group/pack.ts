@@ -28,6 +28,7 @@ import { lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, type Qua
 import { offRoadsOut, roadsOut } from './tactics/roads';
 import { withHasten } from './tactics/hasten';
 import { RAID_FOE_REACH, raidNow } from './tactics/raid';
+import { planBuffs } from './buffs';
 import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
@@ -37,6 +38,8 @@ import { drySpot, isDry, isWet, waitAshore } from './water';
 
 export { focusHealed, pickPackFocus } from './rvr';
 
+/** A rebuff waits for buffs still owed (planBuffs) at most this long from its start; past it, they catch up on the way. */
+export const REBUFF_MAX_MS = 60_000;
 /** The pack's waitAshore memory key: decideRvr, run for its quiet times, has its own. */
 const PACK_ASHORE = 'packAshoreSince';
 
@@ -336,6 +339,15 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const pickupWait = pickups.map(m => ({ name: m.name, why: 'pickup' }));
     const dead = p.members.filter(m => m.isDead && m.regionId === regionId);
     const none = { focus: null, puller: null, cc: [], retreatTo: null };
+    // Buffs someone of ours still owes another (buffs.ts planBuffs, not yet on its target): a rebuff waits for them, up to REBUFF_MAX_MS.
+    const living = p.members.filter(m => !m.isDead);
+    const missingBuffs = () => here.flatMap(c => planBuffs(c.name, living).filter(t => !t.covered && t.rank < 99 && !t.pet).map(t => `${t.spell.name} on ${t.target}`));
+    const buffingNow = () => here.filter(m => m.activity?.kind === 'buff');
+    /** The rebuff isn't done: its minimum time, a buff being cast, or one still owed while REBUFF_MAX_MS hasn't passed. */
+    const rebuffHolds = (): boolean => {
+        const since = now - (mem.rebuffAt ?? 0);
+        return since < k.rebuffMs || buffingNow().length > 0 || (since < REBUFF_MAX_MS && missingBuffs().length > 0);
+    };
     // Travelling with nobody near, nor anybody lately: a column behind the crowd controller. Every update says, as orders merge (setOrders).
     const foeNear = !!k.column && foes.some(c => dist(c, centre) <= k.column);
     if (foeNear) mem.columnFoeAt = now;
@@ -350,7 +362,9 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     const areaRadius = 350;
     // The raid (tactics/raid.ts): the muster said go and no enemy player is on us or within RAID_FOE_REACH: decideRvr plays it,
     // guards and doors included. Those farther off are no reason to drop it (attempt 6: hibernia hunted, hibernia-2 sat).
-    if (raiding && !foes.some(c => onUs(c) || dist(c, centre) <= RAID_FOE_REACH)) return say(calm());
+    // Not while the pack still rebuffs (rebuffHolds): a unit fresh from its bind finishes its buffs before it joins the go. The user, playing
+    // Niamh at 16:27: "everyone is running to the Faste from the PK without buffing first".
+    if (raiding && !(mem.pack === 'rebuff' && rebuffHolds()) && !foes.some(c => onUs(c) || dist(c, centre) <= RAID_FOE_REACH)) return say(calm());
 
     // Chasers are the Hero's: the anchor stands on the focus, so his leash lets him at it (never into a keep's circle).
     // A focus in a river: the bank nearest it, so he goes in no farther than his leash.
@@ -550,9 +564,11 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
                 ...(m.hp < k.rebuffReady.hp ? [{ name: m.name, why: 'health' }] : []),
                 ...(usesMana(m) && m.mana < k.rebuffReady.mana ? [{ name: m.name, why: powerWhy(m) }] : []),
             ]);
-            const buffing = here.filter(m => m.activity?.kind === 'buff');
-            if (now - mem.rebuffAt < k.rebuffMs || low.length || buffing.length) {
-                return say({ ...none, phase: 'recover', anchor: rest().at, waiting: low, objective: 'rebuff and rest together', reason: `rebuffing: ${buffing.length} casting, waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ') || 'the buffs to go round'}${rest().why}` });
+            const buffing = buffingNow();
+            const owed = now - mem.rebuffAt < REBUFF_MAX_MS ? missingBuffs() : [];
+            if (now - mem.rebuffAt < k.rebuffMs || low.length || buffing.length || owed.length) {
+                const owes = owed.length ? `; ${owed.length} buff${owed.length === 1 ? '' : 's'} to go (${owed.slice(0, 2).join(', ')})` : '';
+                return say({ ...none, phase: 'recover', anchor: rest().at, waiting: low, objective: 'rebuff and rest together', reason: `rebuffing: ${buffing.length} casting, waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ') || 'the buffs to go round'}${owes}${rest().why}` });
             }
             mem.pack = 'stalk';
             mem.raids = mem.raids ?? 0;

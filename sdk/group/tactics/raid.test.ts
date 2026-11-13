@@ -369,3 +369,16 @@ describe('raid: the way on from the member furthest along (S3, live 15:18: a for
         expect(u.anchor).toMatchObject({ x: way[2]!.x, y: way[2]!.y });
     });
 });
+
+describe('raid: a pack fresh from its bind finishes its rebuff before the go (the user at 16:27: "running to the Faste without buffing first")', () => {
+    const buffer = (members: MemberReport[]) => members.map((m, i) => i === 2 ? { ...m, capabilities: { ...m.capabilities, buffSpells: [{ name: 'Strength', slot: 'str' as any, target: 'Realm', concentration: 5 }] } } : m);
+    const pk = (memory: Record<string, any>, members: MemberReport[], now: number) => decidePack({ picture: { ...picture(members, []), at: now }, orders: picture([]).orders, memory, now, windingDown: false, settings: mergeSettings(rvrPack.settings, {} as any) } as any);
+    const home = { x: 21_000, y: 27_000, z: 3000 };
+    test('within the rebuff\'s minimum, or with a buff owed (up to 60 s): rebuffing; then the raid', () => {
+        const now = 1_000_000;
+        expect(pk({ ...mustered(), pack: 'rebuff', rebuffAt: now - 5_000 }, five(home), now).reason).toMatch(/^rebuffing/);
+        expect(pk({ ...mustered(), pack: 'rebuff', rebuffAt: now - 25_000 }, buffer(five(home)), now).reason).toMatch(/^rebuffing.*buffs? to go \(Strength/);
+        expect(pk({ ...mustered(), pack: 'rebuff', rebuffAt: now - 25_000 }, five(home), now).reason).toMatch(/^raid/);
+        expect(pk({ ...mustered(), pack: 'rebuff', rebuffAt: now - 70_000 }, buffer(five(home)), now).reason).toMatch(/^raid/);
+    });
+});
