@@ -50,6 +50,8 @@ Oisin plays Nurture support. **Community, unverified:** the level 50 numbers com
 
 A song needs an instrument out (`SpellHandler.cs` `CheckInstrument`), and `bot.takeMeleeSlot`, the SDK's weapon switch, only takes melee weapons in hand. Oisin wears Bard Initiate Lute, the gift of his promotion. The gear template's club would put it away, so `gear-template.ts` takes the lute off and puts it on again last ([gear-template.md](../gear-template.md)). Hibernia's `keepItems` protects `Initiate|Lute|Drum|Flute` from `shedLoad`.
 
+**Verified, 2026-11-13:** Fiacra played no song in any recorded run. She has no promotion lute, the gear template's Bard kit has no instrument, and her only one, a level-29 Arcane Flute drop, sat in the backpack: "You are not wielding the right type of instrument!" every time. In the ranged slot (13) it plays (S1, by hand). Since 79383bd, `song` brings an instrument out itself after that refusal, at most once a minute: a worn one off and on in its slot, else the backpack's best, put on where the server takes it (`songs.ts` `instrumentToBringOut`). Not yet seen live.
+
 ## Weight
 
 **Verified.** Oisin is the group's worst carrier. On 2026-10-31 he stood at 90/70 with a speed of 34 against 191, and the whole group waited for him at each leg until he sold his bags. After the level-24 template he was at 97 %, the heaviest of all 15. A Bard that's left full costs every member.
