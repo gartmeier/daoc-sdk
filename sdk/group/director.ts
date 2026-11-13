@@ -113,13 +113,27 @@ export const RAID_ROUND = 50;
 
 export type MusterHold = 'defenders' | 'winner' | 'lord' | 'progress';
 
-/** How far a raid unit got, from its orders' reason (tactics/raid.ts `raid <phase>: rank N: ...`): phase × 10 + rank; 0 for none. */
-export function raidProgress(reason: string): number {
+/**
+ * How far a raid unit got, from its orders' reason (tactics/raid.ts `raid <phase>: rank N: ...; M left`): phase × 10 + rank, and
+ * within a rank the fewer of its targets left the further (siege.ts's "; M left", up to 99). 0 for none. `lastLeft`: the unit's M
+ * from an earlier tick at this phase and rank, for the reasons that carry none ("X is on us").
+ */
+export function raidProgress(reason: string, lastLeft?: { step: number; left: number }): number {
     const m = /\braid (approach|stage|assault|lord|taken)\b/.exec(reason);
     if (!m) return 0;
     const phase = ['approach', 'stage', 'assault', 'lord', 'taken'].indexOf(m[1]!) + 1;
     const rank = Number(/\brank (\d+)/.exec(reason)?.[1] ?? 0);
-    return phase * 10 + rank;
+    const step = phase * 10 + rank;
+    const said = /;\s*(\d+) left\b/.exec(reason)?.[1];
+    const left = said !== undefined ? Number(said) : lastLeft?.step === step ? lastLeft.left : 99;
+    return step + (99 - Math.min(99, left)) / 100;
+}
+
+/** The "; M left" of a raid reason at its phase and rank, or null without one. */
+export function raidLeft(reason: string): { step: number; left: number } | null {
+    const said = /;\s*(\d+) left\b/.exec(reason)?.[1];
+    const step = Math.floor(raidProgress(reason));
+    return said !== undefined && step > 0 ? { step, left: Number(said) } : null;
 }
 
 /** A running unit of the realm as the calls file carries it: its living's centre (rounded to RAID_ROUND), how many live. */
@@ -411,6 +425,8 @@ interface Open {
         /** The furthest the raid got (raidProgress) and when it last got further. */
         furthest?: number;
         furthestAt?: number;
+        /** Each raid unit's last "; M left" at its phase and rank. */
+        lefts?: Map<string, { step: number; left: number }>;
         /** Since when the defenders hold the rally. */
         heldSince?: number;
         /** Enemy players seen near the target, by key: last seen and realm. */
@@ -884,7 +900,14 @@ export class RealmDirector {
         } else {
             if (raid.some(u => LORD_PHASE.test(u.reason))) o.raid.lordAt = now;
             // Progress: the furthest any raid unit got (phase, then rank, from tactics/raid.ts's `raid <phase>: rank N: ...`).
-            const best = Math.max(0, ...raid.map(u => raidProgress(u.reason)));
+            // A target down within the rank counts too (S2: rank 3, the wall casters, is the long one); a respawn (more left) doesn't.
+            const lefts = o.raid.lefts ??= new Map();
+            const best = Math.max(0, ...raid.map(u => {
+                const p = raidProgress(u.reason, lefts.get(u.unit));
+                const l = raidLeft(u.reason);
+                if (l) lefts.set(u.unit, l);
+                return p;
+            }));
             if (best > (o.raid.furthest ?? 0)) { o.raid.furthest = best; o.raid.furthestAt = now; }
             const gone = now - o.raid.stagedAt;
             const onLord = o.raid.lordAt !== undefined && now - o.raid.lordAt <= s.lordGraceMs;
