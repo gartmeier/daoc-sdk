@@ -19,7 +19,8 @@
     "server:throwaway": "bun scripts/throwaway-server.ts",
     "scoreboard": "bun scripts/scoreboard.ts",
     "navmesh:build": "bun scripts/build-navmesh.ts",
-    "terrain:build": "bun scripts/build-terrain.ts"
+    "terrain:build": "bun scripts/build-terrain.ts",
+    "occluders:build": "bun scripts/build-occluders.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

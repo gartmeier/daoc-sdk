@@ -68,4 +68,4 @@ nearestBindpoint(me.regionId, me.x, me.y, me.realm);
 ## What the world doesn't have
 
 - **No terrain heights and no navmesh** ship with this server image. `bun run navmesh:build` generates per-zone meshes and terrain grids from the local client (`zoneNNN.nav` and `zoneNNN.terrain` per zone; a region spans several zones). The gameserver loads the `.nav` meshes from the mounted `server/navmesh/` at startup and paths NPCs around walls; without them it moves NPCs in straight lines. Only the SDK reads the `.terrain` grids. On the bot side, walks route around walls and the bot stands on the exact terrain; without meshes, z is estimated (see [walking.md](walking.md)).
-- **Line of sight is terrain only:** the client answers the server's LoS checks from the heightmap, so hills block casts and aggro; walls, buildings and trees don't (rvr.md "Human vision").
+- **Line of sight is the terrain's and the fixtures':** the client answers the server's LoS checks from the heightmap and the zone fixtures' collision meshes (`server/navmesh/zoneNNN.occluders`), so hills, keep walls and buildings block casts and aggro; trees don't (rvr.md "Human vision").
