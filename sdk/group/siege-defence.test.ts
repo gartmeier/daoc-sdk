@@ -436,3 +436,15 @@ describe('raidOrders: the lord phase goes for the lord, the roof archer is a sid
         expect(raidOrders(raid, { ...base, members: withUser, seen: [jarl, hunter], reach: () => true }).ranged.focus?.id).toBe(9);
     });
 });
+
+describe('raidOrders: both doors broken, rush up', () => {
+    test('the building door broken with the floor-3 fighter at its post: the lord phase at once', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('hibernia')!;
+        const f3 = FASTE.targets.find(t => t.label === 'floor-3')!.at;
+        const seen = [{ id: 4, name: 'Huscarl', realm: 'midgard', kind: 'npc' as const, ...f3 }, { id: 50, name: 'Jarl Thidranki', realm: 'midgard', kind: 'npc' as const, ...FASTE.targets.find(t => t.kind === 'lord')!.at }];
+        const members = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, x: 32800, y: 38200 + i * 10, z: 3722, alive: true }));
+        expect(raidOrders(raid, { members, seen, owner: 'midgard', staged: true, broken: [252000301, 252000302], reach: () => true }).phase).toBe('lord');
+        expect(raidOrders(raid, { members, seen, owner: 'midgard', staged: true, broken: [252000301], reach: () => true }).phase).toBe('assault');
+    });
+});

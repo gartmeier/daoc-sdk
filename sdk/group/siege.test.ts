@@ -323,9 +323,11 @@ describe('raidOrders', () => {
         expect(raidOrders(plan, view({ members: roof, seen: archerOnUs, staged: true })).melee.focus!.name).toBe('Lady Thidranki');
         const fighterOnUs = garrison().map(s => s.name === 'floor-3' ? { ...s, targetObjectId: roof[0]!.id } : s);
         expect(raidOrders(plan, view({ members: roof, seen: fighterOnUs, staged: true })).ranged.focus!.name).toBe('floor-3');
-        // One stray up there alone: the ranks (live 03:33).
+        // One stray up there alone (live 03:33 it had walked through the shut doors) now proves both doors passed: our walks treat
+        // a shut door as a wall (8e0a8d7), and on the island there is no other way up (passedDoors). Both doors open: rush up (the
+        // user, 2026-11-13 21:25: "if the second door is open and everyone is OK, rush up").
         const stray = [...at(plan.roof, 1), ...at({ x: 33100, y: 38250, z: 3722 }, 7).map(m => ({ ...m, id: m.id + 100 }))];
-        expect(raidOrders(plan, view({ members: stray, seen: garrison(), staged: true })).phase).toBe('assault');
+        expect(raidOrders(plan, view({ members: stray, seen: garrison(), staged: true })).phase).toBe('lord');
         // Nobody up there: the ranks again.
         expect(raidOrders(plan, view({ members: at({ x: 33100, y: 38250, z: 3722 }, 8), seen: garrison(), staged: true })).phase).toBe('assault');
     });

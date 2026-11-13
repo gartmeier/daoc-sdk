@@ -590,7 +590,12 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // Not one of us alone (a stray, live 03:33: it turned the whole raid on the roof's Scouts with the gate still shut).
     const living = view.members.filter(m => m.alive);
     const atLord = living.filter(m => inLordReach(plan, m)).length >= Math.max(AT_LORD_MIN, Math.ceil(living.length * AT_LORD_SHARE));
-    const open = atLord ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
+    // Every breakable door broken (the building's too): rush up to the lord, the floor-3 fighter met on the stair (a fighter on us
+    // is the focus anyway). The user, 2026-11-13 21:25: "if the second door is open and everyone is OK, rush up." Whether everyone
+    // is OK (health, power, the dead) is the caller's, who sees the members' reports (S3's raidStep).
+    const doorSteps = plan.targets.filter(t => t.kind === 'door');
+    const rush = doorSteps.length > 0 && doorSteps.every(t => t.doorId !== undefined && broken.has(t.doorId));
+    const open = atLord || rush ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
     const rank = open.length ? Math.min(...open.map(t => t.rank)) : null;
     const inRank = open.filter(t => t.rank === rank);
     const rangedStep = inRank.find(t => t.who !== 'melee') ?? null;
