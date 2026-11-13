@@ -439,7 +439,11 @@ Surveyed from the server source, the DB and the navmesh, then walked and capture
 - **Rank 4 (the far walls from `COURTYARD`):** wall-n is in sight from there. wall-sw and wall-nw are in sight from no courtyard spot within 750 of its centre, and they don't see the courtyard either. Take them from their wall-walk, or skip them; as it stands they would hold the rank.
 - **Rank 5 (the roof archers from `COURTYARD`):** they are out of sight from the whole courtyard and from the building's door, and in sight from `ROOF` (276-312 away). They join the fight only when the raid is on the roof, so they belong with the lord's step.
 - **Doors don't block:** buildnav writes doors to `.doors`, not into the fixture mesh. A closed gate hides nothing in our answers, though a real client's probably does.
-- **Not yet compared with a real client:** whether a real client tests the same collision mesh, or the visible one (its crenels may have a sill), and at what eye height. To measure it, put a real client's character at the gate and in the courtyard of a throwaway stack, capture with tcpdump in its gameserver container, and decode with `bun client/dev/los-capture.ts <pcap> --port=<game port>`; it lists every 0xD0 answer the client sent, checker and target object ids. Until then, `DAOC_LOS=terrain` gives back the old answers.
+- **Matches the real client (2026-11-13):** the user's 1.127 client was put at the same two spots on the throwaway, and its answers were captured with tcpdump and decoded by `client/dev/los-capture.ts`.
+  - At the gate it answered blocked for wall-n, wall-e-n, wall-e-s and wall-se. No Wizard cast at it.
+  - In the courtyard it answered clear for those four and blocked for wall-sw, wall-nw and all three roof Scouts. A Wizard nuked it; the Scouts didn't shoot.
+  - Our client gave the same 13 answers, guard by guard. Untested so far: lines through the merlon gaps, eye heights other than ours, and a closed gate.
+- **To measure again:** a throwaway allows one realm per account, and it moves a character that logs in near an enemy keep to its bind point unless its last login was within `NearKeepRelogGracePeriod` minutes (3). Raise that in `serverproperty` first. Then capture in its gameserver container (`tcpdump -i any -nn -U -w /tmp/x.pcap tcp port <game port>`) and run `bun client/dev/los-capture.ts <pcap> --port=<game port>`; it names each checker from the NPC packets in the same capture.
 
 ## The wolf pack (`sdk/group/pack.ts`, `rvrPack`)
 

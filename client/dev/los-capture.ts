@@ -5,11 +5,13 @@
 //   docker cp <gameserver>:/tmp/los.pcap .
 //   bun client/dev/los-capture.ts los.pcap [--port=10300]
 //
-// Prints one line per answer: time, the client's address, checker and target object ids, clear or blocked. The ids are
-// the server's; a bot logged in nearby at the same time sees the same ids (sdk.getNearbyNpcs objectId).
+// Prints one line per answer: time, the client's address, checker and target object ids, clear or blocked, and the
+// checker's name and position from the NPC packets (0xDA) the server sent that client in the same capture.
 // Reads classic pcap (not pcapng), Ethernet or Linux cooked (tcpdump -i any) captures of IPv4 TCP.
 
 import { readFileSync } from 'node:fs';
+import { ServerFrameDecoder } from '../net/framing';
+import { decodeNpcCreate } from '../protocol/incoming/objects';
 
 export interface LosAnswer {
     /** Seconds since the first packet of the capture. */
@@ -20,8 +22,11 @@ export interface LosAnswer {
     clear: boolean;
 }
 
-/** TCP payloads sent to `port`, per client address, in capture order (loopback captures arrive in order). */
-export function clientStreams(pcap: Uint8Array, port: number): Map<string, { t: number; data: Uint8Array }[]> {
+/**
+ * TCP payloads sent to `port` (or, with `fromServer`, sent from it), per client address, in capture order (loopback
+ * captures arrive in order).
+ */
+export function clientStreams(pcap: Uint8Array, port: number, fromServer = false): Map<string, { t: number; data: Uint8Array }[]> {
     const dv = new DataView(pcap.buffer, pcap.byteOffset, pcap.byteLength);
     const magic = dv.getUint32(0, true);
     const le = magic === 0xa1b2c3d4 || magic === 0xa1b23c4d;
@@ -49,13 +54,14 @@ export function clientStreams(pcap: Uint8Array, port: number): Map<string, { t: 
         const tcp = ip + ihl;
         const totalLen = (pkt[ip + 2]! << 8) | pkt[ip + 3]!;
         const dport = (pkt[tcp + 2]! << 8) | pkt[tcp + 3]!;
-        if (dport !== port) continue;
         const sport = (pkt[tcp]! << 8) | pkt[tcp + 1]!;
+        if ((fromServer ? sport : dport) !== port) continue;
         const seq = ((pkt[tcp + 4]! << 24) | (pkt[tcp + 5]! << 16) | (pkt[tcp + 6]! << 8) | pkt[tcp + 7]!) >>> 0;
         const dataOff = (pkt[tcp + 12]! >> 4) * 4;
         const data = pkt.subarray(tcp + dataOff, ip + totalLen);
         if (data.length === 0) continue;
-        const key = `${pkt[ip + 12]}.${pkt[ip + 13]}.${pkt[ip + 14]}.${pkt[ip + 15]}:${sport}`;
+        const a = fromServer ? ip + 16 : ip + 12;
+        const key = `${pkt[a]}.${pkt[a + 1]}.${pkt[a + 2]}.${pkt[a + 3]}:${fromServer ? dport : sport}`;
         // tcpdump -i any can see a packet twice (two interfaces): keep the first of each sequence number.
         const s = seen.get(key) ?? new Set<number>();
         seen.set(key, s);
@@ -93,6 +99,24 @@ export function losAnswers(client: string, chunks: { t: number; data: Uint8Array
     return out;
 }
 
+/** The NPCs the server showed one client (0xDA), by object id: the last name and spot seen. */
+export function npcsShown(chunks: { t: number; data: Uint8Array }[]): Map<number, { name: string; x: number; y: number; z: number }> {
+    const out = new Map<number, { name: string; x: number; y: number; z: number }>();
+    const dec = new ServerFrameDecoder();
+    for (const c of chunks) {
+        for (const p of dec.push(c.data)) {
+            if (p.code !== 0xda) continue;
+            try {
+                const n = decodeNpcCreate(p.payload);
+                out.set(n.objectId, { name: n.name, x: n.x, y: n.y, z: n.z });
+            } catch {
+                // a frame we can't read names nobody
+            }
+        }
+    }
+    return out;
+}
+
 if (import.meta.main) {
     const file = process.argv.slice(2).find(a => !a.startsWith('--'));
     const port = Number(/^--port=(\d+)$/.exec(process.argv.find(a => a.startsWith('--port=')) ?? '')?.[1] ?? 10300);
@@ -101,10 +125,15 @@ if (import.meta.main) {
         process.exit(1);
     }
     let n = 0;
-    for (const [client, chunks] of clientStreams(readFileSync(file), port)) {
+    const pcap = readFileSync(file);
+    const shown = clientStreams(pcap, port, true);
+    for (const [client, chunks] of clientStreams(pcap, port)) {
+        const npcs = npcsShown(shown.get(client) ?? []);
         for (const a of losAnswers(client, chunks)) {
             n++;
-            console.log(`${a.t.toFixed(1).padStart(7)}s  ${a.client}  checker ${a.checker}  target ${a.target}  ${a.clear ? 'clear' : 'BLOCKED'}`);
+            const who = npcs.get(a.checker);
+            const named = who ? `  ${who.name} at (${who.x}, ${who.y}, ${who.z})` : '';
+            console.log(`${a.t.toFixed(1).padStart(7)}s  ${a.client}  checker ${a.checker}  target ${a.target}  ${a.clear ? 'clear  ' : 'BLOCKED'}${named}`);
         }
     }
     console.log(`${n} LoS answer(s)`);
