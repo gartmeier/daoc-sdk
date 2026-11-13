@@ -1,7 +1,9 @@
 #!/usr/bin/env bun
 // "lfg" live (lfg.ts is the pure part): a human whispers a bot of their realm, a unit takes them in, a bot steps out.
 //
-//   bun sdk/group/lfg-watch.ts [--groups=hibernia,camelot,midgard] [--root=<dir>] [--control=<dir>] [--dry]
+//   bun sdk/group/lfg-watch.ts [--groups=hibernia,camelot,midgard] [--units=hibernia] [--root=<dir>] [--control=<dir>] [--dry]
+//
+// --units: only those units take a human (the user's hour: --units=hibernia). --dry: answers and edits logged, not made.
 //
 // Every few seconds it reads, over the gateway (read only, no control), the recent chat of each online bot of the
 // realms' units: whispers to it and /region lines. For a human's ask it places them (placeHuman), then:
@@ -62,6 +64,8 @@ export interface LfgState { v: 1; records: LfgRecord[]; held: string[] }
 
 interface Options {
     groups: string[];
+    /** Only these units take a human (e.g. ['hibernia'] for the user's hour); all main groups when absent. */
+    only?: string[];
     root: string;
     gateway: string;
     control: string;
@@ -161,7 +165,7 @@ export function startLfgWatch(o: Options) {
     };
 
     const place = async (r: LfgRecord, g: string) => {
-        const units = await lfgUnits(g);
+        const units = (await lfgUnits(g)).filter(u => !o.only?.length || o.only.includes(u.unit));
         const p = placeHuman(units, r.className!);
         if (!p) {
             note('full', { name: r.name, className: r.className, units: units.map(u => `${u.unit}${u.running ? '' : ' (down)'}${u.observed.length ? ` (has ${u.observed.join(',')})` : ''}`) });
@@ -279,6 +283,7 @@ if (import.meta.main) {
     const root = flag('root') ?? join(import.meta.dir, '..', '..');
     startLfgWatch({
         groups: (flag('groups') ?? 'hibernia,camelot,midgard').split(','),
+        only: flag('units')?.split(','),
         root,
         gateway: flag('gateway') ?? process.env.GATEWAY_HTTP ?? 'http://127.0.0.1:7780',
         control: flag('control') ?? DEFAULT_CONTROL_DIR,
