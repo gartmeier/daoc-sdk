@@ -6,7 +6,8 @@ import { getClassSkills } from '../../data/index';
 import { withCharacter } from '../group/character';
 import { packBehaviors } from '../group/pack';
 import type { Contact } from '../group/types';
-import { CHARM_SAFE_RESIST, charmLimits, charmPullTarget, charmResist, charmTarget, mentalist, noteTooFar, petOnMe, stunTarget, viewDistance, type TooFar } from './mentalist';
+import { contact } from '../group/fixtures';
+import { CHARM_SAFE_RESIST, charmLimits, charmPullTarget, pullBlocked, charmResist, charmTarget, mentalist, noteTooFar, petOnMe, stunTarget, viewDistance, type TooFar } from './mentalist';
 import type { NearbyNpc } from '../types';
 import { selfBuffDue } from './paladin';
 import { reachOfBuild } from './reach';
@@ -248,6 +249,20 @@ describe('the charm (the user, playing Niamh: Imaginary Enemy on a bwca and matu
         expect(charmPullTarget([at(1, 1300, 0, { inCombat: true }), at(2, 1600, 0)], choice)).toBeNull();
         expect(charmPullTarget(camp, { ...choice, busy: new Set([1]) })).toBeNull();
         expect(charmPullTarget(camp, { ...choice, maxLevel: 19 })).toBeNull();
+    });
+
+    test('no pull with an enemy player in view or a fight within 2000 (field 2026-11-13: adds that caused big trouble)', () => {
+        const me = { name: 'Deirdre', regionId: 200, x: 0, y: 0, realm: 'hibernia' };
+        const mate = (o: object = {}) => ({ name: 'Brigid', regionId: 200, x: 500, y: 0, inCombat: false, isDead: false, ...o });
+        expect(pullBlocked([contact(1, { x: 1500, y: 0 })], [mate()], me)).toBeNull();
+        expect(pullBlocked([contact(2, { kind: 'player', name: 'Norseman', realm: 'midgard', x: 6000, y: 0 })], [], me)).toContain('enemy player');
+        expect(pullBlocked([contact(2, { kind: 'player', name: 'Norseman', realm: 'midgard', stale: true })], [], me)).toBeNull();
+        expect(pullBlocked([contact(3, { inCombat: true, x: 1900, y: 0 })], [], me)).toContain('fight near');
+        expect(pullBlocked([contact(3, { threat: true, x: 1900, y: 0 })], [], me)).toContain('fight near');
+        expect(pullBlocked([contact(3, { inCombat: true, x: 2100, y: 0 })], [], me)).toBeNull();
+        expect(pullBlocked([contact(3, { inCombat: true, x: 500, y: 0, charming: 'Deirdre' })], [], me)).toBeNull();
+        expect(pullBlocked([], [mate({ inCombat: true })], me)).toContain('Brigid');
+        expect(pullBlocked([], [mate({ inCombat: true, x: 2500 }), mate({ name: 'Deirdre', inCombat: true })], me)).toBeNull();
     });
 
     test('in the pack nuker list: charmUp in the chores, petControl on the side tick from the start', () => {

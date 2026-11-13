@@ -349,6 +349,24 @@ export function charmPullTarget(npcs: readonly NearbyNpc[], c: CharmPull): Nearb
         .sort((a, b) => b.level - a.level || a.distance - b.distance)[0] ?? null;
 }
 
+/** No pull with a fight this near her: a member in combat, or a contact fighting or a threat. */
+export const CHARM_PULL_QUIET = 2000;
+
+/**
+ * Why a pull would come at a bad time, or null: an enemy player on the board (the pull would hold her and a pet-to-be in the
+ * open), or a fight within CHARM_PULL_QUIET of her. The player-feedback session, 2026-11-13: "Deirdre now the second time
+ * got a lot of adds. The first time it caused us big trouble."
+ */
+export function pullBlocked(contacts: readonly Contact[], members: readonly Pick<MemberReport, 'name' | 'regionId' | 'x' | 'y' | 'inCombat' | 'isDead'>[], me: { name: string; regionId: number; x: number; y: number; realm: string }): string | null {
+    const near = (p: { x: number; y: number }) => Math.hypot(p.x - me.x, p.y - me.y) <= CHARM_PULL_QUIET;
+    const foe = contacts.find(c => c.kind === 'player' && !c.stale && c.realm !== me.realm && c.regionId === me.regionId);
+    if (foe) return `an enemy player in view (${foe.name})`;
+    const fight = contacts.find(c => !c.stale && c.regionId === me.regionId && !c.charming && (c.threat || c.inCombat) && near(c));
+    if (fight) return `a fight near (${fight.name})`;
+    const busy = members.find(m => m.name !== me.name && !m.isDead && m.regionId === me.regionId && m.inCombat && near(m));
+    return busy ? `${busy.name} in combat near` : null;
+}
+
 /** Map of name or id to when it may be tried again, kept in the member's memory. */
 const later = <K>(memory: Map<string, any>, key: string): Map<K, number> => { let m = memory.get(key); if (!m) memory.set(key, m = new Map()); return m; };
 const liveKeys = <K>(m: Map<K, number>, now: number): Set<K> => new Set([...m].filter(([, at]) => at > now).map(([k]) => k));
@@ -400,15 +418,20 @@ export const charmUp = ({ maxResist = CHARM_SAFE_RESIST }: { maxResist?: number 
         let mob = charmTarget(ctx.sdk.getNearbyNpcs(), choice);
         let pulled = false;
         if (!mob) {
-            // The pull starts a fight of its own: only with none on.
+            // The pull starts a fight of its own: only with none on, near or in view.
             if (phase === 'engage' || ctx.threats().length) return false;
+            if (pullBlocked(ctx.picture().contacts, ctx.members() as any, { name: ctx.name, regionId: me.regionId, x: me.x, y: me.y, realm: me.realm })) return false;
             const nuke = ctx.spells.nuke({ targetHp: 0 });
             if (!nuke) return false;
             const pull = charmPullTarget(ctx.sdk.getNearbyNpcs(), { ...choice, factionOf: n => factionAt(me.regionId, n.name, n), range: nuke.range });
             if (!pull) return false;
-            ctx.doing('charm', pull.objectId, `pulling ${pull.name} (L${pull.level}) out of its camp with ${nuke.spell.name}`);
+            const what = `${pull.name} (L${pull.level}, ${pull.distance} away)`;
+            ctx.doing('charm', pull.objectId, `pulling ${what} out of its camp with ${nuke.spell.name}`);
+            // Every pull leaves a line in the run log, whatever comes of it.
+            ctx.note(`charm pull: ${nuke.spell.name} on ${what} at (${Math.round(pull.x)}, ${Math.round(pull.y)}), phase ${phase}`);
             const hit = await ctx.bot.castSpell(nuke.spell, pull.objectId, { approach: false });
             if (!hit.success) {
+                ctx.note(`charm pull: ${nuke.spell.name} on ${pull.name} failed (${hit.reason ?? hit.message})`);
                 ctx.result('charm', hit, pull.objectId);
                 ctx.memory.set('charmRetryAt', Date.now() + CHARM_RETRY_MS);
                 ids.set(pull.objectId, Date.now() + CHARM_MOB_RETRY_MS);
@@ -417,6 +440,7 @@ export const charmUp = ({ maxResist = CHARM_SAFE_RESIST }: { maxResist?: number 
             mob = await comeClear(ctx, pull, choice.aggroOf);
             if (!mob) {
                 // Not clear in time, or on her already: the group's to fight, as any mob on her.
+                ctx.note(`charm pull: ${pull.name} came on her before it was clear of its camp, the group's to fight`);
                 ctx.doing('idle', null, `pull of ${pull.name} came on her before it was clear of its camp`);
                 ctx.memory.set('charmRetryAt', Date.now() + CHARM_RETRY_MS);
                 ids.set(pull.objectId, Date.now() + CHARM_MOB_RETRY_MS);
@@ -441,7 +465,10 @@ export const charmUp = ({ maxResist = CHARM_SAFE_RESIST }: { maxResist?: number 
         if (c.reason === 'refused' && /does not charm|can't be charmed/.test(c.message)) names.set(mob.name, Infinity);
         else ids.set(mob.objectId, Date.now() + CHARM_MOB_RETRY_MS);
         // A pulled one that stayed hers no more: it's on her, the group's to fight.
-        if (pulled) ctx.doing('idle', null, `charm on pulled ${mob.name} failed`);
+        if (pulled) {
+            ctx.note(`charm pull: the charm on ${mob.name} failed (${c.reason ?? c.message}), the group's to fight`);
+            ctx.doing('idle', null, `charm on pulled ${mob.name} failed`);
+        }
         return true;
     },
 });
