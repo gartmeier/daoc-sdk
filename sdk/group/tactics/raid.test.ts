@@ -9,7 +9,7 @@ import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { Behavior } from '../member';
 import type { Contact, GroupPicture, MemberReport, Orders, Point3 } from '../types';
 import type { RealmCall } from './help';
-import { breakDoor, lordUnready, RAID_FOE_REACH, raidMembers, raidPatch, raidRez, raidStep, squadHold, squadWait, withBreakDoor, withRaid, type RaidDoor } from './raid';
+import { breakDoor, lordHurt, lordUnready, RAID_FOE_REACH, raidMembers, raidPatch, raidRez, raidStep, squadHold, squadWait, withBreakDoor, withRaid, type RaidDoor } from './raid';
 import { raidCorpses, raidRezzerNear } from '../behaviors';
 import { decidePack, rvrPack } from '../pack';
 import { getNavmeshStore } from '../../navmesh';
@@ -436,5 +436,12 @@ describe('the rush up to the lord: everyone OK first (S2, the user: "if the seco
         expect(lordUnready(fit.map((m, i) => (i === 4 ? { ...m, isDead: true } : m)), at)).toMatch(/dead, a rez first/);
         expect(lordUnready(fit.map((m, i) => (i === 1 ? { ...m, hp: 50 } : m)), at)).toMatch(/at 50 % health/);
         expect(lordUnready(fit.map((m, i) => (i === 2 ? { ...m, x: at.x + 900 } : m)), at)).toMatch(/not with us/);
+    });
+    test('lordHurt: health falling since the last tick, or a guard on one of us, ends the wait (S2, albion-149 22:33)', () => {
+        const ms = five({ x: 0, y: 0, z: 0 }).map(m => ({ ...m, hp: 80 }));
+        const last = Object.fromEntries(ms.map(m => [m.name, m.hp]));
+        expect(lordHurt(ms, [], last)).toBe(false);
+        expect(lordHurt(ms.map((m, i) => (i === 1 ? { ...m, hp: 70 } : m)), [], last)).toBe(true);
+        expect(lordHurt(ms, [contact(800, { kind: 'npc', name: 'Runemaster', keepGuard: true, hp: 90, target: ms[0]!.name } as any)], undefined)).toBe(true);
     });
 });

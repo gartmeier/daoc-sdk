@@ -58,6 +58,8 @@ export interface RaidMemory {
     patchKey?: string;
     /** When the raid first turned to the lord phase (the rush up waits for a fit, gathered unit from then: LORD_READY_MAX_MS). */
     lordSince?: number;
+    /** Each member's health on the last lord tick: a fall ends the wait (lordHurt). */
+    lordHp?: Record<string, number>;
 }
 
 /**
@@ -70,6 +72,13 @@ export const LORD_READY_MAX_MS = 90_000;
 export const LORD_READY_HP = 70;
 export const LORD_READY_MANA = 70;
 export const LORD_READY_SPREAD = 600;
+
+/** Whether the unit is taking damage: a living member's health down since `last` (more than 1 %), or a guard aiming at one of us. */
+export function lordHurt(members: readonly MemberReport[], guards: readonly Contact[], last: Readonly<Record<string, number>> | undefined): boolean {
+    const names = new Set(members.map(m => m.name));
+    if (guards.some(g => !g.stale && g.hp > 0 && !!g.target && names.has(g.target))) return true;
+    return !!last && members.some(m => !m.isDead && last[m.name] !== undefined && m.hp < last[m.name]! - 1);
+}
 
 /** Why the unit isn't fit to rush the lord, or null when it is (LORD_READY_*). */
 export function lordUnready(members: readonly MemberReport[], centre: Point): string | null {
@@ -261,6 +270,13 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     }
     // The rush up to the lord: from the first lord tick, everyone fit and together first (lordUnready), LORD_READY_MAX_MS at most.
     if (ro.phase === 'lord') r.lordSince ??= Date.now();
+    // Taking damage while it waits (someone's health falling since the last tick, or a guard on one of us): go at once, no more
+    // waiting (S2, albion-149 at 22:33: held in the courtyard under live wall casters, Elaine dead, Gareth 61 % to 15 % in 45 s).
+    if (ro.phase === 'lord' && Date.now() - r.lordSince! < LORD_READY_MAX_MS) {
+        const hurt = lordHurt(o.members, o.guards, r.lordHp);
+        r.lordHp = Object.fromEntries(o.members.map(m => [m.name, m.hp]));
+        if (hurt) r.lordSince = 0;
+    }
     if (ro.phase === 'lord' && centre && Date.now() - r.lordSince! < LORD_READY_MAX_MS) {
         const unready = lordUnready(o.members, centre);
         if (unready) {
