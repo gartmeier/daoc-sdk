@@ -355,3 +355,16 @@ describe('raid: rez across the raid\'s units (S3, 2026-11-13)', () => {
         expect(cs.map(c => [c.name, c.objectId, c.isDead, c.x])).toEqual([['Groa', 5, true, 300]]);
     });
 });
+
+describe('raid: the way on from the member furthest along (S3, live 15:18: a formation trailing its anchor never reached it)', () => {
+    test('the tank at the waypoint and the casters 900 behind: on to the next waypoint', () => {
+        const way = [plan.rally, ...plan.route];
+        const wp = way[1]!, prev = way[0]!;
+        const back = { x: wp.x + (prev.x - wp.x) * 0.9, y: wp.y + (prev.y - wp.y) * 0.9, z: wp.z };
+        const members = five(back);
+        members[0] = { ...members[0]!, x: wp.x + 20, y: wp.y };
+        const mem = { raid: { callId: 'x', staged: false, broken: [] as number[] } };
+        const u = raidStep({ plan, mem, members, guards: [], call: null, unit: 'midgard' }).update;
+        expect(u.anchor).toMatchObject({ x: way[2]!.x, y: way[2]!.y });
+    });
+});

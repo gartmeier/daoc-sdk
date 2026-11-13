@@ -200,7 +200,11 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     }
     if (ro.phase === 'approach' || ro.phase === 'stage') {
         // Each leg of our own bridge in turn: the body's next waypoint (routeFrom); at the stage, the stage.
-        const next = ro.phase === 'stage' ? plan.stage : routeFrom(plan, centre ?? plan.rally)[0] ?? plan.stage;
+        // The way on from the member furthest along it, not the centre: a formation trails behind its anchor, so the centre of a
+        // group stood at the waypoint is 500-1000 short of it and never "reached" it (live 15:18-15:27: camelot idle at the rally's
+        // first waypoint for 9 min; 13:01-13:15 1700 short of the stage; hibernia-s4 730 from its first waypoint on 11-13).
+        const way = alive.length ? alive.map(m => routeFrom(plan, m)).reduce((a, b) => (b.length < a.length ? b : a)) : routeFrom(plan, plan.rally);
+        const next = ro.phase === 'stage' ? plan.stage : way[0] ?? plan.stage;
         return { orders: ro, update: { phase: 'travel', focus: null, anchor: { x: next.x, y: next.y, z: next.z }, facing: { x: plan.stage.x, y: plan.stage.y }, settings, objective, reason: `${reason}, next ${at(next)}` } };
     }
     if (ro.phase === 'taken') return { orders: ro, update: { phase: 'recover', focus: null, anchor: ro.stand, settings, objective, reason } };
