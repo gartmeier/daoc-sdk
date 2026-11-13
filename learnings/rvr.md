@@ -396,14 +396,15 @@ Surveyed from the server source, the DB and the navmesh, then walked and capture
 **The raid plan** (`raidPlan(realm)`, `raidOrders(plan, view)`):
 1. Rally on the realm's own bank before its bridge.
 2. Walk the route over the bridge to the stage (36300, 38300) on the island. It stays outside every guard's aggro by 500. Go in once 75 % are there.
-3. **Rank 1:** the five outer fighters, at (35500, 38250).
-4. **Rank 2:** the gate-side wall casters (ranged, from (34650, 38250)), while melee break the gate.
-5. **Rank 3:** the courtyard pair.
-6. **Rank 4:** the far wall casters, from the courtyard.
-7. **Rank 5:** the roof archers, from the courtyard: about 1000-1300 away in 3D.
-8. **Rank 6:** melee break the building's door; the floor-3 fighter.
-9. **Rank 7:** the lord, with everyone on the roof.
-- A guard on a member, or a fighter off its post, goes first.
+The ranks follow line of sight with the walls (`sdk/vision.ts` `lineOfSight` over `zone252.occluders`, measured 2026-11-13). Each stand sees what is fought from it, and only guards of its rank or earlier see it.
+3. **Rank 1:** the five outer fighters, from (34650, 38250). It sees all five, and no wall caster sees it.
+4. **Rank 2:** the gate, melee only. The ranged wait at its stand, which no caster sees: nothing outside the gate sees the east wall's casters, and they see nothing outside it.
+5. **Rank 3:** the courtyard, from (33100, 38250): the yard pair, and every wall caster that sees the courtyard (east wall and north wall).
+6. **Rank 4:** melee break the building's door; the floor-3 fighter comes down.
+7. **The lord phase:** everyone on the roof. The ranged take the roof archers first (seen from the roof only), the melee stay on the lord.
+- **Optional, no rank:** the west wall casters (no reachable ground spot sees them; they see 1 and 6 of 215 courtyard points and not the roof) and the roof archers until the lord phase.
+- A fighter on a member, or one off its post, goes first. A caster or archer on a member does too, within 1650 of the stand, but not once the raid is on the lord.
+- **Doors:** an enemy door is a wall to our walks until broken (navmesh `BlockingDoor`, `meleeReach`). The Faste has a gate, the building's door and four posterns that never break. Melee take no caster, archer or lord they have no route to.
 - **Routes:** each was checked on the navmesh without swimming, dry except the bridges, and at least 100 clear of every guard's aggro. Hibernia's leaves its bridge about 350 off a wall caster's circle.
 - **Keep circle:** a raiding unit sets `settings.raid = 'Thidranki Faste'`, which lifts the keep's circle in `keepDangers`. It is off by default.
 
