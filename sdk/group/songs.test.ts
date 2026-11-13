@@ -3,7 +3,7 @@ import { song } from './behaviors';
 import { report } from './fixtures';
 import type { MemberContext } from './member';
 import { rvrBehaviors } from './rvr';
-import { chooseSong, SONG_SETTINGS, songKind, type SongKind } from './songs';
+import { chooseSong, instrumentToBringOut, SONG_SETTINGS, songKind, type SongKind } from './songs';
 import type { MemberReport, Role } from './types';
 
 const caster = { heal: true, cc: false, nuke: true, buffs: [], buffSpells: [] };
@@ -232,5 +232,16 @@ describe('song(): a running pulse is never sent again', () => {
         s.state.effects = [];
         await s.run(5900);
         expect(s.cast).toEqual([]);
+    });
+});
+
+describe('instrumentToBringOut', () => {
+    const flute = { slot: 58, name: 'Arcane Flute', objectType: 45, level: 29 };
+    const club = { slot: 10, name: 'Club', objectType: 20, level: 24 };
+    test('one worn in a hand slot first, else the backpack one, else none', () => {
+        expect(instrumentToBringOut([club, { ...flute, slot: 12, name: 'Lute' }], [flute])).toEqual({ item: { ...flute, slot: 12, name: 'Lute' }, worn: true });
+        expect(instrumentToBringOut([club], [flute, { ...flute, slot: 60, name: 'Drum', level: 10 }])).toEqual({ item: flute, worn: false });
+        expect(instrumentToBringOut([club], [{ ...flute, slot: 81 }])).toBeNull();
+        expect(instrumentToBringOut([club], [])).toBeNull();
     });
 });

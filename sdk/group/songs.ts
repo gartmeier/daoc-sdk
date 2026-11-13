@@ -15,6 +15,7 @@
 // have two kinds of their own, for a fight only: armor (Crusader's Defense and its ranks) and
 // combatHeal (the Refreshments), which heals nobody out of combat (CombatHealSpellHandler.StartSpell).
 
+import { ObjectType, type InventoryItem } from '../types';
 import type { MemberReport } from './types';
 
 export type SongKind = 'speed' | 'endurance' | 'power' | 'health' | 'damage' | 'armor' | 'combatHeal';
@@ -109,3 +110,20 @@ export function nextTwist<T extends TwistSong>(have: T[], running: string | null
  * a chant up for 12 s on one cast, and each cast costs 5 endurance (SpellHandler.CalculateEnduranceCost).
  */
 export const CHANT_TWIST: TwistSettings = { order: ['damage', 'combatHeal'], everyMs: 6100 };
+
+/** A hand slot (10 right, 11 left, 12 two-hand, 13 ranged) and the backpack (40-79). */
+const HAND_SLOTS = [10, 11, 12, 13];
+const inBackpack = (i: Pick<InventoryItem, 'slot'>) => i.slot >= 40 && i.slot <= 79;
+
+/**
+ * The instrument to bring out after "You are not wielding the right type of instrument!": one worn in a hand slot (put
+ * away by a weapon: taking it off and on again brings it out, GamePlayerInventory.cs:547-560), else one in the backpack
+ * (put on where the server takes it). Any instrument plays any song (SpellHandler.cs CheckInstrument). Null with none.
+ * Fiacra sang no song in any run: her only instrument, an Arcane Flute drop, sat in the backpack (S5, 2026-11-13).
+ */
+export function instrumentToBringOut(equipment: readonly Pick<InventoryItem, 'slot' | 'name' | 'objectType' | 'level'>[], inventory: readonly Pick<InventoryItem, 'slot' | 'name' | 'objectType' | 'level'>[]): { item: Pick<InventoryItem, 'slot' | 'name' | 'objectType' | 'level'>; worn: boolean } | null {
+    const worn = equipment.find(i => i.objectType === ObjectType.Instrument && HAND_SLOTS.includes(i.slot));
+    if (worn) return { item: worn, worn: true };
+    const bag = inventory.filter(i => i.objectType === ObjectType.Instrument && inBackpack(i)).sort((a, b) => b.level - a.level)[0];
+    return bag ? { item: bag, worn: false } : null;
+}

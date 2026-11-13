@@ -9,7 +9,7 @@
 
 import { findNpcSpawns } from '../../data/index';
 import { styleQueue, type StyleChoice, type StyleChooser } from '../actions';
-import { resurrectCost, STYLE_NEEDS_WEAPON } from '../actions-helpers';
+import { NO_INSTRUMENT, resurrectCost, STYLE_NEEDS_WEAPON } from '../actions-helpers';
 import { ANYTIME_STYLE, fighterStyle, tankStyles } from './styles';
 import { abortable, executionContext } from '../execution-context';
 import { diedLately, isAlive, untouchable } from './blackboard';
@@ -19,7 +19,7 @@ import { type BuffTask, nextBuff, planBuffs, surplusConcentration } from './buff
 import { combatSpot, dangerStops, effectiveLimits, focusSettled, safeSpot, trackFocus } from './positioning';
 import { dotFamily } from './spells';
 import { keepForLater } from './gear-care';
-import { chooseSong, SONG_SETTINGS, type SongSettings } from './songs';
+import { chooseSong, instrumentToBringOut, SONG_SETTINGS, type SongSettings } from './songs';
 import type { Behavior, MemberContext } from './member';
 import { castRunning, instantSummonDue, petOffForCc, petsAllowed, type PetSettings } from './pets';
 import { keepOnMap, onMap, safePath } from './terrain';
@@ -2341,6 +2341,19 @@ export const song = (): Behavior<TacticsSettings> => ({
         const c = await ctx.bot.castSpell(want.spell);
         ctx.result('song', c);
         if (!c.success && c.reason === 'refused' && c.retryAfterMs) ctx.memory.set('songRetryAt', Date.now() + c.retryAfterMs);
+        // No instrument out: bring one out ourselves (songs.ts instrumentToBringOut), at most once a minute; the next turn sings.
+        if (!c.success && c.reason === 'refused' && (c.message ?? '').toLowerCase().includes(NO_INSTRUMENT) && Date.now() >= (ctx.memory.get('instrumentAt') ?? 0)) {
+            ctx.memory.set('instrumentAt', Date.now() + 60_000);
+            const pick = instrumentToBringOut(ctx.sdk.getEquipment(), ctx.sdk.getInventory());
+            if (!pick) return true;
+            ctx.doing('song', null, `bring out ${pick.item.name}`);
+            let r = pick.worn ? await ctx.bot.unequipItem(pick.item.slot) : null;
+            const bag = ctx.sdk.getInventory().find(i => i.slot >= 40 && i.slot <= 79 && i.name === pick.item.name);
+            if (bag && (!r || r.success)) r = await ctx.bot.equipItem(bag, pick.worn ? { slot: pick.item.slot } : {});
+            const out = ctx.sdk.getEquipment().some(i => i.name === pick.item.name && [10, 11, 12, 13].includes(i.slot));
+            ctx.result('instrument', out ? { success: true, message: `${pick.item.name} out` } : { success: false, reason: r?.reason ?? 'not_found', message: `${pick.item.name}: ${r?.message ?? 'not in the backpack'}` });
+            if (out) ctx.memory.delete('songRetryAt');
+        }
         return true;
     },
 });
