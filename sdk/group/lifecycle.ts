@@ -617,7 +617,10 @@ export interface Lifecycle {
     wantsMuster(realm: PlayerRealm): boolean;
     musterStarted(realm: PlayerRealm): void;
     musterEnded(realm: PlayerRealm): void;
-    /** Humans playing in the realm (S1, S6): the target drops by as many. */
+    /**
+     * Humans playing in the realm that lfg did not place (the user's Niamh): the target drops by as many. Humans lfg placed
+     * are already counted from groups/lfg/state.json `held` (one seat each), so don't add them here.
+     */
     setHumans(realm: PlayerRealm, n: number): void;
     /** S6's "lfg": this bot leaves at its unit's next line-up, as a session end. */
     leaveNow(bot: string, why: string): boolean;
@@ -779,7 +782,7 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
                 // Sessions.
                 // A bot lfg stepped out made room for a human: the human plays in its seat, so nobody comes in for it.
                 const lfgIn = r.bots.filter(b => lfg.has(b.bot)).length;
-                const humansIn = Math.max(humans[r.realm] ?? 0, lfgIn);
+                const humansIn = (humans[r.realm] ?? 0) + lfgIn;
                 const t = Math.min(r.bots.length, Math.max(s.floor, curveAt(now, s.curve, s.floor) + b.shift) - humansIn);
                 const soon = Math.min(r.bots.length, Math.max(s.floor, curveAt(now + 60 * 60_000, s.curve, s.floor) + b.shift) - humansIn);
                 target[r.realm] = t;
