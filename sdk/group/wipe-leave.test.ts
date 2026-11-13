@@ -50,3 +50,14 @@ describe('full force first: at our portal keep the group waits for the dead and 
         expect(later.reason).not.toMatch(/^full force first/);
     });
 });
+
+describe('never a raid without our human (S1, 20:3x)', () => {
+    test('the muster at go with the observed member out of the region: the raid holds; with her: on', () => {
+        const rally = { x: 28_454, y: 32_768 };
+        const mem = () => ({ realm: 'hibernia', realmCalls: [muster], help: { id: muster.id, kind: 'muster', state: 'arrived', since: 2000 } } as Record<string, any>);
+        const away = decideRvr(ctx(picture(team(rally, 0, { Encha: { observed: true, regionId: -1 } })), mem()));
+        expect(away.reason).toMatch(/^raid held: waiting for Encha/);
+        const there = decideRvr(ctx(picture(team(rally, 0, { Encha: { observed: true } })), mem()));
+        expect(there.reason).toMatch(/^raid /);
+    });
+});

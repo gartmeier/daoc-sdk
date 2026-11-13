@@ -1005,7 +1005,13 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 
     // ── The raid (tactics/raid.ts, siege.ts): the muster said go. Enemy players first (above); then over our own bridge to the
     // stage, and rank by rank to the lord, whoever is dead or low: raidOrders counts the living, and rest comes with nothing to hit. ──
-    if (raid && preAssault) {
+    // ── Never a raid or a call without our human (S1, 20:3x: a unit with an observed member answers only with the human near it): an
+    // observed member dead, in another region or away from the body holds both; the regroup below waits for them or meets them. ──
+    const humanAway = p.members.filter(m => m.observed && (m.isDead || m.regionId !== regionId || !inMain.has(m.name)));
+    if (raid && humanAway.length && !deadHere.length && !far.length && !defending) {
+        return { ...calm, phase: 'recover', anchor: restAt().at, waiting: humanAway.map(m => ({ name: m.name, why: m.isDead ? 'dead' : 'away' })), objective: `wait for ${names(humanAway)}${gone}`, reason: `raid held: waiting for ${names(humanAway)} (with us before we go on)${gone}` };
+    }
+    if (raid && preAssault && !humanAway.length) {
         // After a fight on the way: rest and rebuff before going on (RAID_REST_MAX_MS at most; buffs as in a field rest).
         if (o.phase === 'engage' || o.phase === 'retreat' || o.phase === 'pull') mem.raidRested = now;
         if (mem.raidRested !== undefined && now - mem.raidRested < RAID_REST_MAX_MS) {
@@ -1032,7 +1038,7 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         }
         mem.raidPeelSince = undefined;
     }
-    if (raid) {
+    if (raid && !humanAway.length) {
         const guards = p.contacts.filter(c => c.keepGuard && !c.stale && isAlive(c) && c.regionId === regionId);
         const { update } = raidStep({ plan: raid.plan, mem, members: p.members.filter(m => m.regionId === regionId), guards, call: raid.call, unit: mem.realmUnit ?? '' });
         mem.legKind = null;
@@ -1074,7 +1080,7 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     }
     // ── A realm call (tactics/help.ts): a unit of ours asks for help, or the muster. Free: no fight, nobody in sight, nobody
     // dead or away (all handled above), at most one short of ready. Legs wait for everyone, so the group arrives together. ──
-    const answer = helpStep(mem, { unit: mem.realmUnit ?? '', centre, now, settings: calls, free: low.length <= HUNT_UNREADY && !pairRing });
+    const answer = helpStep(mem, { unit: mem.realmUnit ?? '', centre, now, settings: calls, free: low.length <= HUNT_UNREADY && !pairRing && !humanAway.length });
     if (answer?.kind === 'go') {
         stepLeg(trip, 'call', answer.goal, { from: centre, movers: main, replan: 1500 });
         return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `${answer.objective}${gone}`, reason: answer.reason };
