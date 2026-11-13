@@ -337,6 +337,23 @@ describe('raidOrders', () => {
         expect(under.melee.focus!.name).toBe('Lady Thidranki');
         // The rush, both doors down: the melee go for him whatever the route check made of the centre (live 21:50:58 "melee hold").
         expect(raidOrders(plan, view({ members: stray, seen: hurt, staged: true, broken: [252000301, 252000302], reach: () => false })).melee.focus!.name).toBe('Lady Thidranki');
+        // A squad joining late (live 21:53, hibernia-s1 at rank 1 while hibernia was at the lord): the whole raid's members (view.raid)
+        // pass the doors and stand by the lord for it, though its own are all outside the gate and its picture has the garrison back.
+        const squad = at({ x: 34800, y: 38275, z: 3620 }, 3).map(m => ({ ...m, id: m.id + 200 }));
+        const joined = raidOrders(plan, view({ members: squad, seen: hurt, staged: true, raid: [...squad, ...stray.map(m => ({ ...m, id: -m.id }))] }));
+        expect(joined.phase).toBe('lord');
+        expect(raidOrders(plan, view({ members: squad, seen: hurt, staged: true })).phase).toBe('assault');
+        // Released ones, alive again at the portal keep, pull no centre out of the keep (live 20:22, hibernia-2: "lord" and "approach:
+        // 7091 to the stage" in turn). A wipe, everyone back home, walks the route again.
+        const home = at({ x: 19000, y: 18700, z: 3000 }, 4).map(m => ({ ...m, id: m.id + 300 }));
+        expect(raidOrders(plan, view({ members: [...stray, ...home], seen: hurt, staged: true, broken: [252000301, 252000302] })).phase).toBe('lord');
+        expect(raidOrders(plan, view({ members: home, seen: hurt, staged: true, broken: [252000301, 252000302] })).phase).toBe('approach');
+        // The muster's rush (S3's RealmCall.rush): every unit up to the lord, whatever its own picture counts open (the gate shut to it,
+        // the whole garrison back); ranged and melee on him, from the roof.
+        const rushed = raidOrders(plan, view({ members: squad, seen: garrison(), staged: true, rush: true }));
+        expect(rushed.phase).toBe('lord');
+        expect(rushed.ranged.stand).toEqual(plan.roof);
+        expect(rushed.melee.focus!.name).toBe('Lady Thidranki');
         // Nobody up there: the ranks again.
         expect(raidOrders(plan, view({ members: at({ x: 33100, y: 38250, z: 3722 }, 8), seen: garrison(), staged: true })).phase).toBe('assault');
     });

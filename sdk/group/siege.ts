@@ -385,6 +385,12 @@ export interface RaidView {
      * of six (Midgard) staged on its own, went in alone at rank 1 and lost four in 16 s while the others were on the way.
      */
     raid?: readonly RaidMember[];
+    /**
+     * The muster's rush (S3's RealmCall.rush, director.ts: a raid unit read the lord phase or one of ours stands by his room): every
+     * unit up to the lord now, whatever its own picture still counts open (the user, 2026-11-13 22:5x: "we decide, okay, now is the
+     * time, everyone up. And then we kill the lord").
+     */
+    rush?: boolean;
 }
 
 export type RaidPhase = 'approach' | 'stage' | 'assault' | 'lord' | 'taken';
@@ -530,14 +536,19 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const idle = (stand: Point3): RaidTask => ({ step: null, focus: null, stand });
     const walk = (phase: RaidPhase, stand: Point3, why: string): RaidOrders => ({ phase, stand, ranged: idle(stand), melee: idle(stand), why });
     if (view.owner === realm) return walk('taken', plan.roof, `${plan.keep} is ours`);
-    const centre = raidCentre(view.members);
+    const keep = planKeep(plan);
+    const stageFromKeep = keep ? Math.hypot(plan.stage.x - keep.x, plan.stage.y - keep.y) : 0;
+    // The body is the living about the keep: one who died and released is alive again at the portal keep, and in the centre it
+    // pulled the raid's middle thousands out, so the whole unit turned back to the approach in the lord phase (live 20:22-20:23,
+    // hibernia-2: "lord" and "approach: 7091 to the stage" in turn; the user: "everyone stood outside of the keep"). With none
+    // about it (a wipe) everyone counts, and the route is walked again. Once staged only: the wait at the stage counts everyone.
+    const aboutKeep = keep && view.staged ? view.members.filter(m => m.alive && Math.hypot(m.x - keep.x, m.y - keep.y) <= stageFromKeep + STAGE_NEAR) : [];
+    const centre = raidCentre(aboutKeep.length ? aboutKeep : view.members);
     if (!centre) return walk('approach', plan.rally, 'nobody alive');
 
     const toStage = Math.hypot(centre.x - plan.stage.x, centre.y - plan.stage.y);
-    const keep = planKeep(plan);
     // Staged holds while the body is about the keep: one that fell back (a wipe, a regroup at the rally, live 02:46) walks
     // the route again, never the straight line from home to the rank's stand.
-    const stageFromKeep = keep ? Math.hypot(plan.stage.x - keep.x, plan.stage.y - keep.y) : 0;
     const staged = !!view.staged && (!keep || Math.hypot(centre.x - keep.x, centre.y - keep.y) <= stageFromKeep + STAGE_NEAR);
     if (!staged) {
         const alive = view.members.filter(m => m.alive);
@@ -566,7 +577,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const done = new Set(view.done ?? []);
     // A door some living one of us stands behind is passed, whether or not a member read it break (each unit learns that only from
     // its own members' chat: live 18:48, hibernia sat at rank 2 "melee on the gate" with the user and bots already past it).
-    const broken = new Set([...(view.broken ?? []), ...passedDoors(plan, view.members)]);
+    // The whole raid's members too (view.raid, the other units'): a squad that joins late takes the doors the leading unit passed
+    // (live 21:53, hibernia-s1 at rank 1 outside, "a shut door ... in the way", while hibernia was at the lord since 21:50:58).
+    const broken = new Set([...(view.broken ?? []), ...passedDoors(plan, view.members), ...passedDoors(plan, view.raid ?? [])]);
     // A door broken is the raid past every rank before it: a guard of those respawning at its post (5-25 min) doesn't send the
     // raid back (live 14:33, hibernia back to rank 1 with the gate down). One that comes at us is still the focus (onUs, offPost).
     const passed = Math.max(0, ...plan.targets.filter(t => t.kind === 'door' && t.doorId !== undefined && broken.has(t.doorId)).map(t => t.rank));
@@ -606,9 +619,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // Under way means him hurt too: one stray up there by an untouched lord (live 22:33's wait under the wall casters) is no rush.
     const lordSeen = foes.find(s => plan.lordName.test(s.name)) ?? null;
     const besideLord = !!lordSeen && (lordSeen.healthPercent ?? 100) < 100
-        && living.some(m => Math.hypot(m.x - lordSeen.x, m.y - lordSeen.y, m.z - lordSeen.z) <= LORD_BESIDE);
+        && [...living, ...(view.raid ?? []).filter(m => m.alive)].some(m => Math.hypot(m.x - lordSeen.x, m.y - lordSeen.y, m.z - lordSeen.z) <= LORD_BESIDE);
     const doorsAll = doorSteps.length > 0 && doorSteps.every(t => t.doorId !== undefined && broken.has(t.doorId));
-    const rush = doorsAll && (wallsDown || besideLord);
+    const rush = !!view.rush || (doorsAll && (wallsDown || besideLord));
     const open = atLord || rush ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
     const rank = open.length ? Math.min(...open.map(t => t.rank)) : null;
     const inRank = open.filter(t => t.rank === rank);
@@ -741,10 +754,10 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // Every door broken (the rush): the stair is open, so he is reachable whatever the route check made of the raid's centre, its
     // height between the courtyard and the roof (live 21:50:58, hibernia: "melee hold" for 30 s with both doors down).
     const melee: RaidTask = { ...t, focus: byLord || rush || meleeOk(lord) ? lord : null };
-    const boltStep = !onRoof ? plan.targets.find(x => x.bolt && !done.has(x.label) && atPost(plan, x, foes)) ?? null : null;
-    const bolt: RaidTask | null = boltStep ? { step: boltStep, focus: atPost(plan, boltStep, foes), stand: boltStep.bolt! } : null;
+    // No bolt here: everyone goes up, casters and healers too (the user, 2026-11-13 22:58: "they should all walk up and kill
+    // everyone"). The bolt from the east wall kept two of the long-reach members below while the lord fight was on the roof.
     const why = archer ? `${archerStep!.label} on the roof first, then ${lord?.name ?? 'the lord'}` : lord ? `${lord.name} on the roof` : 'up to the roof';
-    return { phase: 'lord', stand: plan.roof, ranged, melee, ...(bolt ? { bolt } : {}), why: `${why}${bolt ? `; bolt: ${bolt.step!.label}` : ''}` };
+    return { phase: 'lord', stand: plan.roof, ranged, melee, why };
 }
 
 // ── Doors and walking (meleeReach) ───────────────────────────────────────────
