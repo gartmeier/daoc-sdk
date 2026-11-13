@@ -224,3 +224,31 @@ describe('raidOrders: the ranged half waits out of the walls\' sight while the m
         expect(shut.ranged.focus?.id).toBe(7);
     });
 });
+
+describe('raidOrders: the hold only once the gate is broken, and one wall caster each', () => {
+    const raid = () => raidPlanOf();
+    const at = (label: string) => FASTE.targets.find(x => x.label === label)!.at;
+    const rune = (id: number, label: string, extra: object = {}) => ({ id, name: 'Runemaster', realm: 'midgard', kind: 'npc' as const, ...at(label), ...extra });
+    const members = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, x: 34600, y: 38200 + i * 20, z: 3722, alive: true }));
+
+    test('a wall caster on us with the gate still shut: the ranged fight it, no hold (live 18:03, "nobody fought back")', async () => {
+        const { raidOrders } = await import('./siege');
+        const gate = { id: 900, name: 'Keep Door', realm: 'midgard', kind: 'object' as const, x: 34333, y: 38275, z: 3720, doorId: 252000301 };
+        const o = raidOrders(raid(), { members, seen: [gate, rune(7, 'wall-e-s', { targetObjectId: 101 })], owner: 'midgard', staged: true, broken: [], reach: () => true });
+        expect(o.ranged.hold).toBeUndefined();
+        expect(o.ranged.focus?.id).toBe(7);
+    });
+
+    test('the gate broken and three wall casters up: the melee get all three to spread over', async () => {
+        const { raidOrders } = await import('./siege');
+        const o = raidOrders(raid(), { members, seen: [rune(7, 'wall-se'), rune(8, 'wall-e-s'), rune(9, 'wall-e-n')], owner: 'midgard', staged: true, broken: [252000301], reach: () => true });
+        expect(o.ranged.hold).toBeDefined();
+        expect(o.melee.focus?.id).toBe(7);
+        expect(o.melee.split?.map(s => s.id)).toEqual([7, 8, 9]);
+    });
+});
+
+function raidPlanOf() {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('./siege').raidPlan('hibernia');
+}

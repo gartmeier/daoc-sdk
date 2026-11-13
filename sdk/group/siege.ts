@@ -379,6 +379,11 @@ export interface RaidTask {
      * lives (the melee climb to it). Its focus is then null, and it takes none of the other half's.
      */
     hold?: string;
+    /**
+     * The melee's: every wall caster they can go for now, alive and seen, nearest the stair first (focus is the first). For one
+     * melee on each (the user: "tanks go in. up the stairs. one for each runi."): the caller spreads its tanks and melee over them.
+     */
+    split?: SiegeSeen[];
 }
 
 export interface RaidOrders {
@@ -573,11 +578,19 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     };
     // The ranged half holds out of the walls' sight while the melee's step is a caster on the walls they can reach (a found route:
     // the gate broken). Not on the lord, nor without a layout spot for it.
+    // Only once every door before that rank is broken (the user, 18:05: "the melee climb should start only once the gate is
+    // broken; before that, ranged on the wall casters"), and only for a caster the melee can walk to now.
+    const doorsDown = (r: number) => plan.targets.filter(t => t.kind === 'door' && t.rank < r).every(t => t.doorId !== undefined && broken.has(t.doorId));
     const wallsHold = (step: SiegeTarget | null): boolean => {
-        if (!plan.outOfSight || !step || step.kind !== 'caster' || step.who === 'ranged' || rank === null) return false;
+        if (!plan.outOfSight || !step || step.kind !== 'caster' || step.who === 'ranged' || rank === null || !doorsDown(step.rank)) return false;
         const f = focusOf(step);
-        return !!f && meleeOk(f);
+        return !!f && !!view.reach && meleeOk(f);
     };
+    // The wall casters the melee can go for now, one each: those of this rank, alive at their posts, reachable.
+    const splitOf = (): SiegeSeen[] => rank === null || !doorsDown(rank) ? [] : inRank
+        .filter(t => t.kind === 'caster' && t.who !== 'ranged')
+        .map(t => focusOf(t))
+        .filter((f): f is SiegeSeen => !!f && !!view.reach && meleeOk(f));
     if (first) {
         const stand = (rangedStep ?? meleeStep)?.stand ?? plan.roof;
         const t: RaidTask = { step: rangedStep ?? meleeStep, focus: first, stand };
@@ -587,7 +600,8 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         const firstPost = postOf(plan, first);
         if (firstPost && wallsHold(firstPost) && melee.focus?.id === first.id) {
             const ranged: RaidTask = { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${firstPost.label} on the wall` };
-            return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `${first.name} is on us; ranged out of sight` };
+            const split = splitOf();
+            return { phase: 'assault', stand: ranged.stand, ranged, melee: split.length > 1 ? { ...melee, split } : melee, why: `${first.name} is on us; ranged out of sight` };
         }
         return { phase: rank === null ? 'lord' : 'assault', stand, ranged: t, melee, why: `${first.name} is on us` };
     }
@@ -598,7 +612,11 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         // A wall caster that sees the courtyard still up, and the melee can go for it: the ranged half (casters, healers,
         // support) waits out of every wall caster's sight while the melee climb (the user, 2026-11-13 17:30: "Fiacra and
         // Amergin are not safe, they are being hit by the Runemasters", killed in the courtyard).
-        if (wallsHold(meleeStep)) ranged = { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${meleeStep!.label} on the wall` };
+        if (wallsHold(meleeStep)) {
+            ranged = { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${meleeStep!.label} on the wall` };
+            const split = splitOf();
+            if (split.length > 1) melee = { ...melee, split };
+        }
         const why = [rangedStep && `ranged: ${ranged.hold ? `out of sight while ${ranged.hold}` : rangedStep.label}`, meleeStep && meleeStep !== rangedStep && `melee: ${meleeStep.label}`].filter(Boolean).join(', ');
         return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `rank ${rank}: ${why}` };
     }
@@ -676,7 +694,9 @@ export function meleeReach(regionId: number, from: Point3, to: Point3, doors: Do
     const known = reachCache.get(key);
     if (known !== undefined) return known;
     const a = mesh.closestPoint(from, { x: 64, y: 64, z: 256 });
-    if (!a) return true;
+    // No mesh under `from` (a raid's centre over the slope or the water): no route to say yes by. It answered yes before, and
+    // as the centre moved the raid flipped between the melee's climb and their hold every few seconds (live 18:03, the user).
+    if (!a) { reachCache.set(key, false); return false; }
     const b = mesh.closestPoint(to, { x: 64, y: 64, z: 128 });
     let ok = false;
     if (b && Math.abs(b.z - to.z) <= OFF_MESH_Z) {
