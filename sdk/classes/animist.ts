@@ -14,7 +14,7 @@ import { ccOnIt, petOffCc } from './pet-cc';
 import { dist } from '../group/battleground';
 import type { Character } from '../group/character';
 import type { Behavior, MemberContext } from '../group/member';
-import type { Point } from '../group/types';
+import type { Point, Point3 } from '../group/types';
 import { nukerFight, quickcastUnderFire } from './cabalist';
 import { focusToHit, hurtsOne, SUMMON_MAP_MARGIN, through, waiting, type Through } from './summoner';
 import { giveGround } from './theurgist';
@@ -126,6 +126,8 @@ export const plantTurret = (): Behavior<TacticsSettings> => ({
         const turret = petState ? ctx.sdk.getPet() : null;
         const state = turretLeftBehind(ctx, turret ?? null, go.seen, now);
         if (state === 'wait') return false;
+        // On a turret stand of the keep's defence the turret stays where it stands (defenceTurret), whatever the focus does.
+        if (state === 'plant' && defenceGround(ctx)) return false;
         if (state === 'reach') {
             if (petState && petState.targetObjectId !== go.mob.objectId && !(ctx.memory.get('turretOrder') === go.mob.objectId && waiting(ctx.memory, 'turretOrderAt', now - ORDER_MS))) {
                 ctx.memory.set('turretOrder', go.mob.objectId);
@@ -188,6 +190,50 @@ export const fnfTurret = (floor = 0): Behavior<TacticsSettings> => ({
     },
 });
 
+/** The ground target of our turret stand in the keep's defence (sdk/group/defence.ts, Orders.settings.defence), or null. */
+export function defenceGround(ctx: Pick<MemberContext<any>, 'settings' | 'name'>): Point3 | null {
+    const d = (ctx.settings as { defence?: { seats?: Record<string, { ground?: Point3 }> } | null }).defence;
+    return d?.seats?.[ctx.name]?.ground ?? null;
+}
+
+/** The turret counts as on its ground this near it (3D): the server stands a summon on the nearest walkable spot. */
+export const ON_GROUND = 150;
+
+/**
+ * Whether to plant the main turret on the defence's ground: no window turret, or one off the ground; and the ground within our
+ * summon's range (3D, a margin in). holdDefenceStand brings us there first.
+ */
+export function defencePlant(me: Point3, ground: Point3, turret: (Point & { z?: number | null }) | null, range = TURRET_REACH): boolean {
+    if (turret && dist3(turret, ground) <= ON_GROUND) return false;
+    return dist3(me, ground) <= range - SUMMON_MARGIN;
+}
+
+/**
+ * The keep's defence (milestone 5): the main turret on our stand's ground, inside the gate, planted as soon as we are there and
+ * planted again whenever it isn't, fight or no fight; plantTurret then only sends it at the focus. Off the defence: nothing.
+ */
+export const defenceTurret = (): Behavior<TacticsSettings> => ({
+    name: 'defenceTurret',
+    interruptible: false,
+    async run(ctx) {
+        const ground = defenceGround(ctx);
+        if (!ground) return false;
+        const now = Date.now();
+        if (waiting(ctx.memory, 'plantRetry', now)) return false;
+        const me = ctx.me();
+        const turret = ctx.sdk.getPetState() ? ctx.sdk.getPet() : null;
+        const t = turretPick(through(ctx, 'SummonAnimistPet'));
+        if (!t || t.pick.spell.cooldownRemaining > 0 || !affords(ctx, t)) return false;
+        if (!defencePlant(me, ground, turret, t.pick.range || TURRET_REACH)) return false;
+        await stopSwinging(ctx);
+        ctx.memory.set('plantRetry', now + PLANT_RETRY_MS);
+        ctx.doing('summon', null, `${t.pick.spell.name} on the defence's ground`);
+        const c = await ctx.bot.summonPet(t.pick.spell, { groundTarget: ground, replace: true });
+        ctx.result('summon', c);
+        return true;
+    },
+});
+
 /** A bomber at the focus, ahead of the lifedrain, while we are above BOMB_ABOVE_HP and not under a melee. Counts as a nuke. */
 export const bomb = (floor = 0): Behavior<TacticsSettings> => ({
     name: 'bomb',
@@ -214,7 +260,7 @@ export function animist({ saveBelow = 0, fnf = true, bombers = true }: AnimistOp
     return {
         role: 'nuker',
         instant: [quickcastUnderFire()],
-        urgent: [turretOffCc()],
+        urgent: [turretOffCc(), defenceTurret()],
         react: [giveGround()],
         fight: [plantTurret(), ...(fnf ? [fnfTurret(saveBelow)] : []), ...(bombers ? [bomb(saveBelow)] : []), ...nukerFight(saveBelow, true)],
     };

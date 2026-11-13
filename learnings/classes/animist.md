@@ -66,3 +66,10 @@ From [pets.md](../pets.md#turrets): a ground target first; a spot off the mesh i
 **The carry-over:** `petAttack:out_of_range` 14-17 times in the long sorties. In the run logs most were keep targets: "Lord Thidranki is 1222 from it, beyond its 1000" (94), Scouts on the wall (33), Lady Thidranki (27). The SDK measures the turret's reach in 3D, as the server does; `turretState` and `turretSpot` measured on the ground, so a lord or a wall scout 600-700 above read as in reach.
 - **Changed (`sdk/classes/animist.ts`, `pet-cc.ts`):** `turretState` and the off-crowd-control focus check measure in 3D (`dist3`). `turretSpot` plants as far out as the height difference leaves: the ground reach is the square root of 800² less the height difference². A target 800 or more above or below gets no turret.
 - For the keep's defence (milestone 5), turrets inside the gate and on the stair wait for S2's defence orders.
+
+## The keep defence's turret (stint 2026-11-13, S5)
+
+S2's defence plan (`sdk/group/siege.ts` defenceOrders, `sdk/group/defence.ts`) gives a member with an Animist turret the `turret` job and a stand inside the gate with a ground target (`Orders.settings.defence.seats[name].ground`). `holdDefenceStand` walks her there.
+- **`defenceTurret`** (urgent): while the defence gives her a ground, the main turret goes on it as soon as it is within the summon's range (3D, a margin in), and again whenever no window turret stands within 150 of it, fight or no fight.
+- **`plantTurret`** under a defence only sends the turret at the focus; it never plants it again toward a focus out of reach. The gate is the chokepoint, and a turret walked out after a runner leaves it.
+- Not seen live: nothing calls the defence yet (S3 wires it at the director's defence call).

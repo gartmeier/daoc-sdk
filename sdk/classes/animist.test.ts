@@ -5,7 +5,7 @@ import { withCharacter } from '../group/character';
 import type { Behavior } from '../group/member';
 import { packBehaviors } from '../group/pack';
 import { rvrBehaviors } from '../group/rvr';
-import { animist, bomberPick, fnfPick, LEFT_BEHIND_MS, REACH_MARGIN, SUMMON_MARGIN, TURRET_REACH, turretPick, turretOffCc, turretSpot, turretState } from './animist';
+import { animist, bomberPick, defenceGround, defencePlant, ON_GROUND, fnfPick, LEFT_BEHIND_MS, REACH_MARGIN, SUMMON_MARGIN, TURRET_REACH, turretPick, turretOffCc, turretSpot, turretState } from './animist';
 import { knownThrough } from './summoner-fixtures';
 
 describe('animist kit', () => {
@@ -64,5 +64,25 @@ describe('animist kit', () => {
         expect(['Spore Vent', 'Sporespawn Youngling', 'Tangler Youngling']).not.toContain(fnf);
         const bomber = bomberPick(knownThrough('Animist', 'Creeping turret farm', 24, 'Bomber'))?.pick.spell.name;
         expect(['Entangling Spirit', 'Dancing Flame', 'Constraining Spirit']).not.toContain(bomber);
+    });
+});
+
+describe('animist kit: the turret of the keep defence', () => {
+    const ground = { x: 34200, y: 38275, z: 3720 };
+    test('its ground from the defence settings, by our name; none off the defence', () => {
+        const ctx = (defence: unknown) => ({ name: 'Etain', settings: { defence } }) as any;
+        expect(defenceGround(ctx({ keep: 'x', phase: 'holding', seats: { Etain: { label: 'gate', ground } }, broken: [] }))).toEqual(ground);
+        expect(defenceGround(ctx({ keep: 'x', phase: 'holding', seats: { Etain: { label: 'wall' } }, broken: [] }))).toBeNull();
+        expect(defenceGround(ctx(undefined))).toBeNull();
+    });
+
+    test('planted on the ground when none stands there and the ground is in summon range', () => {
+        const near = { x: ground.x - 300, y: ground.y, z: ground.z };
+        expect(defencePlant(near, ground, null)).toBe(true);
+        expect(defencePlant(near, ground, { ...ground, x: ground.x + ON_GROUND - 10 })).toBe(false);
+        expect(defencePlant(near, ground, { ...ground, x: ground.x + 600 })).toBe(true);
+        expect(defencePlant({ ...near, x: ground.x - 1500 }, ground, null)).toBe(false);
+        // Up on the wall-walk 260 above it and 900 off: out of the summon's range in 3D.
+        expect(defencePlant({ x: ground.x - 900, y: ground.y, z: ground.z + 260 }, ground, null)).toBe(false);
     });
 });
