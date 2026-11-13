@@ -70,10 +70,12 @@ export const BATTLEGROUND_LAYOUTS: Record<number, BattlegroundLayout> = {
         ],
         arrival: { albion: { x: 38113, y: 53507, z: 4160 }, midgard: { x: 53568, y: 23643, z: 4530 }, hibernia: { x: 17367, y: 18248, z: 4320 } },
         // 450 past the outer door on the navmesh's way from the arrival toward `meet` (1150-1470 from the keep's centre, dry, every
-        // spot of a 250 ring round it in sight of every other: sdk/vision.ts lineOfSight, measured 2026-11-13). Inside the walls a
+        // spot within 350 in sight of every other: sdk/vision.ts lineOfSight, measured 2026-11-13). Midgard's is 430 down from its
+        // door instead: at (53046, 25563), beside the wall, 11 % of those pairs were blocked, and Sigrid's buffs failed "not_visible"
+        // 39 times in midgard-2's first stop there (22:31-22:34). Inside the walls a
         // buffer's targets stood behind the keep's pillars and stairs ("You can't see your target from here!", a step, a cast, a
         // step); the user, late on 2026-11-13: "wait in a spot, everyone go there and then buff each other ... turn on the speed song and go".
-        gather: { albion: { x: 36940, y: 51269, z: 3946 }, midgard: { x: 53046, y: 25563, z: 4298 }, hibernia: { x: 19506, y: 19175, z: 4165 } },
+        gather: { albion: { x: 36940, y: 51269, z: 3946 }, midgard: { x: 53223, y: 25845, z: 4267 }, hibernia: { x: 19506, y: 19175, z: 4165 } },
         meet: { x: 34000, y: 32000, z: 3836 },
         // Three rivers run out from the Faste, one between each two realms' halves; the only dry ways over are its three
         // bridges, inside its guards (the halves also meet over cliffs round the rivers' far ends). Each pair meets on one
