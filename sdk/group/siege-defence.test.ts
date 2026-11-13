@@ -200,3 +200,27 @@ describe.skipIf(!meshReady || getOccluderStore().forZone(252) === null)('wallSig
         expect(wallSight(252, { x: 35170, y: 36949, z: 3606 }, true)).toEqual([]);
     });
 });
+
+describe('raidOrders: the ranged half waits out of the walls\' sight while the melee climb', () => {
+    test('rank 3, the gate broken, a wall caster up: ranged hold out of sight with no focus, melee on the caster', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('hibernia')!;
+        const t = FASTE.targets.find(x => x.label === 'wall-se')!;
+        const caster = { id: 7, name: 'Runemaster', realm: 'midgard', kind: 'npc' as const, ...t.at };
+        const members = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, x: 34000, y: 38200 + i * 20, z: 3720, alive: true }));
+        const o = raidOrders(raid, { members, seen: [caster], owner: 'midgard', staged: true, broken: [252000301], reach: () => true });
+        expect(o.melee.focus?.id).toBe(7);
+        expect(o.ranged.focus).toBeNull();
+        expect(o.ranged.hold).toContain('wall-se');
+        expect(o.ranged.stand).toEqual(raid.outOfSight!);
+        expect(o.stand).toEqual(raid.outOfSight!);
+        // The caster on one of us: the same, the melee's.
+        const on = raidOrders(raid, { members, seen: [{ ...caster, targetObjectId: 101 }], owner: 'midgard', staged: true, broken: [252000301], reach: () => true });
+        expect(on.ranged.hold).toBeDefined();
+        expect(on.melee.focus?.id).toBe(7);
+        // No route for the melee (the gate shut): no hold, the ranged keep it as before.
+        const shut = raidOrders(raid, { members, seen: [caster], owner: 'midgard', staged: true, broken: [252000301], reach: () => false });
+        expect(shut.ranged.hold).toBeUndefined();
+        expect(shut.ranged.focus?.id).toBe(7);
+    });
+});

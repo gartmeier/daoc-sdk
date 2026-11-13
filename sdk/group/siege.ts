@@ -73,6 +73,8 @@ export interface SiegeLayout {
     inside: Point3[];
     /** Where the raid stands round the lord: the roof by the stair's top, all within LORD_REACH of him. */
     roof: Point3;
+    /** Where the ranged half waits while wall casters that see the courtyard live (no wall caster sees it); absent: no wait. */
+    outOfSight?: Point3;
     /** The lord takes damage only from attackers (and their pets) within this, in 3D (GuardLord.TakeDamage, a GameKeep). */
     lordReach: number;
     /** Lord names by the realm holding the keep (GuardLord, as our clients saw them). */
@@ -173,6 +175,8 @@ export const FASTE: SiegeLayout = {
         { x: 32154, y: 38342, z: 4579 }, ROOF,
     ],
     roof: ROOF,
+    // The ranged half waits here while a courtyard-side wall caster lives: no wall caster sees it (lineOfSight, 2026-11-13).
+    outOfSight: GATE_OUT,
     lordReach: LORD_REACH,
     // Albion's is Lady (or Lord) Thidranki, Midgard's Jarl Thidranki (both seen); Hibernia's is unseen yet.
     lordName: /\bThidranki$/,
@@ -256,6 +260,8 @@ export interface RaidPlan {
     /** The lord's spot: the director's muster target. */
     target: Point3;
     roof: Point3;
+    /** The layout's outOfSight: where the ranged half waits while the walls' casters live. */
+    outOfSight?: Point3;
     lordReach: number;
     lordName: RegExp;
     /** Ranked, doors left out when breakDoors is off. */
@@ -282,7 +288,7 @@ export function raidPlan(realm: PlayerRealm, keep = FASTE.keep, settings: Partia
     return {
         keep, realm, regionId: layout.regionId,
         rally: a.rally, route: a.route, stage: layout.stage, inside: layout.inside.slice(),
-        target: lord.at, roof: layout.roof, lordReach: layout.lordReach, lordName: layout.lordName,
+        target: lord.at, roof: layout.roof, lordReach: layout.lordReach, lordName: layout.lordName, ...(layout.outOfSight ? { outOfSight: layout.outOfSight } : {}),
         targets: layout.targets.filter(t => s.breakDoors || t.kind !== 'door').slice().sort((x, y) => x.rank - y.rank),
         breakDoors: s.breakDoors,
     };
@@ -368,6 +374,11 @@ export interface RaidTask {
     focus: SiegeSeen | null;
     /** Where to stand. */
     stand: Point3;
+    /**
+     * Set when this half holds, out of sight, while the other works: the ranged half while a wall caster that sees the courtyard
+     * lives (the melee climb to it). Its focus is then null, and it takes none of the other half's.
+     */
+    hold?: string;
 }
 
 export interface RaidOrders {
@@ -560,18 +571,35 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         const t = postOf(plan, x);
         return !t || t.kind === 'fighter' || view.reach(x);
     };
+    // The ranged half holds out of the walls' sight while the melee's step is a caster on the walls they can reach (a found route:
+    // the gate broken). Not on the lord, nor without a layout spot for it.
+    const wallsHold = (step: SiegeTarget | null): boolean => {
+        if (!plan.outOfSight || !step || step.kind !== 'caster' || step.who === 'ranged' || rank === null) return false;
+        const f = focusOf(step);
+        return !!f && meleeOk(f);
+    };
     if (first) {
         const stand = (rangedStep ?? meleeStep)?.stand ?? plan.roof;
         const t: RaidTask = { step: rangedStep ?? meleeStep, focus: first, stand };
         const own = meleeStep ? focusOf(meleeStep) : null;
         const melee: RaidTask = meleeOk(first) ? { ...t } : { step: meleeStep, focus: own && meleeOk(own) ? own : null, stand: meleeStep?.stand ?? stand };
+        // A wall caster on us that the melee can reach: theirs; the ranged half waits out of the walls' sight.
+        const firstPost = postOf(plan, first);
+        if (firstPost && wallsHold(firstPost) && melee.focus?.id === first.id) {
+            const ranged: RaidTask = { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${firstPost.label} on the wall` };
+            return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `${first.name} is on us; ranged out of sight` };
+        }
         return { phase: rank === null ? 'lord' : 'assault', stand, ranged: t, melee, why: `${first.name} is on us` };
     }
     if (rank !== null) {
-        const ranged = task(rangedStep, meleeStep);
+        let ranged = task(rangedStep, meleeStep);
         let melee = task(meleeStep, rangedStep);
         if (melee.focus && !meleeOk(melee.focus)) melee = { ...melee, focus: null };
-        const why = [rangedStep && `ranged: ${rangedStep.label}`, meleeStep && meleeStep !== rangedStep && `melee: ${meleeStep.label}`].filter(Boolean).join(', ');
+        // A wall caster that sees the courtyard still up, and the melee can go for it: the ranged half (casters, healers,
+        // support) waits out of every wall caster's sight while the melee climb (the user, 2026-11-13 17:30: "Fiacra and
+        // Amergin are not safe, they are being hit by the Runemasters", killed in the courtyard).
+        if (wallsHold(meleeStep)) ranged = { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${meleeStep!.label} on the wall` };
+        const why = [rangedStep && `ranged: ${ranged.hold ? `out of sight while ${ranged.hold}` : rangedStep.label}`, meleeStep && meleeStep !== rangedStep && `melee: ${meleeStep.label}`].filter(Boolean).join(', ');
         return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `rank ${rank}: ${why}` };
     }
     const lordStep = plan.targets.find(t => t.kind === 'lord')!;
