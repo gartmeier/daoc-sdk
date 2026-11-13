@@ -59,6 +59,8 @@ export interface Capabilities {
     buffSpells: BuffSpell[];
     /** The pet the group has it keep up: 'main' one in the pet window, 'fnf' a Theurgist's, which fights alone; null none; absent in reports from before pets. */
     pet?: 'main' | 'fnf' | null;
+    /** Its jobs in a keep's defence, best first (siege.ts defenceJobs, from its own spells); absent in reports from before it. */
+    defence?: import('./siege').DefenceJob[];
 }
 
 /** One member's view of itself, built from its own snapshots. */

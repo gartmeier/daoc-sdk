@@ -22,6 +22,10 @@ import { ordersForRole } from './melee-focus';
 import { petOrderedOn, petsAllowed } from './pets';
 import { abSlot, checkSkillSetting, describeSkill, fightAttention, HEAL_BEHAVIOR, resolveSkill, SkillLens, type SkillSetting } from './skill';
 import { Spellbook } from './spells';
+import { defenceJobs, type DefenceJob } from './siege';
+
+/** Spec lines that shoot a bow (a member with one takes the keep's wall in a defence). */
+const BOW_LINES = /^(Archery|Longbow|Composite Bow|Recurve Bow|Crossbow)$/;
 import { canWield } from './styles';
 import { dryMoveGuard } from './water';
 import type { Activity, Capabilities, Contact, GroupPicture, MemberCombat, MemberReport, Orders, Role } from './types';
@@ -400,8 +404,18 @@ export class MemberAgent<S = any> {
     private ownCapabilities(): Capabilities {
         const can = this.spells.capabilities();
         const cc = can.cc && this.behaviors.some(b => b.name === 'crowdControl');
-        const own = { ...can, cc, ccKinds: cc ? can.ccKinds : [], root: cc && can.root, rez: !!can.rez && this.behaviors.some(b => b.name === 'rez') };
+        const own = { ...can, cc, ccKinds: cc ? can.ccKinds : [], root: cc && can.root, rez: !!can.rez && this.behaviors.some(b => b.name === 'rez'), defence: this.defenceJobs() };
         return petsAllowed(this.ctx.settings) && this.member.character?.pet !== false ? own : { ...own, pet: null };
+    }
+
+    /** Our jobs in a keep's defence (siege.ts defenceJobs), from our own spells and a bow line: the coordinator seats us by them. */
+    private defenceJobs(): DefenceJob[] {
+        try {
+            const archer = (this.member.sdk.getState()?.skills.specializations ?? []).some(sp => BOW_LINES.test(sp.name) && sp.level > 1);
+            return defenceJobs({ role: this.member.role, spells: this.spells.all(), archer });
+        } catch {
+            return [];
+        }
     }
 
     /** Push our latest snapshot (with the current activity) to the blackboard. */
