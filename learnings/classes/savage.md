@@ -58,3 +58,10 @@ R6's bot plays **"Hand to Hand first"**: Hand to Hand 24, Savagery 16, Parry 2 a
 - Why so few styled swings (above).
 - **Clan's Call needs his back to the foe's back.** On a player that is on him it never fires; the backup swings. A flank step of his own (the Blademaster's side) is not built.
 - The 60 % floor for the buffs is a first guess.
+
+## "Chasing into the river", read (stint 2026-11-13, S5)
+
+**The carry-over:** `melee:water` 25 and `melee:stuck` 27 in the night of 2026-11-12, the most of the six melee kits. All of Bjorn's in the run logs:
+- **water (about 60):** "held at the bank" / "Move refused: ... is in deep water: holding at the bank". He never went into the river: the dry move guard stops the chase at the bank, and the shared `assist` then holds that focus for 8 s (`noteWet`, `WET_SKIP_MS`) before it tries again. One refusal per 8 s per swimming focus is that rule working.
+- **stuck (about 90):** almost all "max speed 0: rooted, stunned or overloaded". He was rooted or stunned under enemy crowd control, so the 8 s with no progress was the root, not the path.
+- **No kit change.** Two ideas for the shared `assist` (S2/S3's, not done): while the focus is wet-skipped, take another target in reach rather than hold; and with max speed 0, wait out the root instead of an 8 s walk that ends `stuck`.
