@@ -46,6 +46,7 @@ import { canSee, NOTICE_MAX_MS, noticed, pruneNoticeClock, terrainGround, type G
 import { addLook, newEvidence, readClass, type FoeEvidence, type FoeLook } from './class-read';
 import { CC_IMMUNE_MS, npcCcLanded, readCcEnds, serverNameKey, type CcEnd, type CcImmunity, type CcKind, type NpcCcRun } from './cc';
 import { groupmatesOf, ObservedMembers, type Groupmate, type ObservedEntry } from './observed';
+import { DOOR_BROKEN_RE, SIEGE_LAYOUTS } from './siege';
 import type { Activity, Capabilities, MemberCombat, Contact, GroupEvent, GroupPicture, MemberReport, Orders, OrdersUpdate, PetReport, Point, Role, Sighting } from './types';
 
 export interface BlackboardOptions {
@@ -329,7 +330,9 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
         if (ownPets.has(n.objectId)) continue;
         // An enemy realm's pet can be fought (isAttackable); a monster's stays out, like a town NPC.
         const enemyPet = n.isPet && isAttackable(n, p);
-        if (!enemyPet && !isKillable(n, p)) continue;
+        // A keep's guard or lord of another realm: on the board, and in its picture only while the orders carry a raid (Contact.keepGuard).
+        const keepGuard = !n.isPet && n.realm !== 'none' && n.realm !== p.realm && n.level > 1 && n.name.length > 0 && isAttackable(n, p);
+        if (!enemyPet && !keepGuard && !isKillable(n, p)) continue;
         if (enemyPet && !notices(n.objectId, n)) continue;
         // A caster pet's entry names its target only on its victim's client, for moments (live): as for a player, the fight says it, and that reaches every client.
         // Not a monster's: its entry is the word, as a 0 says it let go (a reset, a leash), and a pet killer's run-in reads that (PET_KILLER_RUN_IN_MS).
@@ -349,6 +352,7 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
             aimedAtPlayer: aimed !== undefined && isPlayer.has(aimed) ? aimed : null,
             ...(aimed !== undefined && isPet.has(aimed) && !ownPets.has(aimed) ? { aimedAtPet: aimed } : {}),
             ...(enemyPet ? { isPet: true } : {}),
+            ...(keepGuard ? { keepGuard: true } : {}),
         });
     }
     for (const o of state.nearbyPlayers) {
@@ -381,11 +385,32 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     };
     if (state.summons?.length) report.summons = [...state.summons];
     if (self.petRecast) report.petRecast = true;
+    const doors = doorsBrokenNear(state.gameMessages ?? [], state.nearbyObjects ?? [], p, state.timestamp);
+    if (doors.length) report.doorsBroken = doors;
     if (report.pet && self.petOrderedOn != null) report.pet.orderedOn = self.petOrderedOn;
     const intercepts = interceptsOf(state);
     const ccEnds = readCcEnds(state.gameMessages ?? [], state.timestamp - CC_END_MS);
     const groupmates = self.observed?.length ? groupmatesOf(state, self.observed, aim, (self.capabilities.buffSpells ?? []).map(b => b.name)) : null;
     return { ...(groupmates ? { groupmates } : {}), report, sightings, deaths, foeKills, hits: [...hits], killer: p.isDead ? killerOf(state, p) : null, petLoss: state.lastPetLoss, petSwings, ownSwings, ...(petHits.size ? { petHits: [...petHits] } : {}), ...(intercepts.length ? { intercepts } : {}), ...(ccEnds.length ? { ccEnds } : {}), ...(vision ? { sight: { heading: p.heading, vision, ...(pending.length && vision.noticeMs > NOTICE_MAX_MS ? { pending } : {}) } } : {}) };
+}
+
+/** A broken-door line this old still counts (the coordinator keeps what it learns for the raid). */
+export const DOOR_BROKEN_MS = 60_000;
+/** The line reaches players within 512 of the door (GameKeepDoor.Die, WorldMgr.INFO_DISTANCE); a little more for one that moved since. */
+const DOOR_BROKEN_NEAR = 900;
+
+/**
+ * The doors a member read "The Keep Door is broken!" for in the last DOOR_BROKEN_MS: the line names no door, so it is the door
+ * nearest the member, a door object in view (NearbyObject.doorId) or else a door of a siege layout (siege.ts) in its region.
+ */
+export function doorsBrokenNear(messages: readonly { text: string; receivedAt: number }[], objects: readonly { doorId: number | null; x: number; y: number }[], at: { x: number; y: number; regionId: number }, now: number): number[] {
+    if (!messages.some(m => now - m.receivedAt <= DOOR_BROKEN_MS && DOOR_BROKEN_RE.test(m.text.trim()))) return [];
+    const doors = [
+        ...objects.filter(o => o.doorId != null).map(o => ({ id: o.doorId!, x: o.x, y: o.y })),
+        ...Object.values(SIEGE_LAYOUTS).filter(l => l.regionId === at.regionId).flatMap(l => l.targets.filter(t => t.doorId !== undefined).map(t => ({ id: t.doorId!, x: t.at.x, y: t.at.y }))),
+    ];
+    const near = doors.map(d => ({ id: d.id, d: Math.hypot(d.x - at.x, d.y - at.y) })).filter(d => d.d <= DOOR_BROKEN_NEAR).sort((a, b) => a.d - b.d)[0];
+    return near ? [near.id] : [];
 }
 
 const isBlow = (e: CombatEvent) => e.kind === 'melee' || e.kind === 'spellEffect';
@@ -722,6 +747,7 @@ export class Blackboard {
                 }
                 // Object.assign leaves what a sighting doesn't say: a mob that inherited an enemy pet's id.
                 if (!s.isPet) delete c.isPet;
+                if (!s.keepGuard) delete c.keepGuard;
                 if (!s.isShade) {
                     // The shade over: the servant went, the old model is back and attacks land at once (ClassDisciple.cs:60-83, ShadeECSEffect.cs:38), at 10 % or so (:149). So is a refusal's mark. One never read as a shade has only the mark to go by, and keeps it.
                     if (c.isShade) delete c.unattackableUntil;
@@ -945,8 +971,11 @@ export class Blackboard {
     /** The current shared picture (copies; safe to keep). */
     picture(now = Date.now()): GroupPicture {
         const contacts: Contact[] = [];
+        // Keep guards only while the orders carry a raid (Contact.keepGuard): nothing else knows what to do with them.
+        const guards = !!this.orders.settings?.raid;
         for (const [key, c] of this.contacts) {
             if (now - c.lastSeen > this.forgetAfterMs) { this.forget(key, c); continue; }
+            if (c.keepGuard && !guards) continue;
             if (c.cc && c.cc.until <= now) c.cc = null;
             for (const k of Object.keys(c.ccImmune ?? {}) as CcKind[]) if (c.ccImmune![k]! <= now) delete c.ccImmune![k];
             if (c.unattackableUntil !== undefined && c.unattackableUntil <= now) delete c.unattackableUntil;

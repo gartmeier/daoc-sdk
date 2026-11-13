@@ -46,6 +46,7 @@ import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, lo
 import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
 import { alliesNear, CALL_SETTINGS, flushAnswers, helpStep, noteArrival, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
+import { raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
@@ -599,7 +600,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // A shade is nobody here: no focus, no cc, no enemy to count or hunt (AbstractServerRules.cs:449-455). Its servant counts as it (shadeBodies, above), and a focus that turns out to be a shade moves at once.
     // A focus whose health stands still that long is a phantom, left alone a while (rvrPhantom), as the pack does.
     rvrPhantom(mem, p.contacts, o.phase === 'engage' ? o.focus : null, now);
-    const contacts = p.contacts.filter(c => !untouchable(c, now) && !((mem.rvrPhantoms?.[c.objectId] ?? 0) > now));
+    // Keep guards (on the board only while raiding, Contact.keepGuard) are the raid's alone: raidStep below.
+    const contacts = p.contacts.filter(c => !c.keepGuard && !untouchable(c, now) && !((mem.rvrPhantoms?.[c.objectId] ?? 0) > now));
     const alive = p.members.filter(m => !m.isDead);
     if (!alive.length) return { phase: 'recover', focus: null, cc: [], puller: null, retreatTo: null, reason: 'everyone is dead: releasing' };
     const regionId = groupRegion(alive);
@@ -618,7 +620,9 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const bg = BATTLEGROUND_LAYOUTS[regionId];
     const home = homeOf(regionId, realm);
     if (home) mem.base = home.arrival;
-    const keeps = keepDangers(regionId, realm, s);
+    // The muster said go (tactics/raid.ts): the raid's keep has no circle for us (settings.raid), as the members' patch says too.
+    const raid = raidNow(mem, realm, regionId);
+    const keeps = keepDangers(regionId, realm, raid ? { ...s, raid: raid.plan.keep } : s);
     const zAt = (q: Point) => estimateZ(regionId, q.x, q.y, leader.z, { radius: 8000 });
     const dry = staysDry(s);
     const trip: Trip = { mem, now, regionId, level, avoid: keeps, travelLeg: s.travelLeg, zAt, dry };
@@ -864,6 +868,15 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         mem.hunted = undefined;
     }
 
+    // ── The raid (tactics/raid.ts, siege.ts): the muster said go. Enemy players first (above); then over our own bridge to the
+    // stage, and rank by rank to the lord, whoever is dead or low: raidOrders counts the living, and rest comes with nothing to hit. ──
+    if (raid) {
+        const guards = p.contacts.filter(c => c.keepGuard && !c.stale && isAlive(c) && c.regionId === regionId);
+        const { update } = raidStep({ plan: raid.plan, mem, members: p.members.filter(m => m.regionId === regionId), guards });
+        mem.legKind = null;
+        return { ...calm, ...update, reason: `${update.reason}${gone}` };
+    }
+
     // ── Attacked by guards: in combat near an enemy keep with nothing on the board on us. Keep guards are realm NPCs, never on
     // the board (isKillable), so this is the only sign of them: walk off, away from that keep, instead of resting under them. ──
     const guarded = keeps.find(k => dist(centre, k) < k.r + GUARD_REACH);
@@ -1090,10 +1103,13 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         let calls: readonly RealmCall[] = [];
         try { calls = src?.calls() ?? []; } catch { calls = []; }
         mem.realmCalls = calls;
-        const out = strategy.decide(ctx);
+        let out = strategy.decide(ctx);
+        // The raid's patch (Orders.settings, tactics/raid.ts) ends with the muster's go: guards off the picture, the keep's circle back.
+        if (!raidCall(mem) && ctx.orders.settings?.raid && out.settings === undefined) out = { ...out, settings: null };
         flushAnswers(mem, src);
         return out;
     };
-    // The main groups' own lists (by role and by member) get hasten too (tactics/hasten.ts withHastener).
-    return { strategy: { ...withHastener(strategy), decide }, stop: () => { stopped = true; try { src?.stop?.(); } catch { /* already stopped */ } } };
+    // The main groups' own lists (by role and by member) get hasten too (tactics/hasten.ts withHastener), and the tanks' and
+    // melee's breakDoor for a raid (tactics/raid.ts withRaid).
+    return { strategy: { ...withRaid(withHastener(strategy)), decide }, stop: () => { stopped = true; try { src?.stop?.(); } catch { /* already stopped */ } } };
 }

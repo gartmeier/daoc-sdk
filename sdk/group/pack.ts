@@ -27,6 +27,7 @@ import { aggroZones } from './terrain';
 import { lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, roadsOut } from './tactics/roads';
 import { withHasten } from './tactics/hasten';
+import { raidCall } from './tactics/raid';
 import { decideRvr, focusHealed, groupRegion, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
@@ -345,6 +346,8 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // spread: an enemy player is known, so casters take their wider slots (spreadOnSight) from the first sight on.
     const say = (u: OrdersUpdate): OrdersUpdate => ({ ...u, ...(runnerNote ? { reason: `${u.reason}; ${runnerNote.text}` } : {}), column: column(u), spread: foes.length > 0, waiting: [...(u.waiting ?? []).filter(w => w.why !== 'pickup'), ...pickupWait] });
     const areaRadius = 350;
+    // The raid (tactics/raid.ts): the muster said go and no enemy player is about: decideRvr plays it, guards and doors included.
+    if (raidCall(mem) && !foes.length) return say(calm());
 
     // Chasers are the Hero's: the anchor stands on the focus, so his leash lets him at it (never into a keep's circle).
     // A focus in a river: the bank nearest it, so he goes in no farther than his leash.

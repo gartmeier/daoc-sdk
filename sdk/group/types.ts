@@ -150,6 +150,8 @@ export interface MemberReport {
      * window and what members see of it. `bot` is '', it has no capabilities and is never given orders. Absent on bots.
      */
     observed?: true;
+    /** Keep doors (DbDoor ids) this client read "The Keep Door is broken!" for lately, by the door nearest it then (observeState). Absent without any. */
+    doorsBroken?: number[];
 }
 
 /** A monster (or enemy player) as one member saw it in one snapshot. */
@@ -191,6 +193,11 @@ export interface Sighting {
     isPet?: boolean;
     /** Players: a Necromancer in shade (NearbyPlayer.isShade). No attack and no pet order lands on it (AbstractServerRules.cs:449-455): what can be fought is its servant. */
     isShade?: boolean;
+    /**
+     * An enemy realm's NPC that is no pet: a keep's guard or lord. The board holds it, and its picture shows it only while the orders
+     * carry a raid (Orders.settings.raid, tactics/raid.ts): every other reader goes on as before, when such NPCs never reached the board.
+     */
+    keepGuard?: boolean;
     /** Players: what this member saw of it in this snapshot that tells a class: gear (0x15), spell effects, style animations, weapons swung (class-read.ts). The board keeps it as evidence, not on the contact. */
     look?: FoeLook;
 }
