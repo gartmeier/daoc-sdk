@@ -6,7 +6,7 @@
 
 import type { Behavior, MemberContext } from './member';
 import {
-    defencePlan, defenceRouteFrom, ON_STAND, openOwnDoors, type DefenceOrders, type DefencePhase, type DefencePlan, type DefenceStand,
+    defencePlan, ON_STAND, openOwnDoors, type DefenceOrders, type DefencePhase, type DefencePlan, type DefenceStand,
 } from './siege';
 import type { PlayerRealm } from './keeps';
 
@@ -33,6 +33,11 @@ export function defenceSettings(plan: Pick<DefencePlan, 'keep'>, orders: Defence
     return prev && seatKey(prev) === seatKey(next) ? prev : next;
 }
 
+/** Within this of the keep's centre a member walks to its own stand (the entry outside the gate is 1560 out, the stage 3200). */
+export const DEFENCE_APPROACH = 2200;
+const nearKeep = (plan: Pick<DefencePlan, 'centre'>, p: { x: number; y: number }) => Math.hypot(p.x - plan.centre.x, p.y - plan.centre.y) <= DEFENCE_APPROACH;
+const insideWalls = (plan: Pick<DefencePlan, 'centre'>, p: { x: number; y: number }) => Math.hypot(p.x - plan.centre.x, p.y - plan.centre.y) <= 1000;
+
 /** A leg of the walk in: short enough that a change of orders is heard between legs. */
 const LEG_MS = 20_000;
 /** Back to the stand when this far off it (beyond its leash). */
@@ -54,8 +59,9 @@ export function onStand(me: { x: number; y: number; z: number }, stand: DefenceS
 }
 
 /**
- * Walk to our stand and keep to it. Falls through (the kit acts) while we stand on it, or within its leash in a fight. Off it:
- * over our bridge to the entry outside the gate (defenceRouteFrom), then to the stand, our own doors opened to the walk.
+ * Walk to our stand and keep to it, our own doors opened to the walk. Falls through (the kit acts) while we stand on it, or within
+ * its leash in a fight; farther than DEFENCE_APPROACH from the keep (the unit travels in as a body: the defence call's own legs);
+ * and outside the walls while an enemy attacks us (fight back first).
  */
 export const holdDefenceStand: Behavior = {
     name: 'defence-stand',
@@ -70,11 +76,14 @@ export const holdDefenceStand: Behavior = {
         openOwnDoors(plan, d.broken);
         const fighting = ctx.threats().length > 0 || ctx.orders().focus !== null;
         if (onStand(me, seat, fighting)) return false;
-        const way = defenceRouteFrom(plan, me);
-        ctx.doing('defence', null, way.length ? `to ${seat.label} by the bridge` : `to ${seat.label}`);
-        const w = way.length
-            ? await ctx.bot.followPath(way, { tolerance: 150, timeout: LEG_MS })
-            : await ctx.bot.walkTo(seat.at.x, seat.at.y, { z: seat.at.z, tolerance: 60, timeout: LEG_MS });
+        // Far from the keep the unit walks in as one body (the defence call's travel), never each member alone: live 14:20-14:23
+        // midgard-2's members walked 25000 alone through the field, four rooted on the way, two dead before the gate.
+        if (!nearKeep(plan, me)) return false;
+        // Attacked outside the walls (the raid at our gate): fight back first; inside them, on to the stand. Live 14:20:46 Grimhild
+        // died walking to our own gate through the raid.
+        if (!insideWalls(plan, me) && ctx.threats().some(c => c.targetId === me.objectId)) return false;
+        ctx.doing('defence', null, `to ${seat.label}`);
+        const w = await ctx.bot.walkTo(seat.at.x, seat.at.y, { z: seat.at.z, tolerance: 60, timeout: LEG_MS });
         // A timeout is the leg's end, not a failure: the next turn goes on from where it stopped.
         ctx.result('defence', w.reason === 'timeout' ? { success: true, message: w.message } : w);
         return true;
