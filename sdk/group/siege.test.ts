@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'bun:test';
+import { NavmeshStore } from '../navmesh';
 import { getTerrainStore } from '../terrain';
 import { BATTLEGROUND_LAYOUTS, keepDangers, THIDRANKI, type PlayerRealm } from './keeps';
 import {
     brokenDoors, doorDamage, doorHealth, FASTE, inLordReach, raidCentre, raidOrders, raidPlan, routeFrom, STAGE_SHARE,
-    type RaidMember, type RaidView, type SiegeSeen, pastStage, DOOR_BROKEN_RE } from './siege';
+    type RaidMember, type RaidView, type SiegeSeen, pastStage, DOOR_BROKEN_RE, meleeReach, shutDoors } from './siege';
 import { isWet } from './water';
 
 const REALMS: PlayerRealm[] = ['albion', 'midgard', 'hibernia'];
@@ -412,3 +413,76 @@ describe('helpers', () => {
         expect(inLordReach(plan, { x: 32296, y: 38267, z: 4272 })).toBe(true);
     });
 });
+
+// ── Melee and what they can reach (keep pathing, 2026-11-13) ─────────────────
+
+describe('raidOrders with reach: melee take no static guard they cannot walk to', () => {
+    const plan = raidPlan('midgard')!;
+    const view = (v: Partial<RaidView>): RaidView => ({ members: [], seen: [...garrison(), ...doors], owner: 'albion', ...v });
+    const yard = at({ x: 33300, y: 38700, z: 3722 }, 8);
+
+    test('a wall Wizard on us: ranged take it, melee hold when it is out of their reach (live 08:36, the climb)', () => {
+        const seen = [...garrison('albion', labelsUpTo(1)), ...doors].map(s => s.name === 'wall-se' ? { ...s, targetObjectId: yard[0]!.id } : s);
+        const blind = raidOrders(plan, view({ members: yard, seen, staged: true, broken: [252000301] }));
+        expect(blind.melee.focus?.name).toBe('wall-se');
+        const o = raidOrders(plan, view({ members: yard, seen, staged: true, broken: [252000301], reach: () => false }));
+        expect(o.ranged.focus!.name).toBe('wall-se');
+        expect(o.melee.focus).toBeNull();
+        expect(raidOrders(plan, view({ members: yard, seen, staged: true, broken: [252000301], reach: () => true })).melee.focus!.name).toBe('wall-se');
+    });
+
+    test('a fighter needs no route: it comes to us', () => {
+        const seen = [...garrison('albion', labelsUpTo(2)), ...doors].map(s => s.name === 'yard-1' ? { ...s, targetObjectId: yard[0]!.id } : s);
+        const o = raidOrders(plan, view({ members: yard, seen, staged: true, broken: [252000301], reach: () => false }));
+        expect(o.melee.focus!.name).toBe('yard-1');
+    });
+
+    test('the lord behind a shut door: ranged keep him, melee hold', () => {
+        const roof = [...at(plan.roof, 3), ...at({ x: 33100, y: 38250, z: 3722 }, 5).map(m => ({ ...m, id: m.id + 100 }))];
+        const o = raidOrders(plan, view({ members: roof, seen: garrison(), staged: true, reach: () => false }));
+        expect(o.phase).toBe('lord');
+        expect(o.ranged.focus!.name).toBe('Lady Thidranki');
+        expect(o.melee.focus).toBeNull();
+    });
+});
+
+describe('shutDoors', () => {
+    test('posterns always, the gate and the building door until broken, nothing in our own keep', () => {
+        const ids = (b: number[], ours = false) => shutDoors(FASTE, { broken: b, ours }).map(d => d.id).sort();
+        expect(ids([])).toEqual(FASTE.doors.map(d => d.id).sort());
+        expect(ids([252000301])).not.toContain(252000301);
+        expect(ids([252000301, 252000302])).toEqual([252000303, 252000304, 252000305, 252000306]);
+        expect(ids([], true)).toEqual([]);
+    });
+});
+
+const navStore = new NavmeshStore();
+const meshReady = navStore.available() && navStore.at(FASTE.regionId, 33089, 38271) !== null;
+
+describe.skipIf(!meshReady)('meleeReach on the Faste\'s navmesh', () => {
+    const R = FASTE.regionId;
+    const courtyard = { x: 33300, y: 38700, z: 3722 };
+    const stage = FASTE.stage;
+    const wallSe = FASTE.targets.find(t => t.label === 'wall-se')!.at;
+    const lord = FASTE.targets.find(t => t.kind === 'lord')!.at;
+    const none = { broken: [] as number[], ours: false };
+    const gateOpen = { broken: [252000301], ours: false };
+    const bothOpen = { broken: [252000301, 252000302], ours: false };
+
+    test('the wall-walk is reachable by its stair from the courtyard; from outside only through a broken gate', () => {
+        expect(meleeReach(R, courtyard, wallSe, gateOpen, navStore)).toBe(true);
+        expect(meleeReach(R, stage, wallSe, none, navStore)).toBe(false);
+        expect(meleeReach(R, stage, wallSe, gateOpen, navStore)).toBe(true);
+    });
+
+    test('the lord: only through the broken building door, or in our own keep', () => {
+        expect(meleeReach(R, courtyard, lord, gateOpen, navStore)).toBe(false);
+        expect(meleeReach(R, courtyard, lord, bothOpen, navStore)).toBe(true);
+        expect(meleeReach(R, courtyard, lord, { broken: [], ours: true }, navStore)).toBe(true);
+    });
+
+    test('outside a keep, nothing to say', () => {
+        expect(meleeReach(R, stage, { x: 40448, y: 35226, z: 3216 }, none, navStore)).toBe(true);
+    });
+});
+

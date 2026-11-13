@@ -20,7 +20,8 @@
 //   5-25 min later in it (guard_respawn 15 min, variance 10).
 
 import type { Realm } from '../types';
-import { BATTLEGROUND_LAYOUTS, THIDRANKI, type Keep, type PlayerRealm } from './keeps';
+import { getNavmeshStore, type NavMesh, type NavmeshStore } from '../navmesh';
+import { BATTLEGROUND_LAYOUTS, keepAt, THIDRANKI, type Keep, type PlayerRealm } from './keeps';
 import type { Point, Point3 } from './types';
 
 export type GuardKind = 'fighter' | 'caster' | 'archer' | 'lord';
@@ -69,6 +70,19 @@ export interface SiegeLayout {
     /** Lord names by the realm holding the keep (GuardLord, as our clients saw them). */
     lordName: RegExp;
     approach: Record<PlayerRealm, SiegeApproach>;
+    /** Every door of the keep (the door table): the gate and the building's door break; posterns never do (IsPostern). */
+    doors: SiegeDoor[];
+}
+
+/**
+ * A keep door. To an enemy it is a wall until broken (a postern never breaks); to its own realm it opens by interact
+ * (GameKeepDoor.Interact moves the player 100-150 through). The server checks no movement, a real client can't pass.
+ */
+export interface SiegeDoor {
+    /** DbDoor InternalID (NearbyObject.doorId). */
+    id: number;
+    at: Point3;
+    kind: 'gate' | 'door' | 'postern';
 }
 
 export const LORD_REACH = 400;
@@ -140,6 +154,15 @@ export const FASTE: SiegeLayout = {
     lordReach: LORD_REACH,
     // Albion's is Lady (or Lord) Thidranki, Midgard's Jarl Thidranki (both seen); Hibernia's is unseen yet.
     lordName: /\bThidranki$/,
+    // The door table (2026-11-13): 301 the gate, 302 the building's door, 303-306 the building's posterns at wall-walk height.
+    doors: [
+        { id: 252000301, at: { x: 34333, y: 38275, z: 3720 }, kind: 'gate' },
+        { id: 252000302, at: { x: 32654, y: 38180, z: 3720 }, kind: 'door' },
+        { id: 252000303, at: { x: 32323, y: 37845, z: 3975 }, kind: 'postern' },
+        { id: 252000304, at: { x: 32311, y: 38669, z: 3976 }, kind: 'postern' },
+        { id: 252000305, at: { x: 32315, y: 37950, z: 3952 }, kind: 'postern' },
+        { id: 252000306, at: { x: 32311, y: 38669, z: 3952 }, kind: 'postern' },
+    ],
     // Each checked on the navmesh without swimming (bridges are the only wet stretches) and against every post's aggro:
     // at least 100 clear on the way to the stage (Hibernia's leaves its bridge 350 off a wall caster's circle, and
     // walls are 250+ up, so 3D adds to it), no monster camp within reach.
@@ -274,6 +297,12 @@ export interface RaidView {
     done?: readonly string[];
     /** The raid has stood at the stage already: from then on it is inside, whatever its centre. */
     staged?: boolean;
+    /**
+     * Whether our melee can walk to `to` (meleeReach, from the unit's centre). With it, a caster, archer or lord they can't reach
+     * (a wall-walk or the roof behind a shut door, no route) is no melee focus: melee.focus null, they hold at their stand. Absent:
+     * everything counts as reachable. Live 2026-11-13 08:36: midgard-2's melee climbed the wall straight up to a Wizard.
+     */
+    reach?: (to: Point3) => boolean;
     /**
      * Every member of the raid, all units answering the muster (ours included), when the caller knows them. The stage then
      * waits for STAGE_SHARE of the raid's living within RAID_COMING of the stage, not of this unit's alone: live 04:19 a unit
@@ -470,20 +499,93 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const onLord = rank === null;
     const reachable = (s: SiegeSeen) => { const t = postOf(plan, s); return !t || t.kind === 'fighter' || (!onLord && Math.hypot(s.x - stepStand.x, s.y - stepStand.y) <= FOCUS_REACH); };
     const first = near(onUs.filter(reachable)) ?? near(offPost);
+    // Melee take a static guard (caster, archer, lord) only where they can walk to it (view.reach); a fighter comes to them.
+    const meleeOk = (x: SiegeSeen | null): boolean => {
+        if (!x || x.kind !== 'npc' || !view.reach) return true;
+        const t = postOf(plan, x);
+        return !t || t.kind === 'fighter' || view.reach(x);
+    };
     if (first) {
         const stand = (rangedStep ?? meleeStep)?.stand ?? plan.roof;
         const t: RaidTask = { step: rangedStep ?? meleeStep, focus: first, stand };
-        return { phase: rank === null ? 'lord' : 'assault', stand, ranged: t, melee: { ...t }, why: `${first.name} is on us` };
+        const own = meleeStep ? focusOf(meleeStep) : null;
+        const melee: RaidTask = meleeOk(first) ? { ...t } : { step: meleeStep, focus: own && meleeOk(own) ? own : null, stand: meleeStep?.stand ?? stand };
+        return { phase: rank === null ? 'lord' : 'assault', stand, ranged: t, melee, why: `${first.name} is on us` };
     }
     if (rank !== null) {
-        const ranged = task(rangedStep, meleeStep), melee = task(meleeStep, rangedStep);
+        const ranged = task(rangedStep, meleeStep);
+        let melee = task(meleeStep, rangedStep);
+        if (melee.focus && !meleeOk(melee.focus)) melee = { ...melee, focus: null };
         const why = [rangedStep && `ranged: ${rangedStep.label}`, meleeStep && meleeStep !== rangedStep && `melee: ${meleeStep.label}`].filter(Boolean).join(', ');
         return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `rank ${rank}: ${why}` };
     }
     const lordStep = plan.targets.find(t => t.kind === 'lord')!;
     const lord = foes.find(s => plan.lordName.test(s.name)) ?? atPost(plan, lordStep, foes);
     const t: RaidTask = { step: lordStep, focus: lord, stand: plan.roof };
-    return { phase: 'lord', stand: plan.roof, ranged: t, melee: { ...t }, why: lord ? `${lord.name} on the roof` : 'up to the roof' };
+    return { phase: 'lord', stand: plan.roof, ranged: t, melee: { ...t, focus: meleeOk(lord) ? lord : null }, why: lord ? `${lord.name} on the roof` : 'up to the roof' };
+}
+
+// ── Doors and walking (meleeReach) ───────────────────────────────────────────
+
+/** Doors a raid knows about: broken ones (DOOR_BROKEN_RE, by id) and whether the keep is ours (then every door opens to us). */
+export interface DoorState {
+    broken: readonly number[];
+    ours: boolean;
+}
+
+/** The doors that are walls to us now: posterns always, the gate and the building's door until broken; none in our own keep. */
+export function shutDoors(layout: Pick<SiegeLayout, 'doors'>, doors: DoorState): SiegeDoor[] {
+    if (doors.ours) return [];
+    return layout.doors.filter(d => d.kind === 'postern' || !doors.broken.includes(d.id));
+}
+
+/** What each mesh was last told per door (applyDoors), so the flags change only when the state does. */
+const applied = new WeakMap<NavMesh, Map<number, boolean>>();
+
+/** Shut and open the keep's doors on `mesh` (NavMesh.setDoorBlocking) as `doors` says: every later walk in this process obeys them. */
+export function applyDoors(layout: Pick<SiegeLayout, 'doors'>, doors: DoorState, mesh: NavMesh): void {
+    const shut = new Set(shutDoors(layout, doors).map(d => d.id));
+    let known = applied.get(mesh);
+    if (!known) applied.set(mesh, known = new Map());
+    for (const d of layout.doors) {
+        const blocking = shut.has(d.id);
+        if (known.get(d.id) === blocking) continue;
+        if (mesh.setDoorBlocking(d.at, blocking)) known.set(d.id, blocking);
+    }
+}
+
+/** A target this far (3D) off the mesh at its spot stands where no walk ends (a merlon, a ledge): not reachable on foot. */
+const OFF_MESH_Z = 64;
+const reachCache = new Map<string, boolean>();
+
+/**
+ * Whether a melee at `from` can walk to `to` inside a keep's area: a navmesh route that is `found`, with the keep's shut doors
+ * (shutDoors) as walls. Outside every siege layout's keep, without a mesh, or with `from` off the mesh: true (nothing to say).
+ * Cached per (keep, door state, from to 250, to to 50): a static guard's post costs one query per door state.
+ */
+export function meleeReach(regionId: number, from: Point3, to: Point3, doors: DoorState, store: NavmeshStore = getNavmeshStore()): boolean {
+    const keep = keepAt(regionId, to);
+    const layout = keep ? SIEGE_LAYOUTS[keep.name] : undefined;
+    if (!layout || layout.regionId !== regionId || !store.available()) return true;
+    const mesh = store.at(regionId, to.x, to.y);
+    if (!mesh) return true;
+    applyDoors(layout, doors, mesh);
+    const doorKey = shutDoors(layout, doors).map(d => d.id).join(',');
+    const key = `${layout.keep}|${doorKey}|${Math.round(from.x / 250)},${Math.round(from.y / 250)},${Math.round(from.z / 100)}|${Math.round(to.x / 50)},${Math.round(to.y / 50)},${Math.round(to.z / 50)}`;
+    const known = reachCache.get(key);
+    if (known !== undefined) return known;
+    const a = mesh.closestPoint(from, { x: 64, y: 64, z: 256 });
+    if (!a) return true;
+    const b = mesh.closestPoint(to, { x: 64, y: 64, z: 128 });
+    let ok = false;
+    if (b && Math.abs(b.z - to.z) <= OFF_MESH_Z) {
+        const path = mesh.findPath(a, b);
+        const end = path.points.at(-1);
+        ok = path.status === 'found' && !!end && Math.hypot(end.x - b.x, end.y - b.y, end.z - b.z) <= 50;
+    }
+    if (reachCache.size > 4000) reachCache.clear();
+    reachCache.set(key, ok);
+    return ok;
 }
 
 /** The doors a member's chat says broke (DOOR_BROKEN_RE), matched to the plan's door nearest the member when it read it. */
