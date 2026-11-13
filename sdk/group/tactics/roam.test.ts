@@ -12,7 +12,7 @@ describe('the roam (S3; the user: "we\'re doing the same back and forth every ti
     test('pickPlace: never one of the last few nor where we stand; within a leg\'s reach while one is; weighted', () => {
         const ps = [place('a', 1000, 0), place('b', 6000, 0), place('c', 30_000, 0), place('here', 100, 0)];
         expect(pickPlace(ps, { x: 0, y: 0 }, ['a'], () => 0)?.key).toBe('b');
-        // c is 30k off: never while a and b are within 12000.
+        // c is 30k off: never while a and b are within 16000.
         for (const r of [0, 0.3, 0.6, 0.99]) expect(pickPlace(ps, { x: 0, y: 0 }, [], () => r)?.key).not.toBe('c');
         // A fresh big sighting outweighs an empty meeting place at the same distance.
         const w = [place('meet', 5000, 0, 1), place('seen', -5000, 0, 8)];
@@ -50,6 +50,9 @@ describe('the roam (S3; the user: "we\'re doing the same back and forth every ti
         expect(ps.filter(p => p.key.startsWith('pair:')).map(p => p.key).sort()).toEqual(['pair:albion|hibernia', 'pair:hibernia|midgard']);
         expect(ps.filter(p => p.key.startsWith('bank:'))).toHaveLength(3);
         expect(ps.filter(p => p.key.startsWith('ring')).length).toBe(ring.length);
+        // The user: "going by mid PK, alb PK, Faste": the approaches to the other two portal keeps and the Faste's surroundings.
+        expect(new Set(ps.filter(p => p.key.startsWith('pk:')).map(p => p.key.split(':')[1]))).toEqual(new Set(['midgard', 'albion']));
+        expect(ps.filter(p => p.key.startsWith('faste:')).length).toBe(6);
     });
 
     test('decideRvr with no patrol of its own roams instead of the fixed ring', () => {

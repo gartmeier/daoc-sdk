@@ -12,6 +12,11 @@ import { BATTLEGROUND_LAYOUTS, clearOf, type PlayerRealm } from '../keeps';
 import type { Danger } from '../terrain';
 import { raidPlan } from '../siege';
 
+/** An approach to another realm's portal keep stands this far out from the keep (its guards reach about 4500). */
+export const APPROACH = 7500;
+/** Spots round the Faste stand this far from its centre (outside its guards for a realm that doesn't hold it). */
+export const FASTE_RING = 5800;
+
 /** One place the roam may go. */
 export interface RoamPlace extends Point {
     key: string;
@@ -47,7 +52,7 @@ export interface RoamSettings {
 }
 
 export const ROAM_SETTINGS: RoamSettings = {
-    maxLeg: 12_000, memory: 3, reach: 900, stayMin: 60_000, stayMax: 150_000, circle: 700, stepMs: 25_000, sightingMs: 300_000, sightingWeight: 2,
+    maxLeg: 16_000, memory: 4, reach: 900, stayMin: 60_000, stayMax: 150_000, circle: 700, stepMs: 25_000, sightingMs: 300_000, sightingWeight: 2,
 };
 
 /** memory.roam */
@@ -77,6 +82,22 @@ export function meetingPlaces(regionId: number, realm: PlayerRealm, ring: readon
     for (const [key, p] of Object.entries(bg?.pairs ?? {})) {
         if (!key.split('|').includes(realm)) continue;
         out.push({ key: `pair:${key}`, what: `where ${key.replace('|', ' and ')} meet`, x: p.x, y: p.y, weight: 1 });
+    }
+    // The user, 18:0x: "I would expect more variety: going by mid PK, alb PK, Faste." The approaches to the other realms' portal keeps
+    // (APPROACH out from the keep toward the meeting point, beyond its guards' reach) and spots round the Faste (FASTE_RING out).
+    const meet = bg?.meet;
+    for (const k of bg?.keeps ?? []) {
+        if (!k.portal || k.owner === realm || !meet) continue;
+        const d = dist(k, meet) || 1;
+        for (const [i, turn] of [0, 0.35, -0.35].entries()) {
+            const a = Math.atan2(meet.y - k.y, meet.x - k.x) + turn;
+            out.push({ key: `pk:${k.owner}:${i}`, what: `the approach to ${k.owner}'s portal keep`, x: Math.round(k.x + Math.cos(a) * Math.min(APPROACH, d)), y: Math.round(k.y + Math.sin(a) * Math.min(APPROACH, d)), weight: 0.8 });
+        }
+    }
+    const faste = bg?.keeps.find(k => !k.portal);
+    if (faste) for (let i = 0; i < 6; i++) {
+        const a = i * Math.PI / 3 + 0.3;
+        out.push({ key: `faste:${i}`, what: "the Faste's surroundings", x: Math.round(faste.x + Math.cos(a) * FASTE_RING), y: Math.round(faste.y + Math.sin(a) * FASTE_RING), weight: 0.6 });
     }
     for (const r of ['albion', 'midgard', 'hibernia'] as const) {
         const plan = raidPlan(r);
