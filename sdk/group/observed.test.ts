@@ -70,6 +70,22 @@ describe('groupmatesOf: what one client knows of an observed member', () => {
         const s = state({ group: [windowEntry('Vue')], concentrationEffects: [{ index: 0, name: 'Strength of t..', ownerName: 'Vue', concentration: 5, icon: 1 }, { index: 1, name: 'Armor', ownerName: 'Cleric', concentration: 5, icon: 2 }] });
         expect(groupmatesOf(s, ['Vue'], new Map(), ['Strength of the Ox'])[0]!.buffs).toEqual(['Strength of the Ox']);
     });
+
+    test('its own pet: the nearest pet of our realm near it, not ours, not a foe’s, and on the report while fresh', () => {
+        const npc = (objectId: number, x: number, over: Record<string, unknown> = {}) => ({ kind: 'npc', objectId, name: 'bwca', x, y: 10_000, z: 0, realm: 'albion', isPet: true, healthPercent: 100, ...over });
+        const s = state({
+            group: [windowEntry('Tank', { objectId: 1 }), windowEntry('Vue')], nearbyPlayers: [inView('Vue')],
+            pet: { objectId: 5 } as BotWorldState['pet'],
+            nearbyNpcs: [npc(5, 10_120), npc(6, 10_300), npc(7, 10_150, { realm: 'midgard' }), npc(8, 10_140, { isPet: false }), npc(9, 11_000)] as unknown as BotWorldState['nearbyNpcs'],
+        });
+        const [g] = groupmatesOf(s, ['Vue'], new Map());
+        expect(g!.pet).toMatchObject({ objectId: 6, name: 'bwca', x: 10_300 });
+        expect(groupmatesOf(state({ group: [windowEntry('Vue')], nearbyNpcs: s.nearbyNpcs }), ['Vue'], new Map())[0]!.pet).toBeUndefined();
+        const m = new ObservedMembers([{ name: 'Vue' }]);
+        m.merge('Tank', [g!], s.timestamp);
+        expect(m.reports(s.timestamp)[0]!.observedPet).toEqual({ objectId: 6, name: 'bwca', x: 10_300, y: 10_000, z: 0 });
+        expect(m.reports(s.timestamp + 6000)[0]!.observedPet).toBeUndefined();
+    });
 });
 
 describe('observeState: observed members only when asked', () => {
@@ -246,6 +262,14 @@ describe('buffers buff it first', () => {
         const druid = report('Druid', { role: 'healer', capabilities: { heal: true, cc: false, nuke: false, buffs: [], buffSpells: [spell('Strength', 'str')] } });
         const [t] = planBuffs('Druid', [druid, human({ effects: ['Strength'] })], { needs: { melee: ['str'], healer: [] } });
         expect(t).toMatchObject({ target: 'Vue', covered: true, ours: true });
+    });
+    test('its own pet (a charmed bwca) gets the leftover concentration, last, as a member’s window pet does', () => {
+        const druid = report('Druid', { role: 'healer', capabilities: { heal: true, cc: false, nuke: false, buffs: [], buffSpells: [spell('Strength', 'str')] } });
+        const tasks = planBuffs('Druid', [druid, human({ observedPet: { objectId: 600, name: 'bwca', x: 0, y: 0, z: 0 } })], { needs: { melee: ['str'], healer: [] }, petNeeds: ['str'] });
+        expect(tasks.map(t => `${t.target}${t.pet ? `@${t.pet.owner}:${t.pet.objectId}` : ''}`)).toEqual(['Vue', 'bwca@Vue:600']);
+        // Some member's window pet after all (the board's view was wrong): not taken twice.
+        const owner = report('Ench', { role: 'nuker', pet: { objectId: 600, name: 'bwca' } as MemberReport['pet'] });
+        expect(planBuffs('Druid', [druid, owner, human({ observedPet: { objectId: 600, name: 'bwca', x: 0, y: 0, z: 0 } })], { needs: { melee: ['str'], healer: [], nuker: [] }, petNeeds: ['str'] }).filter(t => t.pet).map(t => t.pet!.owner)).toEqual(['Ench']);
     });
 });
 

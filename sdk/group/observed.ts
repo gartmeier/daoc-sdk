@@ -44,6 +44,8 @@ export interface Groupmate {
     aim?: { targetId: number; at: number };
     /** Concentration buffs this member holds on it, by full spell name. Absent with none. */
     buffs?: string[];
+    /** Its own pet as this member sees it: the nearest pet of our realm within OBSERVED_PET_NEAR of it that isn't ours. Absent with none. */
+    pet?: { objectId: number; name: string; x: number; y: number; z: number; at: number };
 }
 
 /** No capabilities: nothing on the board asks an observed member to do anything. */
@@ -57,6 +59,8 @@ export const OUT_OF_SIGHT = -1;
 export const OBSERVED_AIM_MS = 6000;
 /** Bots leave a target an observed member is hitting to it at or below this % (TacticsSettings.observed.leaveBelow). */
 export const LEAVE_BELOW = 25;
+/** A pet of our realm this near an observed member, no member's, is taken for its own (a charmed mob follows within ~100-300). */
+export const OBSERVED_PET_NEAR = 400;
 
 /** The role an observed member plays in targeting: group.json's, else its class's, a tank class read as melee. */
 export function observedRole(className: string, role?: Role): Role {
@@ -71,7 +75,7 @@ const lower = (s: string) => s.toLowerCase();
  * latest aim among `aims` (attacker id → target and time, from observeState's combat events) and the concentration
  * buffs we hold on it. `ownBuffs` names our buff spells in full: the 0x75 list cuts names to ~12 characters plus "..".
  */
-export function groupmatesOf(state: Pick<BotWorldState, 'group' | 'nearbyPlayers' | 'timestamp' | 'concentrationEffects' | 'player'>, names: readonly string[],
+export function groupmatesOf(state: Pick<BotWorldState, 'group' | 'nearbyPlayers' | 'timestamp' | 'concentrationEffects' | 'player'> & Partial<Pick<BotWorldState, 'nearbyNpcs' | 'pet'>>, names: readonly string[],
     aims: ReadonlyMap<number, { targetId: number; at: number }>, ownBuffs: readonly string[] = []): Groupmate[] {
     const want = new Set(names.map(lower));
     const p = state.player;
@@ -82,12 +86,16 @@ export function groupmatesOf(state: Pick<BotWorldState, 'group' | 'nearbyPlayers
         const aim = aims.get(o?.objectId ?? g.objectId);
         const buffs = (state.concentrationEffects ?? []).filter(c => lower(c.ownerName) === lower(g.name))
             .map(c => ownBuffs.find(full => sameSpellName(full, c.name)) ?? c.name);
+        const pet = o && p ? (state.nearbyNpcs ?? [])
+            .filter(n => n.isPet && n.realm === p.realm && n.objectId !== state.pet?.objectId && n.healthPercent > 0 && Math.hypot(n.x - o.x, n.y - o.y) <= OBSERVED_PET_NEAR)
+            .sort((a, b) => Math.hypot(a.x - o.x, a.y - o.y) - Math.hypot(b.x - o.x, b.y - o.y))[0] : undefined;
         out.push({
             name: g.name, className: g.className, level: g.level, objectId: o?.objectId ?? g.objectId,
             hp: g.healthPercent, mana: g.manaPercent, endurance: g.endurancePercent, isDead: g.isDead, inOtherRegion: g.inOtherRegion,
             ...(o && p ? { seen: { regionId: p.regionId, x: o.x, y: o.y, z: o.z, inCombat: o.inCombat, isSitting: o.isSitting, at: state.timestamp } } : {}),
             ...(aim && state.timestamp - aim.at < OBSERVED_AIM_MS ? { aim: { ...aim } } : {}),
             ...(buffs.length ? { buffs } : {}),
+            ...(pet ? { pet: { objectId: pet.objectId, name: pet.name, x: pet.x, y: pet.y, z: pet.z, at: state.timestamp } } : {}),
         });
     }
     return out;
@@ -104,6 +112,7 @@ interface Kept {
     windowAt: number;
     seen: NonNullable<Groupmate['seen']> | null;
     aim: { targetId: number; at: number } | null;
+    pet: NonNullable<Groupmate['pet']> | null;
     /** Concentration buffs on it, by the member holding them. */
     buffsBy: Map<string, string[]>;
     since: number;
@@ -117,7 +126,7 @@ export class ObservedMembers {
     private readonly kept = new Map<string, Kept>();
 
     constructor(entries: readonly ObservedEntry[] = []) {
-        for (const e of entries) this.kept.set(lower(e.name), { entry: e, window: null, windowAt: 0, seen: null, aim: null, buffsBy: new Map(), since: 0 });
+        for (const e of entries) this.kept.set(lower(e.name), { entry: e, window: null, windowAt: 0, seen: null, aim: null, pet: null, buffsBy: new Map(), since: 0 });
     }
 
     get size(): number { return this.kept.size; }
@@ -134,6 +143,7 @@ export class ObservedMembers {
             if (at >= k.windowAt) { k.window = g; k.windowAt = at; }
             if (g.seen && (!k.seen || g.seen.at >= k.seen.at)) k.seen = { ...g.seen };
             if (g.aim && (!k.aim || g.aim.at >= k.aim.at)) k.aim = { ...g.aim };
+            if (g.pet && (!k.pet || g.pet.at >= k.pet.at)) k.pet = { ...g.pet };
             if (g.buffs?.length) k.buffsBy.set(by, [...g.buffs]); else k.buffsBy.delete(by);
             if (!k.since) k.since = at;
         }
@@ -155,6 +165,7 @@ export class ObservedMembers {
             // Seen lately by anyone is here, whatever a window of a member elsewhere says of regions.
             const seen = k.seen && now - k.seen.at <= OBSERVED_STALE_MS ? k.seen : null;
             const aim = k.aim && now - k.aim.at < OBSERVED_AIM_MS && !w.isDead ? k.aim : null;
+            const pet = k.pet && now - k.pet.at <= OBSERVED_STALE_MS && !w.isDead ? k.pet : null;
             out.push({
                 name: w.name, bot: '', role: observedRole(w.className, k.entry.role), className: w.className, level: w.level, experience: 0,
                 objectId: w.objectId, regionId: seen?.regionId ?? OUT_OF_SIGHT,
@@ -165,6 +176,7 @@ export class ObservedMembers {
                 capabilities: { ...NONE, buffs: [], buffSpells: [] },
                 activity: { kind: 'observed', targetId: aim?.targetId ?? null, detail: '', since: k.since },
                 at: k.windowAt, observed: true,
+                ...(pet ? { observedPet: { objectId: pet.objectId, name: pet.name, x: pet.x, y: pet.y, z: pet.z } } : {}),
             });
         }
         return out;

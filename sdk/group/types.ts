@@ -152,6 +152,8 @@ export interface MemberReport {
      * window and what members see of it. `bot` is '', it has no capabilities and is never given orders. Absent on bots.
      */
     observed?: true;
+    /** An observed member's own pet (a Mentalist's charmed mob, say): the friendly pet nearest it in a member's view, no member's window pet (observed.ts). For the buff plan's leftover pass only. Absent without one. */
+    observedPet?: { objectId: number; name: string; x: number; y: number; z: number };
     /** Keep doors (DbDoor ids) this client read "The Keep Door is broken!" for lately, by the door nearest it then (observeState). Absent without any. */
     doorsBroken?: number[];
 }

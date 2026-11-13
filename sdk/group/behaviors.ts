@@ -2423,8 +2423,8 @@ export const buff = (): Behavior<TacticsSettings> => ({
             // A pet: out of its owner's view (x null) or beyond the spell's range, as it walks with its owner.
             if (t.pet) {
                 const o = ctx.member(t.pet.owner);
-                const p = o?.pet;
-                return !o || o.regionId !== me.regionId || !p || p.objectId !== t.pet.objectId || p.x == null || p.y == null || dist(me, { x: p.x, y: p.y }) > s.range + reach;
+                const p = [o?.pet, o?.observedPet].find(x => x?.objectId === t.pet!.objectId);
+                return !o || o.regionId !== me.regionId || !p || p.x == null || p.y == null || dist(me, { x: p.x, y: p.y }) > s.range + reach;
             }
             const m = t.target === me.name ? undefined : ctx.member(t.target);
             return !!m && (m.regionId !== me.regionId || dist(me, m) > s.range + reach);
