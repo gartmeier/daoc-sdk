@@ -541,9 +541,17 @@ export function mainBody(here: readonly MemberReport[], radius: number, mem: Rec
     const rank = (m: MemberReport) => (hot(m) ? 100 : 0) + size(m) * 4 + (m !== gone && m.name === mem.gatherLead ? 2 : 0) + (m === gone ? -1 : m.role === 'tank' ? 1 : 0);
     const lead = [...here].sort((a, b) => rank(b) - rank(a))[0]!;
     mem.gatherLead = lead.name;
-    const main = here.filter(m => dist(m, lead) <= radius);
-    return { main, far: here.filter(m => !main.includes(m)) };
+    // One far last call stays far until FAR_KEEP inside the radius (live 2026-11-13 22:02:55-22:03:04: Deirdre at its edge flipped
+    // the group between meeting her and trailing a lost Briton every 1-2 s).
+    const wasFar = new Set<string>(mem.farNames ?? []);
+    const main = here.filter(m => dist(m, lead) <= radius - (wasFar.has(m.name) ? FAR_KEEP : 0));
+    const far = here.filter(m => !main.includes(m));
+    mem.farNames = far.map(m => m.name);
+    return { main, far };
 }
+
+/** mainBody's hysteresis: a member far stays far until this much inside the gather radius of the main body's lead. */
+export const FAR_KEEP = 500;
 
 /** A gather for an observed member ends once the group's bots stand within this share of the gather radius of it. */
 export const OBSERVED_GATHER_CLOSE = 0.5;
