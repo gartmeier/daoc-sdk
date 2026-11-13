@@ -64,6 +64,15 @@ describe('help calls', () => {
         expect(out.events.find(e => e.kind === 'why')).toMatchObject({ why: 'outnumbered', was: 'sighted' });
     });
 
+    test('an answer older than the call (a reused id after a restart), or from the caller itself, is ignored', () => {
+        const d = director();
+        const f = () => ({ 'camelot-s1': frame({ id: 'camelot-s1', phase: 'engage', members: at(MID.x, MID.y, 1, 'S'), foes: foes(MID.x + 300, MID.y, 4) }) });
+        const c = d.update(f(), 10_000, []).calls[0]!;
+        const ans = (unit: string, t: number): AnswersFile => ({ v: 1, unit, answers: { [c.id]: { state: 'coming', why: '', at: t } } });
+        expect(d.update(f(), 11_000, [ans('camelot', 5_000), ans('camelot-s1', 10_500)]).calls[0]!.coming).toEqual([]);
+        expect(d.update(f(), 12_000, [ans('camelot', 11_500)]).calls[0]!.coming).toEqual(['camelot']);
+    });
+
     test('closeAll: open calls close as stopped, not wiped', () => {
         const d = director();
         d.update({ 'camelot-s1': frame({ id: 'camelot-s1', phase: 'engage', members: at(MID.x, MID.y, 1, 'S'), foes: foes(MID.x + 300, MID.y, 4) }) }, 0, []);

@@ -471,7 +471,9 @@ export class RealmDirector {
             for (const [id, a] of Object.entries(file.answers ?? {})) {
                 const o = this.open.get(id);
                 const k = `${file.unit}/${id}`;
-                if (!o || (this.answersSeen.get(k) ?? 0) >= a.at) continue;
+                // Not an answer older than the call (ids start over with each director: a 'coming' written for the last
+                // director's call of that id, live 13:40), nor the caller answering its own call.
+                if (!o || (this.answersSeen.get(k) ?? 0) >= a.at || a.at < o.call.since || file.unit === o.call.from) continue;
                 this.answersSeen.set(k, a.at);
                 const coming = o.call.coming;
                 if (a.state === 'coming' || a.state === 'arrived') { if (!coming.includes(file.unit)) coming.push(file.unit); }
