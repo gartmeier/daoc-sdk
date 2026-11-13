@@ -172,6 +172,8 @@ export interface GroupVoiceState {
     /** The last tick in engage, and when this run of engage ticks began (a break of SWITCH_MS starts a new one). */
     engagedAt?: number;
     engageSince?: number;
+    /** The label the last focus line named ("Valewalker"): the next on another of those is "next Valewalker". */
+    lastLabel?: string;
 }
 
 /** An encounter ends when no enemy player was in sight this long: the next one is "inc" again. */
@@ -203,6 +205,8 @@ export function groupClaims(p: GroupPicture, st: GroupVoiceState, now = p.at): C
     }
 
     const team = bots(p.members);
+    // A solo has nobody to tell (the server answers "You are not part of a group").
+    if (p.members.length < 2) return out;
     const living = team.filter(m => !m.isDead);
     if (team.length && !living.length) {
         out.push({ key: 'wipe', text: 'wiped, release and meet at our PK', prio: 100, settleMs: 1500, cooldownMs: 120_000, urgent: true });
@@ -214,7 +218,9 @@ export function groupClaims(p: GroupPicture, st: GroupVoiceState, now = p.at): C
     if (seen.length) st.incLastSeen = now;
     else if (st.incLastSeen !== undefined && now - st.incLastSeen > INC_RESET_MS) { st.incPeak = 0; st.incCalled = 0; }
     st.incPeak = Math.max(st.incPeak ?? 0, seen.length);
-    if (seen.length > (st.incCalled ?? 0) && o.phase !== 'engage' && o.phase !== 'retreat') {
+    // The first sight, then only when it grew by two or more: not a line per enemy.
+    const called = st.incCalled ?? 0;
+    if (seen.length >= (called ? called + 2 : 1) && o.phase !== 'engage' && o.phase !== 'retreat') {
         const by: Record<string, number> = {};
         for (const c of seen) by[c.realm] = (by[c.realm] ?? 0) + 1;
         const centre = { x: seen.reduce((t, c) => t + c.x, 0) / seen.length, y: seen.reduce((t, c) => t + c.y, 0) / seen.length };
@@ -223,7 +229,9 @@ export function groupClaims(p: GroupPicture, st: GroupVoiceState, now = p.at): C
     }
 
     if (o.phase === 'retreat') {
-        const to = o.retreatTo ? ` to ${placeName(o.retreatTo, st.realm, regionId).replace(/^(at|near) /, '')}` : '';
+        // "to our PK", "to the hib bridge"; a compass place ("north-east of the Faste") says nothing a human can run to.
+        const place = o.retreatTo ? placeName(o.retreatTo, st.realm, regionId) : '';
+        const to = /^(at|near) /.test(place) ? ` to ${place.replace(/^(at|near) /, '')}` : '';
         out.push({ key: 'retreat', text: `pulling back${to}, stay with me`, prio: 95, settleMs: 800, cooldownMs: 30_000, urgent: true });
     } else if (o.phase === 'travel' && /^avoid\b/.test(reason)) {
         out.push({ key: 'avoid', text: 'too many for us, steering clear', prio: 50, settleMs: 1500, cooldownMs: 90_000 });
@@ -243,7 +251,7 @@ export function groupClaims(p: GroupPicture, st: GroupVoiceState, now = p.at): C
         if (f && f.kind === 'player') {
             const label = foeLabel(f);
             const fresh = st.focusSaidAt === undefined || st.focusSaidAt < (st.engageSince ?? 0);
-            const text = fresh ? `going in, focus the ${label}` : `switch, focus the ${label}`;
+            const text = fresh ? `going in, focus the ${label}` : label === st.lastLabel ? `next ${label}` : `switch, focus the ${label}`;
             out.push({ key: `focus:${o.focus}`, text, prio: 80, settleMs: 1500, cooldownMs: 25_000 });
         }
     }
@@ -260,12 +268,13 @@ export function groupClaims(p: GroupPicture, st: GroupVoiceState, now = p.at): C
     if (o.phase !== 'engage' && o.phase !== 'retreat') {
         const rezzer = living.find(m => m.capabilities.rez);
         for (const m of p.members) {
-            if (!m.isDead) continue;
-            if (m.observed) {
-                out.push({ key: `rez:${m.name}`, text: rezzer ? `${m.name}, don't release, rez coming` : `${m.name}, nobody can rez, release`, prio: 85, settleMs: 2000, cooldownMs: 90_000 });
-            } else if (rezzer && rezzer.name !== m.name) {
-                out.push({ key: `rez:${m.name}`, text: `rez ${m.name}`, prio: 55, settleMs: 3000, cooldownMs: 90_000 });
-            }
+            if (m.isDead && m.observed) out.push({ key: `rez:${m.name}`, text: rezzer ? `${m.name}, don't release, rez coming` : `${m.name}, nobody can rez, release`, prio: 85, settleMs: 2000, cooldownMs: 90_000 });
+        }
+        // The dead bots in one line: "rez Eir", "rez Eir and Leif", "rez Eir, Leif and Freydis".
+        const dead = rezzer ? team.filter(m => m.isDead).map(m => m.name) : [];
+        if (dead.length) {
+            const names = dead.length === 1 ? dead[0]! : `${dead.slice(0, -1).join(', ')} and ${dead.at(-1)}`;
+            out.push({ key: `rez:${[...dead].sort().join(',')}`, text: `rez ${names}`, prio: 55, settleMs: 3000, cooldownMs: 90_000 });
         }
     }
 
@@ -281,7 +290,7 @@ export function groupSaid(line: Line, st: GroupVoiceState): void {
     const inc = /^inc:(\d+)$/.exec(line.key);
     if (inc) st.incCalled = Number(inc[1]);
     const focus = /^focus:(\d+)$/.exec(line.key);
-    if (focus) { st.lastFocus = Number(focus[1]); st.focusSaidAt = line.at; }
+    if (focus) { st.lastFocus = Number(focus[1]); st.focusSaidAt = line.at; st.lastLabel = /focus the (.+)$/.exec(line.text)?.[1] ?? /^next (.+)$/.exec(line.text)?.[1]; }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────── /region

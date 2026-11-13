@@ -99,6 +99,10 @@ describe('group chat', () => {
         const a = enemy(1, 'midgard');
         v.hear(picture(team(), [a], { phase: 'retreat', retreatTo: { x: 37301, y: 52362, z: 0 } }, 0));
         expect(v.hear(picture(team(), [a], { phase: 'retreat', retreatTo: { x: 37301, y: 52362, z: 0 } }, 900))?.text).toBe('pulling back to our PK, stay with me');
+        // A compass place is no place to run to.
+        const w = gv();
+        w.hear(picture(team(), [a], { phase: 'retreat', retreatTo: { x: 40000, y: 30000, z: 0 } }, 0));
+        expect(w.hear(picture(team(), [a], { phase: 'retreat', retreatTo: { x: 40000, y: 30000, z: 0 } }, 900))?.text).toBe('pulling back, stay with me');
     });
     test('inc once per new count in an encounter, not in the fight', () => {
         const v = gv();
@@ -106,9 +110,13 @@ describe('group chat', () => {
         v.hear(picture(team(), foes, { phase: 'travel' }, 0));
         expect(v.hear(picture(team(), foes, { phase: 'travel' }, 1100))?.text).toBe('inc 2 mids north of the Faste');
         expect(v.hear(picture(team(), foes, { phase: 'travel' }, 6000))).toBeNull();
+        // One more is not worth a line; two more are.
         const three = [...foes, enemy(3, 'hibernia', { x: 33000, y: 25000 })];
         v.hear(picture(team(), three, { phase: 'travel' }, 7000));
-        expect(v.hear(picture(team(), three, { phase: 'travel' }, 8200))?.text).toBe('inc 2 mids and 1 hib north of the Faste');
+        expect(v.hear(picture(team(), three, { phase: 'travel' }, 8200))).toBeNull();
+        const four = [...three, enemy(4, 'hibernia', { x: 33000, y: 25000 })];
+        v.hear(picture(team(), four, { phase: 'travel' }, 9000));
+        expect(v.hear(picture(team(), four, { phase: 'travel' }, 10_200))?.text).toBe('inc 2 mids and 2 hibs north of the Faste');
     });
     test('mezz on someone', () => {
         const v = gv();
@@ -126,6 +134,18 @@ describe('group chat', () => {
         // Nothing of rez during the fight.
         const w = gv();
         expect(ticks(w, t => picture(members, [], { phase: 'engage', focus: null }, t), 12_000)).toEqual(['hi Niamh, stick with us and /assist Gawain, I call the targets here']);
+    });
+    test('the dead in one rez line; a solo says nothing', () => {
+        const v = gv();
+        const members = team().map(m => (m.name !== 'Tuck' ? { ...m, isDead: true } : m));
+        expect(ticks(v, t => picture(members, [], { phase: 'recover' }, t), 6000)).toEqual(['rez Gawain and Merlin']);
+        const solo = gv();
+        expect(ticks(solo, t => picture([report('Gawain', { isDead: false })], [enemy(1)], { phase: 'travel' }, t), 6000)).toEqual([]);
+    });
+    test('next one of the same', () => {
+        const v = gv();
+        const a = enemy(1, 'hibernia'), b = enemy(2, 'hibernia');
+        expect(ticks(v, t => picture(team(), [a, b], { phase: 'engage', focus: t < 5000 ? 1 : 2 }, t), 8000)).toEqual(['going in, focus the Celt', 'next Celt']);
     });
     test('the wipe', () => {
         const v = gv();
