@@ -187,3 +187,24 @@ describe('sightStep never goes through a keep door', () => {
         expect(spot === null || spot.x < 34333).toBe(true);
     });
 });
+
+describe('portal keep doors', () => {
+    afterEach(() => clearOwnDoors());
+    test('our realm\'s portal keep doors are ours in every battleground; the others\' are shut to us', async () => {
+        const { PORTAL_DOORS } = await import('../doors');
+        for (const r of [250, 251, 252, 253]) {
+            expect(ownDoors(r, 'albion').map(d => d.doorId)).toEqual(PORTAL_DOORS[r]!.albion.map(d => d.doorId));
+            expect(shutDoorsIn(r, 'albion').map(d => d.doorId)).toEqual([...PORTAL_DOORS[r]!.midgard, ...PORTAL_DOORS[r]!.hibernia].map(d => d.doorId));
+        }
+        expect(ownDoors(1, 'albion')).toEqual([]);
+        expect(ownDoors(252)).toEqual([]);
+    });
+
+    test('a walk out of Albion\'s portal keep in Thidranki passes its inner door, then its gate', () => {
+        const doors = ownDoors(252, 'albion');
+        const first = doorOnRoute(p(37301, 52362, 3944), [p(36920, 52200, 3944), p(36920, 51300, 3944)], doors);
+        expect(first?.door.doorId).toBe(252000102);
+        const second = doorOnRoute(p(36920, 51962, 3944), [p(36920, 51300, 3944)], doors);
+        expect(second?.door.doorId).toBe(252000101);
+    });
+});

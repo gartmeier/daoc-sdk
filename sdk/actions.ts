@@ -192,7 +192,7 @@ const SIGHT_STEP_KEEP = 150;
  * toward `to` (up to `max`, staying SIGHT_STEP_KEEP off it) from which `to` is in sight over the terrain and past the walls, else the
  * farthest of them, or null with `clearOnly`. Null too when there is no room for a step.
  */
-export function sightStep(regionId: number, from: Vec3, to: Vec3, ground: (regionId: number, x: number, y: number) => number | null = terrainGround, max = SIGHT_STEP_MAX, clearOnly = false): Vec3 | null {
+export function sightStep(regionId: number, from: Vec3, to: Vec3, ground: (regionId: number, x: number, y: number) => number | null = terrainGround, max = SIGHT_STEP_MAX, clearOnly = false, realm?: string): Vec3 | null {
     const d = Math.hypot(to.x - from.x, to.y - from.y);
     const reach = Math.min(max, d - SIGHT_STEP_KEEP);
     let spot: Vec3 | null = null;
@@ -201,7 +201,7 @@ export function sightStep(regionId: number, from: Vec3, to: Vec3, ground: (regio
         const next = { x, y, z: ground(regionId, x, y) ?? from.z + ((to.z - from.z) * s) / d };
         // Never through a keep door, ours or a shut one (doors.ts): live 15:25 two Midgard casters on their wall stands stepped out
         // through their own gate (walkTo uses it) to see the raid, and were rooted outside.
-        if (doorBetween(regionId, from, next)) break;
+        if (doorBetween(regionId, from, next, realm)) break;
         spot = next;
         if (lineOfSight(regionId, spot, to, ground)) return spot;
     }
@@ -2351,7 +2351,7 @@ export class BotActions {
                     const way = layerRoute(p.regionId, p, t);
                     if (way === 'none') return failWith(`${name} is on another level with no way there (${Math.round(t.z - p.z)} up)`, 'out_of_reach');
                     // Never straight through a keep door: ours opens only by interact, an enemy's is a wall until it breaks (doors.ts).
-                    const door = way === 'straight' ? doorBetween(p.regionId, p, t) : null;
+                    const door = way === 'straight' ? doorBetween(p.regionId, p, t, p.realm) : null;
                     if (door) return failWith(`${name} is beyond the door ${door.doorId}`, 'out_of_reach');
                     lastMoveDest = { x: t.x, y: t.y, z: t.z };
                     lastMoveAt = now;
@@ -2539,7 +2539,7 @@ export class BotActions {
     private async stepIntoSight(obj: Obj, holding: boolean): Promise<boolean> {
         const me = this.helpers.player();
         if (!me) return false;
-        const spot = holding ? sightStep(me.regionId, me, obj, terrainGround, SIGHT_STEP_SHORT, true) : sightStep(me.regionId, me, obj);
+        const spot = holding ? sightStep(me.regionId, me, obj, terrainGround, SIGHT_STEP_SHORT, true, me.realm) : sightStep(me.regionId, me, obj, terrainGround, SIGHT_STEP_MAX, false, me.realm);
         if (!spot) return false;
         const w = await this.walkTo(spot.x, spot.y, { z: spot.z, tolerance: 40, timeout: 8000 });
         return w.success;
@@ -6130,7 +6130,7 @@ export class BotActions {
      */
     private async route(dest: Point, via: Point[], options: Omit<WalkOptions, 'z'> & { z?: number }): Promise<WalkResult> {
         const p0 = this.helpers.player();
-        if (!p0 || ownDoors(p0.regionId).length === 0) return this.routeOnce(dest, via, options);
+        if (!p0 || ownDoors(p0.regionId, p0.realm).length === 0) return this.routeOnce(dest, via, options);
         const started = Date.now();
         const left = () => options.timeout === undefined ? undefined : Math.max(1, options.timeout - (Date.now() - started));
         const tolerance = options.tolerance ?? 64;
@@ -6138,7 +6138,7 @@ export class BotActions {
         let vias = via.slice();
         for (let hop = 0; ; hop++) {
             const p = this.helpers.player();
-            const doors = p ? ownDoors(p.regionId) : [];
+            const doors = p ? ownDoors(p.regionId, p.realm) : [];
             if (!p || p.isDead || doors.length === 0 || hop >= MAX_DOOR_HOPS || Math.hypot(dest.x - p.x, dest.y - p.y) <= tolerance && vias.length === 0) {
                 return this.routeOnce(dest, vias, { ...options, timeout: left() });
             }
