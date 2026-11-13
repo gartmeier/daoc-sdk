@@ -9,7 +9,7 @@ import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { Behavior } from '../member';
 import type { Contact, GroupPicture, MemberReport, Orders, Point3 } from '../types';
 import type { RealmCall } from './help';
-import { breakDoor, RAID_FOE_REACH, raidStep, withBreakDoor, withRaid, type RaidDoor } from './raid';
+import { breakDoor, RAID_FOE_REACH, raidMembers, raidStep, withBreakDoor, withRaid, type RaidDoor } from './raid';
 import { decidePack, rvrPack } from '../pack';
 
 const TH = FASTE.regionId;
@@ -142,6 +142,29 @@ describe('raid: a strategy that sets Orders.settings itself (Hibernia withMakeUp
         expect(nulled.decide(ctx(picture(five(plan.rally)), mustered())).settings).toMatchObject({ raid: FASTE.keep });
         const { strategy: over } = realmCalls(wrapped(makeUp) as any, 'hibernia', { calls: () => [], answer: () => {} });
         expect(over.decide(ctx(picture(five(plan.rally)), { realm: 'midgard' }, { settings: a.settings })).settings).toBe(makeUp);
+    });
+});
+
+describe('raid: the whole raid from the muster call (run D 04:19: midgard went in alone)', () => {
+    const others = (n: number, dx: number) => Array.from({ length: n }, (_, i) => ({ unit: 'midgard-2', x: plan.stage.x + dx + i * 30, y: plan.stage.y, z: plan.stage.z, alive: true }));
+
+    test('raidMembers: ours as they stand, the others from the call; none without the field', () => {
+        const ours = five(plan.stage);
+        const w = raidMembers({ raid: [...others(3, 8000), { unit: 'midgard', x: 0, y: 0, z: 0, alive: true }] }, 'midgard', ours)!;
+        expect(w.length).toBe(8);
+        expect(w.filter(m => m.x === 0)).toEqual([]);
+        expect(raidMembers({}, 'midgard', ours)).toBeUndefined();
+        expect(raidMembers(null, 'midgard', ours)).toBeUndefined();
+    });
+
+    test('at the stage with the rest of the raid 8000 out: wait; with it there, or no field: in', () => {
+        const outer = FASTE.targets.find(t => t.label === 'outer-armswoman')!;
+        const mem = () => ({ raid: { callId: 'x', staged: false, broken: [] as number[] } });
+        const run = (call: any) => raidStep({ plan, mem: mem(), members: five(plan.stage), guards: [guard(301, outer.at)], call, unit: 'midgard' }).update;
+        expect(run({ raid: others(10, 8000) })).toMatchObject({ phase: 'travel' });
+        expect(run({ raid: others(10, 8000) }).reason).toContain('of the raid at the stage');
+        expect(run({ raid: others(10, 100) })).toMatchObject({ phase: 'engage', focus: 301 });
+        expect(run(undefined)).toMatchObject({ phase: 'engage', focus: 301 });
     });
 });
 

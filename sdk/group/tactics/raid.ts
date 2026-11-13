@@ -13,7 +13,7 @@
 
 import type { Realm } from '../../types';
 import type { Behavior } from '../member';
-import { planKeep, raidOrders, raidPlan, routeFrom, type RaidOrders, type RaidPlan, type RaidView, type SiegeSeen } from '../siege';
+import { planKeep, raidOrders, raidPlan, routeFrom, type RaidMember, type RaidOrders, type RaidPlan, type RaidView, type SiegeSeen } from '../siege';
 import type { PlayerRealm } from '../keeps';
 import type { GroupStrategy } from '../strategy';
 import type { Contact, MemberReport, OrdersUpdate, Point3, Role } from '../types';
@@ -95,13 +95,24 @@ export function raidPatch(r: RaidMemory, keep: string, o: RaidOrders): RaidPatch
     return r.patch;
 }
 
+/**
+ * The whole raid for RaidView.raid: our own members as they are now, and every other unit's from the muster call (RealmCall.raid,
+ * the director's picture, a few seconds old). Undefined when the call carries none: each unit then stages on its own count.
+ * R1, run D 04:19: midgard staged alone and lost four in 16 s at rank 1 while midgard-2 and the squads were 13000-18000 out.
+ */
+export function raidMembers(call: Pick<RealmCall, 'raid'> | null | undefined, unit: string, ours: readonly MemberReport[]): RaidMember[] | undefined {
+    if (!call?.raid?.length) return undefined;
+    const others = call.raid.filter(m => m.unit !== unit).map((m, i) => ({ id: -(i + 1), x: m.x, y: m.y, z: m.z, alive: m.alive }));
+    return [...ours.map(m => ({ id: m.objectId, x: m.x, y: m.y, z: m.z, alive: !m.isDead })), ...others];
+}
+
 const at = (p: { x: number; y: number }) => `(${Math.round(p.x)}, ${Math.round(p.y)})`;
 
 /**
  * The raid's orders for this tick (pure but for memory.raid). `members` are the unit's in the raid's region, dead ones too;
  * `guards` the board's keep guards there (fresh ones). The caller adds calm's empty fields.
  */
-export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members: readonly MemberReport[]; guards: readonly Contact[] }): { update: OrdersUpdate; orders: RaidOrders } {
+export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members: readonly MemberReport[]; guards: readonly Contact[]; call?: Pick<RealmCall, 'raid'> | null; unit?: string }): { update: OrdersUpdate; orders: RaidOrders } {
     const { plan } = o;
     const r: RaidMemory = o.mem.raid;
     for (const m of o.members) for (const id of m.doorsBroken ?? []) if (!r.broken.includes(id)) r.broken.push(id);
@@ -112,6 +123,8 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
         broken: r.broken,
         staged: r.staged,
     };
+    const whole = raidMembers(o.call, o.unit ?? '', o.members);
+    if (whole) view.raid = whole;
     const ro = raidOrders(plan, view);
     if (ro.phase === 'assault' || ro.phase === 'lord') r.staged = true;
     const settings = raidPatch(r, plan.keep, ro) as unknown as Record<string, unknown>;

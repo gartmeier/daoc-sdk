@@ -875,7 +875,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // stage, and rank by rank to the lord, whoever is dead or low: raidOrders counts the living, and rest comes with nothing to hit. ──
     if (raid) {
         const guards = p.contacts.filter(c => c.keepGuard && !c.stale && isAlive(c) && c.regionId === regionId);
-        const { update } = raidStep({ plan: raid.plan, mem, members: p.members.filter(m => m.regionId === regionId), guards });
+        const { update } = raidStep({ plan: raid.plan, mem, members: p.members.filter(m => m.regionId === regionId), guards, call: raid.call, unit: mem.realmUnit ?? '' });
         mem.legKind = null;
         return { ...calm, ...update, reason: `${update.reason}${gone}` };
     }

@@ -19,6 +19,11 @@ export interface RealmCall {
     /** Muster only: gather at `at` ('rally'), then go for `target` ('go'). */
     stage?: 'rally' | 'go';
     target?: Point3;
+    /**
+     * Muster only, when the director writes it: every member of every unit it asked that is running, by unit. The raid's stage
+     * waits for the whole raid with it (siege.ts RaidView.raid, tactics/raid.ts raidMembers). Absent: each unit counts its own.
+     */
+    raid?: readonly { unit: string; x: number; y: number; z: number; alive: boolean }[];
     /** As our realm saw it: enemy players near `at`, and ours alive there. */
     foes: number;
     ours: number;
