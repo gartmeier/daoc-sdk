@@ -79,3 +79,18 @@ describe('meleeSplit: one wall caster each (the user, 18:0x: "tanks go in. up th
         expect(b.getOrders().meleeSplit).toBeUndefined();
     });
 });
+
+describe('memberOwn: a member\'s own focus and stand, any role (S2: the roof-e Hunter from the wall-walk above the gate)', () => {
+    test('the named member takes its own focus and anchor over everything; the others as before; it lasts one decide', () => {
+        const stand = { x: 34016, y: 38610, z: 3978 };
+        const o = base({ focus: 302, meleeFocus: 401, memberOwn: { Vivien: { focus: 777, anchor: stand } } });
+        expect(ordersForRole(o, 'nuker', 'Vivien')).toMatchObject({ focus: 777, anchor: stand });
+        expect(ordersForRole(o, 'nuker', 'Merlin').focus).toBe(302);
+        expect(ordersForRole(o, 'melee', 'Gawain').focus).toBe(401);
+        const b = new Blackboard();
+        b.setOrders({ phase: 'engage', focus: 302, memberOwn: { Vivien: { focus: 777, anchor: stand } } } as any);
+        expect(b.getOrders().memberOwn?.Vivien?.focus).toBe(777);
+        b.setOrders({ phase: 'engage', focus: 302 } as any);
+        expect(b.getOrders().memberOwn).toBeUndefined();
+    });
+});

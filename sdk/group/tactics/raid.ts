@@ -130,6 +130,11 @@ export function raidMembers(call: Pick<RealmCall, 'raid'> | null | undefined, un
     return [...ours.map(m => ({ id: m.objectId, x: m.x, y: m.y, z: m.z, alive: !m.isDead })), ...others];
 }
 
+/** The bolt (siege.ts RaidOrders.bolt): members whose longest damaging spell reaches this far (capabilities.reach) ... */
+export const BOLT_REACH = 1650;
+/** ... at most this many. */
+const BOLT_SHOOTERS = 2;
+
 /** A unit of this many members or fewer is a squad: it doesn't lead a raid (raidStep's squad hold). */
 export const SQUAD_MAX = 3;
 /** A main group has at least this many members in the raid. */
@@ -215,6 +220,14 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     // on a wall or the roof they can't reach is the ranged half's alone (live 08:36: midgard-2's melee climbed to wall-se).
     const npc = (f: SiegeSeen | null) => (f && f.kind === 'npc' ? f : null);
     const melee = npc(ro.melee.focus);
+    // The bolt (siege.ts RaidOrders.bolt, S2: the roof-e Hunter, seen only from the wall-walk above the gate at 1650-1700): one or two
+    // living non-melee of reach 1650 or more, nearest its stand first, go there with it as their own focus (Orders.memberOwn).
+    const boltFocus = npc(ro.bolt?.focus ?? null);
+    const shooters = ro.bolt && boltFocus ? o.members.filter(m => !m.isDead && m.role !== 'tank' && m.role !== 'melee' && (m.capabilities.reach ?? 0) >= BOLT_REACH)
+        .sort((a, b) => Math.hypot(a.x - ro.bolt!.stand.x, a.y - ro.bolt!.stand.y) - Math.hypot(b.x - ro.bolt!.stand.x, b.y - ro.bolt!.stand.y)).slice(0, BOLT_SHOOTERS) : [];
+    const memberOwn = shooters.length ? Object.fromEntries(shooters.map(m => [m.name, { focus: boltFocus!.id, anchor: ro.bolt!.stand }])) : undefined;
+    const own = memberOwn ? { memberOwn } : {};
+    const bolted = memberOwn ? `; ${shooters.map(m => m.name).join(' and ')} on the ${ro.bolt!.step?.label ?? 'roof'} from the wall` : '';
     // The ranged half holds out of the walls' sight (siege.ts RaidTask.hold) while the melee climb to a wall caster: the casters and
     // healers stay at ro.stand, the melee get the caster. The user at 17:3x: "Fiacra and Amergin are not safe, they are being hit by
     // the Runemasters" (they followed the melee's focus into the courtyard).
@@ -225,13 +238,14 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
         const climbers = o.members.filter(m => !m.isDead && (m.role === 'tank' || m.role === 'melee'));
         const meleeSplit = split.length > 1 && climbers.length > 1 ? Object.fromEntries(climbers.map((m, i) => [m.name, split[i % split.length]!.id])) : undefined;
         const spread = meleeSplit ? `; ${split.length} wall casters, one each` : '';
-        return { orders: ro, update: { phase: 'engage', focus: null, meleeFocus: melee?.id ?? null, ...(meleeSplit ? { meleeSplit } : {}), anchor: ro.stand, ...(melee ? { facing: { x: melee.x, y: melee.y } } : {}), settings, objective, reason: `${reason}; ranged out of sight: ${ro.ranged.hold}${spread}` } };
+        return { orders: ro, update: { phase: 'engage', focus: null, meleeFocus: melee?.id ?? null, ...(meleeSplit ? { meleeSplit } : {}), ...own, anchor: ro.stand, ...(melee ? { facing: { x: melee.x, y: melee.y } } : {}), settings, objective, reason: `${reason}; ranged out of sight: ${ro.ranged.hold}${spread}${bolted}` } };
     }
     const focus = npc(ro.ranged.focus) ?? melee;
     if (focus) {
         const meleeFocus = melee?.id ?? null;
-        return { orders: ro, update: { phase: 'engage', focus: focus.id, meleeFocus: meleeFocus === focus.id ? undefined : meleeFocus, anchor: ro.stand, facing: { x: focus.x, y: focus.y }, settings, objective, reason: `${reason}${meleeFocus === null && !door ? '; melee hold' : ''}` } };
+        return { orders: ro, update: { phase: 'engage', focus: focus.id, meleeFocus: meleeFocus === focus.id ? undefined : meleeFocus, ...own, anchor: ro.stand, facing: { x: focus.x, y: focus.y }, settings, objective, reason: `${reason}${meleeFocus === null && !door ? '; melee hold' : ''}${bolted}` } };
     }
+    if (memberOwn) return { orders: ro, update: { phase: 'engage', focus: null, meleeFocus: null, ...own, anchor: ro.stand, settings, objective, reason: `${reason}${bolted}` } };
     return { orders: ro, update: { phase: 'recover', focus: null, anchor: ro.stand, settings, objective, reason: `${reason}, nothing to hit in view` } };
 }
 

@@ -518,7 +518,8 @@ export function emptyOrders(now = Date.now()): Orders {
 const moved = (a: { x: number; y: number } | null, b: { x: number; y: number } | null, by: number) =>
     !a !== !b || (!!a && !!b && Math.hypot(a.x - b.x, a.y - b.y) > by);
 const ccKey = (o: Orders) => o.cc.map(c => `${c.targetId}:${c.by}`).sort().join(',');
-const splitKey = (o: Orders) => (o.meleeSplit ? Object.entries(o.meleeSplit).map(([n, id]) => `${n}:${id}`).sort().join(',') : '');
+const splitKey = (o: Orders) => (o.meleeSplit ? Object.entries(o.meleeSplit).map(([n, id]) => `${n}:${id}`).sort().join(',') : '')
+    + (o.memberOwn ? `|${Object.entries(o.memberOwn).map(([n, t]) => `${n}:${t.focus}@${Math.round(t.anchor.x)},${Math.round(t.anchor.y)}`).sort().join(',')}` : '');
 
 /** Orders changed in a way that should interrupt what members are doing. */
 export function isMaterialChange(a: Orders, b: Orders): boolean {
@@ -1032,6 +1033,7 @@ export class Blackboard {
         // The melee's own focus lasts one decide: one that doesn't name it (the raid over, a fight with players) drops it.
         if (!('meleeFocus' in update)) delete next.meleeFocus;
         if (!('meleeSplit' in update)) delete next.meleeSplit;
+        if (!('memberOwn' in update)) delete next.memberOwn;
         const material = isMaterialChange(prev, next);
         if (material) {
             next.seq = prev.seq + 1;

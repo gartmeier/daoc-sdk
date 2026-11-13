@@ -301,6 +301,11 @@ export interface Orders {
      * each (tactics/raid.ts; the user, 18:0x: "tanks go in. up the stairs. one for each runi"). Lasts one decide, as meleeFocus.
      */
     meleeSplit?: Record<string, number>;
+    /**
+     * A member's own focus and stand by name, over everything else (any role): a raid sends one or two long-reach members to a spot
+     * of their own for a target only it sees (tactics/raid.ts: the roof-e Hunter from the wall-walk above the gate). Lasts one decide.
+     */
+    memberOwn?: Record<string, { focus: number | null; anchor: Point3 }>;
     /** Who brings the focus to the anchor. */
     puller: string | null;
     /** Crowd-control assignments. */

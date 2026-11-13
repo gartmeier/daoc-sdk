@@ -12,6 +12,9 @@ export const MELEE_FOCUS_ROLES: ReadonlySet<Role> = new Set<Role>(['tank', 'mele
  * spread them, else meleeFocus as its focus when the orders set one apart.
  */
 export function ordersForRole(o: Orders, role: Role, name?: string): Orders {
+    // A member's own task (Orders.memberOwn) over every other: its focus and its stand, whatever its role.
+    const task = name !== undefined ? o.memberOwn?.[name] : undefined;
+    if (task) return { ...o, focus: task.focus, anchor: task.anchor, facing: null };
     if (!MELEE_FOCUS_ROLES.has(role)) return o;
     const own = name !== undefined ? o.meleeSplit?.[name] : undefined;
     if (own !== undefined) return own === o.focus ? o : { ...o, focus: own };
