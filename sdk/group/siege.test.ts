@@ -305,6 +305,11 @@ describe('raidOrders', () => {
         const o = raidOrders(plan, view({ members: roof, seen: garrison(), staged: true }));
         expect(o.phase).toBe('lord');
         expect(o.ranged.focus!.name).toBe('Lady Thidranki');
+        // A roof archer on us takes nothing from the lord; a fighter on us does (frozen window 06:32).
+        const archerOnUs = garrison().map(s => s.name === 'roof-e' ? { ...s, targetObjectId: roof[0]!.id } : s);
+        expect(raidOrders(plan, view({ members: roof, seen: archerOnUs, staged: true })).ranged.focus!.name).toBe('Lady Thidranki');
+        const fighterOnUs = garrison().map(s => s.name === 'floor-3' ? { ...s, targetObjectId: roof[0]!.id } : s);
+        expect(raidOrders(plan, view({ members: roof, seen: fighterOnUs, staged: true })).ranged.focus!.name).toBe('floor-3');
         // One stray up there alone: the ranks (live 03:33).
         const stray = [...at(plan.roof, 1), ...at({ x: 33100, y: 38250, z: 3722 }, 7).map(m => ({ ...m, id: m.id + 100 }))];
         expect(raidOrders(plan, view({ members: stray, seen: garrison(), staged: true })).phase).toBe('assault');

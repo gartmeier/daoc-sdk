@@ -465,7 +465,10 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // the roof further off would draw the casters in after it, into the yard (live 02:55, hibernia-2 lost 7 that way).
     // A fighter on us comes to us, so it always is.
     const stepStand = (rangedStep ?? meleeStep)?.stand ?? plan.roof;
-    const reachable = (s: SiegeSeen) => { const t = postOf(plan, s); return !t || t.kind === 'fighter' || Math.hypot(s.x - stepStand.x, s.y - stepStand.y) <= FOCUS_REACH; };
+    // On the lord (rank null: every rank done, or the hold): only a fighter on us takes the focus from him. Roof archers
+    // stand 290-320 from him, and while they were the focus he regenerated (06:32 in the frozen window: 98 % after 7 min).
+    const onLord = rank === null;
+    const reachable = (s: SiegeSeen) => { const t = postOf(plan, s); return !t || t.kind === 'fighter' || (!onLord && Math.hypot(s.x - stepStand.x, s.y - stepStand.y) <= FOCUS_REACH); };
     const first = near(onUs.filter(reachable)) ?? near(offPost);
     if (first) {
         const stand = (rangedStep ?? meleeStep)?.stand ?? plan.roof;
