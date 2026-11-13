@@ -178,6 +178,18 @@ describe('raidOrders', () => {
         expect(raidOrders(plan, view({ members: dead })).phase).toBe('assault');
     });
 
+    test('a body spread round the stage (formation) is staged: within STAGE_NEAR, or its centre on the stage (live 02:18-02:32)', () => {
+        // 5 at the stage, 3 casters fanned out 800 east: the centre 300 from the stage.
+        const members = [...at(plan.stage, 5), ...at({ ...plan.stage, x: plan.stage.x + 800 }, 3).map(m => ({ ...m, id: m.id + 100 }))];
+        expect(raidOrders(plan, view({ members, staged: false })).phase).toBe('assault');
+        // 1100 out they don't count, but the centre (410 off) is on the stage.
+        const wide = [...at(plan.stage, 5), ...at({ ...plan.stage, x: plan.stage.x + 1100 }, 3).map(m => ({ ...m, id: m.id + 100 }))];
+        expect(raidOrders(plan, view({ members: wide, staged: false })).phase).toBe('assault');
+        // Still on the way: they wait.
+        const coming = [...at(plan.stage, 5), ...at(plan.route[0]!, 3).map(m => ({ ...m, id: m.id + 100 }))];
+        expect(raidOrders(plan, view({ members: coming, staged: false })).phase).toBe('stage');
+    });
+
     test('first the outer fighters, from outside the gate', () => {
         const o = raidOrders(plan, view({ members: at(plan.stage, 10) }));
         expect(o.phase).toBe('assault');

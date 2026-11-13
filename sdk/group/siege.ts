@@ -301,6 +301,12 @@ const SEEN_FROM = 2500;
 const AT_SPOT = 600;
 /** The raid goes in from the stage once this share of the living stand there. */
 export const STAGE_SHARE = 0.75;
+/**
+ * A member this near the stage stands at it. The pack's formation fans casters out behind the anchor, further with an enemy
+ * in sight (spreadOnSight): live 2026-11-13 02:18-02:32, hibernia-2 stood 5/8 within AT_SPOT for 14 min, its centre 320
+ * from the stage. The outer fighters' posts are 1600+ from the stage, their aggro 1000.
+ */
+export const STAGE_NEAR = 1000;
 
 const isFoe = (s: SiegeSeen, realm: PlayerRealm) => s.kind === 'npc' && !s.isPet && !s.isDead && (s.healthPercent ?? 100) > 0
     && !s.isPeaceful && s.isTargetable !== false && s.realm !== 'none' && s.realm !== realm && (s.level ?? 2) > 1;
@@ -359,7 +365,8 @@ export function atPost(plan: Pick<RaidPlan, 'targets' | 'lordName' | 'realm'>, t
  * - taken: the keep is ours.
  * - approach: not yet staged, nobody at the stage and the centre not past it (pastStage): walk the route. `stand` is the body's
  *   next waypoint; each member walks routeFrom(plan, itself), so stragglers follow the same bridge.
- * - stage: some at the stage, fewer than STAGE_SHARE of the living: those wait, the rest come (routeFrom each).
+ * - stage: some at the stage (STAGE_NEAR), fewer than STAGE_SHARE of the living and the centre not on it yet: those wait,
+ *   the rest come (routeFrom each).
  * - assault: the lowest rank with a target not done. Ranged take its first ranged-or-all target, melee its first
  *   melee-or-all target (a door), so casters work the walls while melee break the gate. A half with nothing in that
  *   rank stands with the other. A guard of the keep attacking a member, or a fighter off its post (one that came out
@@ -378,14 +385,14 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const keep = planKeep(plan);
     if (!view.staged) {
         const alive = view.members.filter(m => m.alive);
-        const there = alive.filter(m => Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= AT_SPOT).length;
+        const there = alive.filter(m => Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= STAGE_NEAR).length;
         // Nobody there yet and the body not past the stage: walk on (each member by routeFrom from itself).
         if (there === 0 && toStage > AT_SPOT && !(keep && pastStage(plan, keep, centre))) {
             const next = routeFrom(plan, centre)[0] ?? plan.stage;
             return walk('approach', next, `${Math.round(toStage)} to the stage`);
         }
         // Some there: they wait, the rest come.
-        if (there > 0 && there < Math.ceil(alive.length * STAGE_SHARE)) return walk('stage', plan.stage, `${there}/${alive.length} at the stage`);
+        if (there > 0 && there < Math.ceil(alive.length * STAGE_SHARE) && toStage > AT_SPOT) return walk('stage', plan.stage, `${there}/${alive.length} at the stage`);
     }
 
     const memberIds = new Set(view.members.map(m => m.id));
