@@ -669,7 +669,8 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
             ranged = fromOutside;
         }
         const why = [rangedStep && `ranged: ${ranged.hold ? `out of sight while ${ranged.hold}` : rangedStep.label}`, meleeStep && meleeStep !== rangedStep && `melee: ${meleeStep.label}`].filter(Boolean).join(', ');
-        return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `rank ${rank}: ${why}` };
+        // "N left": the rank's targets still standing, for the director's progress hold (a wall caster down is progress too).
+        return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `rank ${rank}: ${why}; ${inRank.length} left` };
     }
     const lordStep = plan.targets.find(t => t.kind === 'lord')!;
     const lord = foes.find(s => plan.lordName.test(s.name)) ?? atPost(plan, lordStep, foes);
