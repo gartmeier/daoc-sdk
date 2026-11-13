@@ -111,7 +111,16 @@ export interface RaidMember {
 /** Raid members' places are rounded to this. */
 export const RAID_ROUND = 50;
 
-export type MusterHold = 'defenders' | 'winner' | 'lord';
+export type MusterHold = 'defenders' | 'winner' | 'lord' | 'progress';
+
+/** How far a raid unit got, from its orders' reason (tactics/raid.ts `raid <phase>: rank N: ...`): phase × 10 + rank; 0 for none. */
+export function raidProgress(reason: string): number {
+    const m = /\braid (approach|stage|assault|lord|taken)\b/.exec(reason);
+    if (!m) return 0;
+    const phase = ['approach', 'stage', 'assault', 'lord', 'taken'].indexOf(m[1]!) + 1;
+    const rank = Number(/\brank (\d+)/.exec(reason)?.[1] ?? 0);
+    return phase * 10 + rank;
+}
 
 /** A running unit of the realm as the calls file carries it: its living's centre (rounded to RAID_ROUND), how many live. */
 export interface UnitSpot {
@@ -220,6 +229,9 @@ export interface DirectorSettings {
      */
     lordGraceMs: number;
     lordMaxMs: number;
+    /** The progress hold: past goMaxMs the clock waits while the raid got further (a rank, a phase) within progressGraceMs, up to progressMaxMs in all. */
+    progressGraceMs: number;
+    progressMaxMs: number;
     /**
      * The defence hold: the rally doesn't go while more enemy players than defenceShare × the raid's living were seen
      * within defenceRadius of the target in the last defenceMemoryMs. Held that long without a break: the muster ends
@@ -285,7 +297,7 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     clearMs: 15_000, maxMs: 180_000,
     campRadius: 5000, campFoes: 2, campMs: 15_000,
     quorum: 0.7, rallyMaxMs: 240_000, goMaxMs: 900_000, raidBreak: 0.3, raidEveryMs: 0,
-    lordGraceMs: 30_000, lordMaxMs: 600_000,
+    lordGraceMs: 30_000, lordMaxMs: 600_000, progressGraceMs: 180_000, progressMaxMs: 1_800_000,
     defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000,
     fewShare: 0.5, fewMin: 2, ownersAwayMin: 3, ownersAwayFrom: 8000, ownersAwayPair: 2500,
     onWayMs: 120_000, onWayMin: 1000,
@@ -396,6 +408,9 @@ interface Open {
         livingAtGo?: number;
         /** Last time a raid unit read the lord phase. */
         lordAt?: number;
+        /** The furthest the raid got (raidProgress) and when it last got further. */
+        furthest?: number;
+        furthestAt?: number;
         /** Since when the defenders hold the rally. */
         heldSince?: number;
         /** Enemy players seen near the target, by key: last seen and realm. */
@@ -868,13 +883,20 @@ export class RealmDirector {
             }
         } else {
             if (raid.some(u => LORD_PHASE.test(u.reason))) o.raid.lordAt = now;
+            // Progress: the furthest any raid unit got (phase, then rank, from tactics/raid.ts's `raid <phase>: rank N: ...`).
+            const best = Math.max(0, ...raid.map(u => raidProgress(u.reason)));
+            if (best > (o.raid.furthest ?? 0)) { o.raid.furthest = best; o.raid.furthestAt = now; }
             const gone = now - o.raid.stagedAt;
             const onLord = o.raid.lordAt !== undefined && now - o.raid.lordAt <= s.lordGraceMs;
             const late = gone > s.goMaxMs;
             hold('lord', late && onLord && gone <= s.goMaxMs + s.lordMaxMs);
+            // The progress hold (S2, 18:51: hibernia-4 timed out at 941 s just as it had taken the wall casters): past goMaxMs the clock
+            // waits while the raid got further within progressGraceMs, up to progressMaxMs in all.
+            const progressing = o.raid.furthestAt !== undefined && now - o.raid.furthestAt <= s.progressGraceMs && gone <= s.progressMaxMs;
+            if (call.hold !== 'lord') hold('progress', late && progressing);
             const end = owner === this.realm ? 'captured'
                 : living < s.raidBreak * (o.raid.livingAtGo ?? living) ? 'broken'
-                : late && call.hold !== 'lord' ? 'timeout' : null;
+                : late && call.hold !== 'lord' && call.hold !== 'progress' ? 'timeout' : null;
             if (end) {
                 if (call.hold) hold(call.hold, false);
                 events.push(this.close(o, end, board, now));

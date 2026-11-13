@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { askedOf, callsFor, callWatch, defaultRaid, DIRECTOR_SETTINGS, musterHold, picketFor, RealmDirector, type AnswersFile, type CallsFile, type RealmCall } from './director';
+import { askedOf, callsFor, callWatch, defaultRaid, DIRECTOR_SETTINGS, musterHold, picketFor, raidProgress, RealmDirector, type AnswersFile, type CallsFile, type RealmCall } from './director';
 import { homeOf, THIDRANKI } from './keeps';
 import { frame, type FoeSpec, type MemberSpec } from './realm-board-fixtures';
 
@@ -270,7 +270,7 @@ describe('muster', () => {
     test('the lord hold: past goMaxMs the clock waits while a unit reads the lord phase, up to lordMaxMs more', () => {
         const plan = { rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } };
         const f = (reason: string) => ({ camelot: frame({ id: 'camelot', phase: 'engage', reason, members: at(33000, 44000, 6, 'G') }) });
-        const d = director();
+        const d = director({ settings: { progressGraceMs: -1 } });
         d.startMuster(plan);
         expect(d.update(f(''), 0, []).calls[0]!.stage).toBe('go');
         d.update(f('raid lord: Lady Thidranki on the roof'), 850_000, []);
@@ -285,17 +285,33 @@ describe('muster', () => {
         expect(out.events.find(e => e.kind === 'close')).toMatchObject({ end: 'timeout' });
 
         // On the lord all along: it ends at goMaxMs + lordMaxMs.
-        const d2 = director();
+        const d2 = director({ settings: { progressGraceMs: -1 } });
         d2.startMuster(plan);
         d2.update(f(''), 0, []);
         expect(d2.update(f('raid lord: up to the roof'), 1_499_000, []).calls).toHaveLength(1);
         expect(d2.update(f('raid lord: up to the roof'), 1_501_000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'timeout' });
 
         // Without the lord phase the clock ends it as before.
-        const d3 = director();
+        const d3 = director({ settings: { progressGraceMs: -1 } });
         d3.startMuster(plan);
         d3.update(f(''), 0, []);
         expect(d3.update(f('raid assault: gate'), 901_000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'timeout' });
+    });
+
+    test('the progress hold: past 15 min the clock waits while the raid gets further (a rank, a phase) within 3 min, up to 30 min (S2, 18:51)', () => {
+        expect(raidProgress('raid assault: rank 3: melee: wall-se')).toBe(33);
+        expect(raidProgress('raid lord: up to the roof')).toBe(40);
+        expect(raidProgress('patrol to waypoint 2/5')).toBe(0);
+        const plan = { rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } };
+        const f = (reason: string) => ({ camelot: frame({ id: 'camelot', reason, members: at(33000, 44000, 6, 'G') }) });
+        const d = director({ settings: { sight: false } });
+        d.startMuster(plan);
+        d.update(f('raid assault: rank 1: outer'), 0, []);
+        d.update(f('raid assault: rank 2: gate'), 800_000, []);
+        expect(d.update(f('raid assault: rank 2: gate'), 901_000, []).calls[0]).toMatchObject({ hold: 'progress' });
+        d.update(f('raid assault: rank 3: walls'), 1_000_000, []);
+        expect(d.update(f('raid assault: rank 3: walls'), 1_150_000, []).calls).toHaveLength(1);
+        expect(d.update(f('raid assault: rank 3: walls'), 1_181_000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'timeout' });
     });
 
     test('the defence hold: the rally does not go while more defenders were seen near the target than the raid has living', () => {
