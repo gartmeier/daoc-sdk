@@ -360,9 +360,12 @@ const GROUP_INVITE_DIALOG = 0x05;
 const PLAN_TIMEOUT_MS = 15_000;
 /** A target this much higher or lower than us stands on another layer (a wall-walk, a ledge, a floor): reached only by a found route. */
 const LAYER_DZ = 100;
-/** walkToObject's step onto a target close on the ground: a found route at most this times the 3D distance, plus LAYER_SLACK. */
-const LAYER_STEP_FACTOR = 1.5;
-const LAYER_SLACK = 100;
+/**
+ * walkToObject's step onto a target close on the ground but on another level: a found route of at most this. It was 1.5 × the 3D
+ * distance + 100 until live 19:08 (albion-1): under the lord, 266 away, Agravaine got 'no short way up or down' ten times while the
+ * spiral stair to the roof was a found route. The navmesh's found routes are real ones (no wall's side): a cap only bounds detours.
+ */
+const LAYER_STEP_MAX = 2500;
 
 /**
  * How to reach `to` from `from` when it may stand on another layer. 'straight': the same layer, or no navmesh here to say (as before).
@@ -1599,9 +1602,9 @@ export class BotActions {
                 const targetZ = obj.z;
                 // Onto another layer only by a short found route (layerRoute): no straight climb up a wall to a caster on it.
                 const me = this.helpers.player();
-                const way = me ? layerRoute(me.regionId, me, obj, LAYER_STEP_FACTOR * Math.hypot(obj.x - me.x, obj.y - me.y, obj.z - me.z) + LAYER_SLACK) : 'straight';
+                const way = me ? layerRoute(me.regionId, me, obj, LAYER_STEP_MAX) : 'straight';
                 if (way === 'none') {
-                    return { ...last, ...fail(`Cannot reach ${nameOf(obj)}: it stands on another level with no short way up or down (at ${obj.distance})`, 'out_of_reach', {}), target: obj };
+                    return { ...last, ...fail(`Cannot reach ${nameOf(obj)}: it stands on another level with no way up or down (at ${obj.distance}: ${layerRouteWhy})`, 'out_of_reach', {}), target: obj };
                 }
                 const r = await this.sdk.sendMoveTo(obj.x, obj.y, targetZ, { tolerance: Math.min(tolerance, 24), ...(way === 'straight' ? {} : { waypoints: way.waypoints.slice(0, -1) }) });
                 if (!r.success) return { ...last, ...fail(`Cannot reach ${nameOf(obj)}: ${r.message}`, r.reason ?? 'dispatch_failed', {}), target: obj };

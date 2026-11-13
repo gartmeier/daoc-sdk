@@ -50,3 +50,13 @@ describe('walkTo on a spiral stair', () => {
         } finally { w.dispose(); }
     });
 });
+
+describe.skipIf(!meshReady)('layerRoute: the spiral stair to the lord', () => {
+    test('from the floor below the roof, 266 under the lord, a found route up the stair within the step\'s cap', async () => {
+        const { layerRoute: lr } = await import('../actions');
+        const { FASTE } = await import('../group/siege');
+        const lord = FASTE.targets.find(t => t.kind === 'lord')!.at;
+        const r = lr(252, { x: 32250, y: 38270, z: 4320 }, lord, 2500);
+        expect(r).not.toBe('none');
+    });
+});
