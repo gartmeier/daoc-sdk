@@ -257,6 +257,24 @@ There is no door to break. `keeps.ts` lifts the Faste's keep circle only for a u
 - All three are ready for R1's benches at 22:30. From then on I only read the sortie logs. The bench rule for 04:30 stands: none is on it now.
 - **For R3, no action needed:** `pets.ts` unchanged. The Necromancer's servant is the shade's body, and the group's healers never heal it (it's a pet); its own heal and lifedrains keep it up. A servant's death drops the owner out of shade at 10 % health without counting as a death. Details: `learnings/classes/necromancer.md` "In a group".
 
+**Field run B, first sorties (22:28-23:07, read 23:15), each in its realm's main group:**
+- **Morgause (camelot):** servant up 95 % and 89 %, but on the focus only 28 % and 51 %: 94 and 35 attack orders refused ("too far away to attack with your pet"), idle 50 % and 26 % on "nothing to cast", first nuke 32-34 s in. The server wants the owner within 2000 of the target for an order and within the PetSpell's range for a cast; she stood back with the casters. **4a23c39:** `servantFight` walks the shade to 1300 of the focus first (nobody can hit it). Live at camelot's next sortie. 3 deaths, all out of shade after the servant's.
+- **Etain (hibernia):** turret 6565 damage (twice hers, 3041), up 66 %, 21 plants; 3 deaths; 6 refused turret orders. Nothing to fix yet.
+- **Grimhild (midgard):** 6365 damage, commander on the focus 76 %, 2 deaths. Nothing to fix.
+- None on the bench. Next look after camelot's next sortie, for the walk-in.
+
+**00:10, the next sorties:**
+- **Morgause, camelot 23:35 (after 4a23c39):** no refused attack order (90 before), servant on the focus 70 % (28-51 %), first nuke 6.1 s (32-34 s), 3278 damage, her best. One death: her servant died and she died 2 s later, still walking in. **f415247:** a walk in is at most 1.5 s a turn, and none into a 500-range nuke with the servant below 40 %.
+- **Etain:** turret 7695 and 7700 in the next two sorties. It broke crowd control 5 and 2 times (a turret picks its own next target). **2b9358c:** it now goes passive on any mezzed target.
+- **Grimhild:** 9279 damage and 0 deaths in a 45 min sortie, commander up 100 %; 4 deaths in the next. Nothing kit-side.
+- All three stay in; none on the bench. Next look about 01:30.
+
+**01:30, the sorties after f415247 and 2b9358c:**
+- **Morgause (camelot 00:20, 00:37):** first nuke 6-7 s, servant on the focus 61-65 %, 1556 and 4690 damage (her best), no refused order. 2 deaths a sortie, out of shade after the servant's. Holding.
+- **Etain (hibernia 00:18, 42 min):** the turret still broke crowd control 6×: the check sat in her fight turn, which her 2.5 s casts held. **2125074:** it now runs on the side tick (250 ms) and counts a mezz another member is casting. Live at hibernia's next sortie.
+- **Grimhild (midgard, three sorties):** 1993-3829 damage, commander up 70-94 %, 3-4 deaths a sortie, first nuke 0-1.3 s. Nothing kit-side.
+- None on the bench. Next look about 03:00, then the 04:30 call.
+
 ## R3: Group play
 
 **Landed 19:05-19:15 (913e38f; the realm `rvr.ts` mains are private), live from each main group's next sortie** (`sdk/group/rvr.ts`, new `sdk/group/tactics/help.ts`, the realm `rvr.ts` mains; import check ok for all six main groups; field.ts never waited on my `.editing` locks).
@@ -300,6 +318,31 @@ There is no door to break. `keeps.ts` lifts the Faste's keep circle only for a u
 - **Squads (R4):** no squad.ts change. `squadRoaming` takes `rvrRoaming`'s lists, which now have it, and the `-sN` scripts don't replace them. If a squad builds its own list later, `withHasten(list)` adds it.
 - **Live check:** look for `hasten` in the runs logs (`doing hasten ... Speed of the Realm, the hastener N away`, then `hasten: Speed of the Realm`, or `no_effect`). Not seen live yet.
 - **Tests:** `tactics/hasten.test.ts` (8: the rule, the placing, the behaviour with a fake member). pets.test.ts and rvr.test.ts list pins now include `hasten`.
+
+**Landed 02:09 (baf78da): the raid at the muster's go** (R1, 01:50, for the Faste probe's attempt 2). Live from each main group's next sortie: attempt 2 needs a fresh field.ts start (or a rotation) of the raiding realm's main groups. Squads aren't wired.
+- **Board** (`blackboard.ts`, `types.ts`):
+  - `observeState` reports an enemy realm's NPC that is no pet as a sighting marked `keepGuard`: attackable, level 2 and up, not a peace NPC like a hastener.
+  - The board holds these. `picture()` shows them only while the orders carry a raid (`Orders.settings.raid`), so every other reader (squads, the observer, the fight branches) sees nothing new.
+  - Each member's report carries `doorsBroken`: the door nearest it when it read "The Keep Door is broken!" in the last 60 s. That is a door object in view, else the siege layout's door, within 900.
+- **decideRvr** (Albion's roaming, and the pack's calm side). `decidePack` hands the tick to calm when the muster says go and no enemy player is about.
+  - A unit answering a muster at `'go'`, in the plan's region, runs `raidStep` (`tactics/raid.ts`). It builds the `raidOrders(raidPlan(realm), view)` view from the board's keep guards, the members (dead ones too), the doors read broken, and `staged`. The owner is read from the guards' realm.
+    - **approach/stage:** travel to `routeFrom(plan, centre)[0]` (the body's next waypoint), and at stage to the stage.
+    - **assault/lord:** engage the ranged half's focus (else the melee's), anchored at `stand`.
+    - **Nothing to hit in view:** recover at `stand`.
+  - It sits after the fight and hunt branches (enemy players first) and before "attacked by guards: moving off".
+  - The orders' `settings` patch `{ raid: 'Thidranki Faste', raidDoor }` lifts the Faste's circle for every member (keepDangers) and puts the guards in the picture. `realmCalls` sets it back to null once no muster says go.
+- **Doors:** a new behaviour, `breakDoor`, for tanks and melee (by the member's role).
+  - It goes into the role lists and every member's own list, by `realmCalls` (`withRaid`), before tank, meleeFight, guard or assist.
+  - With `settings.raidDoor` set: walk to the door's stand, `sendSetTarget` the door object found by `doorId` in `sdk.getNearbyObjects()`, face it, and auto-attack.
+  - It stands down for something on the member or a retreat, and stops its swing when the orders drop the door.
+- **Squads (R1 asked):** R4's squads answer the muster too (`chooseCall`). At go they walk straight at the lord's spot (`callGoal`), through every guard. Either they get the same `raidStep`, or they leave the muster at go. That's R4's call, through squad.ts.
+- **Known gaps for attempt 2:**
+  - A straggler walks straight to the anchor, not along the route.
+  - Melee with no step of their own (ranks 4-5, walls and roof) follow the ranged focus and stand under a wall they can't reach.
+  - The lord phase's formation slots round the roof anchor may fall off the roof.
+  - Nobody rezzes mid-raid: the raid never waits for the dead.
+  - Hibernia's lord name is unseen (`/\bThidranki$/`).
+- **Tests:** `tactics/raid.test.ts` (12): the board's guards and their picture gate, broken doors, raidStep (approach, assault, gate, broken), decideRvr at go and after, and breakDoor (placing, walk, swing, stand-down).
 
 ## R7: Melee and song kits
 
@@ -547,3 +590,34 @@ R1 restarted run A at 19:28 for the realm-point reset, so it splits cleanly: 18:
 - **abeb482, the "failed" opener, explained:** Hodur's at 20:18:27 (log) matched Scathach's at 13:08. In both, the engage dropped 2 s before the click as the target left view, very likely the other realm's stealther hiding on sight. (I said at 19:25 that Hodur was 6000+ away at 13:08; those were distances to a waypoint, not positions, so that was wrong.) The kit (`sdk/classes/stealther.ts`, which nobody owns tonight, so I took it) now re-reads the target in its own client right before the click and lurks if it's gone or hidden.
 - **The 22:30 window, as run (R1, 22:24-22:34).** Run A stopped at 22:24 and its 30 clients quit cleanly (30 exit 0). R6's thirty were already out at 22:20. `GainRP = 0` for all 60 (60 rows), and none is at the cap or outside Thidranki. `starting_keep_level = 1` was set and the gameserver restarted (logins after 84 s). The gateway restarted with e6d3866 (classGuess in contacts). The thirty went onto every unit's bench (each unit's members plus bench = its realm's 20). The 60-bot swarm was in game at 22:28 with loop lag max 3 ms.
 - **Run B started at 22:28:** `bun groups/field.ts --mix=6,6,3,2,1,1 --director=ab --swarm-log=groups/stint-swarm.log -- --skill=average`. All 18 units sortied by 22:34. First slot: the director on for Albion and Hibernia, off for Midgard. The first calls closed by 22:34: camelot's "caught" call was answered by camelot-2, which arrived. Midgard's shadow calls were logged with nobody asked.
+- **The Faste watch (22:23-22:48, read-only, 2813 samples of camelot-s3, hibernia-s2/s3, midgard-s2/s3):** no Hibernian or Midgard stealther, and none of their walk destinations, came within 4000 of the Faste. Only Mordred passed it, by design: the Faste is Albion's, so it's no circle for him. The straight walk of 21:48 and 22:12 didn't recur in that window. **Still open:** if it shows again in run B, the watcher (`bun <scratchpad>/faste-watch.ts <units...>`, a copy can go in `groups/`) shows whether the coordinator's anchor or the member's walk leaves the route.
+
+### R5: the Faste probe, attempt 1 (Hibernia, 01:58-02:04, field.ts `--muster=hibernia`, no raidOrders yet)
+
+Read live with `siege-watch --watch` (owners) and an observe-only log of every Hibernian's state each 10 s (place, dead, guards at their posts, the phase `raidOrders` would give).
+
+- **Muster: 3 min 6 s.** It began at 01:58:37 (rally 28454, 32768) and went at 02:01:43 with 16 of 19 at the rally.
+- **The 'go': 8 dead in 51 s, no guard touched.** Scathach went down at 02:02:13, then Fionn, Niamh, Cuchulainn, Aine, Ciaran, Diarmuid and Brigid by 02:03:04. Each kill line reads "killed by Wizard / Armsman / Armswoman in Thidranki Faste". Every guard stayed at 100 % throughout, so nobody hit back.
+  - **Why:** the go walks the straight line from Hibernia's rally toward the lord's spot. That line crosses the north-west wall, inside the aggro of wall-nw and wall-n (Wizards, 1850), the roof Scouts (2100) and the yard Armsmen. The board leaves guards out (R3's note, `blackboard.ts:332`), so units neither focus a guard nor defend against one.
+  - **Fighters follow.** An Armsman and an Armswoman left their posts after the body (seen off-post at 02:03:01). The dead released to the portal keep, and by 02:03:21 the body was back near the rally.
+- **Owner:** albion all the way (guards, 60 bots), as expected.
+- **Fixed during the attempt (39669cc, `siege.ts` only):**
+  - Before the muster, Hibernia's body was roaming 2600 south-west of the keep. `raidOrders` read that as "past the stage" and called the assault from the wrong side. Past the stage now means on the corridor from the stage to the keep, or inside the walls (`pastStage`).
+  - A Hastener at the gate matched an outer post. Peaceful and untargetable NPCs are no guards now.
+  - 54 siege tests pass.
+- **For attempt 2 (R1, R3):** a 'go' without `raidOrders` plus guards on the board costs about 8 bodies a minute for nothing. Hold the go until R3's switch lands.
+  - With the switch, each member walks `routeFrom(plan, itself)`. Hibernia's route goes east along the north bank to the stage at (36300, 38300), outside all aggro (walked dry on the throwaway).
+  - After that it is rank by rank. The first fight is the 5 outer fighters at (35500, 38250), out of the casters' reach.
+- **Attempt 1 in total (R5, 02:10):** the director ended the muster as `broken` at 02:04:51, 3 min 8 s after the go. Hibernia lost at least 14 deaths across 8 characters. Wave 1 was 8 between 02:02:13 and 02:03:04. Wave 2 was 6, between 02:04:41 and 02:05:12: Niamh, Aine, Fionn, Ciaran, Cuchulainn and Scathach, who died again after walking back in from the portal keep. Every guard was still at 100 % at the end. The 10 s samples miss a death and quick release between them (Brigid's shows only in chat), so 14 is a floor. Field mode stopped at 02:09:44.
+
+### R4: squads at the muster's go (R1's ask, 02:10), landed 3207f5d at 02:13
+
+- **What changed:** a squad answering a muster at `'go'` now raids as the main groups do. It no longer walks straight at the lord's spot (`callGoal`). The squad sets `memory.help` and `memory.realmCalls` to that muster, which is what R3's `raidNow` reads. Its inner decide (`decideRvr`) then runs `raidStep`: our own bridge to the stage (`routeFrom`), then rank by rank, with the raid patch in `Orders.settings`. With the patch on, the board shows the keep guards and the keep's circle is lifted.
+  - The squad's own judgement of enemy players still runs first: it flees from a group it wouldn't take, and keeps clear of one.
+  - Its own legs (flee, avoid, close) lift the raid keep's circle too.
+  - Once staged, it no longer gathers, because the ranged and the melee stand apart by the raid's orders.
+- **Doors:** the squads' tank and melee lists carry `breakDoor` (`withRaid` on `squadRoaming`), as the mains' do.
+- **End:** when the go ends, the patch goes as `settings: null`, as R3's `realmCalls` does it, and `memory.help` is cleared.
+- **Fallback:** a go the squad can't raid is left, with the answer `left` and the reason "no raid plan for its keep here". That covers no plan for our realm, another region, or a muster target more than 3000 from the plan's lord spot.
+- **Tests:** `squad.test.ts` has 65. At go, a Hibernian duo at the rally travels to `routeFrom`'s next waypoint with `settings.raid`, not to the lord. A closed muster gives `settings: null`. Tank and melee carry `breakDoor`. A go with no plan here is left.
+- **Live:** at each squad's next sortie after 02:13. The import check is clean for all 12 squad folders.
