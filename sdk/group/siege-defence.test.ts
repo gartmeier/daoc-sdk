@@ -178,3 +178,25 @@ describe('raidOrders: a broken door is the raid past the ranks before it', () =>
         expect(after.ranged.step?.rank).toBe(3);
     });
 });
+
+describe('raidOrders: no guard seen at all, once staged', () => {
+    test('rank 1 with its fighters dead and nothing else in view: on to the gate, not resting at rank 1', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('hibernia')!;
+        const gate = { id: 900, name: 'Keep Door', realm: 'midgard', kind: 'object' as const, x: 34333, y: 38275, z: 3720, doorId: 252000301 };
+        const members = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, x: 34650, y: 38200 + i * 20, z: 3722, alive: true }));
+        expect(raidOrders(raid, { members, seen: [gate], owner: 'midgard', staged: true }).melee.step?.label).toBe('gate');
+        // Not staged yet (a picture with no guards on the approach): still rank 1, as before.
+        expect(raidOrders(raid, { members, seen: [gate], owner: 'midgard', staged: false }).ranged.step?.rank ?? 1).toBe(1);
+    });
+});
+
+describe.skipIf(!meshReady || getOccluderStore().forZone(252) === null)('wallSight', () => {
+    test('where Amergin died the north-east wall caster sees; the gate\'s stand and the stage are clear; our own keep never', async () => {
+        const { wallSight } = await import('./siege');
+        expect(wallSight(252, { x: 35170, y: 36949, z: 3606 })).toContain('wall-e-n');
+        expect(wallSight(252, { x: 34650, y: 38250, z: 3720 })).toEqual([]);
+        expect(wallSight(252, { x: 36300, y: 38300, z: 3353 })).toEqual([]);
+        expect(wallSight(252, { x: 35170, y: 36949, z: 3606 }, true)).toEqual([]);
+    });
+});

@@ -22,6 +22,7 @@
 import type { Realm } from '../types';
 import { getNavmeshStore, type NavMesh, type NavmeshStore } from '../navmesh';
 import { setOwnDoors, setShutDoors } from '../doors';
+import { lineOfSight } from '../vision';
 import { BATTLEGROUND_LAYOUTS, keepAt, THIDRANKI, type Keep, type PlayerRealm } from './keeps';
 import type { Point, Point3, Role } from './types';
 
@@ -379,6 +380,8 @@ export interface RaidOrders {
 const AT_POST = 400, AT_POST_Z = 200;
 /** A member this near a post that sees nothing there takes it for gone (dead, respawning): NPCs are seen to 6000. */
 const SEEN_FROM = 2500;
+/** With no guard seen at all, a post this near one of us counts as gone (once staged). Rank 1's posts lie 200-1500 from its stand. */
+const POST_NEAR = 1600;
 /** The raid is at a spot when its centre is this near. */
 const AT_SPOT = 600;
 /** The raid goes in from the stage once this share of the living stand there. */
@@ -516,7 +519,10 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         if (atPost(plan, t, foes)) return false;
         // Nothing at the post: gone, if one of us is near enough to see it; else assume it still stands. Seeing no guard
         // at all is no news (a picture without them, live 02:39: a unit walked to the gate past five outer fighters).
-        if (!foes.length) return false;
+        // Once staged, a post one of us stands near shows its guard if one is there (a client sees NPCs much farther): none
+        // seen means gone, so the raid goes on (live 16:47, the user in hibernia's raid: rank 1's outer fighters dead, the wall
+        // casters out of sight of the gate's stand, and the raid rested "nothing to hit in view" for minutes).
+        if (!foes.length) return !!view.staged && view.members.some(m => m.alive && Math.hypot(m.x - t.at.x, m.y - t.at.y) <= POST_NEAR);
         return view.members.some(m => m.alive && Math.hypot(m.x - t.at.x, m.y - t.at.y) <= SEEN_FROM);
     };
     // One of us by the lord (within his reach): the lord it is, whatever came back behind us. Guards respawn 5-25 min after
@@ -916,4 +922,29 @@ export function openOwnDoors(plan: Pick<DefencePlan, 'keep' | 'regionId' | 'door
     const mesh = store.available() ? store.at(plan.regionId, plan.lord.x, plan.lord.y) : null;
     if (mesh) applyDoors(layout, { ours: true, broken }, mesh);
     else useOwnDoors(layout, { ours: true, broken });
+}
+
+// ── Out of the walls' sight (wallSight) ──────────────────────────────────────
+
+const sightCache = new Map<string, string[]>();
+
+/**
+ * The wall casters and roof archers of the keep at `p` that see it within their aggro (lineOfSight with the walls, from each post),
+ * by label. Empty off every layout, with nothing in sight, or for a keep that is ours (the caller knows the owner). Cached per 50
+ * units. For a stand, a rest or a healer's step during a raid: where it is empty no static guard casts at us (live 16:43, the user
+ * in hibernia's raid: Amergin killed by wall-e-n's Runemaster at (35170, 36949), 1420 from it, seen through a merlon gap).
+ */
+export function wallSight(regionId: number, p: Point3, ours = false): string[] {
+    if (ours) return [];
+    const keep = keepAt(regionId, p);
+    const layout = keep ? SIEGE_LAYOUTS[keep.name] : undefined;
+    if (!layout || layout.regionId !== regionId) return [];
+    const key = `${layout.keep}|${Math.round(p.x / 50)},${Math.round(p.y / 50)},${Math.round(p.z / 50)}`;
+    const known = sightCache.get(key);
+    if (known) return known;
+    const out = layout.targets
+        .filter(t => (t.kind === 'caster' || t.kind === 'archer') && Math.hypot(t.at.x - p.x, t.at.y - p.y, t.at.z - p.z) <= t.aggro && lineOfSight(regionId, t.at, p))
+        .map(t => t.label);
+    sightCache.set(key, out);
+    return out;
 }
