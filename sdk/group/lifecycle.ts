@@ -15,8 +15,11 @@
 //             (stepWave; the units' side is waves.ts).
 //
 // A bot due to leave is not pulled out of a running unit: it is 'leaving', field.ts leaves it out of the next line-up
-// (mayPlay), and once no unit holds it, the life cycle logs it out through S1's swarm control (options.presence).
-// Logging in and out is never done here directly.
+// (mayPlay), and once no unit holds it and it stands away from any keep the server would call unsafe, the life cycle
+// logs it out through S1's swarm control (options.presence). Logging in and out is never done here directly.
+// A login near an enemy keep (or one in combat) lands at the bind, the realm's portal keep outside the battleground
+// (PlayerInitRequestHandler CheckNearbyKeepAndMoveIfUnsafe, within 6000): a bot that comes in outside Thidranki, or
+// one no unit holds found outside, is 'entering' and walks back in (enterBattleground) before it counts as online.
 //
 // Pure where it can be: stepRealm, stepBalance, stepWave, mixFor, curveAt and wantsMuster take state and inputs and return
 // actions; startLifecycle runs them every 30 s against the gateway and the realm boards, keeps its state in
@@ -29,8 +32,12 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { BATTLEGROUND_LAYOUTS, THIDRANKI, type PlayerRealm } from './keeps';
+import { findBotEnv, parseEnvFile } from '../index';
+import { enterBattleground } from './battleground';
 import { lineupPool } from './lineup';
-import { loadGroup } from './roster';
+import type { Member } from './member';
+import { connectBot, loadGroup } from './roster';
+import { roleForClass } from './strategy';
 import type { RealmBoardView } from './realm-board';
 import type { Point3 } from './types';
 import { WAVE_DIR, writeWave, type RealmWave } from './waves';
@@ -57,6 +64,11 @@ export interface LifecycleSettings {
     extendMs: number;
     /** The longest a needed class (the last Druid, Bard, ...) plays on waiting for another of its class. */
     neededMaxMs: number;
+    /** Entering: the way back in is asked again after this, and given up (the bot logs out to rest) after enterMaxMs. */
+    enterRetryMs: number;
+    enterMaxMs: number;
+    /** A log-out waits while the bot stands within this of a keep not ours (or the Faste at all: it may be in combat). */
+    keepClear: number;
     /** At most one log-out (and `logInsPerStep` log-ins) per realm this often. */
     stepMs: number;
     logInsPerStep: number;
@@ -119,6 +131,9 @@ export const LIFECYCLE_SETTINGS: LifecycleSettings = {
     rest: { minMs: 20 * 60_000, maxMs: 90 * 60_000 },
     extendMs: 15 * 60_000,
     neededMaxMs: 5 * 60 * 60_000,
+    enterRetryMs: 4 * 60_000,
+    enterMaxMs: 20 * 60_000,
+    keepClear: 7000,
     stepMs: 90_000,
     logInsPerStep: 2,
     joinTimeoutMs: 5 * 60_000,
@@ -220,7 +235,7 @@ export function openNeeds(bots: readonly LifeBot[], needs: readonly Need[]): Nee
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────── the sessions
 
-export type LifeState = 'online' | 'leaving' | 'offline' | 'joining';
+export type LifeState = 'online' | 'leaving' | 'offline' | 'joining' | 'entering';
 
 export interface Life extends LifeBot {
     realm: PlayerRealm;
@@ -231,20 +246,26 @@ export interface Life extends LifeBot {
     until: number;
     /** Sessions started. */
     sessions: number;
-    /** leaving: when the log-out was last asked. */
+    /** leaving: when the log-out was last asked; entering: when the way back in was last asked. */
     askedAt?: number;
+    /** leaving: when a log-out near a keep was last put off (logged once in leaveRetryMs). */
+    waitedAt?: number;
     /** Why it is in this state (a log). */
     why: string;
 }
 
-export type LifeAction = { kind: 'logIn' | 'logOut'; bot: string; realm: PlayerRealm; why: string };
-export type LifeEvent = { kind: 'joined' | 'left' | 'leave' | 'extend' | 'join' | 'adopt' | 'lost' | 'stuck'; bot: string; realm: PlayerRealm; why: string };
+export type LifeAction = { kind: 'logIn' | 'logOut' | 'enter'; bot: string; realm: PlayerRealm; why: string };
+export type LifeEvent = { kind: 'joined' | 'left' | 'leave' | 'extend' | 'join' | 'adopt' | 'lost' | 'stuck' | 'entering' | 'wait'; bot: string; realm: PlayerRealm; why: string };
 
 export interface RealmStep {
     /** Bots of the realm that should play now (the curve, the shift, the humans in it). */
     target: number;
     /** Bots in game now (any region). */
     inGame: ReadonlySet<string>;
+    /** Of those, the ones outside the battleground (region known and not Thidranki). */
+    outside?: ReadonlySet<string>;
+    /** Bots standing where a log-out would bring them back at the bind (logOutUnsafe): they log out later. */
+    unsafe?: ReadonlySet<string>;
     /** Bots a running unit holds (field.ts): a leaving one waits for its unit to let go. */
     held: ReadonlySet<string>;
     /** One main group's needs (groupNeeds), counted once for each main group at `needsAt` (default the target). */
@@ -282,10 +303,18 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
     const ev = (kind: LifeEvent['kind'], l: Life, why: string) => events.push({ kind, bot: l.bot, realm: l.realm, why });
     const set = (l: Life, state: LifeState, until: number, why: string) => { l.state = state; l.since = now; l.until = until; l.why = why; };
 
-    // 1. What is in game.
+    // 1. What is in game, and where.
+    const enter = (l: Life, why: string) => { l.askedAt = now; actions.push({ kind: 'enter', bot: l.bot, realm: l.realm, why }); };
     for (const l of lives) {
         const inGame = o.inGame.has(l.bot);
-        if (l.state === 'joining' && inGame) { set(l, 'online', now + between(rand, s.session), 'session'); l.sessions++; ev('joined', l, `session of ${Math.round((l.until - now) / 60_000)} min`); }
+        const outside = inGame && !!o.outside?.has(l.bot);
+        if (l.state === 'joining' && outside) { set(l, 'entering', now, 'logged in outside the battleground'); ev('entering', l, 'logged in outside Thidranki: back in first'); enter(l, l.why); }
+        else if (l.state === 'online' && outside && !o.held.has(l.bot)) { set(l, 'entering', now, 'outside the battleground'); ev('entering', l, 'in game outside Thidranki, no unit holds it: back in'); enter(l, l.why); }
+        else if (l.state === 'entering' && inGame && !outside) { set(l, 'online', now + between(rand, s.session), 'session'); l.sessions++; ev('joined', l, `back in Thidranki, session of ${Math.round((l.until - now) / 60_000)} min`); }
+        else if (l.state === 'entering' && !inGame) { set(l, 'offline', now + 2 * 60_000, 'dropped while entering'); ev('lost', l, 'out of the game on its way back in'); }
+        else if (l.state === 'entering' && now - l.since > s.enterMaxMs) { set(l, 'leaving', now, 'could not get back in'); ev('leave', l, `not back in Thidranki after ${Math.round(s.enterMaxMs / 60_000)} min: logs out`); }
+        else if (l.state === 'entering' && now - (l.askedAt ?? 0) >= s.enterRetryMs) enter(l, 'still outside the battleground: again');
+        else if (l.state === 'joining' && inGame) { set(l, 'online', now + between(rand, s.session), 'session'); l.sessions++; ev('joined', l, `session of ${Math.round((l.until - now) / 60_000)} min`); }
         else if (l.state === 'joining' && now - l.since > s.joinTimeoutMs) { set(l, 'offline', now + 2 * 60_000, 'log-in not seen'); ev('lost', l, 'asked to log in, not in game after the timeout'); }
         else if (l.state === 'leaving' && !inGame) { set(l, 'offline', now + between(rand, s.rest), 'rest'); ev('left', l, `back in ${Math.round((l.until - now) / 60_000)} min at the earliest`); }
         else if (l.state === 'offline' && inGame && now - l.since > 3 * 60_000 && !o.pinned.away.has(l.bot)) {
@@ -294,7 +323,7 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
         }
     }
 
-    const playing = () => lives.filter(l => l.state === 'online' || l.state === 'joining');
+    const playing = () => lives.filter(l => l.state === 'online' || l.state === 'joining' || l.state === 'entering');
     const mains = mainsFor(Math.max(o.target, o.needsAt ?? 0));
     const needs = Array.from({ length: mains }, () => o.needs).flat();
     /** Would the realm's needs stay as covered without `l`? */
@@ -343,14 +372,27 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
         }
     }
 
-    // 5. Leaving bots no unit holds: log out (again, if the last ask didn't take).
+    // 5. Leaving bots no unit holds, standing where a log-in later is safe: log out (again, if the last ask didn't take).
     for (const l of lives) {
         if (l.state !== 'leaving' || o.held.has(l.bot) || !o.inGame.has(l.bot)) continue;
+        if (o.unsafe?.has(l.bot)) {
+            if (!l.waitedAt || now - l.waitedAt >= s.leaveRetryMs) { l.waitedAt = now; ev('wait', l, 'near a keep: a log-in there would land at the bind, waits to log out'); }
+            continue;
+        }
         if (l.askedAt && now - l.askedAt < s.leaveRetryMs) continue;
         l.askedAt = now;
         actions.push({ kind: 'logOut', bot: l.bot, realm: l.realm, why: l.why });
     }
     return { actions, events, lastOut, lastIn };
+}
+
+/**
+ * Whether a log-out here would bring the bot back at its bind: within `clear` of a keep not of its realm, or of a
+ * non-portal keep at all (the Faste may be in combat). The server looks within 6000 (WorldMgr.VISIBILITY_DISTANCE).
+ */
+export function logOutUnsafe(p: { regionId: number; x: number; y: number }, realm: PlayerRealm, owners: (keep: string) => string | null, clear = LIFECYCLE_SETTINGS.keepClear): boolean {
+    const keeps = BATTLEGROUND_LAYOUTS[p.regionId]?.keeps ?? [];
+    return keeps.some(k => Math.hypot(k.x - p.x, k.y - p.y) < clear && (!k.portal || (owners(k.name) ?? k.owner) !== realm));
 }
 
 // ───────────────────────────────────────────────────────────────────────────────────────────────────────────── balance
@@ -527,6 +569,10 @@ export interface LifecycleOptions {
     presence: { logIn(bot: string): Promise<unknown>; logOut(bot: string): Promise<unknown> };
     /** Bots in game now, any region (default: the gateway's /status). */
     inGame?: () => Promise<Set<string>>;
+    /** Where a bot in game stands (default: the gateway's /status/<user>); null when unknown. */
+    where?: (bot: string) => Promise<{ regionId: number; x: number; y: number } | null>;
+    /** Take a bot no unit holds back into Thidranki (default: enterBattleground for that bot alone, by its own control connection). */
+    enter?: (bot: string) => Promise<{ success: boolean; message: string }>;
     /** Whether a running unit holds the bot (field.ts holding). */
     held: (bot: string) => boolean;
     /** The realm's board (director.lastBoard()); null without a director. */
@@ -574,9 +620,39 @@ interface Saved {
     lastIn: Record<string, number>;
 }
 
+const GATEWAY = () => process.env.GATEWAY_HTTP ?? 'http://127.0.0.1:7780';
+
+function userOf(bot: string): string {
+    const env = findBotEnv(bot);
+    try { return env ? parseEnvFile(readFileSync(env, 'utf8')).BOT_USERNAME || bot : bot; } catch { return bot; }
+}
+
+async function gatewayWhere(bot: string): Promise<{ regionId: number; x: number; y: number } | null> {
+    try {
+        const res = await fetch(`${GATEWAY()}/status/${encodeURIComponent(userOf(bot))}`, { signal: AbortSignal.timeout(4000) });
+        if (!res.ok) return null;
+        const p = ((await res.json()) as { inGame?: boolean; player?: { regionId?: number; x?: number; y?: number } }).player;
+        return p && Number.isFinite(p.regionId) && Number.isFinite(p.x) && Number.isFinite(p.y) ? { regionId: p.regionId!, x: p.x!, y: p.y! } : null;
+    } catch {
+        return null;
+    }
+}
+
+/** One bot back into Thidranki: its portal keep by the town teleporter, bind, medallion, port (battleground.ts). */
+export async function enterAlone(bot: string, className: string, log?: (line: string) => void): Promise<{ success: boolean; message: string }> {
+    const c = await connectBot(bot);
+    try {
+        const m: Member = { bot, role: roleForClass(className), sdk: c.sdk, actions: c.bot };
+        const r = await enterBattleground([m], { regionId: THIDRANKI, log });
+        return { success: r.success, message: r.message };
+    } finally {
+        await c.sdk.sendStop().catch(() => null);
+        await c.sdk.disconnect().catch(() => null);
+    }
+}
+
 async function gatewayInGame(): Promise<Set<string>> {
-    const gateway = process.env.GATEWAY_HTTP ?? 'http://127.0.0.1:7780';
-    const res = await fetch(`${gateway}/status`, { signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${GATEWAY()}/status`, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) throw new Error(`gateway /status ${res.status}`);
     const j = await res.json() as { bots?: Record<string, { status?: string; inGame?: boolean }> };
     return new Set(Object.entries(j.bots ?? {}).filter(([, b]) => b.status === 'active' && b.inGame).map(([k]) => k));
@@ -638,6 +714,12 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
     };
     let lastSample = 0;
     let stopped = false, busy = false;
+    /** Bots on their way back in now (enterAlone running). */
+    const enteringNow = new Set<string>();
+    const where = opts.where ?? gatewayWhere;
+    const classOf = (bot: string) => opts.realms.flatMap(r => r.bots).find(b => b.bot === bot)?.className ?? '';
+    const enterOne = opts.enter ?? ((bot: string) => enterAlone(bot, classOf(bot), line => log(`lifecycle enter ${bot}: ${line}`)));
+    const keepOwner = (keep: string) => (keep === 'Thidranki Faste' ? opts.owner?.() ?? null : null);
 
     const tick = async () => {
         if (stopped || busy) return;
@@ -655,6 +737,10 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
                 }
                 log(`lifecycle: ${fresh ? 'state picked up from ' + new Date(fresh.at).toTimeString().slice(0, 5) : 'new'}, ${[...lives.values()].filter(l => l.state === 'online').length} online${shadow ? ' (shadow)' : ''}`);
             }
+            // Where the bots stand that may log in, out or walk back in: joining, entering and leaving ones, and those no unit holds.
+            const look = [...lives.values()].filter(l => inGame.has(l.bot) && (l.state !== 'online' || !opts.held(l.bot)) && l.state !== 'offline');
+            const places = new Map<string, { regionId: number; x: number; y: number } | null>();
+            await Promise.all(look.map(async l => { places.set(l.bot, await where(l.bot)); }));
             for (const r of opts.realms) {
                 const board = opts.board?.(r.realm) ?? null;
                 // Balance and wave from the realm's own board.
@@ -677,12 +763,27 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
                 const soon = Math.min(r.bots.length, Math.max(s.floor, curveAt(now + 60 * 60_000, s.curve, s.floor) + b.shift) - humansIn);
                 target[r.realm] = t;
                 const held = new Set(r.bots.map(x => x.bot).filter(x => opts.held(x)));
-                const res = stepRealm(realmLives(r.realm), { target: t, inGame, held, needs: groupNeeds(r.requires, r.bots), needsAt: soon, pinned: pins, lastOut: lastOut[r.realm]!, lastIn: lastIn[r.realm]! }, now, rand, s);
+                const outside = new Set<string>(), unsafe = new Set<string>();
+                for (const [bot, p] of places) {
+                    if (!p || lives.get(bot)?.realm !== r.realm) continue;
+                    if (p.regionId !== THIDRANKI) outside.add(bot);
+                    else if (logOutUnsafe(p, r.realm, keepOwner, s.keepClear)) unsafe.add(bot);
+                }
+                const res = stepRealm(realmLives(r.realm), { target: t, inGame, outside, unsafe, held, needs: groupNeeds(r.requires, r.bots), needsAt: soon, pinned: pins, lastOut: lastOut[r.realm]!, lastIn: lastIn[r.realm]! }, now, rand, s);
                 lastOut[r.realm] = res.lastOut; lastIn[r.realm] = res.lastIn;
                 for (const e of res.events) { record({ ...e, kind: e.kind, target: t }); log(`lifecycle ${r.realm}: ${e.bot} ${e.kind}: ${e.why}`); }
                 for (const a of res.actions) {
                     record({ kind: a.kind, bot: a.bot, realm: a.realm, why: a.why, shadow });
                     if (shadow) continue;
+                    if (a.kind === 'enter') {
+                        if (enteringNow.has(a.bot)) continue;
+                        enteringNow.add(a.bot);
+                        void enterOne(a.bot)
+                            .then(e => { record({ kind: 'entered', bot: a.bot, success: e.success, message: e.message.slice(0, 300) }); log(`lifecycle: ${a.bot} back in: ${e.success ? 'yes' : 'no'}, ${e.message.slice(0, 200)}`); })
+                            .catch((e: Error) => { record({ kind: 'enter-error', bot: a.bot, error: e.message }); log(`lifecycle: ${a.bot} back in failed: ${e.message}`); })
+                            .finally(() => enteringNow.delete(a.bot));
+                        continue;
+                    }
                     const call = a.kind === 'logIn' ? opts.presence.logIn(a.bot) : opts.presence.logOut(a.bot);
                     void call.catch((e: Error) => { record({ kind: 'presence-error', bot: a.bot, action: a.kind, error: e.message }); log(`lifecycle: ${a.kind} ${a.bot} failed: ${e.message}`); });
                 }
@@ -694,7 +795,7 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
                 lastSample = now;
                 const realms = Object.fromEntries(opts.realms.map(r => {
                     const ls = realmLives(r.realm);
-                    return [r.realm, { playing: ls.filter(l => l.state === 'online' || l.state === 'joining').length, inGame: r.bots.filter(x => inGame.has(x.bot)).length, leaving: ls.filter(l => l.state === 'leaving').length, target: target[r.realm], curve: curveAt(now, s.curve, s.floor), shift: balance[r.realm]!.shift, humans: humans[r.realm] ?? 0, wave: waves[r.realm]!.phase }];
+                    return [r.realm, { playing: ls.filter(l => l.state === 'online' || l.state === 'joining' || l.state === 'entering').length, entering: ls.filter(l => l.state === 'entering').length, inGame: r.bots.filter(x => inGame.has(x.bot)).length, leaving: ls.filter(l => l.state === 'leaving').length, target: target[r.realm], curve: curveAt(now, s.curve, s.floor), shift: balance[r.realm]!.shift, humans: humans[r.realm] ?? 0, wave: waves[r.realm]!.phase }];
                 }));
                 try { appendFileSync(samplesPath, JSON.stringify({ at: new Date(now).toISOString(), shadow, realms }) + '\n'); } catch { /* next time */ }
             }
@@ -740,7 +841,7 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
         summary() {
             return opts.realms.map(r => {
                 const ls = realmLives(r.realm);
-                return `${r.realm} ${ls.filter(l => l.state === 'online').length}/${target[r.realm] ?? '?'} (shift ${balance[r.realm]!.shift}, ${ls.filter(l => l.state === 'leaving').length} leaving, ${ls.filter(l => l.state === 'joining').length} joining, wave ${waves[r.realm]!.phase})`;
+                return `${r.realm} ${ls.filter(l => l.state === 'online').length}/${target[r.realm] ?? '?'} (shift ${balance[r.realm]!.shift}, ${ls.filter(l => l.state === 'leaving').length} leaving, ${ls.filter(l => l.state === 'joining').length} joining, ${ls.filter(l => l.state === 'entering').length} entering, wave ${waves[r.realm]!.phase})`;
             }).join('; ');
         },
         stop() { stopped = true; clearInterval(timer); },

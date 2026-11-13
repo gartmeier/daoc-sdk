@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-    curveAt, CURVE, groupNeeds, initialLives, LIFECYCLE_SETTINGS, mixFor, newWave, openNeeds, readBalance, see, stepBalance,
+    curveAt, CURVE, groupNeeds, initialLives, LIFECYCLE_SETTINGS, logOutUnsafe, mixFor, newWave, openNeeds, readBalance, see, stepBalance,
     stepRealm, stepWave, wantsMuster, wearOf, type BalanceState, type Life, type LifeBot, type RealmStep, type Sightings,
 } from './lifecycle';
 import { quietSpot, waveOrder, nextIdle, QUIET_REASON, type RealmWave } from './waves';
@@ -183,6 +183,49 @@ describe('sessions', () => {
         expect(lives[0]!.until - now).toBeGreaterThanOrEqual(60 * MIN);
         expect(lives[2]!.until - now).toBeGreaterThanOrEqual(20 * MIN);
         expect(lives[2]!.until - now).toBeLessThanOrEqual(90 * MIN);
+    });
+
+    test('a log-in outside Thidranki walks back in before it plays; retried, then given up', () => {
+        const now = at(20);
+        const lives = initialLives(HIB.slice(0, 2), 'hibernia', new Set(), now, seeded(3));
+        lives[0]!.state = 'joining' as Life['state']; lives[0]!.since = now - MIN;
+        const base = { target: 1, held: new Set<string>(), needs: [] as string[][], pinned: { away: new Set<string>(), stay: new Set<string>() }, lastOut: now, lastIn: now };
+        const r = stepRealm(lives, { ...base, inGame: new Set(['amergin']), outside: new Set(['amergin']) }, now, seeded(3));
+        expect(lives[0]!.state).toBe('entering');
+        expect(r.actions).toEqual([{ kind: 'enter', bot: 'amergin', realm: 'hibernia', why: 'logged in outside the battleground' }]);
+        // Not again before enterRetryMs; again after.
+        expect(stepRealm(lives, { ...base, inGame: new Set(['amergin']), outside: new Set(['amergin']) }, now + MIN, seeded(3)).actions).toEqual([]);
+        expect(stepRealm(lives, { ...base, inGame: new Set(['amergin']), outside: new Set(['amergin']) }, now + 5 * MIN, seeded(3)).actions.map(a => a.kind)).toEqual(['enter']);
+        // In Thidranki: it plays.
+        stepRealm(lives, { ...base, inGame: new Set(['amergin']), outside: new Set() }, now + 6 * MIN, seeded(3));
+        expect(lives[0]!.state).toBe('online');
+        // An online bot no unit holds, found outside: back in; a held one is its unit's.
+        stepRealm(lives, { ...base, inGame: new Set(['amergin']), outside: new Set(['amergin']), held: new Set(['amergin']) }, now + 7 * MIN, seeded(3));
+        expect(lives[0]!.state).toBe('online');
+        stepRealm(lives, { ...base, inGame: new Set(['amergin']), outside: new Set(['amergin']) }, now + 8 * MIN, seeded(3));
+        expect(lives[0]!.state).toBe('entering');
+        stepRealm(lives, { ...base, inGame: new Set(['amergin']), outside: new Set(['amergin']) }, now + 30 * MIN, seeded(3));
+        expect(lives[0]!.state).toBe('leaving');
+    });
+
+    test('a leaving bot near a keep waits to log out', () => {
+        const now = at(20);
+        const lives = initialLives(HIB.slice(0, 1), 'hibernia', new Set(['amergin']), now, seeded(3));
+        lives[0]!.state = 'leaving' as Life['state'];
+        const base = { target: 0, inGame: new Set(['amergin']), held: new Set<string>(), needs: [] as string[][], pinned: { away: new Set<string>(), stay: new Set<string>() }, lastOut: now, lastIn: now };
+        const r = stepRealm(lives, { ...base, unsafe: new Set(['amergin']) }, now, seeded(3));
+        expect(r.actions).toEqual([]);
+        expect(r.events.map(e => e.kind)).toEqual(['wait']);
+        expect(stepRealm(lives, base, now + 30_000, seeded(3)).actions.map(a => a.kind)).toEqual(['logOut']);
+    });
+
+    test('unsafe to log out: near the Faste (whoever holds it), near an enemy portal keep; safe at home and in the field', () => {
+        const none = () => null;
+        expect(logOutUnsafe({ regionId: 252, x: 33089 + 3000, y: 38271 }, 'hibernia', none)).toBe(true);
+        expect(logOutUnsafe({ regionId: 252, x: 33089 + 3000, y: 38271 }, 'albion', () => 'albion')).toBe(true);
+        expect(logOutUnsafe({ regionId: 252, x: 54053, y: 24680 + 2000 }, 'hibernia', none)).toBe(true);
+        expect(logOutUnsafe({ regionId: 252, x: 18362 + 1500, y: 18257 }, 'hibernia', none)).toBe(false);
+        expect(logOutUnsafe({ regionId: 252, x: 26000, y: 26000 }, 'hibernia', none)).toBe(false);
     });
 
     test('a day: playing follows the curve, Druid and Bard always on, sessions turn over', () => {
