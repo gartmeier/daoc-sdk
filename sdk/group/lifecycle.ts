@@ -720,11 +720,13 @@ async function gatewayWhere(bot: string): Promise<{ regionId: number; x: number;
     }
 }
 
-async function gatewayConLost(bot: string): Promise<number | null> {
+/** A bot's lost constitution from the gateway's /state/<user> ({ state: { player } }); null when unknown. */
+export async function gatewayConLost(bot: string): Promise<number | null> {
     try {
         const res = await fetch(`${GATEWAY()}/state/${encodeURIComponent(userOf(bot))}`, { signal: AbortSignal.timeout(4000) });
         if (!res.ok) return null;
-        const c = ((await res.json()) as { player?: { constitutionLost?: number } }).player?.constitutionLost;
+        const j = (await res.json()) as { state?: { player?: { constitutionLost?: number } }; player?: { constitutionLost?: number } };
+        const c = (j.state?.player ?? j.player)?.constitutionLost;
         return Number.isFinite(c) ? c! : null;
     } catch {
         return null;
