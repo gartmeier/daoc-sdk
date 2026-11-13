@@ -187,7 +187,7 @@ const SIGHT_STEP_KEEP = 150;
 
 /**
  * Where to step after a cast refused for sight: the first point every SIGHT_STEP_SAMPLE units along the straight line
- * toward `to` (up to `max`, staying SIGHT_STEP_KEEP off it) from which `to` is in sight over the terrain, else the
+ * toward `to` (up to `max`, staying SIGHT_STEP_KEEP off it) from which `to` is in sight over the terrain and past the walls, else the
  * farthest of them, or null with `clearOnly`. Null too when there is no room for a step.
  */
 export function sightStep(regionId: number, from: Vec3, to: Vec3, ground: (regionId: number, x: number, y: number) => number | null = terrainGround, max = SIGHT_STEP_MAX, clearOnly = false): Vec3 | null {
@@ -2371,7 +2371,7 @@ export class BotActions {
      * The walk into range stops inside it by the smaller of 10 % of the range and 150, in 3D, by what the target reads as it goes. A target that moves on from there gets the server's "That target is too far away!" at the cast's end: reason out_of_range, and the caller goes again: for 30 s or until a cast at it lands, the next walk at it stops short by as much again as it left in a cast, by our own readings, at most at half the range. A height it can't climb leaves the first reading inside the range good enough, and the cast goes from there.
      * A target that dies on the way ends the walk at once, with nothing cast: reason already_dead, with targetDied, a friend's too. A corpse that gets up ends it as well, reason invalid_target in the Corpse spell's own words. An id gone just after its death reads already_dead with targetDied, and one merely out of view not_found.
      * Reason refused for a song with no instrument in hand, naming the song and the instrument we wear, with retryAfterMs of 60 s: only a change of hand cures it. Reason interrupted has retryAfterMs 2200, the server's own wait (SpellHandler.cs:372). A mezz's or a stun's line beside the 0x0B reads crowd_controlled, and so does Amnesia's, which ends a cast with no 0x0B and no line of the cast's own (AmnesiaSpellHandler.cs:50). An item's recast line ("... to discharge this item!") answers the useItem and says nothing of the cast.
-     * Reason not_visible: "You can't see your target from here!", a hill between us by the client's LoS answer (sdk/vision.ts lineOfSight). castSpell then steps toward the target to the first spot that sees it over the terrain (sightStep), up to SIGHT_STEP_MAX (with `approach: false` only up to SIGHT_STEP_SHORT, and only when such a spot is that near), and casts once more; its message then says so.
+     * Reason not_visible: "You can't see your target from here!", a hill, a keep wall or a building between us by the client's LoS answer (sdk/vision.ts lineOfSight). castSpell then steps toward the target to the first spot that sees it over the terrain and past the walls (sightStep), up to SIGHT_STEP_MAX (with `approach: false` only up to SIGHT_STEP_SHORT, and only when such a spot is that near), and casts once more; its message then says so.
      */
     async castSpell(spell: NamePattern | Spell, target?: ObjectTarget | null, options: CastOptions = {}): Promise<CastResult> {
         const base = { spell: null as Spell | null, target: null as Obj | null, castTimeMs: null as number | null, completed: false, resisted: false, damage: 0, messages: [] as GameMessage[] };

@@ -9,9 +9,10 @@
 //   - within awareRadius it is noticed whatever the facing or the ground (nameplates, footsteps, sound);
 //   - farther off it must be inside the view cone (fovDegrees, centred on the viewer's heading),
 //   - and the sight line from the viewer's eyes to the target's chest must clear the terrain.
-// The terrain is the client's own heightmap (server/navmesh/zoneNNN.terrain, sdk/terrain.ts):
-// hills and ridges block, keep walls, buildings and trees don't (they aren't in it). Where a zone
-// has no .terrain (a city, a dungeon, a checkout without it), nothing blocks.
+// The terrain is the client's own heightmap (server/navmesh/zoneNNN.terrain, sdk/terrain.ts): hills and
+// ridges block. Keep walls, buildings and other fixtures block too, from their collision meshes
+// (server/navmesh/zoneNNN.occluders, sdk/occluders.ts); trees don't. Where a zone has no .terrain or
+// no .occluders (a checkout without them), those don't block.
 //
 // What hits us is known whatever this says: that part is up to the caller (observeState).
 //
@@ -21,10 +22,12 @@
 // Noticing takes a moment: a member reports an enemy only once it has had it in view for noticeMs, which stands
 // for spotting it and calling it out to the group (observeState keeps the clock per member).
 //
-// The same terrain answers the server's line-of-sight checks (0xD0) in the client (clientLineOfSight): our own
-// casts, our pets' attacks and a monster's aggro on us are then cut off by hills as a real client's are.
+// The same terrain and fixtures answer the server's line-of-sight checks (0xD0) in the client (clientLineOfSight):
+// our own casts, our pets' attacks and a monster's aggro on us are then cut off by hills and walls as a real
+// client's are. DAOC_LOS=terrain leaves the fixtures out, DAOC_LOS=clear answers every check clear.
 
 import { getZoneAt } from '../data/zones';
+import { getOccluderStore } from './occluders';
 import { getTerrainStore, sampleTerrain, type TerrainGrid } from './terrain';
 
 export type VisionMode = 'omniscient' | 'human';
@@ -147,6 +150,18 @@ export interface Seen {
 /** Ground height at a spot, or null where it isn't known (then it never blocks). */
 export type GroundAt = (regionId: number, x: number, y: number) => number | null;
 
+/** True when something other than the ground (a wall, a building) stands between two points of a region. */
+export type SolidAt = (regionId: number, from: Seen, to: Seen) => boolean;
+
+/** The zone fixtures' collision meshes (sdk/occluders.ts): keep walls, buildings, not trees. */
+export const fixtureSolid: SolidAt = (regionId, from, to) => getOccluderStore().blocked(regionId, from, to);
+
+/**
+ * The fixtures go with the real terrain by default: a caller that passes its own ground (a test, a model) gets no
+ * fixtures unless it passes them too.
+ */
+const solidFor = (ground: GroundAt): SolidAt | null => (ground === terrainGround ? fixtureSolid : null);
+
 /** A zone's grid is asked of the store again after this: TerrainStore.forZone stats its file on every call, too slow for ~50 samples a sight line. */
 const GRID_RECHECK_MS = 30_000;
 const grids = new Map<number, { grid: TerrainGrid | null; at: number }>();
@@ -182,9 +197,10 @@ export function inViewCone(viewer: Viewer, target: { x: number; y: number }, fov
 /**
  * The straight line from `from` to `to` (3D) clears the ground: no sample along it, one step
  * in from either end, has the ground above the line by more than `clearance`. The ends are
- * skipped so the slope a viewer stands on doesn't hide what's down it.
+ * skipped so the slope a viewer stands on doesn't hide what's down it. Then no fixture
+ * (`solid`, a wall or a building) stands across it.
  */
-export function sightLineClear(regionId: number, from: Seen, to: Seen, opts: Pick<VisionOptions, 'stepUnits' | 'clearance'>, ground: GroundAt = terrainGround): boolean {
+export function sightLineClear(regionId: number, from: Seen, to: Seen, opts: Pick<VisionOptions, 'stepUnits' | 'clearance'>, ground: GroundAt = terrainGround, solid: SolidAt | null = solidFor(ground)): boolean {
     const len = Math.hypot(to.x - from.x, to.y - from.y);
     const step = Math.max(8, opts.stepUnits);
     for (let d = step; d < len - step; d += step) {
@@ -196,38 +212,59 @@ export function sightLineClear(regionId: number, from: Seen, to: Seen, opts: Pic
         const line = from.z + t * (to.z - from.z);
         if (g > line + opts.clearance) return false;
     }
-    return true;
+    return !solid || !solid(regionId, from, to);
 }
 
 /** Why a target is or isn't seen (for tests, the viewer and logs). */
 export type SightVerdict = 'aware' | 'seen' | 'behind' | 'blocked';
 
 /** The rules above for one viewer and target, with the reason. */
-export function sightOf(viewer: Viewer, target: Seen, opts: VisionOptions, ground: GroundAt = terrainGround): SightVerdict {
+export function sightOf(viewer: Viewer, target: Seen, opts: VisionOptions, ground: GroundAt = terrainGround, solid: SolidAt | null = solidFor(ground)): SightVerdict {
     if (Math.hypot(target.x - viewer.x, target.y - viewer.y) <= opts.awareRadius) return 'aware';
     if (!inViewCone(viewer, target, opts.fovDegrees)) return 'behind';
     const eye = { x: viewer.x, y: viewer.y, z: viewer.z + opts.eyeHeight };
     const at = { x: target.x, y: target.y, z: target.z + opts.targetHeight };
-    return sightLineClear(viewer.regionId, eye, at, opts, ground) ? 'seen' : 'blocked';
+    return sightLineClear(viewer.regionId, eye, at, opts, ground, solid) ? 'seen' : 'blocked';
 }
 
 /** True when the viewer notices the target (sightOf is 'aware' or 'seen'). */
-export function canSee(viewer: Viewer, target: Seen, opts: VisionOptions, ground: GroundAt = terrainGround): boolean {
-    const v = sightOf(viewer, target, opts, ground);
+export function canSee(viewer: Viewer, target: Seen, opts: VisionOptions, ground: GroundAt = terrainGround, solid: SolidAt | null = solidFor(ground)): boolean {
+    const v = sightOf(viewer, target, opts, ground, solid);
     return v === 'aware' || v === 'seen';
 }
 
-/** Line of sight over the terrain between two objects, whatever way either faces: `from`'s eyes to `to`'s chest. */
-export function lineOfSight(regionId: number, from: Seen, to: Seen, ground: GroundAt = terrainGround, opts: Pick<VisionOptions, 'eyeHeight' | 'targetHeight' | 'stepUnits' | 'clearance'> = HUMAN_VISION): boolean {
-    return sightLineClear(regionId, { x: from.x, y: from.y, z: from.z + opts.eyeHeight }, { x: to.x, y: to.y, z: to.z + opts.targetHeight }, opts, ground);
+/** Line of sight over the terrain and past the fixtures between two objects, whatever way either faces: `from`'s eyes to `to`'s chest. */
+export function lineOfSight(regionId: number, from: Seen, to: Seen, ground: GroundAt = terrainGround, opts: Pick<VisionOptions, 'eyeHeight' | 'targetHeight' | 'stepUnits' | 'clearance'> = HUMAN_VISION, solid: SolidAt | null = solidFor(ground)): boolean {
+    return sightLineClear(regionId, { x: from.x, y: from.y, z: from.z + opts.eyeHeight }, { x: to.x, y: to.y, z: to.z + opts.targetHeight }, opts, ground, solid);
+}
+
+/** What answers the server's 0xD0 checks: everything, the terrain only, or nothing (every check clear). */
+export type ClientLosMode = 'full' | 'terrain' | 'clear';
+
+/** DAOC_LOS: clear (or off/0/false/no), terrain, or anything else (unset, on, full, walls) for terrain and fixtures. */
+export function clientLosMode(env: string | undefined = process.env.DAOC_LOS): ClientLosMode {
+    if (/^(0|off|false|no|clear)$/i.test(env ?? '')) return 'clear';
+    if (/^terrain$/i.test(env ?? '')) return 'terrain';
+    return 'full';
 }
 
 /**
- * The client's answer to the server's 0xD0 checks (lineOfSight on the client heightmaps), or undefined to answer
- * every check "clear" as before: with DAOC_LOS=clear (or off/0/false/no), or with no terrain built.
+ * The client's answer to the server's 0xD0 checks (lineOfSight on the client heightmaps and, unless DAOC_LOS=terrain,
+ * the fixtures' meshes), or undefined to answer every check "clear" as before: with DAOC_LOS=clear (or off/0/false/no),
+ * or with no terrain built.
  */
-export function clientLineOfSight(): ((regionId: number, from: Seen, to: Seen) => boolean) | undefined {
-    if (/^(0|off|false|no|clear)$/i.test(process.env.DAOC_LOS ?? '')) return undefined;
+export function clientLineOfSight(mode: ClientLosMode = clientLosMode()): ((regionId: number, from: Seen, to: Seen) => boolean) | undefined {
+    if (mode === 'clear') return undefined;
     if (!getTerrainStore().available()) return undefined;
-    return (regionId, from, to) => lineOfSight(regionId, from, to);
+    const solid = mode === 'full' ? fixtureSolid : null;
+    return (regionId, from, to) => lineOfSight(regionId, from, to, terrainGround, HUMAN_VISION, solid);
+}
+
+/** One line for the client's log: what its 0xD0 answers test. */
+export function describeClientLos(mode: ClientLosMode = clientLosMode()): string {
+    if (mode === 'clear' || !getTerrainStore().available()) return 'line of sight: every server check is answered clear (DAOC_LOS=clear, or no server/navmesh terrain)';
+    if (mode === 'terrain') return 'line of sight: server checks answered from the terrain only (DAOC_LOS=terrain)';
+    return getOccluderStore().available()
+        ? 'line of sight: server checks answered from the terrain and the zone fixtures (walls, buildings)'
+        : 'line of sight: server checks answered from the terrain; no server/navmesh/*.occluders, so walls do not block (bun run occluders:build)';
 }

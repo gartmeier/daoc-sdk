@@ -13,6 +13,7 @@
 // Output (gitignored; navmeshes are derived from client assets and must not be redistributed):
 //   server/navmesh/zoneNNN.nav       one mesh per zone, region-global game coordinates
 //   server/navmesh/zoneNNN.terrain   exact outdoor terrain heights (scripts/build-terrain.ts)
+//   server/navmesh/zoneNNN.occluders fixture meshes for line of sight (scripts/build-occluders.ts)
 //   server/navmesh/lib/Detour.dll    64-bit-polyref Detour from server/core/Pathing/Detour
 //
 // Steps:
@@ -25,7 +26,8 @@
 //      blocks on an error dialog.
 //   5. Drop the meshes of zones that failed or never finished (a zoneNNN.nav.pending marker next
 //      to the mesh outlives a crashed run), then copy the rest to server/navmesh.
-//   6. Write the terrain grids of every zone with a mesh (bun run terrain:build alone does just this).
+//   6. Write the terrain grids of every zone with a mesh (bun run terrain:build alone does just this),
+//      and its fixtures for line of sight (bun run occluders:build).
 
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -37,7 +39,7 @@ const DETOUR_SRC = join(ROOT, 'server', 'core', 'Pathing', 'Detour');
 const DETOUR_DLL = join(DETOUR_SRC, 'Build', 'Release', 'Detour.dll');
 const CORE_LINK = join(ROOT, 'server', 'OpenDAoC-Core');
 const BUILDNAV = join(ROOT, 'server', 'buildnav');
-const BUILDNAV_OUT = join(BUILDNAV, 'bin', 'Release', 'net10.0-windows7.0');
+export const BUILDNAV_OUT = join(BUILDNAV, 'bin', 'Release', 'net10.0-windows7.0');
 export const NAVMESH_DIR = join(ROOT, 'server', 'navmesh');
 /** Home realms 1, 100, 200; capitals 10 (Camelot), 101 (Jordheim), 201 (Tir na Nog); 252 (Thidranki). */
 export const DEFAULT_REGIONS = [1, 100, 200, 10, 101, 201, 252];
@@ -421,6 +423,14 @@ export async function main(argv: string[]): Promise<void> {
         console.log(`${terrain.written.length} terrain grid(s)${terrain.none.length ? `; none for zone(s) ${terrain.none.join(', ')} (no heightmap)` : ''}`);
     } catch (e) {
         console.warn(`warning: terrain grids not written (${e instanceof Error ? e.message : e}); retry: bun run terrain:build`);
+    }
+    // Walls and buildings for line of sight (sdk/occluders.ts), from the .obj buildnav left next to each mesh.
+    try {
+        const { writeOccluders } = await import('./build-occluders');
+        const occ = writeOccluders(all.map(f => Number(/\d+/.exec(f)![0])), zonesDir);
+        console.log(`${occ.written.length} occluder file(s)${occ.none.length ? `; no .obj left for zone(s) ${occ.none.join(', ')}` : ''}`);
+    } catch (e) {
+        console.warn(`warning: occluders not written (${e instanceof Error ? e.message : e}); retry: bun run occluders:build`);
     }
     const dll = join(NAVMESH_DIR, 'lib', 'Detour.dll');
     try {

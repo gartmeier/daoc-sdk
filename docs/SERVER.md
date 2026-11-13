@@ -97,7 +97,7 @@ The script waits for MariaDB, then checks each property key and value type again
 | `ban_hackers` | False | A protocol mistake gets a kick, not a ban |
 | `xp_rate` | 3 (`--xp=N`) | Faster levelling for test runs |
 
-`check_los_before_aggro` and `check_los_during_player_cast` keep their defaults (True). The headless client answers each 0xD0 LoS request from the terrain heightmap between the two objects (`client/session.ts` `losClear`, `sdk/vision.ts` `lineOfSight`); with no terrain built or `DAOC_LOS=clear`, with "clear".
+`check_los_before_aggro` and `check_los_during_player_cast` keep their defaults (True). The headless client answers each 0xD0 LoS request from the terrain heightmap and the zone fixtures' collision meshes between the two objects (`client/session.ts` `losClear`, `sdk/vision.ts` `lineOfSight`, `sdk/occluders.ts`); with `DAOC_LOS=terrain` from the terrain only; with no terrain built or `DAOC_LOS=clear`, with "clear".
 
 Options:
 
