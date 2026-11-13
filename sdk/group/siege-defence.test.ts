@@ -303,3 +303,19 @@ describe.skipIf(!meshReady || getOccluderStore().forZone(252) === null)('the wal
         }
     });
 });
+
+describe('passedDoors: a member behind a door proves it passed', () => {
+    test('one of us in the courtyard: the gate; in the building: its door too; outside: none', async () => {
+        const { passedDoors, raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('hibernia')!;
+        const m = (x: number, y: number, alive = true) => ({ id: 1, x, y, z: 3720, alive });
+        expect(passedDoors(raid, [m(34650, 38250)])).toEqual([]);
+        expect(passedDoors(raid, [m(33777, 37900)])).toEqual([252000301]);
+        expect(passedDoors(raid, [m(32300, 38300)])).toEqual([252000301, 252000302]);
+        expect(passedDoors(raid, [m(33500, 38300, false)])).toEqual([]);
+        // The unit at rank 2 with no chat of the gate breaking, one of us inside: on to the courtyard (rank 3).
+        const members = [...Array.from({ length: 5 }, (_, i) => ({ id: 100 + i, x: 34600, y: 38200 + i * 20, z: 3722, alive: true })), { id: 106, x: 33777, y: 37900, z: 3720, alive: true }];
+        const o = raidOrders(raid, { members, seen: [], owner: 'midgard', staged: true, broken: [] });
+        expect(o.melee.step?.label).not.toBe('gate');
+    });
+});

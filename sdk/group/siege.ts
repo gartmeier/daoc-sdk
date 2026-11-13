@@ -102,6 +102,11 @@ export interface SiegeDoor {
     kind: 'gate' | 'door' | 'postern';
     /** The door table's heading: its front, where the heading points, is the inside (sdk/doors.ts doorFront). */
     heading: number;
+    /**
+     * Where a raider can stand only once this door is passed (no other way in on the island): a circle round the keep for its
+     * gate (the courtyard, the walls, the building), a box for the building's door. A living raider there proves it broken.
+     */
+    behind?: { centre: Point; r: number } | { box: [number, number, number, number] };
 }
 
 export const LORD_REACH = 400;
@@ -190,8 +195,10 @@ export const FASTE: SiegeLayout = {
     lordName: /\bThidranki$/,
     // The door table (2026-11-13): 301 the gate, 302 the building's door, 303-306 the building's posterns at wall-walk height.
     doors: [
-        { id: 252000301, at: { x: 34333, y: 38275, z: 3720 }, kind: 'gate', heading: 1024 },
-        { id: 252000302, at: { x: 32654, y: 38180, z: 3720 }, kind: 'door', heading: 1030 },
+        // Behind the gate: within 950 of the keep's centre (the outer wall runs 900-1100 out, the gate is 1245 east of it); behind
+        // the building's door: the building, x 31830-32640 (its door at 32654), y 37950-38600.
+        { id: 252000301, at: { x: 34333, y: 38275, z: 3720 }, kind: 'gate', heading: 1024, behind: { centre: { x: 33089, y: 38271 }, r: 950 } },
+        { id: 252000302, at: { x: 32654, y: 38180, z: 3720 }, kind: 'door', heading: 1030, behind: { box: [31830, 37950, 32640, 38600] } },
         { id: 252000303, at: { x: 32323, y: 37845, z: 3975 }, kind: 'postern', heading: 4079 },
         { id: 252000304, at: { x: 32311, y: 38669, z: 3976 }, kind: 'postern', heading: 2058 },
         { id: 252000305, at: { x: 32315, y: 37950, z: 3952 }, kind: 'postern', heading: 2058 },
@@ -538,7 +545,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const near = (list: SiegeSeen[]) => list.slice().sort((a, b) => Math.hypot(a.x - centre.x, a.y - centre.y) - Math.hypot(b.x - centre.x, b.y - centre.y))[0];
 
     const done = new Set(view.done ?? []);
-    const broken = new Set(view.broken ?? []);
+    // A door some living one of us stands behind is passed, whether or not a member read it break (each unit learns that only from
+    // its own members' chat: live 18:48, hibernia sat at rank 2 "melee on the gate" with the user and bots already past it).
+    const broken = new Set([...(view.broken ?? []), ...passedDoors(plan, view.members)]);
     // A door broken is the raid past every rank before it: a guard of those respawning at its post (5-25 min) doesn't send the
     // raid back (live 14:33, hibernia back to rank 1 with the gate down). One that comes at us is still the focus (onUs, offPost).
     const passed = Math.max(0, ...plan.targets.filter(t => t.kind === 'door' && t.doorId !== undefined && broken.has(t.doorId)).map(t => t.rank));
@@ -1040,4 +1049,17 @@ export function wallSight(regionId: number, p: Point3, ours = false): string[] {
         .map(t => t.label);
     sightCache.set(key, out);
     return out;
+}
+
+/**
+ * Doors a living member stands behind (SiegeDoor.behind): passed, so broken (or ours). On the island there is no other way into
+ * the courtyard or the building, and our walks treat a shut door as a wall. For a raid's own broken list, beside its chat.
+ */
+export function passedDoors(plan: Pick<RaidPlan, 'keep'>, members: readonly RaidMember[]): number[] {
+    const layout = SIEGE_LAYOUTS[plan.keep];
+    if (!layout) return [];
+    const inside = (b: NonNullable<SiegeDoor['behind']>, p: Point) => 'box' in b
+        ? p.x >= b.box[0] && p.y >= b.box[1] && p.x <= b.box[2] && p.y <= b.box[3]
+        : Math.hypot(p.x - b.centre.x, p.y - b.centre.y) <= b.r;
+    return layout.doors.filter(d => d.behind && members.some(m => m.alive && inside(d.behind!, m))).map(d => d.id);
 }
