@@ -8,7 +8,7 @@
 import { defenceSettings, holdDefenceStand, type DefenceSettings } from '../defence';
 import type { PlayerRealm } from '../keeps';
 import type { Behavior } from '../member';
-import { defenceOrders, defencePlan, type DefenceJob } from '../siege';
+import { defenceOrders, defencePlan, inDefenceReach, type DefenceJob } from '../siege';
 import type { GroupStrategy } from '../strategy';
 import type { Contact, MemberReport, Role } from '../types';
 import { answering, type RealmCall } from './help';
@@ -44,7 +44,7 @@ export function memberJobs(m: Pick<MemberReport, 'role' | 'capabilities'>): Defe
 export function defendPatch(mem: Record<string, any>, realm: PlayerRealm, members: readonly MemberReport[], contacts: readonly Contact[]): DefenceSettings | null {
     const plan = defencePlan(realm);
     if (!plan) return null;
-    const near = (p: { x: number; y: number }) => Math.hypot(p.x - plan.lord.x, p.y - plan.lord.y) <= ATTACK_RADIUS;
+    const near = (p: { x: number; y: number }) => Math.hypot(p.x - plan.centre.x, p.y - plan.centre.y) <= ATTACK_RADIUS;
     const foes = contacts.filter(c => !c.stale && c.hp > 0 && c.realm !== realm && (c.kind === 'player' || c.isPet) && !c.keepGuard && near(c)).map(c => ({ x: c.x, y: c.y, z: c.z }));
     const here = members.filter(m => m.regionId === plan.regionId);
     const defenders = here.map(m => ({ id: m.objectId, x: m.x, y: m.y, z: m.z, alive: !m.isDead, jobs: memberJobs(m) }));
@@ -56,6 +56,16 @@ export function defendPatch(mem: Record<string, any>, realm: PlayerRealm, member
     mem.defencePatch = patch;
     mem.defenceWhy = o.why;
     return patch;
+}
+
+/**
+ * While defending, the enemies the group fights: only those within the keep's reach (siege.ts inDefenceReach, 1450 from its
+ * centre: the walls, the courtyard, the gate's outside stand). S2's rehearsal (throwaway, 2026-11-13): with any enemy in
+ * engage range, the Armsman walked out to the stage, 3200 off, and fought two gate-breakers there. Null without a plan.
+ */
+export function defenceReachOf(realm: PlayerRealm): ((c: { x: number; y: number }) => boolean) | null {
+    const plan = defencePlan(realm);
+    return plan ? c => inDefenceReach(plan, c) : null;
 }
 
 /** `base` with the defence patch on top: the same object while neither changes (members rebuild their settings on a new one). */

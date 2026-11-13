@@ -60,4 +60,17 @@ describe('the defence call, the units\' side (S3, 2026-11-13)', () => {
         expect(decideRvr(ctx(picture(five(), seven), {})).reason).toMatch(/^(fall back|hunt|wait ashore)/);
         expect(withDefenceStand([]).map(b => b.name)).toEqual(['defence-stand']);
     });
+
+    test('defending, the group fights only enemies within the keep reach: not two gate-breakers out at the stage (S2 rehearsal)', () => {
+        const { strategy } = realmCalls(rvrRoaming as any, 'camelot', { calls: () => [defend], answer: () => {} });
+        const ctx = (p: GroupPicture, memory: Record<string, any>): CoordinatorContext<RvrSettings> =>
+            ({ picture: p, orders: p.orders, memory, now: p.at, windingDown: false, settings: mergeSettings(RVR_SETTINGS, {} as any) });
+        const inside = five(33600, 38300);
+        const at = (id: number, x: number, y: number) => contact(id, { kind: 'player', realm: 'midgard', name: 'Norseman', level: 24, regionId: TH, x, y, z: 3300, hp: 100 });
+        const memory: Record<string, any> = {};
+        strategy.decide(ctx(picture(inside), memory));
+        expect(strategy.decide(ctx(picture(inside, [at(601, 36300, 38300), at(602, 36350, 38300)]), memory)).phase).not.toBe('engage');
+        const o = strategy.decide(ctx(picture(inside, [at(603, 34300, 38275)]), memory));
+        expect(o).toMatchObject({ phase: 'engage', focus: 603 });
+    });
 });

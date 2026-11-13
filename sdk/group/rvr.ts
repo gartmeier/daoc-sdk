@@ -47,7 +47,7 @@ import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
 import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, noteArrival, roamGoal, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
 import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
-import { defendCall, defendPatch, overDefence, withDefence } from './tactics/defend';
+import { defenceReachOf, defendCall, defendPatch, overDefence, withDefence } from './tactics/defend';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { loiter, waveOrder, waveWatch, type RealmWave } from './waves';
@@ -656,6 +656,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const toward = helper ? `toward ${helper.unit} coming to help` : 'toward our portal keep';
     // Defending our keep (tactics/defend.ts): no retreat and no hunt; each member holds its stand.
     const defending = !!defendCall(mem);
+    const defenceReach = defending && realm !== 'none' ? defenceReachOf(realm as PlayerRealm) : null;
     const outnumbered = (n: number) => s.retreat.enabled && !defending && n >= main.length + allies + margin;
     const withAllies = allies ? ` + ${allies} of ours` : '';
     const counted = (big: readonly Contact[], all: readonly Contact[]) => (big.length === all.length ? enemiesText(all.length) : `${big.length} of ${enemiesText(all.length)}`);
@@ -687,6 +688,8 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const swimming = (c: Contact) => dry && isWet(regionId, c);
     const inFight = (c: Contact) => {
         if (c.stale || !isAlive(c) || c.regionId !== regionId) return false;
+        // Defending our keep: only those within its reach (walls, courtyard, the gate's outside); never out after them.
+        if (defenceReach && !defenceReach(c)) return false;
         const near = dist(c, centre) <= s.engageRadius + (c.threat || c.objectId === o.focus ? FOCUS_SLACK : 0);
         if (onUs(c)) return inMain.has(onWhom(c)!) || near;
         if (c.isPet && c.threat) return near;
