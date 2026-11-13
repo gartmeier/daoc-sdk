@@ -388,7 +388,11 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
 
     const toStage = Math.hypot(centre.x - plan.stage.x, centre.y - plan.stage.y);
     const keep = planKeep(plan);
-    if (!view.staged) {
+    // Staged holds while the body is about the keep: one that fell back (a wipe, a regroup at the rally, live 02:46) walks
+    // the route again, never the straight line from home to the rank's stand.
+    const stageFromKeep = keep ? Math.hypot(plan.stage.x - keep.x, plan.stage.y - keep.y) : 0;
+    const staged = !!view.staged && (!keep || Math.hypot(centre.x - keep.x, centre.y - keep.y) <= stageFromKeep + STAGE_NEAR);
+    if (!staged) {
         const alive = view.members.filter(m => m.alive);
         const there = alive.filter(m => Math.hypot(m.x - plan.stage.x, m.y - plan.stage.y) <= STAGE_NEAR).length;
         // Nobody there yet and the body not past the stage: walk on (each member by routeFrom from itself).

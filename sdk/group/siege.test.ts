@@ -173,6 +173,14 @@ describe('raidOrders', () => {
         for (const label of ['outer-armswoman', 'gate', 'wall-e-n']) expect(pastStage(plan, keep, FASTE.targets.find(x => x.label === label)!.stand)).toBe(true);
     });
 
+    test('staged holds about the keep only: a body back at the rally walks the route again (live 02:46)', () => {
+        expect(raidOrders(plan, view({ members: at(plan.rally, 8), staged: true })).phase).toBe('approach');
+        expect(raidOrders(plan, view({ members: at(plan.rally, 8), staged: true })).stand).toEqual(plan.route[0]!);
+        // Fighting rank 1 at its stand, still staged.
+        const r1 = FASTE.targets.find(x => x.label === 'outer-armswoman')!.stand;
+        expect(raidOrders(plan, view({ members: at(r1, 8), staged: true })).phase).toBe('assault');
+    });
+
     test('seeing no guard at all is no news: posts near us still stand (live 02:39)', () => {
         const members = at(plan.stage, 10);
         const o = raidOrders(plan, view({ members, seen: [], staged: true }));
