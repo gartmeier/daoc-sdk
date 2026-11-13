@@ -110,8 +110,9 @@ export const standOutOfSight = (): Behavior<TacticsSettings> => ({
         if (!spot) return ctx.skip('stand: no cover in reach of the group');
         ctx.memory.set('standAt', Date.now());
         ctx.doing('move', null, `out of sight (${spot.seen} of ${foes.length} see the spot)`);
-        const w = await ctx.bot.walkTo(spot.x, spot.y, { z: spot.z, tolerance: 40, timeout: 3000 });
-        ctx.result('stand', w.success ? { success: true, message: `${spot.seen} of ${foes.length} see it` } : w);
+        // A route round a wall corner can be longer than the step: a timeout is a step part of the way, and the next turn looks again.
+        const w = await ctx.bot.walkTo(spot.x, spot.y, { z: spot.z, tolerance: 40, timeout: 3500 });
+        ctx.result('stand', w.success || w.reason === 'timeout' ? { success: true, message: `${spot.seen} of ${foes.length} see it${w.success ? '' : ' (part way)'}` } : w);
         return true;
     },
 });
