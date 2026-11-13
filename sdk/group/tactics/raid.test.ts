@@ -97,6 +97,26 @@ describe('raid: the orders, step by step', () => {
         expect(mem.raid.broken).toEqual([252000301]);
         expect((update.settings as any).raidDoor).toBeNull();
     });
+
+    test('the melee\'s own focus: none on a rank of wall casters (they hold), the door\'s at the gate, the same on a fighter', () => {
+        const outer = FASTE.targets.find(t => t.label === 'outer-armswoman')!;
+        const wall = FASTE.targets.find(t => t.label === 'wall-e-n')!;
+        // Rank 1, a fighter for all: one focus.
+        const a = step(five(plan.stage), [guard(301, outer.at)]);
+        expect(a.update).toMatchObject({ focus: 301, meleeFocus: undefined });
+        // Rank 2 with the gate standing: the wall caster is the ranged half's, the melee are breakDoor's (no "hold").
+        const b = step(five({ x: 35_500, y: 38_250, z: 3570 }), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem);
+        expect(b.update).toMatchObject({ phase: 'engage', focus: 302, meleeFocus: null });
+        expect(b.update.reason).not.toContain('melee hold');
+        // The gate broken, the walls left: no step for the melee, they hold (live 08:36 they climbed to wall-se).
+        const members = five({ x: 34_420, y: 38_275, z: 3720 });
+        members[1] = { ...members[1]!, doorsBroken: [252000301] };
+        const c = step(members, [guard(302, wall.at, { name: 'Sorcerer' })], { raid: { callId: 'x', staged: true, broken: [] as number[] } });
+        expect(c.update).toMatchObject({ phase: 'engage', focus: 302, meleeFocus: null });
+        expect(c.update.reason).toContain('melee hold');
+        // Travelling: no meleeFocus named, so the board drops it.
+        expect('meleeFocus' in step(five(plan.rally)).update).toBe(false);
+    });
 });
 
 describe('raid: decideRvr at the muster\'s go', () => {

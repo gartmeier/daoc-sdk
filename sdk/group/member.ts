@@ -18,6 +18,7 @@ import { abortable, executionContext } from '../execution-context';
 import { fighting, inFightVision, resolveVision, type NoticeClock, type VisionMode, type VisionOptions } from '../vision';
 import { type Blackboard, observeState, SHADE_REFUSED, steppedInFront, UNATTACKABLE_MS } from './blackboard';
 import type { Character } from './character';
+import { ordersForRole } from './melee-focus';
 import { petOrderedOn, petsAllowed } from './pets';
 import { abSlot, checkSkillSetting, describeSkill, fightAttention, HEAL_BEHAVIOR, resolveSkill, SkillLens, type SkillSetting } from './skill';
 import { Spellbook } from './spells';
@@ -150,8 +151,8 @@ export class MemberContext<S = any> {
     me(): PlayerState { return this.sdk.getPlayer()!; }
     /** The group's picture as this member takes it in: with a skill (skill.ts), only the contacts it has reacted to, and its own focus. */
     picture(): GroupPicture { return this.agent.skilled ? this.agent.seen().picture : this.agent.board.picture(); }
-    /** The coordinator's orders as this member acts on them: with a skill, the focus it has switched to so far. */
-    orders(): Orders { return this.agent.skilled ? this.agent.seen(true).orders : this.agent.board.getOrders(); }
+    /** The coordinator's orders as this member acts on them: as its role reads them (a tank's or melee's own focus, melee-focus.ts), and with a skill the focus it has switched to so far. */
+    orders(): Orders { return this.agent.skilled ? this.agent.seen(true).orders : ordersForRole(this.agent.board.getOrders(), this.role); }
     members(): MemberReport[] { return this.picture().members; }
     member(name: string): MemberReport | undefined { return this.members().find(m => m.name === name); }
     /** The living tank, if the group has one. */
@@ -308,7 +309,7 @@ export class MemberAgent<S = any> {
         this.unsubscribe.push(member.sdk.onStateUpdate(() => this.publish()));
         this.unsubscribe.push(board.onOrders((next, prev) => {
             if (this.skilled) this.lookAgain();
-            else if (this.affected(next, prev)) this.interrupt(`orders: ${next.phase}`);
+            else if (this.affected(ordersForRole(next, this.member.role), ordersForRole(prev, this.member.role))) this.interrupt(`orders: ${next.phase}`);
         }));
         // With stayDry (RvR and the pack have it, PvE has none), no fight move of ours ends in the river: casts from the bank
         // (water.ts dryMoveGuard). Only while pulling or engaged: travel, recovery and retreat legs cross rivers and must not
@@ -338,7 +339,7 @@ export class MemberAgent<S = any> {
         if (forOrders && this.seenCache && now - this.seenCache.at < SKILL_PICTURE_MS) picture = this.seenCache.picture;
         else this.seenCache = { at: now, picture: picture = this.board.picture(now) };
         const target = this.member.sdk.getPlayer()?.targetObjectId;
-        return this.lens!.view(picture, this.board.getOrders(), now, target ? new Set([target]) : undefined);
+        return this.lens!.view(picture, ordersForRole(this.board.getOrders(), this.member.role), now, target ? new Set([target]) : undefined);
     }
 
     /** With a skill: an orders change as the member sees it interrupts as a board change does without. */

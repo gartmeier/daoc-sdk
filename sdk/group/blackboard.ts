@@ -521,7 +521,7 @@ const ccKey = (o: Orders) => o.cc.map(c => `${c.targetId}:${c.by}`).sort().join(
 
 /** Orders changed in a way that should interrupt what members are doing. */
 export function isMaterialChange(a: Orders, b: Orders): boolean {
-    return a.phase !== b.phase || a.focus !== b.focus || a.puller !== b.puller || ccKey(a) !== ccKey(b)
+    return a.phase !== b.phase || a.focus !== b.focus || a.meleeFocus !== b.meleeFocus || a.puller !== b.puller || ccKey(a) !== ccKey(b)
         || moved(a.retreatTo, b.retreatTo, 300) || moved(a.anchor, b.anchor, 300) || (a.column?.driver ?? null) !== (b.column?.driver ?? null);
 }
 
@@ -1005,6 +1005,8 @@ export class Blackboard {
     setOrders(update: OrdersUpdate, now = Date.now()): boolean {
         const prev = this.orders;
         const next: Orders = { ...prev, ...update, seq: prev.seq, issuedAt: prev.issuedAt };
+        // The melee's own focus lasts one decide: one that doesn't name it (the raid over, a fight with players) drops it.
+        if (!('meleeFocus' in update)) delete next.meleeFocus;
         const material = isMaterialChange(prev, next);
         if (material) {
             next.seq = prev.seq + 1;

@@ -139,8 +139,15 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
         return { orders: ro, update: { phase: 'travel', focus: null, anchor: { x: next.x, y: next.y, z: next.z }, facing: { x: plan.stage.x, y: plan.stage.y }, settings, objective, reason: `${reason}, next ${at(next)}` } };
     }
     if (ro.phase === 'taken') return { orders: ro, update: { phase: 'recover', focus: null, anchor: ro.stand, settings, objective, reason } };
-    const focus = [ro.ranged.focus, ro.melee.focus].find(f => f && f.kind === 'npc') ?? null;
-    if (focus) return { orders: ro, update: { phase: 'engage', focus: focus.id, anchor: ro.stand, facing: { x: focus.x, y: focus.y }, settings, objective, reason } };
+    // The ranged half's focus is the unit's; the melee get their own (Orders.meleeFocus): a door is breakDoor's, and a caster
+    // on a wall or the roof they can't reach is the ranged half's alone (live 08:36: midgard-2's melee climbed to wall-se).
+    const npc = (f: SiegeSeen | null) => (f && f.kind === 'npc' ? f : null);
+    const melee = npc(ro.melee.focus);
+    const focus = npc(ro.ranged.focus) ?? melee;
+    if (focus) {
+        const meleeFocus = melee?.id ?? null;
+        return { orders: ro, update: { phase: 'engage', focus: focus.id, meleeFocus: meleeFocus === focus.id ? undefined : meleeFocus, anchor: ro.stand, facing: { x: focus.x, y: focus.y }, settings, objective, reason: `${reason}${meleeFocus === null && !door ? '; melee hold' : ''}` } };
+    }
     return { orders: ro, update: { phase: 'recover', focus: null, anchor: ro.stand, settings, objective, reason: `${reason}, nothing to hit in view` } };
 }
 

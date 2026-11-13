@@ -283,6 +283,13 @@ export interface Orders {
     facing: Point | null;
     /** Primary target everyone assists on. */
     focus: number | null;
+    /**
+     * The tanks' and melee's focus when it isn't `focus` (melee-focus.ts: MemberContext.orders() gives it to them as their
+     * focus). A raid sets it: a caster on a keep wall or the roof is the ranged half's, never the melee's without a route to
+     * it (tactics/raid.ts). null: none, they hold at the anchor. Absent: the same as focus. It lasts one decide: an update
+     * that doesn't name it drops it (Blackboard.setOrders).
+     */
+    meleeFocus?: number | null;
     /** Who brings the focus to the anchor. */
     puller: string | null;
     /** Crowd-control assignments. */
