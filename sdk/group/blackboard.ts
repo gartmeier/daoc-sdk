@@ -576,6 +576,9 @@ const PET_HIT_LATELY_MS = 2000;
  */
 type InternalContact = Contact & { engaged: boolean; hit: boolean; petHitAt: number; ccSince: number; ccAt: Point | null; ccRuns?: Partial<Record<CcKind, NpcCcRun>>; lastHostile: number; deathEchoUntil: number; petKillerUntil: number; petKillerOf: { owner: string; at: number } | null };
 
+/** An observed member's death counts only after it read alive this long without a break (observedDeaths). */
+export const OBSERVED_ALIVE_MS = 5000;
+
 export class Blackboard {
     private readonly reports = new Map<string, MemberReport>();
     private readonly contacts = new Map<string, InternalContact>();
@@ -609,6 +612,8 @@ export class Blackboard {
     private readonly observed: ObservedMembers;
     /** Which of them read dead in the last picture of them, for their 'death' event. */
     private readonly observedDead = new Map<string, boolean>();
+    /** Since when each observed member has read alive without a break: a death counts only after OBSERVED_ALIVE_MS of it. */
+    private readonly observedAliveSince = new Map<string, number>();
 
     constructor(options: BlackboardOptions = {}) {
         this.staleAfterMs = options.staleAfterMs ?? 5000;
@@ -645,7 +650,14 @@ export class Blackboard {
     /** An observed member's death, from its window: a 'death' event like a bot's, its killer unknown. */
     private observedDeaths(now: number): void {
         for (const m of this.observed.reports(now)) {
-            if (this.observedDead.get(m.name) === false && m.isDead) this.emit({ at: now, kind: 'death', member: m.name, text: `${m.name} died`, data: { killer: null } });
+            // Members' windows can disagree for a moment (one already reads the corpse, another not yet), so a dead human
+            // flickered alive and dead: one death read 20 times in 6 s, and field.ts rotated the unit for "20 deaths"
+            // (hibernia, 2026-11-13 16:26:45 UTC). A death counts only after it read alive OBSERVED_ALIVE_MS without a break.
+            if (m.isDead) {
+                const since = this.observedAliveSince.get(m.name);
+                if (this.observedDead.get(m.name) === false && since !== undefined && now - since >= OBSERVED_ALIVE_MS) this.emit({ at: now, kind: 'death', member: m.name, text: `${m.name} died`, data: { killer: null } });
+                this.observedAliveSince.delete(m.name);
+            } else if (!this.observedAliveSince.has(m.name)) this.observedAliveSince.set(m.name, now);
             this.observedDead.set(m.name, m.isDead);
         }
     }

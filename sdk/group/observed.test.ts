@@ -152,9 +152,27 @@ describe('Blackboard: the observed member on the picture', () => {
 
     test('its death is a death event, like a bot\'s', () => {
         const board = new Blackboard({ observed: [{ name: 'Vue' }] });
-        board.publish(seenBy('Tank', [mate()]));
-        board.publish(seenBy('Tank', [mate({ isDead: true, hp: 0 })]));
+        const t0 = Date.now();
+        board.publish(seenBy('Tank', [mate()]), t0);
+        board.publish(seenBy('Tank', [mate({ isDead: true, hp: 0 })]), t0 + 6000);
         expect(board.events().filter(e => e.kind === 'death').map(e => e.member)).toEqual(['Vue']);
+    });
+
+    test('one death read by windows that disagree is one death (live: 20 in 6 s rotated the unit)', () => {
+        const board = new Blackboard({ observed: [{ name: 'Vue' }] });
+        const t0 = Date.now();
+        board.publish(seenBy('Tank', [mate()]), t0);
+        board.publish(seenBy('Tank', [mate({ isDead: true, hp: 0 })]), t0 + 6000);
+        for (let i = 1; i <= 10; i++) {
+            board.publish(seenBy('Druid', [mate()]), t0 + 6000 + i * 300);
+            board.publish(seenBy('Tank', [mate({ isDead: true, hp: 0 })]), t0 + 6150 + i * 300);
+        }
+        expect(board.events().filter(e => e.kind === 'death')).toHaveLength(1);
+        // Rezzed and alive a while, then dead again: a second death.
+        board.publish(seenBy('Tank', [mate()]), t0 + 20_000);
+        board.publish(seenBy('Tank', [mate()]), t0 + 26_000);
+        board.publish(seenBy('Tank', [mate({ isDead: true, hp: 0 })]), t0 + 27_000);
+        expect(board.events().filter(e => e.kind === 'death')).toHaveLength(2);
     });
 
     test('effects: the concentration buffs bots hold on it, until the holder lets go', () => {
