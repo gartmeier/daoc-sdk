@@ -2189,6 +2189,10 @@ export const holdFormation = (): Behavior<TacticsSettings> => ({
         // the leash): the others' fight behaviours place them.
         const fromAnchor = dist(me, o.anchor);
         if (o.phase === 'engage' && fromAnchor < fightRejoin(ctx.role, ctx.settings.chaseLeash)) return false;
+        // A buff stop (rvr.ts BUFF_STOP_SETTINGS, buffStop its radius): within it nobody walks to a slot, buffs go first (the user, 19:3x:
+        // "it looks like formation is more important than finishing buffing right now"); farther, to the tight slot.
+        const stand = (ctx.settings as { buffStop?: unknown }).buffStop;
+        if (typeof stand === 'number' && o.phase !== 'engage' && fromAnchor <= stand) return false;
         const slot = formationSlot(ctx, o.anchor, o.facing);
         // Travelling on (the leg's anchor says where to next): past the slot that way, so the walk doesn't brake at the
         // slot before the next leg comes, and a new leg re-aims it without braking (travel.ts). The trip's last leg: the slot.

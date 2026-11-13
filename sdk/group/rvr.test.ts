@@ -1491,6 +1491,22 @@ describe('decideRvr: buffed before leaving home, never a fight with our own real
         expect(homeBuffHold({ recoverSince: 0 }, owed, owed, field, home, 61_000, true)).toBeNull();
         expect(homeBuffHold({ recoverSince: 0 }, owed, owed, field, home, 30_000, false)).toBeNull();
     });
+    test('the buff stop: one spot, everyone tight round it (BUFF_STOP_SETTINGS), cleared after (the user at 19:32: "meet in a small radius")', () => {
+        const owed = buffer(team());
+        const mem: Record<string, any> = { recoverSince: 0 };
+        const first = decideRvr(ctx(picture(owed), { orders: { phase: 'recover', anchor: { x: 10_000, y: 10_000, z: 0 } }, memory: mem, now: 1000 }));
+        expect(first.reason).toMatch(/^buff up before going on/);
+        expect((first.settings as any)?.buffStop).toBe(300);
+        expect(first.reason).toContain('on the way to the spot');
+        // The spot stays put while the stop lasts, wherever the last anchor was.
+        const again = decideRvr(ctx(picture(owed), { orders: { phase: 'recover', anchor: { x: 11_000, y: 10_000, z: 0 }, settings: first.settings as any }, memory: mem, now: 2000 }));
+        expect(again.anchor).toEqual(first.anchor);
+        expect(again.settings).toBe(first.settings);
+        // Buffed: the stop's settings go.
+        const done = decideRvr(ctx(picture(team()), { orders: { phase: 'recover', anchor: first.anchor, settings: first.settings as any }, memory: mem, now: 3000 }));
+        expect(done.settings).toBeNull();
+        expect(mem.buffSpot).toBeUndefined();
+    });
     test('a monster of our realm (an observed member\'s charmed pet) is never a focus', () => {
         const pet = contact(80, { kind: 'npc', name: 'perturbed bwca', realm: 'hibernia', level: 23, regionId: R, x: 10_300, y: 10_000, threat: true, target: 'Tank' } as any);
         expect(decideRvr(ctx(picture(team(), [pet]))).focus ?? null).toBeNull();

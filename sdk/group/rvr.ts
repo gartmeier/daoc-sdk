@@ -638,7 +638,31 @@ export function homeBuffHold(mem: Record<string, any>, members: readonly MemberR
     return `buff up before ${atHome ? 'leaving' : 'going on'}: ${casting.length} casting${owed.length ? `, ${owed.length} buff${owed.length === 1 ? '' : 's'} to go (${owed.slice(0, 2).join(', ')})` : ''}, ${left} s at most`;
 }
 
+/**
+ * Every member's settings during a buff stop (homeBuffHold), as Orders.settings (the user, playing Niamh at 19:32: "You could meet in
+ * a small radius outside, buff everyone, done, stick, and go"): everyone within about 250 of the one spot, walking back from 120 off
+ * (slotSlack, gatherRadius 0), and a buffer casts only on those already in its spell's range, so nobody walks after a buff.
+ * buffStop is the stand's radius: within it a member stands where it is, no slot (holdFormation), so its buffs come first (the
+ * user: "it looks like formation is more important than finishing buffing right now").
+ * The decide after the stop clears it (decideRvr). The same object while it lasts: members rebuild their settings on a new one.
+ */
+export const BUFF_STOP_SETTINGS: Readonly<Record<string, unknown>> = Object.freeze({
+    buffStop: 300,
+    slotSlack: 100,
+    gatherRadius: 0,
+    formation: { tank: { back: 0, angle: 0 }, healer: { back: 160, angle: 0.7 }, support: { back: 160, angle: -0.7 }, nuker: { back: 230, angle: 0.3 }, melee: { back: 110, angle: 1.2 } },
+});
+/** A member farther than this from the buff stop's spot is still on its way there (the reason says how many). */
+export const BUFF_STOP_RADIUS = BUFF_STOP_SETTINGS.buffStop as number;
+
 export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
+    const out = decideRvrOnce(ctx);
+    // The buff stop's settings end with it: a decide that sets none clears them.
+    if (out.settings === undefined && (ctx.orders.settings as { buffStop?: unknown } | null | undefined)?.buffStop) return { ...out, settings: null };
+    return out;
+}
+
+function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const { orders: o, memory: mem, settings: s, now } = ctx;
     // A shade's servant is that Necromancer here: counted, sized up and focused as the player (shadeBodies).
     const p = { ...ctx.picture, contacts: shadeBodies(ctx.picture.contacts) };
@@ -892,10 +916,17 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // keep, while a buff of ours is still owed to a member (observed ones included) or one is being cast, rest and buff there before any
     // way out (hunt, wave, gather, call, muster, raid, patrol), at most HOME_BUFF_MAX_MS from arriving. Fights (above) come first. ──
     // A rest in the field holds the same way (REST_BUFF_MAX_MS from its start): the last orders were a recover.
+    // One spot for the whole stop (memory.buffSpot, from its first tick), everyone close round it standing still (BUFF_STOP_SETTINGS):
+    // at 19:32 hibernia buffed spread over 1800, the buffers walking to their targets (the user: "meet in a small radius ... buff everyone, done, stick, and go").
     if (o.phase === 'recover') mem.recoverSince ??= now;
-    else mem.recoverSince = undefined;
+    else { mem.recoverSince = undefined; mem.buffSpot = undefined; }
     const homeHold = homeBuffHold(mem, p.members, here, centre, homeAt, now, o.phase === 'recover');
-    if (homeHold) return { ...calm, phase: 'recover', anchor: restAt().at, waiting: low, objective: `buff up${gone}`, reason: homeHold };
+    if (!homeHold) mem.buffSpot = undefined;
+    if (homeHold) {
+        const spot: Point3 = mem.buffSpot ??= restAt().at;
+        const coming = here.filter(m => dist(m, spot) > BUFF_STOP_RADIUS).length;
+        return { ...calm, phase: 'recover', anchor: spot, settings: BUFF_STOP_SETTINGS, waiting: low, objective: `buff up${gone}`, reason: `${homeHold}${coming ? `; ${coming} on the way to the spot` : ''}` };
+    }
 
     // ── Hunting: enemy players in sight beyond engageRadius. Too many: fall back (toward home unless they stand that way) ──
     // Raiding: no hunt and no fall-back for those in sight; one that comes within RAID_FOE_REACH is fought (inFight).
