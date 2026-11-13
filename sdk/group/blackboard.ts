@@ -975,7 +975,8 @@ export class Blackboard {
         const guards = !!this.orders.settings?.raid;
         for (const [key, c] of this.contacts) {
             if (now - c.lastSeen > this.forgetAfterMs) { this.forget(key, c); continue; }
-            if (c.keepGuard && !guards) continue;
+            // ... or while one is on one of ours (a guard come out after us): rvr.ts fights a lone one outside the walls.
+            if (c.keepGuard && !guards && !c.target && !c.targetPet) continue;
             if (c.cc && c.cc.until <= now) c.cc = null;
             for (const k of Object.keys(c.ccImmune ?? {}) as CcKind[]) if (c.ccImmune![k]! <= now) delete c.ccImmune![k];
             if (c.unattackableUntil !== undefined && c.unattackableUntil <= now) delete c.unattackableUntil;

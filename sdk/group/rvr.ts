@@ -596,6 +596,22 @@ export function rvrPhantom(mem: Record<string, any>, contacts: readonly Contact[
     else if (now - f.since >= RVR_FROZEN_MS) { mem.rvrPhantoms[focus.objectId] = now + RVR_PHANTOM_MS; mem.rvrFrozen = undefined; }
 }
 
+/** Another guard this near makes a guard no lone add. */
+const GUARD_PAIR = 1500;
+/** Within this of a keep's centre a guard is at its post inside the walls. */
+const GUARD_WALLS = 1300;
+
+/**
+ * A keep guard we fight as an add: on one of ours (its target or pet target), alive and fresh, outside every keep's walls, with
+ * no other guard within GUARD_PAIR of it. Anything else of a keep stays the raid's, or a place to move off from.
+ */
+export function loneGuard(c: Contact, all: readonly Contact[]): boolean {
+    if (!c.keepGuard || c.stale || !isAlive(c) || (!c.target && !c.targetPet)) return false;
+    const keeps = BATTLEGROUND_LAYOUTS[c.regionId]?.keeps ?? [];
+    if (keeps.some(k => Math.hypot(c.x - k.x, c.y - k.y) <= GUARD_WALLS)) return false;
+    return !all.some(o => o !== c && o.keepGuard && !o.stale && isAlive(o) && Math.hypot(o.x - c.x, o.y - c.y) <= GUARD_PAIR);
+}
+
 export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     const { orders: o, memory: mem, settings: s, now } = ctx;
     // A shade's servant is that Necromancer here: counted, sized up and focused as the player (shadeBodies).
@@ -604,8 +620,10 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // A shade is nobody here: no focus, no cc, no enemy to count or hunt (AbstractServerRules.cs:449-455). Its servant counts as it (shadeBodies, above), and a focus that turns out to be a shade moves at once.
     // A focus whose health stands still that long is a phantom, left alone a while (rvrPhantom), as the pack does.
     rvrPhantom(mem, p.contacts, o.phase === 'engage' ? o.focus : null, now);
-    // Keep guards (on the board only while raiding, Contact.keepGuard) are the raid's alone: raidStep below.
-    const contacts = p.contacts.filter(c => !c.keepGuard && !untouchable(c, now) && !((mem.rvrPhantoms?.[c.objectId] ?? 0) > now));
+    // Keep guards (on the board while raiding, Contact.keepGuard) are the raid's: raidStep below. Not raiding, a lone guard on one of
+    // ours outside the walls is an add we fight (loneGuard): the user, playing Niamh at 17:08, fought a Huscarl at 46 % 2344 from the
+    // Faste while hibernia "moved off" from "something unseen".
+    const contacts = p.contacts.filter(c => (!c.keepGuard || (!mem.raid && loneGuard(c, p.contacts))) && !untouchable(c, now) && !((mem.rvrPhantoms?.[c.objectId] ?? 0) > now));
     const alive = p.members.filter(m => !m.isDead);
     if (!alive.length) return { phase: 'recover', focus: null, cc: [], puller: null, retreatTo: null, reason: 'everyone is dead: releasing' };
     const regionId = groupRegion(alive);
