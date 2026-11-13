@@ -766,9 +766,11 @@ export function meleeReach(regionId: number, from: Point3, to: Point3, doors: Do
     const key = `${layout.keep}|${doorKey}|${Math.round(from.x / 250)},${Math.round(from.y / 250)},${Math.round(from.z / 100)}|${Math.round(to.x / 50)},${Math.round(to.y / 50)},${Math.round(to.z / 50)}`;
     const known = reachCache.get(key);
     if (known !== undefined) return known;
-    const a = mesh.closestPoint(from, { x: 64, y: 64, z: 256 });
-    // No mesh under `from` (a raid's centre over the slope or the water): no route to say yes by. It answered yes before, and
-    // as the centre moved the raid flipped between the melee's climb and their hold every few seconds (live 18:03, the user).
+    // A raid's centre with members on several levels (the courtyard, the wall-walk, the stair) has its height between floors: look
+    // wider before giving up (live 19:07, albion-1 at the lord: "melee hold" on and off as the centre's height moved).
+    const a = mesh.closestPoint(from, { x: 64, y: 64, z: 256 }) ?? mesh.closestPoint(from, { x: 200, y: 200, z: 600 });
+    // Still no mesh near `from` (over the water): no route to say yes by. It answered yes before, and as the centre moved the raid
+    // flipped between the melee's climb and their hold every few seconds (live 18:03, the user).
     if (!a) { reachCache.set(key, false); return false; }
     const b = mesh.closestPoint(to, { x: 64, y: 64, z: 128 });
     let ok = false;

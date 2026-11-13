@@ -376,3 +376,12 @@ function defencePlanOf() {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     return require('./siege').raidPlan('midgard');
 }
+
+describe.skipIf(!meshReady)('meleeReach from a raid spread over the levels', () => {
+    test('a centre with its height between the courtyard and the wall-walk still finds the lord once both doors are broken', async () => {
+        const { meleeReach } = await import('./siege');
+        const lord = FASTE.targets.find(t => t.kind === 'lord')!.at;
+        expect(meleeReach(252, { x: 33300, y: 38500, z: 3850 }, lord, { broken: [252000301, 252000302], ours: false })).toBe(true);
+        expect(meleeReach(252, { x: 33300, y: 38500, z: 3850 }, lord, { broken: [252000301], ours: false })).toBe(false);
+    });
+});
