@@ -29,7 +29,7 @@ import { offRoadsOut, roadsOut } from './tactics/roads';
 import { withHasten } from './tactics/hasten';
 import { RAID_FOE_REACH, raidNow, underRaidKeep } from './tactics/raid';
 import { planBuffs } from './buffs';
-import { campFree, decideRvr, focusHealed, groupRegion, BANK_REACH, HUNT_KEEP, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { BUFF_STOP_RADIUS, BUFF_STOP_SETTINGS, campFree, decideRvr, focusHealed, groupRegion, BANK_REACH, HUNT_KEEP, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import { countFor, groupSize, type Count } from './size';
@@ -276,6 +276,13 @@ export function noticePhantom(mem: Record<string, any>, contacts: readonly Conta
 }
 
 export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
+    const out = decidePackOnce(ctx);
+    // A rebuff's buff-stop settings (BUFF_STOP_SETTINGS) end with it: a decide that sets none clears them, as decideRvr does.
+    if (out.settings === undefined && (ctx.orders.settings as { buffStop?: unknown } | null | undefined)?.buffStop) return { ...out, settings: null };
+    return out;
+}
+
+function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     const { orders: o, memory: mem, settings: s, now } = ctx;
     // A shade's servant is that Necromancer here: counted, sized up and focused as the player (shadeBodies).
     const p = { ...ctx.picture, contacts: shadeBodies(ctx.picture.contacts) };
@@ -290,6 +297,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     if (!mem.realm || mem.realm === 'none') mem.realm = realmOfGroup(p.members);
     const realm: Realm = mem.realm;
     const homeSpot = homeOf(regionId, realm)?.arrival ?? null;
+    const homeGather = homeOf(regionId, realm)?.gather ?? null;
     const here = alive.filter(m => m.regionId === regionId);
     const leader = here.find(m => m.role === 'tank') ?? here[0]!;
     const level = Math.min(...here.map(m => m.level));
@@ -345,6 +353,12 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         if (!off?.road) return { at: stay, why: '' };
         return { at: { x: off.x, y: off.y, z: zAt(off) }, why: `, off ${off.road.realm}'s road out of its portal keep (${Math.round(dist(centre, off))} away)` };
     })());
+    // One spot for the whole rebuff (memory.rebuffSpot, from its first tick), and everyone close round it standing still (BUFF_STOP_SETTINGS):
+    // at our portal keep outside its gate (homeOf gather), elsewhere where the pack rests. With rest().at, which follows the centre,
+    // and no stop settings, buffers walked to targets out of range and formation walked them back (the user, late on 2026-11-13: "They buff one
+    // person, move a little bit, then buff more and move a little bit ... It's like they're moving already in formation").
+    const rebuffSpot = (): Point3 => (mem.rebuffSpot ??= homeGather && homeSpot && dist(centre, homeSpot) <= k.keepRadius ? { ...homeGather } : rest().at);
+    const rebuffComing = (): string => { const n = here.filter(m => dist(m, rebuffSpot()) > BUFF_STOP_RADIUS).length; return n ? `; ${n} on the way to the spot` : ''; };
     const facing = free[0] ? { x: free[0].x, y: free[0].y } : undefined;
     // Released members at the keep stay put until the pack is within gatherRadius of them (they are in `main` then).
     // In a pair round nobody is picked up: those released walk out to the pack at its ring, which rests there for them (decideRvr).
@@ -453,6 +467,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     // A run that starts at the keep starts together and buffed.
     if (!mem.pack && homeSpot && dist(centre, homeSpot) <= k.keepRadius) { mem.pack = 'rebuff'; mem.rebuffAt = now; }
     mem.pack ??= 'stalk';
+    if (mem.pack !== 'rebuff') mem.rebuffSpot = undefined;
 
     if (mem.pack === 'bolt') {
         const chased = free.some(c => dist(c, centre) <= k.reach);
@@ -594,7 +609,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             const owed = now - mem.rebuffAt < REBUFF_MAX_MS ? missingBuffs() : [];
             if (now - mem.rebuffAt < k.rebuffMs || low.length || buffing.length || owed.length) {
                 const owes = owed.length ? `; ${owed.length} buff${owed.length === 1 ? '' : 's'} to go (${owed.slice(0, 2).join(', ')})` : '';
-                return say({ ...none, phase: 'recover', anchor: rest().at, waiting: low, objective: 'rebuff and rest together', reason: `rebuffing: ${buffing.length} casting, waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ') || 'the buffs to go round'}${owes}${rest().why}` });
+                return say({ ...none, phase: 'recover', anchor: rebuffSpot(), settings: BUFF_STOP_SETTINGS, waiting: low, objective: 'rebuff and rest together', reason: `rebuffing: ${buffing.length} casting, waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ') || 'the buffs to go round'}${owes}${rebuffComing()}${homeGather && dist(rebuffSpot(), homeGather) < 1 ? ', outside the gate' : ''}` });
             }
             mem.pack = 'stalk';
             mem.raids = mem.raids ?? 0;
@@ -602,8 +617,9 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     }
 
     // ── Stalking ──
+    if (mem.pack !== 'rebuff') mem.rebuffSpot = undefined;
     if (dead.length) mem.hadDead = true;
-    if (mem.hadDead && !dead.length && !far.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.hadDead = false; mem.pack = 'rebuff'; mem.rebuffAt = now; return say({ ...none, phase: 'recover', anchor: rest().at, reason: 'rebuffing: someone is back' }); }
+    if (mem.hadDead && !dead.length && !far.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.hadDead = false; mem.pack = 'rebuff'; mem.rebuffAt = now; return say({ ...none, phase: 'recover', anchor: rebuffSpot(), settings: BUFF_STOP_SETTINGS, reason: 'rebuffing: someone is back' }); }
     if (pickups.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.pack = 'home'; mem.legKind = null; stepLeg(trip, 'home', homeSpot!, { from: centre, movers: main, replan: Infinity }); return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'pick up the released', reason: `picking up ${pickups.map(m => m.name).join(', ')}` }); }
     const seen = free.filter(inHunt);
     if (!seen.length) {

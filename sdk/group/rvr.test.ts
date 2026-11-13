@@ -1492,6 +1492,18 @@ describe('decideRvr: buffed before leaving home, never a fight with our own real
         expect(done.settings).toBeNull();
         expect(mem.buffSpot).toBeUndefined();
     });
+    test('at our portal keep the spot of the stop is outside its gate (homeOf gather), where everyone sees everyone (the user, late on 2026-11-13)', () => {
+        const T = 252;
+        const arrival = homeOf(T, 'hibernia')!.arrival;
+        const gate = homeOf(T, 'hibernia')!.gather;
+        expect(Math.hypot(gate.x - arrival.x, gate.y - arrival.y)).toBeGreaterThan(1500);
+        const inKeep = buffer(team({}, arrival, T));
+        const mem: Record<string, any> = {};
+        const u = decideRvr(ctx(picture(inKeep), { memory: mem, now: 1000 }));
+        expect(u.reason).toMatch(/^buff up before leaving/);
+        expect(u.anchor).toEqual(gate);
+        expect((u.settings as any)?.buffStop).toBe(300);
+    });
     test('a monster of our realm (an observed member\'s charmed pet) is never a focus', () => {
         const pet = contact(80, { kind: 'npc', name: 'perturbed bwca', realm: 'hibernia', level: 23, regionId: R, x: 10_300, y: 10_000, threat: true, target: 'Tank' } as any);
         expect(decideRvr(ctx(picture(team(), [pet]))).focus ?? null).toBeNull();

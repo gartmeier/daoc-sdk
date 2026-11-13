@@ -36,6 +36,8 @@ export interface BattlegroundLayout {
     keeps: Keep[];
     /** Where the medallion teleport lands each realm (OFTeleporters.cs). */
     arrival: Record<PlayerRealm, Point3>;
+    /** Where a unit leaving its portal keep gathers to buff: just outside the outer gate, everyone in sight of everyone. */
+    gather?: Record<PlayerRealm, Point3>;
     /** Neutral ground about as far from every portal keep: the default patrols ring it. */
     meet: Point3;
     /** Where two realms meet in a pair round (settings.opponent), by pairKey: their patrols ring it, one each way. */
@@ -67,6 +69,11 @@ export const BATTLEGROUND_LAYOUTS: Record<number, BattlegroundLayout> = {
             { name: 'Albion Portal Keep', x: 37301, y: 52362, z: 3944, owner: 'albion', portal: true, guardLevel: 255 },
         ],
         arrival: { albion: { x: 38113, y: 53507, z: 4160 }, midgard: { x: 53568, y: 23643, z: 4530 }, hibernia: { x: 17367, y: 18248, z: 4320 } },
+        // 450 past the outer door on the navmesh's way from the arrival toward `meet` (1150-1470 from the keep's centre, dry, every
+        // spot of a 250 ring round it in sight of every other: sdk/vision.ts lineOfSight, measured 2026-11-13). Inside the walls a
+        // buffer's targets stood behind the keep's pillars and stairs ("You can't see your target from here!", a step, a cast, a
+        // step); the user, late on 2026-11-13: "wait in a spot, everyone go there and then buff each other ... turn on the speed song and go".
+        gather: { albion: { x: 36940, y: 51269, z: 3946 }, midgard: { x: 53046, y: 25563, z: 4298 }, hibernia: { x: 19506, y: 19175, z: 4165 } },
         meet: { x: 34000, y: 32000, z: 3836 },
         // Three rivers run out from the Faste, one between each two realms' halves; the only dry ways over are its three
         // bridges, inside its guards (the halves also meet over cliffs round the rivers' far ends). Each pair meets on one
@@ -108,12 +115,12 @@ export interface KeepSettings {
  */
 export const KEEP_CLEARANCE: KeepSettings['keepClearance'] = { portal: 4500, keep: 4500 };
 
-/** Our portal keep and where we arrive (and land after a release) in a battleground; null elsewhere. */
-export function homeOf(regionId: number, realm: Realm): { keep: Keep; arrival: Point3 } | null {
+/** Our portal keep, where we arrive (and land after a release) and where we gather to buff on the way out (the arrival without one), in a battleground; null elsewhere. */
+export function homeOf(regionId: number, realm: Realm): { keep: Keep; arrival: Point3; gather: Point3 } | null {
     const bg = BATTLEGROUND_LAYOUTS[regionId];
     if (!bg || realm === 'none') return null;
     const keep = bg.keeps.find(k => k.portal && k.owner === realm);
-    return keep ? { keep, arrival: bg.arrival[realm] } : null;
+    return keep ? { keep, arrival: bg.arrival[realm], gather: bg.gather?.[realm] ?? bg.arrival[realm] } : null;
 }
 
 /**

@@ -541,17 +541,9 @@ export function mainBody(here: readonly MemberReport[], radius: number, mem: Rec
     const rank = (m: MemberReport) => (hot(m) ? 100 : 0) + size(m) * 4 + (m !== gone && m.name === mem.gatherLead ? 2 : 0) + (m === gone ? -1 : m.role === 'tank' ? 1 : 0);
     const lead = [...here].sort((a, b) => rank(b) - rank(a))[0]!;
     mem.gatherLead = lead.name;
-    // One far last call stays far until FAR_KEEP inside the radius (live 2026-11-13 22:02:55-22:03:04: Deirdre at its edge flipped
-    // the group between meeting her and trailing a lost Briton every 1-2 s).
-    const wasFar = new Set<string>(mem.farNames ?? []);
-    const main = here.filter(m => dist(m, lead) <= radius - (wasFar.has(m.name) ? FAR_KEEP : 0));
-    const far = here.filter(m => !main.includes(m));
-    mem.farNames = far.map(m => m.name);
-    return { main, far };
+    const main = here.filter(m => dist(m, lead) <= radius);
+    return { main, far: here.filter(m => !main.includes(m)) };
 }
-
-/** mainBody's hysteresis: a member far stays far until this much inside the gather radius of the main body's lead. */
-export const FAR_KEEP = 500;
 
 /** A gather for an observed member ends once the group's bots stand within this share of the gather radius of it. */
 export const OBSERVED_GATHER_CLOSE = 0.5;
@@ -969,12 +961,15 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // A rest in the field holds the same way (REST_BUFF_MAX_MS from its start): the last orders were a recover.
     // One spot for the whole stop (memory.buffSpot, from its first tick), everyone close round it standing still (BUFF_STOP_SETTINGS):
     // at 19:32 hibernia buffed spread over 1800, the buffers walking to their targets (the user: "meet in a small radius ... buff everyone, done, stick, and go").
+    // At our portal keep that spot is outside its gate (homeOf gather): inside the walls camelot's buffers stepped round pillars into
+    // sight between casts (22:23, Enid and Vivien "not_visible" 20 times), and the user, late on 2026-11-13: "wait in a spot, everyone go there and
+    // then buff each other ... they're moving already in formation rather than just meeting in a smaller spot".
     if (o.phase === 'recover') mem.recoverSince ??= now;
     else { mem.recoverSince = undefined; mem.buffSpot = undefined; }
     const homeHold = homeBuffHold(mem, p.members, here, centre, homeAt, now, o.phase === 'recover');
     if (!homeHold) mem.buffSpot = undefined;
     if (homeHold) {
-        const spot: Point3 = mem.buffSpot ??= restAt().at;
+        const spot: Point3 = mem.buffSpot ??= home && homeAt && dist(centre, homeAt) <= HOME_BUFF_RADIUS ? { ...home.gather } : restAt().at;
         const coming = here.filter(m => dist(m, spot) > BUFF_STOP_RADIUS).length;
         return { ...calm, phase: 'recover', anchor: spot, settings: BUFF_STOP_SETTINGS, waiting: low, objective: `buff up${gone}`, reason: `${homeHold}${coming ? `; ${coming} on the way to the spot` : ''}` };
     }

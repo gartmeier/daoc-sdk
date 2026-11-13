@@ -4,7 +4,7 @@ import { petControl } from './pets';
 import { Blackboard, SHADE_REFUSED, UNATTACKABLE_MS } from './blackboard';
 import { contact, enemy, obs, picture, report, sighting } from './fixtures';
 import { decidePack, HOME_RUN_HOLD_MS, packBehaviors, packCc, PACK_SETTINGS, pickPackFocus, RUNNER_DROP_MS, rvrPack, type PackSettings, noticePhantom, shouldBolt } from './pack';
-import { RVR_SETTINGS, rvrBehaviors, rvrRoaming } from './rvr';
+import { homeOf, RVR_SETTINGS, rvrBehaviors, rvrRoaming } from './rvr';
 import { mergeSettings, type CoordinatorContext } from './strategy';
 import { pickNuke, type SpellPick } from './spells';
 import { isWet } from './water';
@@ -675,6 +675,37 @@ describe('decidePack: nobody walks alone', () => {
         const ok: any = { realm: 'hibernia', pack: 'rebuff', rebuffAt: 0 };
         decidePack(ctx(picture(thid({}, near)), { memory: ok, now: 60_000, settings: { patrol: null } }));
         expect(ok.pack).toBe('stalk');
+    });
+
+    test('a rebuff at the keep: one spot outside its gate, everyone standing round it (BUFF_STOP_SETTINGS), cleared after (the user, late on 2026-11-13: "wait in a spot, everyone go there and then buff each other")', () => {
+        const gate = homeOf(THID, 'hibernia')!.gather;
+        expect(distTo(gate, keep)).toBeGreaterThan(1500);
+        const m: any = { realm: 'hibernia', pack: 'rebuff', rebuffAt: 0 };
+        const first = decidePack(ctx(picture(thid({}, keep)), { memory: m, now: 1000, settings: { patrol: null } }));
+        expect(first.phase).toBe('recover');
+        expect(distTo(first.anchor!, gate)).toBeLessThan(1);
+        expect((first.settings as any)?.buffStop).toBe(300);
+        expect(first.reason).toContain('5 on the way to the spot, outside the gate');
+        // There, the spot stays where it is, wherever the centre has gone: no anchor that walks with the group.
+        const there = { x: gate.x + 100, y: gate.y };
+        const held = decidePack(ctx(picture(thid({}, there), [], { phase: 'recover', anchor: first.anchor, settings: first.settings as any }), { memory: m, now: 5000, settings: { patrol: null } }));
+        expect(held.anchor).toEqual(first.anchor);
+        expect(held.settings).toBe(first.settings);
+        expect(held.reason).not.toContain('on the way');
+        // Buffed and rested: the stop's settings go with it.
+        const done = decidePack(ctx(picture(thid({}, there), [], { phase: 'recover', anchor: first.anchor, settings: first.settings as any }), { memory: m, now: 60_000, settings: { patrol: null } }));
+        expect(m.pack).toBe('stalk');
+        expect(done.settings).toBeNull();
+        expect(m.rebuffSpot).toBeUndefined();
+    });
+
+    test('a rebuff in the field (someone is back) stands at one spot too, with the stop settings', () => {
+        const m: any = { realm: 'hibernia', pack: 'stalk', hadDead: true };
+        const u = decidePack(ctx(picture(thid()), { memory: m, now: 1000, settings: { patrol: null } }));
+        expect(u.reason).toMatch(/^rebuffing: someone is back/);
+        expect((u.settings as any)?.buffStop).toBe(300);
+        const next = decidePack(ctx(picture(thid({}, { x: middle.x + 400, y: middle.y }), [], { phase: 'recover', anchor: u.anchor, settings: u.settings as any }), { memory: m, now: 2000, settings: { patrol: null } }));
+        expect(next.anchor).toEqual(u.anchor);
     });
 });
 
