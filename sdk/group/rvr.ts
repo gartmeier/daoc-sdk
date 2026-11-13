@@ -446,7 +446,8 @@ export function stepLeg(t: Trip, kind: string, goal: Point, o: { from: Point; mo
     const next: Point = mem.route[0] ?? goal;
     const len = o.meet ? Math.min(t.travelLeg, Math.max(300, dist(from, goal) / 2)) : t.travelLeg;
     const f = Math.min(1, len / Math.max(1, dist(from, next)));
-    let leg: Point = keepOnMap(t.regionId, from, { x: Math.round(from.x + (next.x - from.x) * f), y: Math.round(from.y + (next.y - from.y) * f) });
+    // Never a leg in a camp's reach (a hunt's or a trail's goal among the bwca, 20:42): the nearest spot out of it.
+    let leg: Point = campFree(t.regionId, t.level, keepOnMap(t.regionId, from, { x: Math.round(from.x + (next.x - from.x) * f), y: Math.round(from.y + (next.y - from.y) * f) }), t.dry);
     if (t.dry) {
         // A leg in a river is the far bank (the nearest dry spot that gets us nearer the goal, toward the next route point),
         // and the route points of the crossing are behind it then. No such bank: the leg stays where it is.
@@ -615,6 +616,28 @@ export const HUNT_KEEP = 1000;
 export const HOME_BUFF_RADIUS = 3000;
 /** It waits for owed buffs at most this long after arriving home; past it they catch up on the way. */
 export const HOME_BUFF_MAX_MS = 90_000;
+
+/** campFree looks this far round a spot for one out of every camp's reach. */
+export const CAMP_SEARCH = 2000;
+
+/**
+ * `p` out of every aggressive camp's reach (aggroZones: aggro range + AGGRO_PAD): `p` itself when it is, else the nearest such spot
+ * within CAMP_SEARCH (dry with `dry`), `p` when there is none. Walks' legs and fights' anchors go through it: the user, playing
+ * Niamh at 20:37 and 20:42-20:44: "Deirdre now the second time got a lot of adds" (hibernia fought Midgard inside a bwca camp, and
+ * its hunts and trails ended in the camps round (24784, 27407)-(26430, 28912)).
+ */
+export function campFree(regionId: number, level: number, p: Point, dry = false): Point {
+    const zones = aggroZones(regionId, level);
+    if (clearOf(p, zones)) return p;
+    for (let r = 200; r <= CAMP_SEARCH; r += 200) {
+        for (let k = 0; k < 16; k++) {
+            const a = k * Math.PI / 8;
+            const q = { x: Math.round(p.x + Math.cos(a) * r), y: Math.round(p.y + Math.sin(a) * r) };
+            if (clearOf(q, zones) && (!dry || isDry(regionId, q))) return q;
+        }
+    }
+    return p;
+}
 
 /** At our portal keep the group waits for everyone (dead, released, walking in) at most this long from arriving, before a raid or a call. */
 export const HOME_WAIT_MS = 120_000;
@@ -867,7 +890,8 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         // A focus beyond the leash moves the anchor toward it, at most FIGHT_DRIFT from the centre (so the next
         // tick keeps it), leaving it LEASH_FIT of the leash away; else tank and melee would stand idle.
         // Never toward one under keep guards, and never into a keep circle.
-        let anchor = was;
+        // A fight that starts or drifts into a camp's reach stands out of it (campFree; 20:37: Deirdre died 364 from a bwca spawn).
+        let anchor: Point = campFree(regionId, level, was, dry);
         if (!reach(focus) && !inKeep(focus)) {
             const d = dist(centre, focus);
             const k = Math.min(FIGHT_DRIFT, Math.max(0, d - leash * LEASH_FIT)) / Math.max(1, d);
@@ -1040,7 +1064,9 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     }
     if (raid && !humanAway.length) {
         const guards = p.contacts.filter(c => c.keepGuard && !c.stale && isAlive(c) && c.regionId === regionId);
-        const { update } = raidStep({ plan: raid.plan, mem, members: p.members.filter(m => m.regionId === regionId), guards, call: raid.call, unit: mem.realmUnit ?? '' });
+        const step = raidStep({ plan: raid.plan, mem, members: p.members.filter(m => m.regionId === regionId), guards, call: raid.call, unit: mem.realmUnit ?? '' });
+        // The approach's waypoints out of camps' reach too (campFree); inside the keep, its own stands.
+        const update = step.update.phase === 'travel' && step.update.anchor ? { ...step.update, anchor: (a => ({ x: a.x, y: a.y, z: zAt(a) }))(campFree(regionId, level, step.update.anchor, dry)) } : step.update;
         mem.legKind = null;
         return { ...calm, ...update, reason: `${update.reason}${gone}` };
     }

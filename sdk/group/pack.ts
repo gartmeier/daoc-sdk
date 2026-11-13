@@ -29,7 +29,7 @@ import { offRoadsOut, roadsOut } from './tactics/roads';
 import { withHasten } from './tactics/hasten';
 import { RAID_FOE_REACH, raidNow, underRaidKeep } from './tactics/raid';
 import { planBuffs } from './buffs';
-import { decideRvr, focusHealed, groupRegion, HUNT_KEEP, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { campFree, decideRvr, focusHealed, groupRegion, HUNT_KEEP, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import { countFor, groupSize, type Count } from './size';
@@ -426,8 +426,12 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         const spare = main.filter(m => m.capabilities.cc && !cc.some(a => a.by === m.name));
         return [...cc, ...assignCc(ranked, spare, o.cc.filter(a => ranked.some(c => c.objectId === a.targetId)), now)];
     };
-    const fight = (kind: string, focus: Contact | null, cc0: { targetId: number; by: string }[], anchor: Point3, why: string): OrdersUpdate =>
-        say({ phase: 'engage', puller: null, retreatTo: null, focus: focus?.objectId ?? null, cc: withBeasts(cc0, focus), anchor, ...(focus ? { facing: { x: focus.x, y: focus.y } } : {}), objective: `${kind} at (${anchor.x}, ${anchor.y})`, reason: `${kind}: ${focus ? tag(focus) : 'no target in reach'}, ${why}` });
+    // The fight's anchor out of camps' reach (campFree; the user at 20:37: "Deirdre now the second time got a lot of adds").
+    const fight = (kind: string, focus: Contact | null, cc0: { targetId: number; by: string }[], anchor0: Point3, why: string): OrdersUpdate => {
+        const free = campFree(regionId, level, anchor0, dry);
+        const anchor: Point3 = free === anchor0 ? anchor0 : { x: free.x, y: free.y, z: zAt(free) };
+        return say({ phase: 'engage', puller: null, retreatTo: null, focus: focus?.objectId ?? null, cc: withBeasts(cc0, focus), anchor, ...(focus ? { facing: { x: focus.x, y: focus.y } } : {}), objective: `${kind} at (${anchor.x}, ${anchor.y})`, reason: `${kind}: ${focus ? tag(focus) : 'no target in reach'}, ${why}` });
+    };
     const startRaid = (why: string): OrdersUpdate => {
         mem.pack = 'raid';
         mem.raidAt = now;
