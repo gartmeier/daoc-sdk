@@ -32,11 +32,46 @@ describe('help calls', () => {
         expect(out.events.map(e => e.kind)).toEqual(['open', 'ask']);
     });
 
-    test('even odds is no call; nor a fight with nobody near, nor a unit out of a fight', () => {
-        const d = director();
+    test('even odds is no call; nor a fight with nobody near, nor a unit out of a fight (first sight off)', () => {
+        const d = director({ settings: { sight: false } });
         expect(d.update({ camelot: frame({ id: 'camelot', phase: 'engage', members: at(MID.x, MID.y, 3, 'G'), foes: foes(MID.x + 300, MID.y, 3) }) }, 0, []).calls).toHaveLength(0);
         expect(d.update({ camelot: frame({ id: 'camelot', phase: 'engage', members: at(MID.x, MID.y, 1, 'G'), foes: foes(MID.x + 4000, MID.y, 3) }) }, 0, []).calls).toHaveLength(0);
         expect(d.update({ camelot: frame({ id: 'camelot', phase: 'travel', members: at(MID.x, MID.y, 1, 'G'), foes: foes(MID.x + 300, MID.y, 3) }) }, 0, []).calls).toHaveLength(0);
+    });
+
+    test('first sight: a bigger group of one realm within 5000 calls sighted, in a fight or not; fewer than 3, even, or split over two realms does not', () => {
+        const one = (members: number, f: ReturnType<typeof foes>, phase = 'travel') => director().update({ camelot: frame({ id: 'camelot', phase, members: at(MID.x, MID.y, members, 'G'), foes: f }) }, 0, []).calls;
+        expect(one(1, foes(MID.x + 4000, MID.y, 3))[0]).toMatchObject({ why: 'sighted', foes: 3, ours: 1 });
+        expect(one(1, foes(MID.x + 4000, MID.y, 3), 'engage')[0]).toMatchObject({ why: 'sighted' });
+        expect(one(4, foes(MID.x + 4000, MID.y, 5))[0]).toMatchObject({ why: 'sighted', foes: 5 });
+        expect(one(1, foes(MID.x + 4000, MID.y, 2))).toHaveLength(0);
+        expect(one(5, foes(MID.x + 4000, MID.y, 5))).toHaveLength(0);
+        expect(one(1, foes(MID.x + 6000, MID.y, 6))).toHaveLength(0);
+        // 2 Midgard and 2 Hibernia: two groups of 2, no call.
+        expect(one(1, [...foes(MID.x + 3000, MID.y, 2), ...foes(MID.x + 3000, MID.y + 500, 2, 10, { realm: 'hibernia' })])).toHaveLength(0);
+    });
+
+    test('first sight: helpers from up to 9000, their places on the call; it turns outnumbered once in a fight', () => {
+        const d = director();
+        const helpers = { camelot: frame({ id: 'camelot', members: at(MID.x + 8500, MID.y, 6, 'G') }) };
+        let out = d.update({ ...helpers, 'camelot-s1': frame({ id: 'camelot-s1', members: at(MID.x, MID.y, 2, 'S'), foes: foes(MID.x - 4000, MID.y, 4) }) }, 0, []);
+        const c = out.calls[0]!;
+        expect(c).toMatchObject({ why: 'sighted', asked: ['camelot'] });
+        expect(c.helpers?.[0]).toMatchObject({ unit: 'camelot', alive: 6 });
+        expect(out.events.find(e => e.kind === 'open')).toMatchObject({ nearest: expect.any(Number), fight: false });
+        out = d.update({ ...helpers, 'camelot-s1': frame({ id: 'camelot-s1', phase: 'engage', members: at(MID.x, MID.y, 2, 'S'), foes: foes(MID.x + 300, MID.y, 4) }) }, 1000, []);
+        expect(out.calls[0]).toMatchObject({ id: c.id, why: 'outnumbered' });
+        expect(out.events.find(e => e.kind === 'why')).toMatchObject({ why: 'outnumbered', was: 'sighted' });
+    });
+
+    test('closeAll: open calls close as stopped, not wiped', () => {
+        const d = director();
+        d.update({ 'camelot-s1': frame({ id: 'camelot-s1', phase: 'engage', members: at(MID.x, MID.y, 1, 'S'), foes: foes(MID.x + 300, MID.y, 4) }) }, 0, []);
+        d.startMuster({ rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } });
+        d.update({ 'camelot-s1': frame({ id: 'camelot-s1', phase: 'engage', members: at(MID.x, MID.y, 1, 'S'), foes: foes(MID.x + 300, MID.y, 4) }) }, 1000, []);
+        const ev = d.closeAll('stopped', 2000);
+        expect(ev.map(e => e.kind === 'close' && e.end)).toEqual(['stopped', 'stopped']);
+        expect(d.calls()).toHaveLength(0);
     });
 
     test('ours of another unit standing in the fight count, so no call', () => {
@@ -261,7 +296,7 @@ describe('muster', () => {
             camelot: frame({ id: 'camelot', members: at(33000, 44000, 6, 'G') }),
             'camelot-s1': frame({ id: 'camelot-s1', members: at(33000, 41000, 1, 'S'), foes: foes(33000, 38500, n) }),
         });
-        const d = director();
+        const d = director({ settings: { sight: false } });
         d.startMuster(plan);
         let out = d.update(f(8), 0, []);
         expect(out.calls[0]).toMatchObject({ stage: 'rally', defenders: 8, hold: 'defenders' });
@@ -274,7 +309,7 @@ describe('muster', () => {
         expect(out.events.map(e => e.kind)).toEqual(['hold', 'stage']);
 
         // As many as the raid's living: no hold.
-        const d2 = director();
+        const d2 = director({ settings: { sight: false } });
         d2.startMuster(plan);
         expect(d2.update(f(7), 0, []).calls[0]!.stage).toBe('go');
 

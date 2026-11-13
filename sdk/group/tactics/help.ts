@@ -32,8 +32,22 @@ export interface RealmCall {
     /** Units the director picked (free, nearest, way short). */
     asked: readonly string[];
     coming?: readonly string[];
+    /** Help only, on the caller's own call (director.ts): where the units coming stand now, nearest to `at` first. */
+    helpers?: readonly UnitSpot[];
     since?: number;
     updatedAt?: number;
+}
+
+/** A running unit of the realm as the director's calls file carries it (director.ts UnitSpot). */
+export interface UnitSpot {
+    unit: string;
+    x: number;
+    y: number;
+    z: number;
+    alive: number;
+    size: number;
+    fight: boolean;
+    phase: string | null;
 }
 
 export type CallAnswer = 'coming' | 'declined' | 'arrived' | 'left';
@@ -191,6 +205,72 @@ export interface CallSource {
     calls(): readonly RealmCall[];
     answer(id: string, answer: CallAnswer, why?: string): void;
     stop?(): void;
+    /** The unit's own open help calls (with their helpers). */
+    mine?(): readonly RealmCall[];
+    /** The realm's other running units. */
+    units?(): readonly UnitSpot[];
+}
+
+// ── The caller's side (stint 2026-11-13, S3): fall back toward the helpers, turn when they are with us ──
+
+/** Helpers within this of our centre (2D) stand with us: they count on our side. */
+export const WITH_US = 2500;
+
+/** The nearest helper coming to our own open help call (memory.ownCalls, rvr.ts realmCalls), where it stands now; null with none. */
+export function helperPoint(mem: Record<string, any>, centre: Point): (UnitSpot & { call: string }) | null {
+    let best: (UnitSpot & { call: string }) | null = null;
+    for (const c of (mem.ownCalls ?? []) as RealmCall[]) {
+        for (const h of c.helpers ?? []) {
+            if (h.alive <= 0) continue;
+            if (!best || dist(h, centre) < dist(best, centre)) best = { ...h, call: c.id };
+        }
+    }
+    return best;
+}
+
+/**
+ * Ours on our side at our own call: those the director counts there (its `ours`, our own living taken out), and helpers
+ * within WITH_US of our centre not yet counted there. Once they are with us, the odds turn and so do we.
+ */
+export function callerAllies(mem: Record<string, any>, centre: Point, ourLiving: number): number {
+    let n = 0;
+    for (const c of (mem.ownCalls ?? []) as RealmCall[]) {
+        if (dist(c.at, centre) > WITH_US) continue;
+        const there = Math.max(0, c.ours - ourLiving);
+        const coming = (c.helpers ?? []).filter(h => dist(h, centre) <= WITH_US).reduce((t, h) => t + h.alive, 0);
+        n = Math.max(n, there + coming);
+    }
+    return n;
+}
+
+// ── Roaming within reach of a friend (stint 2026-11-13, S3) ──
+
+export interface RoamSettings {
+    /** Close up on the nearest friendly unit once it is farther than this ... */
+    far: number;
+    /** ... until within this of it. */
+    near: number;
+    /** Friends of at least this many living (a group or a trio, not a stealther alone). */
+    minAlive: number;
+    /** A friend this near our own portal keep is resting at home: not one to roam by. */
+    homeClear: number;
+}
+
+export const ROAM_SETTINGS: RoamSettings = { far: 4500, near: 3000, minAlive: 3, homeClear: 7000 };
+
+/**
+ * Where to walk to stay within reach of the nearest friendly unit (memory.realmUnits), or null while it is near enough or
+ * there is none. Once farther than `far` we close up to `near` of it, then patrol on (memory.roamClose holds the state).
+ */
+export function roamGoal(mem: Record<string, any>, centre: Point, home: Point | null, s: RoamSettings = ROAM_SETTINGS): { goal: Point; friend: UnitSpot; d: number } | null {
+    const friends = ((mem.realmUnits ?? []) as UnitSpot[]).filter(u => u.alive >= s.minAlive && (!home || dist(u, home) > s.homeClear));
+    if (!friends.length) { mem.roamClose = undefined; return null; }
+    const friend = friends.reduce((a, b) => (dist(a, centre) <= dist(b, centre) ? a : b));
+    const d = dist(friend, centre);
+    if (d <= s.near || (!mem.roamClose && d <= s.far)) { mem.roamClose = undefined; return null; }
+    mem.roamClose = friend.unit;
+    const k = (d - s.near) / d;
+    return { goal: { x: Math.round(centre.x + (friend.x - centre.x) * k), y: Math.round(centre.y + (friend.y - centre.y) * k) }, friend, d };
 }
 
 /** Sends the answers helpStep and noteArrival queued (memory.helpOut), in order. */

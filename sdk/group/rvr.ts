@@ -44,7 +44,7 @@ import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
 import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, TRAIL_MS, trailGoal, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
-import { alliesNear, CALL_SETTINGS, flushAnswers, helpStep, noteArrival, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
+import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, noteArrival, roamGoal, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
 import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
 import { ONWARD_MIN } from './travel';
@@ -110,6 +110,8 @@ export interface RvrSettings extends TacticsSettings, KeepSettings {
     softFocus?: SoftFocus;
     /** Realm calls (tactics/help.ts): answer a unit's call for help, or the muster, when free and the way is short. `--calls.enabled=false` off. */
     calls?: CallSettings;
+    /** Close up on the nearest friendly unit when farther than 4500 (tactics/help.ts roamGoal); `--roam=false` off. */
+    roam?: boolean;
 }
 
 /**
@@ -643,7 +645,13 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // A realm call we answer (tactics/help.ts): arrived once near it, and those of ours fighting there count on our side.
     const calls = s.calls ?? CALL_SETTINGS;
     noteArrival(mem, centre, now, calls);
-    const allies = alliesNear(mem, centre, s.huntRadius + calls.arrive, alive);
+    // Our own call (help.ts callerAllies): those the director counts with us, and helpers now within reach of us.
+    const allies = alliesNear(mem, centre, s.huntRadius + calls.arrive, alive) + callerAllies(mem, centre, alive.length);
+    // Falling back, toward the nearest helper coming to our own call rather than home (unless the enemy stands that way):
+    // we meet them sooner and turn once they are with us (allies above). Stint 2026-11-13, S3.
+    const helper = helperPoint(mem, centre);
+    const fallTo: Point | null = helper ?? home?.arrival ?? null;
+    const toward = helper ? `toward ${helper.unit} coming to help` : 'toward our portal keep';
     const outnumbered = (n: number) => s.retreat.enabled && n >= main.length + allies + margin;
     const withAllies = allies ? ` + ${allies} of ours` : '';
     const counted = (big: readonly Contact[], all: readonly Contact[]) => (big.length === all.length ? enemiesText(all.length) : `${big.length} of ${enemiesText(all.length)}`);
@@ -698,7 +706,7 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const behind = [...following, ...held, ...unseen];
         if (behind.length) mem.fledAt = centroid(behind);
         if (behind.length && now - (mem.retreatStart ?? now) < s.retreat.maxMs) {
-            const to = dist(centre, o.retreatTo) < 600 ? spotAlong(trip, centre, runWay(centre, following.length ? following : held.length ? held : unseen, homeAt), s.retreat.distance) : o.retreatTo;
+            const to = dist(centre, o.retreatTo) < 600 ? spotAlong(trip, centre, runWay(centre, following.length ? following : held.length ? held : unseen, fallTo), s.retreat.distance) : o.retreatTo;
             return { phase: 'retreat', retreatTo: to, anchor: to, reason: o.reason };
         }
         mem.retreatEnded = now;
@@ -742,9 +750,9 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
             mem.retreatStart = now;
             mem.fledIds = big.map(c => c.objectId);
             mem.fledAt = centroid(big);
-            const way = runWay(centre, big, homeAt);
+            const way = runWay(centre, big, fallTo);
             const to = spotAlong(trip, centre, way, s.retreat.distance);
-            return { ...calm, phase: 'retreat', retreatTo: to, anchor: to, objective: `get away from ${enemiesText(big.length)}${gone}`, reason: `retreat: ${counted(big, players)} vs ${main.length}${withAllies}${way.home ? ', toward our portal keep' : ''}` };
+            return { ...calm, phase: 'retreat', retreatTo: to, anchor: to, objective: `get away from ${enemiesText(big.length)}${gone}`, reason: `retreat: ${counted(big, players)} vs ${main.length}${withAllies}${way.home ? `, ${toward}` : ''}` };
         }
         // The fight's anchor: the centre when it starts, and again once the group drifted FIGHT_DRIFT from it.
         const was: Point = o.phase === 'engage' && mem.fightAnchor && dist(centre, mem.fightAnchor) <= FIGHT_DRIFT ? mem.fightAnchor : centre;
@@ -832,11 +840,11 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const more = big.filter(c => recalled.includes(c)).length;
         if (outnumbered(big.length)) {
             const d = Math.round(dist(centre, centroid(big)));
-            const way = runWay(centre, big, homeAt);
-            const goal = way.home && homeAt ? homeAt : spotAlong(trip, centre, way, s.huntRadius);
-            stepLeg(trip, 'fall back', goal, { from: centre, movers: main, replan: way.home ? 1 : 2000 });
+            const way = runWay(centre, big, fallTo);
+            const goal = way.home && fallTo ? fallTo : spotAlong(trip, centre, way, s.huntRadius);
+            stepLeg(trip, 'fall back', goal, { from: centre, movers: main, replan: way.home ? (helper ? 1500 : 1) : 2000 });
             const counts = more ? `${counted(big.filter(c => !recalled.includes(c)), seen)} and ${more} more we ran from (mezzed or out of view)` : counted(big, seen);
-            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `fall back ${way.home ? 'toward our portal keep' : 'away from them'}${gone}`, reason: `fall back: ${counts} ${d} away vs ${main.length}${withAllies}` };
+            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `fall back ${way.home ? toward : 'away from them'}${gone}`, reason: `fall back: ${counts} ${d} away vs ${main.length}${withAllies}${way.home && helper ? `, ${toward} (${Math.round(dist(centre, helper))} away)` : ''}` };
         }
         // With stayDry, those swimming aren't hunted into the river: with only such in sight, the group waits on dry ground for them (waitAshore).
         const ashore = seen.filter(c => !swimming(c));
@@ -979,6 +987,13 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const rest = restAt();
         return { ...calm, phase: 'recover', anchor: rest.at, objective: `keep off the ${enemiesText(fled.ids.length)} we ran from${gone}`, reason: `keep off: the ${enemiesText(fled.ids.length)} we ran from were ${Math.round(dist(centre, fled.at))} away at ${at(fled.at)}, patrol on in ${Math.ceil((fled.until - now) / 1000)} s${rest.why}` };
     }
+    // Within reach of a friend (help.ts roamGoal): farther than 4500 from the nearest friendly unit, close up to 3000 of it first,
+    // so a call finds help near. Stint 2026-11-13, S3: help stood 6000-9000 away and most fights ended before it came.
+    const roam = s.roam === false ? null : roamGoal(mem, centre, homeAt);
+    if (roam && clearOf(roam.goal, keeps)) {
+        stepLeg(trip, 'roam', roam.goal, { from: centre, movers: main, replan: 1500 });
+        return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `stay within reach of ${roam.friend.unit}${gone}`, reason: `roam near: ${roam.friend.unit} is ${Math.round(roam.d)} away, closing to 3000` };
+    }
     stepLeg(trip, 'patrol', wp, { from: centre, movers: here, replan: Infinity, force: arrived });
     // The leg that ends at the waypoint goes on to the next one: the group walks through it, not to a stop at it.
     if (mem.leg && !mem.legOnward && dist(mem.leg, wp) < 1 && loop.length > 1) {
@@ -1115,6 +1130,8 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         let calls: readonly RealmCall[] = [];
         try { calls = src?.calls() ?? []; } catch { calls = []; }
         mem.realmCalls = calls;
+        // Our own calls (their helpers) and the realm's other units (roaming near them): help.ts helperPoint, roamGoal.
+        try { mem.ownCalls = src?.mine?.() ?? []; mem.realmUnits = src?.units?.() ?? []; } catch { mem.ownCalls = []; mem.realmUnits = []; }
         let out = strategy.decide(ctx);
         // The raid's patch (Orders.settings, tactics/raid.ts) over whatever the strategy's own wrappers set there: Hibernia's
         // withMakeUp and Camelot's withOurMakeUp put their patch (or null) on every tick, and the board showed no guard (attempt 3,

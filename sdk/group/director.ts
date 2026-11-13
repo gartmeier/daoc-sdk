@@ -31,7 +31,11 @@ export const DIRECTOR_DIR = process.env.DAOC_DIRECTOR_DIR ?? join(import.meta.di
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────── the interface
 
 export type CallKind = 'help' | 'muster';
-export type CallWhy = 'outnumbered' | 'caught' | 'camped' | 'raid';
+/**
+ * sighted: a bigger group seen coming (within sightRadius, more of one realm than ours there), before any fight: help is
+ * asked on first sight, not once we are losing (stint 2026-11-13, S3: help was 6000-9000 away and most fights ended first).
+ */
+export type CallWhy = 'sighted' | 'outnumbered' | 'caught' | 'camped' | 'raid';
 export type AnswerState = 'coming' | 'declined' | 'arrived' | 'left';
 
 export interface RealmCall {
@@ -65,6 +69,11 @@ export interface RealmCall {
     defenders?: number;
     /** Muster only: what holds it now. 'defenders': the go waits while they outnumber the raid; 'lord': the clock waits. */
     hold?: 'defenders' | 'lord';
+    /**
+     * Help only: where the units coming (answered 'coming', or asked) stand now, not yet arrived, nearest to `at` first. The
+     * caller falls back toward the nearest (rvr.ts) and turns once they are with it (they count as ours there).
+     */
+    helpers?: UnitSpot[];
     /** ms epoch. */
     since: number;
     updatedAt: number;
@@ -82,6 +91,19 @@ export interface RaidMember {
 /** Raid members' places are rounded to this. */
 export const RAID_ROUND = 50;
 
+/** A running unit of the realm as the calls file carries it: its living's centre (rounded to RAID_ROUND), how many live. */
+export interface UnitSpot {
+    unit: string;
+    x: number;
+    y: number;
+    z: number;
+    alive: number;
+    size: number;
+    /** In a fight of its own. */
+    fight: boolean;
+    phase: string | null;
+}
+
 /** <dir>/<realm>.json */
 export interface CallsFile {
     v: 1;
@@ -89,6 +111,8 @@ export interface CallsFile {
     at: number;
     enabled: boolean;
     calls: RealmCall[];
+    /** Every running unit with a living member in the region (while on): where the realm's friends are, to roam near them. */
+    units?: UnitSpot[];
 }
 
 /** <dir>/answers/<unit>.json */
@@ -115,6 +139,15 @@ export interface DirectorSettings {
     lossMs: number;
     /** A helper's centre at most this far from the fight: the way is short (~37 s at full run). */
     reach: number;
+    /**
+     * First sight: a unit with at least sightMin enemy players of one realm within sightRadius, more than ours there (its
+     * living and other units' within nearFriend of its centre), calls 'sighted', in a fight or not. Its helpers may come from
+     * sightReach: the call comes earlier, so there is time for a longer way. sight: false turns it off.
+     */
+    sight: boolean;
+    sightRadius: number;
+    sightMin: number;
+    sightReach: number;
     /** Help is not asked of a unit whose living are below this mean health, or fewer than this share of its size. */
     helperHp: number;
     helperAlive: number;
@@ -157,6 +190,7 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     enabled: true, help: true, muster: true,
     nearFoe: 2500, nearFriend: 2000, lossShare: 1 / 3, lossMs: 30_000,
     reach: 7000, helperHp: 60, helperAlive: 0.5, arrive: 1500,
+    sight: true, sightRadius: 5000, sightMin: 3, sightReach: 9000,
     clearMs: 15_000, maxMs: 180_000,
     campRadius: 5000, campFoes: 2, campMs: 15_000,
     quorum: 0.7, rallyMaxMs: 240_000, goMaxMs: 900_000, raidBreak: 0.3, raidEveryMs: 0,
@@ -166,6 +200,23 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
 
 /** A unit's orders reason in siege.ts's lord phase (tactics/raid.ts writes `raid <phase>: ...`). */
 const LORD_PHASE = /\braid lord\b/;
+
+/** How bad a help call's reason is: an open call takes a worse one, never a milder. */
+const WHY_RANK: Record<CallWhy, number> = { sighted: 0, outnumbered: 1, caught: 2, camped: 2, raid: 3 };
+
+/** The foes of the realm with most of them here (all of them when one realm). */
+export function biggestRealm(foes: readonly SeenFoe[]): SeenFoe[] {
+    const by = new Map<string, SeenFoe[]>();
+    for (const f of foes) by.set(f.realm, [...(by.get(f.realm) ?? []), f]);
+    return [...by.values()].sort((a, b) => b.length - a.length)[0] ?? [];
+}
+
+/** A unit's spot for the calls file (its living's centre, rounded). */
+export function spotOf(u: UnitView): UnitSpot {
+    const round = (n: number) => Math.round(n / RAID_ROUND) * RAID_ROUND;
+    const c = u.centre ?? { x: 0, y: 0, z: 0 };
+    return { unit: u.unit, x: round(c.x), y: round(c.y), z: round(c.z), alive: u.alive, size: u.size, fight: u.inFight, phase: u.phase };
+}
 
 export interface RaidPlan {
     rally: Point3;
@@ -189,7 +240,10 @@ export function defaultRaid(realm: PlayerRealm, regionId = THIDRANKI): RaidPlan 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────── the events
 
 export type DirectorEvent =
-    | { kind: 'open'; call: string; from: string; why: CallWhy; at: Point3; foes: number; ours: number; foeRoles: Partial<Record<SeenRole, number>> }
+    /** nearest: the nearest other running unit's centre from `at` when it opened (help), null with none; for "distance at the call". */
+    | { kind: 'open'; call: string; from: string; why: CallWhy; at: Point3; foes: number; ours: number; foeRoles: Partial<Record<SeenRole, number>>; nearest?: number | null; fight?: boolean }
+    /** A help call's reason got worse (sighted → outnumbered → caught). */
+    | { kind: 'why'; call: string; why: CallWhy; was: CallWhy }
     | { kind: 'ask'; call: string; unit: string; dist: number }
     | { kind: 'answer'; call: string; unit: string; state: AnswerState; why: string }
     | { kind: 'arrive'; call: string; unit: string; ms: number; answered: boolean }
@@ -373,10 +427,14 @@ export class RealmDirector {
                 };
                 for (const u of board.units) if (u.totals) o.killsAtOpen.set(u.unit, u.totals.playerKills);
                 this.open.set(o.call.id, o);
-                events.push({ kind: 'open', call: o.call.id, from, why: c.why, at: c.at, foes: c.foes.length, ours: c.ours, foeRoles: o.call.foeRoles });
+                const others = board.units.filter(u => u.unit !== from && u.running && u.centre && u.alive > 0).map(u => dist2(u.centre!, c.at));
+                events.push({ kind: 'open', call: o.call.id, from, why: c.why, at: c.at, foes: c.foes.length, ours: c.ours, foeRoles: o.call.foeRoles, nearest: others.length ? Math.round(Math.min(...others)) : null, fight: !!caller?.inFight });
             } else {
-                // A worse reason wins: caught and camped over outnumbered.
-                if (o.call.why === 'outnumbered') o.call.why = c.why;
+                // A worse reason wins: caught and camped over outnumbered over sighted.
+                if (WHY_RANK[c.why] > WHY_RANK[o.call.why]) {
+                    events.push({ kind: 'why', call: o.call.id, why: c.why, was: o.call.why });
+                    o.call.why = c.why;
+                }
                 o.call.at = c.at;
                 o.call.foes = c.foes.length;
                 o.call.ours = c.ours;
@@ -436,17 +494,28 @@ export class RealmDirector {
         return { board, calls: this.calls(), events: logged };
     }
 
-    /** Is unit `u` in trouble now: outnumbered or caught, in a fight of its own. */
+    /** Is unit `u` in trouble now: outnumbered or caught, in a fight of its own; or a bigger group in sight (sighted). */
     private helpCondition(u: UnitView, board: RealmBoardView, now: number): { why: CallWhy; at: Point3; foes: SeenFoe[]; ours: number } | null {
         const s = this.settings;
-        if (!u.running || !u.centre || !u.inFight || u.alive === 0) return null;
-        const near = foesNear(board.foes, u.centre, s.nearFoe);
-        if (!near.length) return null;
+        if (!u.running || !u.centre || u.alive === 0) return null;
+        const at = { x: Math.round(u.centre.x), y: Math.round(u.centre.y), z: Math.round(u.centre.z) };
         const ours = this.oursNear(board, u.centre, u.unit) + u.alive;
-        const recent = u.losses.filter(l => now - l.at <= s.lossMs).length;
-        const caught = u.caught || u.fleeing || recent >= Math.max(1, Math.ceil(u.size * s.lossShare));
-        const why: CallWhy | null = caught ? 'caught' : near.length > ours ? 'outnumbered' : null;
-        return why ? { why, at: { x: Math.round(u.centre.x), y: Math.round(u.centre.y), z: Math.round(u.centre.z) }, foes: near, ours } : null;
+        if (u.inFight) {
+            const near = foesNear(board.foes, u.centre, s.nearFoe);
+            if (near.length) {
+                const recent = u.losses.filter(l => now - l.at <= s.lossMs).length;
+                const caught = u.caught || u.fleeing || recent >= Math.max(1, Math.ceil(u.size * s.lossShare));
+                const why: CallWhy | null = caught ? 'caught' : near.length > ours ? 'outnumbered' : null;
+                if (why) return { why, at, foes: near, ours };
+            }
+        }
+        if (!s.sight) return null;
+        // By the raid's target the enemies are its defenders, counted by the muster (the defence hold), not a group coming.
+        const raid = this.pendingRaid ?? [...this.open.values()].find(x => x.call.kind === 'muster')?.raid;
+        if (raid && dist2(u.centre, raid.target) <= s.defenceRadius + 1000) return null;
+        // First sight: the biggest realm in view, so two other realms fighting each other aren't one group.
+        const big = biggestRealm(foesNear(board.foes, u.centre, s.sightRadius));
+        return big.length >= s.sightMin && big.length > ours ? { why: 'sighted', at, foes: big, ours } : null;
     }
 
     /** Living members of other units within nearFriend of `p`. */
@@ -494,7 +563,7 @@ export class RealmDirector {
             .filter(u => u.unit !== o.call.from && u.running && u.centre && !u.inFight && !busy.has(u.unit)
                 && u.alive >= Math.max(1, Math.ceil(u.size * s.helperAlive)) && u.hp >= s.helperHp)
             .map(u => ({ u, d: dist2(u.centre!, o.call.at) }))
-            .filter(x => x.d <= s.reach)
+            .filter(x => x.d <= (o.call.why === 'sighted' ? Math.max(s.reach, s.sightReach) : s.reach))
             .sort((a, b) => a.d - b.d);
     }
 
@@ -519,6 +588,10 @@ export class RealmDirector {
             }
         }
         call.want = Math.max(0, want);
+        // Where the helpers stand now (not yet arrived), nearest first: the caller falls back toward them.
+        const helpers = [...new Set([...call.coming, ...call.asked])].filter(a => !o.arrived.has(a)).map(a => units.get(a)).filter((u): u is UnitView => !!u && u.running && !!u.centre && u.alive > 0);
+        const spots = helpers.map(spotOf).sort((a, b) => dist2(a, call.at) - dist2(b, call.at));
+        if (spots.length) call.helpers = spots; else delete call.helpers;
     }
 
     private close(o: Open, end: string, board: RealmBoardView, now: number): DirectorEvent {
@@ -650,10 +723,34 @@ export class RealmDirector {
         return out;
     }
 
+    /**
+     * Close every open call as `why` ('stopped' when field.ts stops), log it, and write the file off. A restart then
+     * doesn't read as a broken raid or a wiped call. Returns the close events (for the caller's ledger).
+     */
+    closeAll(why = 'stopped', now = Date.now()): LoggedEvent[] {
+        const board = this.last ?? { realm: this.realm, at: now, units: [], foes: [] };
+        const events: DirectorEvent[] = [];
+        for (const o of [...this.open.values()]) {
+            const e = this.close(o, why, board, now);
+            if (e.kind === 'close') e.wiped = false;
+            events.push(e);
+        }
+        this.pendingRaid = null;
+        const logged = events.map(e => ({ ...e, t: now, realm: this.realm, shadow: !this.settings.enabled }) as LoggedEvent);
+        if (this.write) {
+            for (const e of logged) { try { appendFileSync(join(this.dir, `${this.realm}-log.jsonl`), `${JSON.stringify(e)}\n`); } catch { /* gone */ } }
+            const file: CallsFile = { v: 1, realm: this.realm, at: now, enabled: false, calls: [] };
+            try { writeAtomic(join(this.dir, `${this.realm}.json`), JSON.stringify(file)); } catch { /* gone */ }
+        }
+        return logged;
+    }
+
     /** Write <dir>/<realm>.json: the calls while on, none while off. */
     private publish(now: number): void {
         if (!this.write) return;
-        const file: CallsFile = { v: 1, realm: this.realm, at: now, enabled: this.settings.enabled, calls: this.settings.enabled ? this.calls() : [] };
+        const on = this.settings.enabled;
+        const units = on && this.last ? this.last.units.filter(u => u.running && u.centre && u.alive > 0).map(spotOf) : [];
+        const file: CallsFile = { v: 1, realm: this.realm, at: now, enabled: on, calls: on ? this.calls() : [], ...(on ? { units } : {}) };
         writeAtomic(join(this.dir, `${this.realm}.json`), JSON.stringify(file));
     }
 }
@@ -676,6 +773,18 @@ export function callsFor(file: CallsFile | null, unit: string, now = Date.now())
     return (file.calls ?? []).filter(c => c.from !== unit);
 }
 
+/** The unit's own open help calls (none while off or stale): where its helpers are. */
+export function ownCallsFor(file: CallsFile | null, unit: string, now = Date.now()): RealmCall[] {
+    if (!file || file.v !== 1 || !file.enabled || now - file.at > CALLS_STALE_MS) return [];
+    return (file.calls ?? []).filter(c => c.from === unit && c.kind === 'help');
+}
+
+/** The realm's other running units (none while off or stale). */
+export function unitsFor(file: CallsFile | null, unit: string, now = Date.now()): UnitSpot[] {
+    if (!file || file.v !== 1 || !file.enabled || now - file.at > CALLS_STALE_MS) return [];
+    return (file.units ?? []).filter(u => u.unit !== unit);
+}
+
 /** The calls that name `unit` (asked, or a muster it is in), nearest first when `centre` is given. */
 export function askedOf(calls: readonly RealmCall[], unit: string, centre?: Point | null): RealmCall[] {
     const mine = calls.filter(c => c.asked.includes(unit));
@@ -684,6 +793,10 @@ export function askedOf(calls: readonly RealmCall[], unit: string, centre?: Poin
 
 export interface CallWatch {
     calls: () => RealmCall[];
+    /** The unit's own open help calls (with `helpers`). */
+    mine: () => RealmCall[];
+    /** The realm's other running units, where they stand. */
+    units: () => UnitSpot[];
     answer: (callId: string, state: AnswerState, why?: string) => void;
     stop: () => void;
 }
@@ -710,6 +823,8 @@ export function callWatch(unit: string, realm: PlayerRealm, dir = DIRECTOR_DIR):
     try { if (existsSync(answersPath)) answers = { ...JSON.parse(readFileSync(answersPath, 'utf8')), unit, v: 1 }; } catch { /* start over */ }
     return {
         calls: () => callsFor(file, unit),
+        mine: () => ownCallsFor(file, unit),
+        units: () => unitsFor(file, unit),
         answer: (callId, state, why = '') => {
             answers.answers[callId] = { state, why: why.slice(0, 200), at: Date.now() };
             // Keep the newest 20.
@@ -793,12 +908,15 @@ export function startDirector(opts: StartDirectorOptions): { director: RealmDire
     void tick();
     return {
         director,
+        // Stop the director before the units (field.ts): its open calls close as 'stopped', not 'broken' or 'gone'.
         stop: () => {
+            if (stopped) return;
             stopped = true;
             clearInterval(timer);
-            if (opts.write ?? true) {
-                const file: CallsFile = { v: 1, realm: director.realm, at: Date.now(), enabled: false, calls: [] };
-                try { writeAtomic(join(director.dir, `${director.realm}.json`), JSON.stringify(file)); } catch { /* gone */ }
+            const now = Date.now();
+            const events = director.closeAll('stopped', now);
+            if (events.length) {
+                try { opts.onUpdate?.({ board: director.lastBoard() ?? { realm: director.realm, at: now, units: [], foes: [] }, calls: [], events }); } catch { /* the ledger is gone */ }
             }
         },
     };

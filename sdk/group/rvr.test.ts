@@ -1415,3 +1415,39 @@ describe('decideRvr: a Necromancer in shade is its servant (blackboard.ts shadeB
         expect(d.objective).toContain('fall back');
     });
 });
+
+describe('decideRvr: help in time (S3, 2026-11-13)', () => {
+    test('the caller falls back toward the helpers coming to its own call, and turns once they are with it', () => {
+        const seven = [60, 61, 62, 63, 64, 65, 66].map(id => foe(id, { x: 14_000, y: 10_000 }));
+        const spot = (x: number, alive: number) => ({ unit: 'hibernia-2', x, y: 10_000, z: 0, alive, size: 6, fight: false, phase: 'travel' });
+        const own = (helperX: number, alive = 6) => [{ id: 'hibernia-3', kind: 'help', from: 'hibernia', why: 'sighted', at: { x: 9680, y: 10_000, z: 0 }, foes: 7, ours: 5, want: 3, asked: ['hibernia-2'], helpers: [spot(helperX, alive)] }];
+        // Helpers 5000 west, the enemy east: fall back west, toward them.
+        let d = decideRvr(ctx(picture(team(), seven), { memory: { ownCalls: own(4_700) } }));
+        expect(d.objective).toContain('fall back toward hibernia-2 coming to help');
+        expect(d.anchor!.x).toBeLessThan(9_700);
+        // The helpers stand behind the enemy: away from them as before.
+        d = decideRvr(ctx(picture(team(), seven), { memory: { ownCalls: own(18_000) } }));
+        expect(d.objective).toContain('fall back away from them');
+        // Four of them with us (within 2500): 7 against 5 + 4, no fall back.
+        d = decideRvr(ctx(picture(team(), seven), { memory: { ownCalls: own(8_500, 4) } }));
+        expect(d.reason).toMatch(/^hunt 7 enemies/);
+    });
+
+    test('roams within reach: farther than 4500 from the nearest friendly unit, it closes to 3000 first, then patrols', () => {
+        const friend = (x: number, alive = 6) => ({ unit: 'hibernia-2', x, y: 10_000, z: 0, alive, size: 6, fight: false, phase: 'travel' });
+        const memory: Record<string, any> = { realmUnits: [friend(20_000)] };
+        const d = decideRvr(ctx(picture(team()), { memory }));
+        expect(d.reason).toContain('roam near: hibernia-2');
+        expect(d.anchor!.x).toBeGreaterThan(9_700);
+        // Within 4500 but closing: on to 3000.
+        memory.realmUnits = [friend(13_900)];
+        expect(decideRvr(ctx(picture(team()), { memory })).reason).toContain('roam near');
+        memory.realmUnits = [friend(12_500)];
+        expect(decideRvr(ctx(picture(team()), { memory })).reason).toContain('patrol');
+        // Not closing again until past 4500; a stealther alone (1 living) is no friend to roam by; roam: false is off.
+        memory.realmUnits = [friend(13_900)];
+        expect(decideRvr(ctx(picture(team()), { memory })).reason).toContain('patrol');
+        expect(decideRvr(ctx(picture(team()), { memory: { realmUnits: [friend(20_000, 1)] } })).reason).toContain('patrol');
+        expect(decideRvr(ctx(picture(team()), { memory: { realmUnits: [friend(20_000)] }, settings: { roam: false } })).reason).toContain('patrol');
+    });
+});
