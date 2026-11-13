@@ -51,10 +51,11 @@ export interface RoamSettings {
     sightingWeight: number;
 }
 
-// A look of 8-18 s at each place, then on (the user, playing Niamh at 19:45, the group standing 1-2 min at a sighting: "that's not
-// human-like behaviour. You'd keep roaming"). The circle step comes only with a stay longer than stepMs (settings of one's own).
+// No stop: a place is a waypoint, and on reaching it (reach) the group walks on to the next (the user, playing Niamh at 19:45, the
+// group standing 1-2 min at a sighting: "that's not human-like behaviour. You'd keep roaming"; on 8-18 s looks: "there shouldn't
+// be stops"). A stay and its circle steps come only with stayMax above 0 (settings of one's own).
 export const ROAM_SETTINGS: RoamSettings = {
-    maxLeg: 16_000, memory: 4, reach: 900, stayMin: 8_000, stayMax: 18_000, circle: 700, stepMs: 25_000, sightingMs: 300_000, sightingWeight: 2,
+    maxLeg: 16_000, memory: 4, reach: 900, stayMin: 0, stayMax: 0, circle: 700, stepMs: 25_000, sightingMs: 300_000, sightingWeight: 2,
 };
 
 /** memory.roam */
@@ -164,6 +165,13 @@ export function roamStep(mem: Record<string, any>, o: { centre: Point; places: r
     const d = dist(o.centre, place);
     if (r.reachedAt === undefined && d > s.reach) {
         return { kind: 'go', goal: place, place, reason: `roam: to ${place.what} (${Math.round(place.x)}, ${Math.round(place.y)}), ${Math.round(d)} away` };
+    }
+    // No stay: past it, on to the next place at once (the group never stands while it roams).
+    if (r.reachedAt === undefined && s.stayMax <= 0) {
+        next();
+        const on = r.place as RoamPlace | null;
+        if (on) return { kind: 'go', goal: on, place: on, reason: `roam: past ${place.what}, on to ${on.what} (${Math.round(on.x)}, ${Math.round(on.y)}), ${Math.round(dist(o.centre, on))} away` };
+        r.place = place;
     }
     if (r.reachedAt === undefined) {
         r.reachedAt = o.now;

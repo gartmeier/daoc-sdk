@@ -27,16 +27,15 @@ describe('the roam (S3; the user: "we\'re doing the same back and forth every ti
         expect(sightingPlaces([{ x: 1, y: 1, n: 6, at: 0 }], ROAM_SETTINGS.sightingMs + 1, ok)).toHaveLength(0);
     });
 
-    test('roamStep by default: a look of at most 18 s at a place, then on (the user at 19:45: "You\'d keep roaming")', () => {
+    test('roamStep by default: no stop, on reaching a place on to the next at once (the user: "there shouldn\'t be stops")', () => {
         const mem: Record<string, any> = {};
         const ps = [place('a', 5000, 0), place('b', -5000, 0)];
         let r = roamStep(mem, { centre: { x: 0, y: 0 }, places: ps, now: 0, rand: seq(0.99) })!;
-        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000, rand: seq(0.99) })!;
-        expect(r.kind).toBe('stay');
         const first = r.place.key;
-        r = roamStep(mem, { centre: r.place, places: ps, now: 10_000 + 18_000, rand: seq(0.99) })!;
+        r = roamStep(mem, { centre: { x: r.place.x - 800, y: 0 }, places: ps, now: 10_000, rand: seq(0.99) })!;
         expect(r.kind).toBe('go');
         expect(r.place.key).not.toBe(first);
+        expect(r.reason).toMatch(/^roam: past /);
     });
 
     test('roamStep with a long stay: go, stay a while walking a small circle, then on to another place (not the same)', () => {
