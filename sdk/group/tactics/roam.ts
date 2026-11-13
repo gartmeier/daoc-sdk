@@ -70,7 +70,12 @@ export interface RoamMemory {
     done: string[];
     /** Sighting cells passed, and when: a sighting there older than that is no news. */
     passed: Record<string, number>;
+    /** The roam's last tick: a gap longer than PAUSE_MS (something else had the group) moves `until` on by it. */
+    tick?: number;
 }
+
+/** A gap between roam ticks longer than this is a pause, not walking time. */
+export const PAUSE_MS = 5000;
 
 export type RoamStep = { goal: Point; place: RoamPlace; reason: string };
 
@@ -169,6 +174,10 @@ export function roamStep(mem: Record<string, any>, o: { regionId: number; centre
     const s = o.settings ?? ROAM_SETTINGS;
     const r: RoamMemory = mem.roam?.passed ? mem.roam : (mem.roam = { place: null, since: o.now, until: o.now, side: 0, done: [], passed: {} });
     const circuit = o.circuit ?? [];
+    // The give-up clock runs only while the roam does: a rest, a break, a hunt or a fight in between pauses it (live 20:22,
+    // camelot-2 "gave up on" a sighting after a 2-min field rest it never walked in).
+    if (r.place && r.tick !== undefined && o.now - r.tick > PAUSE_MS) r.until += o.now - r.tick;
+    r.tick = o.now;
     const sightings = sightingPlaces(o.regionId, o.sightings ?? [], o.now, o.ok ?? (() => true), s);
     const was = r.place;
     const reached = !!was && dist(o.centre, was) <= s.reach;

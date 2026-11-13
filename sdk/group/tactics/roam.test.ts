@@ -115,9 +115,21 @@ describe('roamStep', () => {
         const mem: Record<string, any> = {};
         roamStep(mem, { regionId: 1, centre: { x: 0, y: 0 }, places: ps, now: 0 });
         const until = mem.roam.until;
-        const r = roamStep(mem, { regionId: 1, centre: { x: 100, y: 0 }, places: ps, now: until + 1 })!;
+        let r = roamStep(mem, { regionId: 1, centre: { x: 100, y: 0 }, places: ps, now: 1000 })!;
+        for (let t = 2000; t <= until + 1000 && r.place.key === 'a'; t += 1000) r = roamStep(mem, { regionId: 1, centre: { x: 100, y: 0 }, places: ps, now: t })!;
         expect(r.reason).toMatch(/^roam: gave up on a, on to b/);
         expect(mem.roam.done).toContain('a');
+    });
+
+    test('the give-up clock pauses while something else has the group (live 20:22: camelot-2 gave up on a sighting after a 2-min rest)', () => {
+        const mem: Record<string, any> = {};
+        roamStep(mem, { regionId: 1, centre: { x: 0, y: 0 }, places: ps, now: 0 });
+        const until = mem.roam.until;
+        // A rest of until + 60 s, the roam not asked in between: still on to a, the clock moved on by the gap.
+        const r = roamStep(mem, { regionId: 1, centre: { x: 100, y: 0 }, places: ps, now: until + 60_000 })!;
+        expect(r.place.key).toBe('a');
+        expect(r.reason).toMatch(/^roam: to a /);
+        expect(mem.roam.until).toBeGreaterThan(until + 60_000);
     });
 });
 
