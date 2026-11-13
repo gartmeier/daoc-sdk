@@ -96,6 +96,16 @@ Thidranki Warden Blade and a medium shield, 621 health in scale. Blades 10: Glow
 - **The heal thresholds as the only healer** (tank 90, others 83, emergency 55) are still unmeasured. She can't be the only healer while the Druid is required.
 - **Major Regeneration over Regrowth** for a member missing more than ~110 (`pickHeal` ties them).
 - **Glowing Blade** on a diver beside her while the Druid carries the heals. At idle 30 % she has the time.
-- **`lastStand` live:** untested in a fight so far (tests only, `warden.test.ts`). In her sortie logs, look for `lastStand` results, `move ... for Glowing Blade` steps, and "You perform your Glowing Blade perfectly!". Open questions: does the side step ever land Glowing Blade against a bot, and does fighting it out at even health beat getting away?
+- **`lastStand` live, verified 2026-11-12/13** (13 hibernia-s1 sorties, 20:06-05:45 UTC):
+  - **It ran in 6 sorties.** Its swing reports as `melee`, so it shows as `Aine: melee: ...` in the sortie logs. Only its heal reports as `lastStand`.
+  - **No style of hers landed:** the reports read `styles {}` every time, so Glowing Blade never landed.
+  - **Five swings were refused with "X is not in view!"** A melee swing needs the target within 120° in front of her as well as in sight (`WeaponAction.cs:389-392`), and after the side step she faces the spot she walked to.
+  - **Three heal tries in 3 s, each `must_wait`,** after an interrupted cast.
+  - **Her deaths in those sorties** came with a member still within 2000, or under the squad's `retreat`, which ranks above `lastStand`.
+  - **To do:**
+    - Face him after the step and before each swing, or drop the step.
+    - While the heal waits, swing.
+    - Then see whether Glowing Blade lands against a bot at all.
+  - **Still open:** does fighting it out at even health beat getting away?
 - **Her bladeturn in fights:** give it a result name of its own (now `buff`), so its recasts can be counted.
 
