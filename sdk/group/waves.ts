@@ -32,6 +32,8 @@ export interface RealmWave {
     until: number | null;
     /** Out: where the realm last saw enemies when this wave went out (null: none seen lately, patrol as usual). */
     toward: Point3 | null;
+    /** Out: every recent sighting, one per group of enemies (life cycle cf56e66); a unit goes to its nearest. Older files: `toward`. */
+    towards?: Point3[] | null;
     why: string;
 }
 
@@ -41,6 +43,12 @@ export const WAVE_STALE_MS = 3 * 60_000;
 const QUIET_RING = { min: 500, max: 900 };
 /** Quiet: a spot stays this far from every portal keep door, on the arrival's side of its own keep's (S2's doors, cbf18a1). */
 export const QUIET_DOOR_CLEAR = 600;
+/**
+ * Quiet: a unit within this of its spot by the portal keep takes its break there; farther, it rests where it is, as a
+ * player group out roaming does (the user, 2026-11-13: "the same back and forth every time"). A unit with a player in it
+ * (an observed member) always rests where it is.
+ */
+export const HOME_NEAR = 8000;
 /** Quiet: a unit farther than this from its spot walks there first. */
 export const QUIET_NEAR = 900;
 /** Out: a unit within this of `toward` has reached it, and patrols on from there. */
@@ -116,6 +124,7 @@ export function quietSpot(regionId: number, realm: PlayerRealm, unit: string): P
 export type WaveOrder =
     | { kind: 'home'; at: Point3; why: string }
     | { kind: 'quiet'; at: Point3; why: string }
+    | { kind: 'rest'; key: string; why: string }
     | { kind: 'toward'; at: Point3; key: string; why: string }
     | { kind: 'reached'; key: string };
 
@@ -123,25 +132,33 @@ const d2 = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
 
 /**
  * What the realm's wave asks of a free unit (no fight, no call, nobody dead or away, rested): null to patrol as usual.
- * Quiet: walk to its spot by the portal keep ('home'), then stay there ('quiet'). Out with somewhere to go: a leg toward
+ * Quiet: within HOME_NEAR of its spot by the portal keep (as after a wipe, back from the bind), walk there ('home') and
+ * stay ('quiet'); farther, or with a player in the group (`human`), a rest where it is ('rest': the caller picks the spot
+ * once per wave, `resting` is that wave's key, and keeps it). Out with somewhere to go: a leg toward the sighting nearest
  * it ('toward'), once per wave; within TOWARD_NEAR it is 'reached' (the caller remembers the key) and patrols on.
  */
-export function waveOrder(wave: RealmWave | null, o: { unit: string; realm: PlayerRealm; regionId: number; centre: Point; reached?: string | null; now?: number }): WaveOrder | null {
+export function waveOrder(wave: RealmWave | null, o: { unit: string; realm: PlayerRealm; regionId: number; centre: Point; reached?: string | null; resting?: string | null; human?: boolean; now?: number }): WaveOrder | null {
     if (!wave) return null;
     const now = o.now ?? Date.now();
+    const key = `${wave.id}`;
     if (wave.phase === 'quiet') {
         const at = quietSpot(o.regionId, o.realm, o.unit);
         if (!at) return null;
         const left = wave.until ? Math.max(0, Math.round((wave.until - now) / 1000)) : null;
+        const again = left !== null ? `, out again in ${left} s` : '';
         const d = d2(o.centre, at);
+        if (o.resting === key || o.human || d > HOME_NEAR) {
+            const where = o.human ? 'a player with us: no walk home' : `${Math.round(d)} from the portal keep`;
+            return { kind: 'rest', key, why: `${QUIET_REASON} a rest where we are, ${where}${again} (${wave.why})` };
+        }
         if (d > QUIET_NEAR) return { kind: 'home', at, why: `${QUIET_REASON} back to the portal keep for a break (${wave.why}), ${Math.round(d)} away` };
-        return { kind: 'quiet', at, why: `${QUIET_REASON} a break at the portal keep${left !== null ? `, out again in ${left} s` : ''} (${wave.why})` };
+        return { kind: 'quiet', at, why: `${QUIET_REASON} a break at the portal keep${again} (${wave.why})` };
     }
-    if (!wave.toward) return null;
-    const key = `${wave.id}`;
-    if (o.reached === key) return null;
-    if (d2(o.centre, wave.toward) <= TOWARD_NEAR) return { kind: 'reached', key };
-    return { kind: 'toward', at: wave.toward, key, why: `wave: out toward where our realm last saw enemies (${Math.round(wave.toward.x)}, ${Math.round(wave.toward.y)}), ${Math.round(d2(o.centre, wave.toward))} away` };
+    const targets = wave.towards?.length ? wave.towards : wave.toward ? [wave.toward] : [];
+    if (!targets.length || o.reached === key) return null;
+    const to = targets.reduce((a, b) => (d2(o.centre, b) < d2(o.centre, a) ? b : a));
+    if (d2(o.centre, to) <= TOWARD_NEAR) return { kind: 'reached', key };
+    return { kind: 'toward', at: to, key, why: `wave: out toward the nearest place our realm saw enemies (${Math.round(to.x)}, ${Math.round(to.y)}), ${Math.round(d2(o.centre, to))} away` };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────── idling like players

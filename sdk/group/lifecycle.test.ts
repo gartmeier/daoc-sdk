@@ -421,7 +421,8 @@ describe('waves', () => {
         expect(spot).not.toBeNull();
         expect(quietSpot(252, 'hibernia', 'hibernia-s1')).toEqual(spot);
         expect(quietSpot(252, 'hibernia', 'hibernia-s2')).not.toEqual(spot);
-        const far = waveOrder(wave, { unit: 'hibernia-s1', realm: 'hibernia', regionId: 252, centre: { x: 33000, y: 33000 }, now: 0 });
+        // Within HOME_NEAR (8000) of its spot: back to the portal keep (far away it rests where it is, the next test).
+        const far = waveOrder(wave, { unit: 'hibernia-s1', realm: 'hibernia', regionId: 252, centre: { x: spot.x + 4000, y: spot.y + 3000 }, now: 0 });
         expect(far?.kind).toBe('home');
         const there = waveOrder(wave, { unit: 'hibernia-s1', realm: 'hibernia', regionId: 252, centre: spot, now: MIN });
         expect(there?.kind).toBe('quiet');
@@ -444,6 +445,29 @@ describe('waves', () => {
                 for (const d of PORTAL_DOORS[region]![realm]) expect(doorSide(d, spot)).toBe(doorSide(d, home.arrival));
             }
         }
+    });
+    test('a break: at the portal keep only when near it; farther, or with a player in the group, a rest where we are', () => {
+        const quiet: RealmWave = { v: 1, realm: 'hibernia', at: 0, id: 7, phase: 'quiet', since: 0, until: 5 * MIN, toward: null, why: 'after a fight' };
+        const spot = quietSpot(252, 'hibernia', 'hibernia')!;
+        const near = { x: spot.x + 5000, y: spot.y };
+        const far = { x: spot.x + 20000, y: spot.y + 10000 };
+        expect(waveOrder(quiet, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: near, now: 0 })?.kind).toBe('home');
+        const rest = waveOrder(quiet, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: far, now: 0 })!;
+        expect(rest).toEqual(expect.objectContaining({ kind: 'rest', key: '7' }));
+        expect((rest as { why: string }).why.startsWith(QUIET_REASON)).toBe(true);
+        // A player with us: no walk home even near it.
+        expect(waveOrder(quiet, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: near, human: true, now: 0 })?.kind).toBe('rest');
+        // Once resting this wave, it stays a rest (no walk home as the group drifts nearer).
+        expect(waveOrder(quiet, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: near, resting: '7', now: 0 })?.kind).toBe('rest');
+    });
+    test('out: toward the sighting nearest the unit; an older file with only toward still works', () => {
+        const out: RealmWave = { v: 1, realm: 'hibernia', at: 0, id: 8, phase: 'out', since: 0, until: null, toward: { x: 30000, y: 30000, z: 3000 }, towards: [{ x: 45000, y: 40000, z: 3000 }, { x: 20000, y: 20000, z: 3000 }], why: 'the break is over' };
+        const go = waveOrder(out, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: { x: 18000, y: 18000 }, now: 0 });
+        expect(go).toEqual(expect.objectContaining({ kind: 'toward', at: { x: 20000, y: 20000, z: 3000 } }));
+        const east = waveOrder(out, { unit: 'hibernia-2', realm: 'hibernia', regionId: 252, centre: { x: 50000, y: 42000 }, now: 0 });
+        expect(east).toEqual(expect.objectContaining({ kind: 'toward', at: { x: 45000, y: 40000, z: 3000 } }));
+        const old = waveOrder({ ...out, towards: undefined }, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: { x: 18000, y: 18000 }, now: 0 });
+        expect(old).toEqual(expect.objectContaining({ kind: 'toward', at: { x: 30000, y: 30000, z: 3000 } }));
     });
     test('idle acts: mostly sit and turn', () => {
         const r = seeded(11);
