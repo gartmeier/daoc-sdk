@@ -176,6 +176,10 @@ describe('decidePack with a quarry', () => {
     test('ambush off: back to the patrol', () => {
         const { step } = play({ ambush: false });
         for (let t = 0; t <= 3000; t += 1000) step(duo(14_000 + t / 5, 10_000, t), t);
-        expect(step([], 5000).reason).toContain('patrol');
+        // The roam's 10 s hold after the last chase first, walking on to where they were last seen (pack.ts chase), then the patrol.
+        const hold = step([], 5000);
+        expect(hold.reason).toMatch(/^after the fight: holding/);
+        expect(hold.anchor!.x).toBeGreaterThan(14_000);
+        expect(step([], 13_500).reason).toContain('patrol');
     });
 });

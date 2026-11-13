@@ -610,6 +610,18 @@ describe('decidePack: nobody walks alone', () => {
         expect(decide(foe(26_400), { realm: 'hibernia', pack: 'stalk' }).reason ?? '').toMatch(/^roam/);
     });
 
+    test.skipIf(isWet(THID, { x: 32_500, y: 29_500 }))("the roam holds 10 s after a hunt of the pack's own that followed an engage (live 22:11:41-47: engage, hunt, roam 4 s later)", () => {
+        const m: Record<string, any> = { realm: 'hibernia', pack: 'stalk' };
+        const near = [enemy(101, 'midgard', { regionId: THID, x: middle.x + 600, y: middle.y })];
+        const away = [enemy(102, 'midgard', { regionId: THID, x: middle.x - 1500, y: middle.y - 2500 })];
+        const decide = (now: number, contacts: Contact[], phase: Orders['phase']) => decidePack(ctx(picture(thid(), contacts), { memory: m, orders: { phase }, settings: { patrol: null }, now }));
+        expect(decide(20_000, near, 'travel').phase).toBe('engage');
+        expect(decide(21_000, away, 'engage').reason).toMatch(/^hunt /);
+        expect(decide(22_000, away, 'travel').reason).toMatch(/^hunt /);
+        expect(decide(26_000, [], 'travel').reason).toMatch(/^after the fight: holding 6 s/);
+        expect(decide(32_500, [], 'travel').reason).toMatch(/^roam: /);
+    });
+
     test('a released member at the keep is told to wait, and the pack goes to get it', () => {
         const m: any = { realm: 'hibernia' };
         const members = thid({ Menta: { x: keep.x, y: keep.y } });

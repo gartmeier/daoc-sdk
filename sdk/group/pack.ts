@@ -373,6 +373,11 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     };
     // spread: an enemy player is known, so casters take their wider slots (spreadOnSight) from the first sight on.
     const say = (u: OrdersUpdate): OrdersUpdate => ({ ...u, ...(runnerNote ? { reason: `${u.reason}; ${runnerNote.text}` } : {}), column: column(u), spread: foes.length > 0, waiting: [...(u.waiting ?? []).filter(w => w.why !== 'pickup'), ...pickupWait] });
+    // The roam's 10 s hold after a fight (rvr.ts FIGHT_HOLD_MS) counts from the last engage or chase: the pack's own fights and hunts
+    // never reach decideRvr, which saw only the tick it was called on. Live 22:11:41-47: engage, hunt, roam 4 s after the hunt.
+    if (o.phase === 'engage') { mem.engagedAt = now; mem.fightSpot = undefined; }
+    // A chase's hold goes on to where they were last seen (`at`), not a stand.
+    const chase = (u: OrdersUpdate, at: Point): OrdersUpdate => { mem.engagedAt = now; mem.fightSpot = onLand(at, centre); return say(u); };
     const areaRadius = 350;
     // The raid (tactics/raid.ts): the muster said go and no enemy player is on us or within RAID_FOE_REACH: decideRvr plays it,
     // guards and doors included. Those farther off are no reason to drop it (attempt 6: hibernia hunted, hibernia-2 sat).
@@ -664,10 +669,10 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         const pass = s.ambush ? lieInWait(mem.quarry, inSight, centre, (mem.ambushTracks ?? {}) as Tracks, now, LEG_REACHED) : null;
         const spot = (mem.quarry as Quarry | undefined)?.spot;
         if (pass && spot) {
-            return say({ ...none, phase: 'travel', anchor: { x: spot.x, y: spot.y, z: zAt(spot) }, facing: { x: lead.x, y: lead.y }, objective: `lie in wait for ${inSight.length} stragglers`, reason: `lie in wait: ${tag(lead)}, ${Math.round(d)} away, passing ${Math.round(pass.d)} from us in ${Math.round(pass.inS)} s` });
+            return chase({ ...none, phase: 'travel', anchor: { x: spot.x, y: spot.y, z: zAt(spot) }, facing: { x: lead.x, y: lead.y }, objective: `lie in wait for ${inSight.length} stragglers`, reason: `lie in wait: ${tag(lead)}, ${Math.round(d)} away, passing ${Math.round(pass.d)} from us in ${Math.round(pass.inS)} s` }, lead);
         }
         stepLeg(trip, 'prey', lead, { from: centre, movers: main, replan: 500 });
-        return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: { x: lead.x, y: lead.y }, objective: `hunt ${inSight.length} stragglers`, reason: `hunt ${tag(lead)}, ${Math.round(d)} away, ${inSight.length} in sight vs ${main.length}` });
+        return chase({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: { x: lead.x, y: lead.y }, objective: `hunt ${inSight.length} stragglers`, reason: `hunt ${tag(lead)}, ${Math.round(d)} away, ${inSight.length} in sight vs ${main.length}` }, lead);
     }
     const inReach = free.filter(c => dist(c, centre) <= k.reach).length;
     const refuse = main.length < k.minPack ? `only ${main.length} together`
@@ -690,7 +695,7 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
         const moving = now - mem.holdSince >= k.waitMs;
         const f = Math.max(0, d - (k.openAt - 100)) / d;
         const to = moving ? { x: Math.round(centre.x + (lead.x - centre.x) * f), y: Math.round(centre.y + (lead.y - centre.y) * f) } : stay;
-        return say({ ...none, phase: 'travel', anchor: { ...to, z: zAt(to) }, ...(facing ? { facing } : {}), objective: 'stand off', reason: `${moving ? 'closing in on' : 'standing off from'} ${tag(lead)}, ${Math.round(d)} away` });
+        return chase({ ...none, phase: 'travel', anchor: { ...to, z: zAt(to) }, ...(facing ? { facing } : {}), objective: 'stand off', reason: `${moving ? 'closing in on' : 'standing off from'} ${tag(lead)}, ${Math.round(d)} away` }, lead);
     }
     mem.holdSince = undefined;
     // Past the stand-off, or a pack that arrives a little short stays out of it for good.
@@ -716,11 +721,11 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
             mem.stalkClosing = true;
             const to = { x: Math.round(close.x), y: Math.round(close.y) };
             mem.stalkAnchor = to;
-            return say({ ...none, phase: 'travel', anchor: { ...to, z: zAt(to) }, ...(facing ? { facing } : {}), objective: 'stand off', reason: `closing in on ${tag(lead)}, ${Math.round(d)} away: the stalk stalled` });
+            return chase({ ...none, phase: 'travel', anchor: { ...to, z: zAt(to) }, ...(facing ? { facing } : {}), objective: 'stand off', reason: `closing in on ${tag(lead)}, ${Math.round(d)} away: the stalk stalled` }, lead);
         }
     }
     stepLeg(trip, 'stalk', goal, { from: centre, movers: main, replan: 800 });
-    return say({ ...none, phase: 'travel', anchor: legAnchor(mem), ...(facing ? { facing } : {}), objective: `stalk ${seen.length} round (${Math.round(lead.x)}, ${Math.round(lead.y)})`, reason: `stalk ${tag(lead)}, ${Math.round(d)} away, ${crowd} together` });
+    return chase({ ...none, phase: 'travel', anchor: legAnchor(mem), ...(facing ? { facing } : {}), objective: `stalk ${seen.length} round (${Math.round(lead.x)}, ${Math.round(lead.y)})`, reason: `stalk ${tag(lead)}, ${Math.round(d)} away, ${crowd} together` }, lead);
 }
 
 /** A broken pack's run goes on this long after the last enemy pressed it ... */
