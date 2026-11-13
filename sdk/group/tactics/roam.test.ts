@@ -3,6 +3,7 @@ import { picture, report } from '../fixtures';
 import { decideRvr, defaultPatrol, RVR_SETTINGS, THIDRANKI, type RvrSettings } from '../rvr';
 import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { GroupPicture, MemberReport } from '../types';
+import { roamGoal } from './help';
 import { meetingPlaces, pickPlace, ROAM_SETTINGS, roamStep, sightingPlaces, type RoamPlace } from './roam';
 
 const place = (key: string, x: number, y: number, weight = 1): RoamPlace => ({ key, what: key, x, y, weight });
@@ -18,6 +19,30 @@ describe('the roam (S3; the user: "we\'re doing the same back and forth every ti
         const w = [place('meet', 5000, 0, 1), place('seen', -5000, 0, 8)];
         const picks = Array.from({ length: 50 }, (_, i) => pickPlace(w, { x: 0, y: 0 }, [], () => i / 50)?.key);
         expect(picks.filter(k => k === 'seen').length).toBeGreaterThan(35);
+    });
+
+    test('pickPlace: a sighting first, at any distance (the user at 19:51: "There are no enemies here")', () => {
+        const ps = [place('meet', 3000, 0), place('seen:1', 30_000, 0, 0.5)];
+        for (const r of [0, 0.5, 0.99]) expect(pickPlace(ps, { x: 0, y: 0 }, [], () => r)?.key).toBe('seen:1');
+    });
+
+    test('roamStep: 5 min in one area with no enemy seen in it, then a place at least 12000 off', () => {
+        const mem: Record<string, any> = {};
+        const ps = [place('a', 2000, 0), place('b', -2000, 0), place('c', 0, 2500), place('far', 20_000, 0)];
+        roamStep(mem, { centre: { x: 0, y: 0 }, places: ps, now: 0, rand: seq(0) });
+        // A sighting in the area 2 min in keeps it fresh until 7 min.
+        const sightings = [{ x: 1000, y: 0, n: 2, at: 120_000 }];
+        expect(roamStep(mem, { centre: { x: 100, y: 0 }, places: ps, now: 400_000, rand: seq(0), sightings })!.reason).not.toMatch(/far off/);
+        const r = roamStep(mem, { centre: { x: 100, y: 0 }, places: ps, now: 421_000, rand: seq(0), sightings })!;
+        expect(r.reason).toMatch(/min here with no enemy seen, far off/);
+        expect(r.place.key).toBe('far');
+    });
+
+    test('roamGoal: only a friend out roaming or fighting, never one resting (19:51: hibernia closed on hibernia-2 resting)', () => {
+        const friend = (phase: string | null) => ({ realmUnits: [{ unit: 'hibernia-2', x: 8000, y: 0, z: 0, alive: 6, size: 6, fight: false, phase }] });
+        expect(roamGoal(friend('travel'), { x: 0, y: 0 }, null, undefined, 0)?.friend.unit).toBe('hibernia-2');
+        expect(roamGoal(friend('recover'), { x: 0, y: 0 }, null, undefined, 0)).toBeNull();
+        expect(roamGoal(friend('idle'), { x: 0, y: 0 }, null, undefined, 0)).toBeNull();
     });
 
     test('sightingPlaces: weight from how many and how fresh; none past 5 min', () => {

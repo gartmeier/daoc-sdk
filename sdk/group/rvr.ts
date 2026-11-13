@@ -44,7 +44,7 @@ import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry, waitAshore } from './water';
 import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, TRAIL_MS, trailGoal, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
-import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, noteArrival, roamGoal, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
+import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, noteArrival, roamGoal, roamingPhase, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
 import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
 import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDefence, withDefence } from './tactics/defend';
@@ -1157,8 +1157,8 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const okPlace = placeOk([...keeps, ...aggroZones(regionId, level)], q => !dry || isDry(regionId, q));
         if (mem.roamKey !== key) { mem.roamMeet = meetingPlaces(regionId, realm as PlayerRealm, loop, okPlace); mem.roamKey = key; }
         const places: RoamPlace[] = [...(mem.roamMeet as RoamPlace[]), ...sightingPlaces(mem.realmSeen ?? [], now, okPlace)];
-        const friends = ((mem.realmUnits ?? []) as { x: number; y: number; size: number; alive: number }[]).filter(u => u.size >= 4 && u.alive >= 3);
-        const r = roamStep(mem, { centre, places, now, ok: okPlace, friends });
+        const friends = ((mem.realmUnits ?? []) as { x: number; y: number; size: number; alive: number; phase?: string | null }[]).filter(u => u.size >= 4 && u.alive >= 3 && roamingPhase(u.phase));
+        const r = roamStep(mem, { centre, places, now, ok: okPlace, friends, sightings: mem.realmSeen ?? [] });
         if (r) {
             stepLeg(trip, 'roam', r.goal, { from: centre, movers: here, replan: r.kind === 'go' ? 1500 : 300 });
             mem.camp = { x: r.place.x, y: r.place.y, z: zAt(r.place), names: r.place.what };

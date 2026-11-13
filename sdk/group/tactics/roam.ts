@@ -49,6 +49,14 @@ export interface RoamSettings {
     sightingMs: number;
     /** A sighting's weight: this, plus one per enemy seen, at its freshest. */
     sightingWeight: number;
+    /**
+     * An area: the group within this of where it started roaming there (memory.roam.area). After areaMs in one with no enemy seen
+     * in it (by us or our realm), it goes on to a place at least areaFar away, past maxLeg (the user at 19:51: "we're in the same
+     * area forever. There are no enemies here. We're going in circles for like 20 minutes").
+     */
+    areaRadius: number;
+    areaMs: number;
+    areaFar: number;
 }
 
 // No stop: a place is a waypoint, and on reaching it (reach) the group walks on to the next (the user, playing Niamh at 19:45, the
@@ -56,6 +64,7 @@ export interface RoamSettings {
 // be stops"). A stay and its circle steps come only with stayMax above 0 (settings of one's own).
 export const ROAM_SETTINGS: RoamSettings = {
     maxLeg: 16_000, memory: 4, reach: 900, stayMin: 0, stayMax: 0, circle: 700, stepMs: 25_000, sightingMs: 300_000, sightingWeight: 2,
+    areaRadius: 5000, areaMs: 300_000, areaFar: 12_000,
 };
 
 /** memory.roam */
@@ -70,6 +79,8 @@ export interface RoamMemory {
     stepAt?: number;
     /** Keys of the last places, newest last. */
     last: string[];
+    /** Where the group's current area started, and when (RoamSettings.areaRadius). */
+    area?: Point & { since: number };
 }
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -125,13 +136,19 @@ export const FRIEND_NEAR = 4500;
  */
 export const STAY_FRIEND_FAR = 6000;
 
-/** The next place: weighted, at random, from those within maxLeg (the nearest few else), never the last `memory` ones nor where we stand. */
-export function pickPlace(places: readonly RoamPlace[], centre: Point, last: readonly string[], rand: () => number, s: RoamSettings = ROAM_SETTINGS, friends: readonly Point[] = []): RoamPlace | null {
+/**
+ * The next place: weighted, at random, never the last `memory` ones nor where we stand. Where our realm saw enemies (a sighting,
+ * key `seen:`) first, at any distance: the roam goes where the fighting is (the user at 19:51). Else from the meeting places
+ * within maxLeg (the nearest few else); with `farFrom`, only those at least areaFar from that point, at any distance.
+ */
+export function pickPlace(places: readonly RoamPlace[], centre: Point, last: readonly string[], rand: () => number, s: RoamSettings = ROAM_SETTINGS, friends: readonly Point[] = [], farFrom?: Point): RoamPlace | null {
     const fresh = places.filter(p => !last.includes(p.key) && dist(p, centre) > s.reach * 1.5);
     const pool = fresh.length ? fresh : places.filter(p => dist(p, centre) > s.reach * 1.5);
     if (!pool.length) return null;
+    const seen = pool.filter(p => p.key.startsWith('seen:') && (!farFrom || dist(p, farFrom) >= s.areaFar));
+    const far = farFrom ? pool.filter(p => dist(p, farFrom) >= s.areaFar) : [];
     const near = pool.filter(p => dist(p, centre) <= s.maxLeg);
-    const from = near.length ? near : [...pool].sort((a, b) => dist(a, centre) - dist(b, centre)).slice(0, 2);
+    const from = seen.length ? seen : far.length ? far : near.length ? near : [...pool].sort((a, b) => dist(a, centre) - dist(b, centre)).slice(0, 2);
     // Nearer is likelier: a long walk is worth it for a fresh sighting, less for an empty meeting place.
     // And near a friendly group of ours (help.ts roamGoal keeps us within reach of one): three times as likely.
     const w = from.map(p => p.weight / (1 + dist(p, centre) / 5000) * (friends.some(f => dist(f, p) <= FRIEND_NEAR) ? 3 : 1));
@@ -149,15 +166,24 @@ export type RoamStep =
  * This tick's roam: go to the place, or stay at it (a step round a small circle every stepMs) until stayUntil, then pick the next.
  * `ok` checks a circle step (dry, clear). Null with no place at all (the caller patrols as before).
  */
-export function roamStep(mem: Record<string, any>, o: { centre: Point; places: readonly RoamPlace[]; now: number; rand?: () => number; ok?: (p: Point) => boolean; settings?: RoamSettings; friends?: readonly Point[] }): RoamStep | null {
+export function roamStep(mem: Record<string, any>, o: { centre: Point; places: readonly RoamPlace[]; now: number; rand?: () => number; ok?: (p: Point) => boolean; settings?: RoamSettings; friends?: readonly Point[]; sightings?: readonly RoamSighting[] }): RoamStep | null {
     const s = o.settings ?? ROAM_SETTINGS;
     const rand = o.rand ?? Math.random;
     const r: RoamMemory = mem.roam ??= { place: null, last: [] };
-    const next = () => {
+    const next = (farFrom?: Point) => {
         if (r.place) { r.last = [...r.last.filter(k => k !== r.place!.key), r.place.key].slice(-s.memory); }
-        r.place = pickPlace(o.places, o.centre, r.last, rand, s, o.friends ?? []);
+        r.place = pickPlace(o.places, o.centre, r.last, rand, s, o.friends ?? [], farFrom);
         r.reachedAt = undefined; r.stayUntil = undefined; r.step = undefined; r.stepAt = undefined;
     };
+    // The area (areaRadius): areaMs in it with no enemy seen in it, and on to a place far off (areaFar), whatever we were going to.
+    if (!r.area || dist(o.centre, r.area) > s.areaRadius) r.area = { x: Math.round(o.centre.x), y: Math.round(o.centre.y), since: o.now };
+    const seenHere = Math.max(r.area.since, ...(o.sightings ?? []).filter(x => dist(x, r.area!) <= s.areaRadius).map(x => x.at));
+    if (o.now - seenHere >= s.areaMs) {
+        const left = r.area;
+        r.area = { x: Math.round(o.centre.x), y: Math.round(o.centre.y), since: o.now };
+        next(left);
+        if (r.place) return { kind: 'go', goal: r.place, place: r.place, reason: `roam: ${Math.round((o.now - seenHere) / 60_000)} min here with no enemy seen, far off to ${r.place.what} (${Math.round(r.place.x)}, ${Math.round(r.place.y)}), ${Math.round(dist(o.centre, r.place))} away` };
+    }
     // A place that's gone from the list (a sighting faded) is still where we go: we picked it.
     if (!r.place || (r.stayUntil !== undefined && o.now >= r.stayUntil)) next();
     if (!r.place) return null;

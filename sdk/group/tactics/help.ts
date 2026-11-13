@@ -299,6 +299,9 @@ const MAIN_SIZE = 4;
 
 export const ROAM_SETTINGS: RoamSettings = { far: 4500, near: 3000, minAlive: 3, homeClear: 7000 };
 
+/** A friendly unit in this phase is out roaming or fighting (null: an older calls file, taken as out). */
+export const roamingPhase = (phase: string | null | undefined): boolean => phase == null || phase === 'travel' || phase === 'engage' || phase === 'pull' || phase === 'retreat';
+
 /**
  * Where to walk to stay within reach of the nearest friendly unit (memory.realmUnits), or null while it is near enough or
  * there is none. Once farther than `far` we close up to `near` of it, then patrol on (memory.roamClose holds the state).
@@ -307,7 +310,8 @@ export function roamGoal(mem: Record<string, any>, centre: Point, home: Point | 
     // Gave up closing lately (no nearer for ROAM_STALL_MS): roam on (live 17:55: hibernia stood still 3500-3900 from hibernia-2's
     // centre, pulled 15000 off by a member at our portal keep).
     if ((mem.roamStallUntil ?? 0) > now) return null;
-    const out = ((mem.realmUnits ?? []) as UnitSpot[]).filter(u => u.alive >= s.minAlive && (!home || dist(u, home) > s.homeClear));
+    // Only a friend out roaming or fighting: not one resting or waiting (the user at 19:51: hibernia closed on hibernia-2 resting 14000 from our portal keep).
+    const out = ((mem.realmUnits ?? []) as UnitSpot[]).filter(u => u.alive >= s.minAlive && (!home || dist(u, home) > s.homeClear) && roamingPhase(u.phase));
     // A main group first: a squad roams the edges and runs off (live 13:24, a group closed on midgard-s1 and lost it every few
     // seconds); a trio only when no main group is out.
     const mains = out.filter(u => u.size >= MAIN_SIZE);
