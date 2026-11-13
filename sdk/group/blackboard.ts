@@ -385,8 +385,13 @@ export function observeState(state: BotWorldState, self: MemberSelf, sightRadius
     };
     if (state.summons?.length) report.summons = [...state.summons];
     if (self.petRecast) report.petRecast = true;
-    const doors = doorsBrokenNear(state.gameMessages ?? [], state.nearbyObjects ?? [], p, state.timestamp);
+    // The server's door state (0x99) first: open is broken, shut is shut (repaired or never broken), whatever the chat said. The
+    // broken line is the fallback for a door without one (a client from before the 0x99 reader).
+    const known = new Map((state.doors ?? []).map(d => [d.doorId, d.open]));
+    const doors = [...new Set([...[...known].filter(([, open]) => open).map(([id]) => id), ...doorsBrokenNear(state.gameMessages ?? [], state.nearbyObjects ?? [], p, state.timestamp).filter(id => !known.has(id))])];
     if (doors.length) report.doorsBroken = doors;
+    const shut = [...known].filter(([, open]) => !open).map(([id]) => id);
+    if (shut.length) report.doorsShut = shut;
     if (report.pet && self.petOrderedOn != null) report.pet.orderedOn = self.petOrderedOn;
     const intercepts = interceptsOf(state);
     const ccEnds = readCcEnds(state.gameMessages ?? [], state.timestamp - CC_END_MS);

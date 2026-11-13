@@ -156,8 +156,13 @@ export interface MemberReport {
     observed?: true;
     /** An observed member's own pet (a Mentalist's charmed mob, say): the friendly pet nearest it in a member's view, no member's window pet (observed.ts). For the buff plan's leftover pass only. Absent without one. */
     observedPet?: { objectId: number; name: string; x: number; y: number; z: number };
-    /** Keep doors (DbDoor ids) this client read "The Keep Door is broken!" for lately, by the door nearest it then (observeState). Absent without any. */
+    /**
+     * Keep doors (DbDoor ids) this client knows broken: the server's door state says open (0x99, sdk.getDoorState), or it read "The
+     * Keep Door is broken!" lately by the door nearest it then (observeState). Absent without any.
+     */
     doorsBroken?: number[];
+    /** Keep doors the server's door state (0x99) says shut: repaired, or never broken. A client without 0x99 has none. Absent without any. */
+    doorsShut?: number[];
 }
 
 /** A monster (or enemy player) as one member saw it in one snapshot. */
