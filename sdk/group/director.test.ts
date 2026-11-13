@@ -506,6 +506,18 @@ describe('the defence call (S3, 2026-11-13)', () => {
         expect(out.events.find(e => e.kind === 'close')).toMatchObject({ end: 'quiet' });
     });
 
+    test('nobody to ask: the log says why each unit was passed over, at most every 30 s (S2, live 14:05)', () => {
+        const d = director({ units: UNITS6, targetOwner: () => 'albion', settings: { sight: false } });
+        const f = { ...frames(5), camelot: frame({ id: 'camelot', phase: 'engage', members: at(faste.x + 6000, faste.y, 6, 'G') }), 'camelot-2': frame({ id: 'camelot-2', members: at(faste.x - 9000, faste.y, 6, 'H', { hp: 40 }) }) };
+        const out = d.update(f, 0, []);
+        const r = out.events.find(e => e.kind === 'refused');
+        expect(r).toMatchObject({ want: 4 });
+        const why = Object.fromEntries((r as any).units.map((u: any) => [u.unit, u.why]));
+        expect(why).toMatchObject({ camelot: 'in a fight 6125 away', 'camelot-2': 'health 40', 'camelot-s2': 'a squad of 2' });
+        expect(d.update(f, 10_000, []).events.find(e => e.kind === 'refused')).toBeUndefined();
+        expect(d.update(f, 31_000, []).events.find(e => e.kind === 'refused')).toBeDefined();
+    });
+
     test('one attacker is no defence; the keep lost closes it', () => {
         let owner = 'albion';
         const d = director({ units: UNITS6, targetOwner: () => owner, settings: { sight: false } });

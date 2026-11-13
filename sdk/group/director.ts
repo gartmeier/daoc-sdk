@@ -254,6 +254,9 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
 /** A unit's orders reason in siege.ts's lord phase (tactics/raid.ts writes `raid <phase>: ...`). */
 const LORD_PHASE = /\braid lord\b/;
 
+/** A call that still wants bodies logs why each unit was passed over at most this often. */
+const REFUSED_EVERY_MS = 30_000;
+
 /** How bad a help call's reason is: an open call takes a worse one, never a milder. */
 const WHY_RANK: Record<CallWhy, number> = { sighted: 0, outnumbered: 1, caught: 2, camped: 2, raid: 3, keep: 3 };
 
@@ -314,6 +317,8 @@ export function musterHold(n: { defenders: number; third: number; ownersAway: nu
 export type DirectorEvent =
     /** nearest: the nearest other running unit's centre from `at` when it opened (help), null with none; for "distance at the call". */
     | { kind: 'open'; call: string; from: string; why: CallWhy; at: Point3; foes: number; ours: number; foeRoles: Partial<Record<SeenRole, number>>; nearest?: number | null; fight?: boolean }
+    /** Bodies still wanted and nobody (more) to ask: why each unit was passed over (at most every REFUSED_EVERY_MS per call). */
+    | { kind: 'refused'; call: string; want: number; units: { unit: string; why: string }[] }
     /** A help call's reason got worse (sighted → outnumbered → caught). */
     | { kind: 'why'; call: string; why: CallWhy; was: CallWhy }
     | { kind: 'ask'; call: string; unit: string; dist: number }
@@ -340,6 +345,8 @@ interface Open {
     killsAtOpen: Map<string, number>;
     foesMax: number;
     oursMax: number;
+    /** Last 'refused' event (throttle). */
+    refusedAt?: number;
     raid?: RaidPlan & {
         stagedAt: number;
         livingAtGo?: number;
@@ -662,13 +669,16 @@ export class RealmDirector {
         // Caught or camped: at least one more, even at even odds.
         let want = Math.max(call.why === 'outnumbered' || counted.size ? 0 : 1, call.foes + 1 - call.ours - bodies);
         if (want > 0) {
+            let asked = 0;
             for (const { u, d } of this.candidates(o, board)) {
                 if (want <= 0) break;
                 if (counted.has(u.unit)) continue;
                 call.asked.push(u.unit);
                 want -= u.alive;
+                asked++;
                 events.push({ kind: 'ask', call: call.id, unit: u.unit, dist: Math.round(d) });
             }
+            if (!asked && want > 0) this.logRefused(o, board, Math.max(0, want), this.helpBusy(o), call.why === 'sighted' ? Math.max(this.settings.reach, this.settings.sightReach) : this.settings.reach, 1, false, events);
         }
         call.want = Math.max(0, want);
         // Where the helpers stand now (not yet arrived), nearest first: the caller falls back toward them.
@@ -877,21 +887,62 @@ export class RealmDirector {
         }, 0);
         let want = attackers + 1 - ours - coming;
         if (want > 0 && call.asked.length < cap) {
+            const busy = new Set<string>();
+            for (const x of this.open.values()) if (x !== o && x.call.kind === 'help') { busy.add(x.call.from); for (const c of x.call.coming) busy.add(c); }
             const free = board.units
-                .filter(u => u.running && u.centre && u.size >= s.defendMinSize && u.alive >= Math.max(1, Math.ceil(u.size * s.helperAlive)) && u.hp >= s.helperHp && !call.asked.includes(u.unit))
-                .filter(u => !u.inFight || dist2(u.centre!, keep) <= s.defendRadius)
-                .filter(u => ![...this.open.values()].some(x => x !== o && x.call.kind === 'help' && (x.call.from === u.unit || x.call.coming.includes(u.unit))))
+                .filter(u => !call.asked.includes(u.unit) && !this.refusal(u, keep, { busy, reach: s.defendReach, minSize: s.defendMinSize, fightWithin: s.defendRadius }))
                 .map(u => ({ u, d: dist2(u.centre!, keep) }))
-                .filter(x => x.d <= s.defendReach)
                 .sort((a, b) => a.d - b.d);
+            const before = call.asked.length;
             for (const { u, d } of free) {
                 if (want <= 0 || call.asked.length >= cap) break;
                 call.asked.push(u.unit);
                 if (d > s.defendRadius) want -= u.alive;
                 events.push({ kind: 'ask', call: call.id, unit: u.unit, dist: Math.round(d) });
             }
+            if (call.asked.length === before && want > 0) this.logRefused(o, board, want, busy, s.defendReach, s.defendMinSize, true, events);
         }
         call.want = Math.max(0, want);
+    }
+
+    /** Units busy with another help call (calling, asked or coming): not asked for this one. */
+    private helpBusy(o: Open): Set<string> {
+        const busy = new Set<string>();
+        for (const x of this.open.values()) {
+            if (x === o || x.call.kind !== 'help') continue;
+            busy.add(x.call.from);
+            for (const a of x.call.asked) busy.add(a);
+            for (const c of x.call.coming) busy.add(c);
+        }
+        return busy;
+    }
+
+    /** Why `u` can't be asked to `at`, or null when it can. fightWithin: a unit in a fight that near `at` still can (a defence). */
+    private refusal(u: UnitView, at: Point, o: { busy: ReadonlySet<string>; reach: number; minSize: number; fightWithin?: number }): string | null {
+        const s = this.settings;
+        if (!u.running) return 'not running';
+        if (!u.centre) return 'none alive in the region';
+        if (u.size < o.minSize) return `a squad of ${u.size}`;
+        if (u.alive < Math.max(1, Math.ceil(u.size * s.helperAlive))) return `${u.alive} of ${u.size} alive`;
+        if (u.hp < s.helperHp) return `health ${Math.round(u.hp)}`;
+        const d = dist2(u.centre, at);
+        if (u.inFight && !(o.fightWithin !== undefined && d <= o.fightWithin)) return `in a fight ${Math.round(d)} away`;
+        if (o.busy.has(u.unit)) return 'on another help call';
+        if (d > o.reach) return `${Math.round(d)} away`;
+        return null;
+    }
+
+    /** Log why every other unit was passed over (R2's carry-over 2; S2 at 14:05: two defend calls asked nobody), throttled per call. */
+    private logRefused(o: Open, board: RealmBoardView, want: number, busy: ReadonlySet<string>, reach: number, minSize: number, defence: boolean, events: DirectorEvent[]): void {
+        const now = board.at;
+        if (o.refusedAt !== undefined && now - o.refusedAt < REFUSED_EVERY_MS) return;
+        const at = o.call.at;
+        const units = board.units
+            .filter(u => u.unit !== o.call.from && !o.call.asked.includes(u.unit) && !o.call.coming.includes(u.unit))
+            .map(u => ({ unit: u.unit, why: this.refusal(u, at, { busy, reach, minSize, ...(defence ? { fightWithin: this.settings.defendRadius } : {}) }) ?? 'free' }));
+        if (!units.length) return;
+        o.refusedAt = now;
+        events.push({ kind: 'refused', call: o.call.id, want, units });
     }
 
     private readAnswers(): AnswersFile[] {
