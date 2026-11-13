@@ -57,8 +57,12 @@ export const OBSERVED_STALE_MS = 5000;
 export const OUT_OF_SIGHT = -1;
 /** An observed member hitting something this recently is fighting it (attacking, targetId). */
 export const OBSERVED_AIM_MS = 6000;
-/** Bots leave a target an observed member is hitting to it at or below this % (TacticsSettings.observed.leaveBelow). */
-export const LEAVE_BELOW = 25;
+/**
+ * Bots leave a target an observed member is hitting to it at or below this % (TacticsSettings.observed.leaveBelow).
+ * Off (-1: no target is ever that low): the user, playing Niamh on 2026-11-13, "Get rid of that. Kill everything" after
+ * Conall stood idle 7 times leaving a Norseman to them. A strategy can still set its own leaveBelow.
+ */
+export const LEAVE_BELOW = -1;
 /** A pet of our realm this near an observed member, no member's, is taken for its own (a charmed mob follows within ~100-300). */
 export const OBSERVED_PET_NEAR = 400;
 

@@ -333,6 +333,8 @@ describe('formation: it holds a slot and nobody moves it', () => {
 });
 
 describe('bots leave it the kills', () => {
+    /** The rule is off by default (LEAVE_BELOW -1); a strategy turns it on with its own leaveBelow. */
+    const LEAVING = { ...SETTINGS, observed: { leaveBelow: 25 } } as TacticsSettings;
     const mob = (hp: number) => contact(500, { regionId: R, x: 10_200, y: 10_000, hp, threat: true, hostileSince: Date.now() - 10_000, target: 'Hero', targetSince: Date.now() - 10_000 });
     const hitting = () => human({ attacking: true, targetId: 500 });
 
@@ -346,25 +348,31 @@ describe('bots leave it the kills', () => {
 
     test('assist holds its nuke and its swing; at 60 % it nukes as ever', async () => {
         const wiz = report('Wizard', { role: 'nuker', regionId: R, x: 10_000, y: 10_000, objectId: 3 });
-        const low = stub({ name: 'Wizard', role: 'nuker', members: [wiz, hitting()], contacts: [mob(20)], orders: { focus: 500 } });
+        const low = stub({ name: 'Wizard', role: 'nuker', members: [wiz, hitting()], contacts: [mob(20)], orders: { focus: 500 }, settings: LEAVING });
         expect(await assist({ holdMs: 0 }).run(low.ctx)).toBe(false);
         expect(low.skips).toEqual(['assist: water beetle left to Vue']);
         expect(low.calls.castSpell).toEqual([]);
-        const melee = stub({ name: 'Wizard', role: 'melee', members: [wiz, hitting()], contacts: [mob(20)], orders: { focus: 500 } });
+        const melee = stub({ name: 'Wizard', role: 'melee', members: [wiz, hitting()], contacts: [mob(20)], orders: { focus: 500 }, settings: LEAVING });
         expect(await assist({ melee: true, holdMs: 0 }).run(melee.ctx)).toBe(false);
         expect(melee.calls.attack).toEqual([]);
-        const high = stub({ name: 'Wizard', role: 'nuker', members: [wiz, hitting()], contacts: [mob(60)], orders: { focus: 500 } });
+        const high = stub({ name: 'Wizard', role: 'nuker', members: [wiz, hitting()], contacts: [mob(60)], orders: { focus: 500 }, settings: LEAVING });
         expect(await assist({ holdMs: 0 }).run(high.ctx)).toBe(true);
         expect(high.calls.castSpell).toEqual([500]);
     });
 
     test('the tank stops on it too', async () => {
         const hero = report('Hero', { role: 'tank', regionId: R, x: 10_100, y: 10_000, objectId: 1 });
-        const s = stub({ name: 'Hero', role: 'tank', members: [hero, hitting()], contacts: [mob(20)], orders: { focus: 500 } });
+        const s = stub({ name: 'Hero', role: 'tank', members: [hero, hitting()], contacts: [mob(20)], orders: { focus: 500 }, settings: LEAVING });
         expect(await tank().run(s.ctx)).toBe(false);
         expect(s.skips).toEqual(['tank: water beetle left to Vue']);
         expect(s.calls.killNpc).toEqual([]);
         expect(leftTo(s.ctx, mob(20))?.name).toBe('Vue');
+    });
+
+    test('off by default (the user, 2026-11-13: kill everything): the tank kills it', async () => {
+        const hero = report('Hero', { role: 'tank', regionId: R, x: 10_100, y: 10_000, objectId: 1 });
+        const s = stub({ name: 'Hero', role: 'tank', members: [hero, hitting()], contacts: [mob(5)], orders: { focus: 500 } });
+        expect(leftTo(s.ctx, mob(5))).toBeUndefined();
     });
 });
 
