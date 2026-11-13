@@ -180,7 +180,14 @@ Times are targets. Work moves on when ready; restarts whenever faster, except du
 ## S1: Coordinator (status)
 
 **13:30. Running under the supervisor:** gateway, the swarm of 60 with a control folder, and field mode with the night's flags, all started and watched by `bun scripts/supervisor.ts groups/supervisor.json`. Log: `groups/supervisor.log`; process logs `groups/stint2-{gateway,swarm,field}.log`. The keep-awake script runs from S1's session.
-- To stop everything cleanly: `touch groups/supervisor.stop` (field mode stops, the bots quit, then the swarm and gateway end). To stop field mode only: `touch groups/field.stop` (the supervisor leaves it down).
+- To stop everything cleanly: `touch groups/supervisor.stop` (field mode stops, the bots quit, then the swarm and gateway end).
+- **To restart field mode with the current code: `touch groups/field.stop`.** field.ts deletes the stop file as it ends, so the supervisor starts it again 10 s later. Its flags: the supervisor's command line plus `groups/field.flags` (one flag a line; the file wins), so flags change without a supervisor restart.
+
+**13:32, field mode restarted (S1) with:**
+- the life cycle in **shadow** (`--life=shadow` in `groups/field.flags`): it plans and logs to `groups/lifecycle/` and the field log (`life:` lines), logs nobody in or out, and doesn't touch the line-ups. `--life=on` gives it the unit sizes and who plays; `--raid-every=life` (needs on) musters by numbers instead of the 30 min timer;
+- the directors stopped first on a stop file (S3's ask), so an open muster closes as `stopped`;
+- **`groups/lifecycle/pinned.json` "away"** honoured at every line-up, life cycle on or off: a bot listed there is never picked. Emer is in it for S5's respec trip (S5 takes her off). Niamh goes in it for the user's hour.
+- field.ts is private (git-excluded): these changes are in the working tree only; the previous version is in S1's scratchpad.
 
 **Logging one bot out and in (for S4's life cycle and S6's lfg): the swarm's control folder.**
 - `bun client/swarm-control.ts logout <bot> [...] [--wait=90]` and `bun client/swarm-control.ts login <bot> [...] [--wait=120]`; `bun client/swarm-control.ts status`.
@@ -190,7 +197,7 @@ Times are targets. Work moves on when ready; restarts whenever faster, except du
 
 **Found at 13:24: 13 of the 60 weren't in Thidranki, and the cause will hit every logout.**
 - At login the server moves a character standing near an enemy keep, or a keep in combat, to its bind point: "This area isn't currently secure and you are being transported to a safer location" (`PlayerInitRequestHandler.cs:141-153`, `CheckNearbyKeepAndMoveIfUnsafe`, within visibility distance of the keep).
-- Every character's bind is at its realm's portal keep outside the battleground (Castle Sauvage, Druim Ligen, Svasud Faste's side for Midgard), not in Thidranki. So a bot that logs out near the Faste, while it is an enemy's or in combat, comes back outside and stays there: field mode never put Gawain, Morgana, Tuck, Mordred, Merlin, Enid, Fionn, Niamh, Aine, Cathbad, Etain, Amergin and Laoghaire in a unit. Last night may have run on fewer than 60 for part of the time.
+- Every character's bind is at its realm's portal keep outside the battleground (Castle Sauvage for Albion, Druim Ligen for Hibernia, Midgard's own), not in Thidranki. So a bot that logs out near the Faste, while it is an enemy's or in combat, comes back outside and stays there: field mode never put Gawain, Morgana, Tuck, Mordred, Merlin, Enid, Fionn, Niamh, Aine, Cathbad, Etain, Amergin and Laoghaire in a unit. Last night may have run on fewer than 60 for part of the time.
 - Brought back at 13:27 with `enterBattleground` (portal keep, bind, medallion, port): all 13 in Thidranki and bound at their portal keeps.
 - **For S4:** a bot the life cycle logs in must check its region and, outside Thidranki, walk back in (`enterBattleground` for that bot, as `groups/_template/battleground.ts` does for a group) before it counts as online. Better still, log out away from the Faste. **For S6:** the same for a bot that comes back after an lfg.
 
@@ -200,6 +207,19 @@ Times are targets. Work moves on when ready; restarts whenever faster, except du
 - **Group heals:** the Cleric (Enid, Nimue) casts Heaven's Commendation and the Healer (Eir, Sigrid) Favor of Battle through the Druid's `groupHeal`: three or more around her each missing most of it, in a fight, above 30 % power, not under a melee. Result kind `groupHeal` in the reports.
 - **The stand** (`sdk/classes/healer-stand.ts`, Druid, Cleric and Healer kits): in a fight, while nobody in her reach is under the heal line (or an enemy is casting at her), a step of at most 450 out of every free enemy player's sight (terrain, keep walls, buildings), keeping the members in her reach within 1800. Result kind `stand`.
 - **Time in an enemy's sight (the morning report's measure):** each Druid, Cleric and Healer notes it at every fight's end in its unit's run log: `<Name>: in enemy sight 12.0 s of 41.5 s in the fight (29 %)`. `grep -h "in enemy sight" groups/*/runs/*.log` gives every fight.
+
+- **First readings (13:20-13:26 local, before the stand could have moved anyone much):** in enemy sight Brigid 39-63 %, Eir 94-100 %, Sigrid 56 % of fight time. One stand walk timed out (now a step part of the way, b9eeb33).
+
+**13:45, the keep pieces (part 1) and the carry-overs.** Import check clean after each commit, `bun test sdk/classes` 354 pass.
+- **The bomb (d1e94ac):** `sdk/classes/pbae.ts`, `pbae` in the Enchanter and Wizard kits. It casts the top point-blank rank (at least 100 damage) when 2+ enemy players or pets stand within 240 (3D), nothing under our cc is within 380, and no melee swings at the caster. Blaise and Vivien (Steaming Blast 133) have it now. Ciaran's Light build stays under the floor. Emer gets it after her Mana respec.
+- **Emer's respec:** Thidranki has no trainer (the nearest Enchanter trainer is Anwar in Tir na Nog). Ready in `groups/s5-emer/` (one-member group: `cloak-trip.ts --stay`, `choose-build`, `train.ts --respec`, `cloak-trip.ts` back). Waiting for S1 to keep her out of line-ups for ~20 min.
+- **Etain's turrets inside the gate and on the stair:** waiting for S2's defence orders (what a defending member reads, and where). Asked S2.
+- **Reaver (c6d5408):** the aura's on/off now comes from its pulses (each pulse is an effect animation from him on himself). A stop goes out during the recast timer: the server cancels a running pulse before it checks the timer, and only castSpell's client-side check refused it.
+- **Minstrel (2bc0d51):** the `song: pulse_cancelled` were mostly song()'s own deliberate stop in a quiet phase, recorded as a failure, and every singer had them (Oisin 1174, Elaine 1037, Tuck 790 in the run logs). Now a `songStop` success (one hunk in `sdk/group/behaviors.ts` song()). One song at a time is the server's rule for every singer. `cc: pulse_cancelled` is a stuck flute mezz cleared by the next one: a lost turn, left as is.
+- **Etain (2bc0d51):** `petAttack:out_of_range` was keep targets: the lord, Lady Thidranki, wall Scouts, 1182-1233 from the turret in 3D, which the kit measured on the ground. Turret reach and plant spot are now 3D.
+- **Morgause (2bc0d51):** Vitality Theft `no_response` was the servant mid-cast: the server queues the new spell silently, and the power is paid each time. The servant now reads as busy by its own cast animation, and a `no_response` holds the next spell. `walk:water`: a refused walk-in holds 8 s at the bank (`noteWet`).
+- **Savage (e082ebe, guide only):** never in the river. Water refusals are the dry move guard plus the 8 s hold working; `stuck` is "max speed 0", so rooted or stunned. Two ideas for the shared `assist` are in `learnings/classes/savage.md`; not done.
+- **For whoever owns it:** `bun test sdk/group` has 2 failures from the uncommitted `loiter` behaviour now last in the role lists, after `rest` (`behaviors-lull.test.ts`, `withPets ... RvR lists`). Not from S5.
 
 ## S4: Life cycle
 
@@ -226,3 +246,24 @@ Times are targets. Work moves on when ready; restarts whenever faster, except du
 - **The member side (`sdk/group/defence.ts`):** `defenceSettings(plan, orders, idToName, broken, prev)` → `Orders.settings.defence`; `holdDefenceStand` (put first in each role's list while it's set) walks in over the bridge and through our doors to its stand, and falls through on it (or within its leash in a fight) so the kit fights from there.
 - **For S3 (interface sent 13:20):** at the defence call, per tick: `openOwnDoors`, `defenceOrders`, the settings patch, the behaviour first. Next for me: the pathing in `actions.ts` (the straight last step and the chase), then a defence on the throwaway with a few members, then live (19:00-02:00).
 - **0x99 door state:** not needed so far (doors broken are read from chat as before). If it becomes needed it goes to S1 for a swarm restart before 19:00.
+
+## S3: Director
+
+**13:35 (bun clock, CET), all five pieces committed:** 75e95a1, 0bfc215, 5ffd895, da83f8a, 20e084b, 1c8250a. Tests: director 34, raid 24, defend 4, rvr/help 126. Import check: 23/23 guarded rvr.ts files. The units' side (rvr.ts, tactics/help.ts, raid.ts, defend.ts, behaviors.ts) goes live at each unit's next sortie. The director side goes live at the next field.ts start. The field.ts running since about 13:16 has 75e95a1 only.
+- **Help in time (75e95a1, live):**
+  - A unit calls `sighted` on first sight: 3 or more of one realm within 5000, more than ours there, in a fight or not. Helpers may come from 9000. A call's reason only gets worse (a `why` event).
+  - The caller falls back toward the nearest helper coming, unless the enemy stands that way. Helpers within 2500 count on its side, so it turns when they meet. Reason: `fall back toward <unit> coming to help`.
+  - A free main group farther than 4500 from the nearest friendly unit closes to 3000 first (`roam near: ...`). It roams by a main group first, a trio only when no main group is out (1c8250a). `--roam=false` turns it off for a run.
+  - First live look, 13:16-13:29: 26 `sighted` calls (Midgard 14, Hibernia 12). midgard-s3's two calls had midgard-s2 and -s4 arrive. 74 `roam near` lines.
+- **The defence call (da83f8a + 20e084b, live at the next field.ts start):**
+  - While we hold the Faste and 2 or more enemy players were seen within 4500 of it, a `defend` call (why `keep`) asks the nearest main groups in until we outnumber the attackers, at most half the running units. Help calls go on with the rest.
+  - A unit asked in seats its members on S2's stands each tick (`Orders.settings.defence`) and holds them (`holdDefenceStand`). It doesn't hunt or fall back.
+  - The call closes `quiet` 45 s after the last attacker was seen, or `lost`.
+  - Squads don't answer it yet.
+- **The moment to raid (5ffd895, live at the next field.ts start):** the go waits for few defenders seen at the keep (at most half the raid's living, at least 2), unless the owners are seen fighting the third realm far off (3 or more, over 8000 out). With the third realm at the keep too: as many or more, hold `winner` (take it from the winner); fewer, go with them on the weaker side. The stage event logs `defenders`, `third`, `ownersAway`, `owner`.
+- **Raid fixes (da83f8a, units' side live):**
+  - A corpse in a raid holds its release for a rezzer of any raid unit it sees near. A rezzer takes another unit's corpse once none of its own needs it (`await_rez <name> (raid)`).
+  - The stage's whole-raid wait counts units still closing on the target, at any distance (the director's `onWay`; a unit that hasn't come 1000 closer in 2 min drops out).
+  - A squad waits at the last approach waypoint 3000 or more from the stage (Hibernia (34500, 35200)) until a main group on its way has passed: `squad waits for <unit> to pass`.
+- **For S1:** field.ts should call each director's `stop()` as soon as stopping() is true, before the realm loops end. stop() now closes open calls as `stopped` and hands those close events to onUpdate (sent 13:15).
+- **Measure:** `bun sdk/group/director-report.ts --since=HH:MM [--until=HH:MM]` prints last night's columns plus first sight, call to first arrival, the nearest unit at the call, the ask distance, and with help against without. Last night's run B (22:28-01:54) reads the same as the morning report: on 308 calls, 26 % arrived, first arrival 22 s (median), ask 5231 away.
