@@ -9,7 +9,7 @@ import type { BotWorldState, NearbyNpc, NearbyPlayer, PetState } from '../types'
 import { assist, buff, buffRetryMs, crowdControl, defaultBehaviors, flee, heal, meleeFight, song } from './behaviors';
 import { Blackboard } from './blackboard';
 import { MEZZED } from './cc';
-import { obs, report } from './fixtures';
+import { obs, report, sighting } from './fixtures';
 import { MemberAgent, type Behavior, type MemberAgentOptions } from './member';
 import { GroupObserver } from './observer';
 import { packBehaviors } from './pack';
@@ -761,6 +761,39 @@ describe('a member too far to buff', () => {
         } finally {
             clock.mockRestore();
         }
+    });
+});
+
+describe('a buff stop with a threat about', () => {
+    // 21:11, the Faste: "1 buff to go (Barrier of Negation on Ciaran)" for the stop's whole 60 s, none cast: guards hostile for
+    // seconds after their last shot, inside the keep with no door between, held every buff up, the member's own too.
+    const BARRIER = spell('Barrier of Negation', 4321);
+    const STR = spell('Blessed Strength', 1451, 1);
+    const TANK = 77;
+    const stop = (target: string | null) => {
+        const m = member({
+            role: 'healer', list: [buff()], spells: [BARRIER, STR], player: { concentration: 20, maxConcentration: 20 }, orders: { phase: 'recover', focus: null, cc: [], anchor: ME },
+            world: { pet: null, nearbyNpcs: [], nearbyPlayers: [makePlayerObj({ objectId: TANK, name: 'Tank', realm: 'albion', x: ME.x + 200, y: ME.y, z: ME.z, distance: 200, distance2d: 200 })] },
+        });
+        const tank = report('Tank', { role: 'tank', objectId: TANK, regionId: 1, x: ME.x + 200, y: ME.y, z: ME.z });
+        // A monster fighting near us, on none of us (or on us): a threat with no door between.
+        m.board.publish(obs(tank, [sighting(700, { x: ME.x + 600, y: ME.y, z: ME.z, swinging: true, inCombat: true, ...(target ? { targetId: m.w.state.player!.objectId } : {}) })]));
+        return m;
+    };
+    const cast = (m: ReturnType<typeof stop>) => m.w.sentOf('castSpell').map(c => c.spellIndex);
+
+    test('our own buff still goes, the one on another member waits', async () => {
+        const m = stop(null);
+        await until(() => m.w.sentOf('castSpell').length > 0, 800);
+        await Bun.sleep(100);
+        expect(m.board.picture().contacts.some(c => c.threat)).toBe(true);
+        expect(cast(m)).toEqual([0]);
+    });
+
+    test('with the threat on us, none', async () => {
+        const m = stop('me');
+        await Bun.sleep(250);
+        expect(m.w.sentOf('castSpell')).toEqual([]);
     });
 });
 

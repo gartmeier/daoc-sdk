@@ -257,8 +257,9 @@ export const wallStep = (o: { focusAny?: boolean } = {}): Behavior<TacticsSettin
         if (!seen.length) return false;
         const others = ctx.members().filter(m => m.name !== me.name && !m.isDead && m.regionId === region);
         const spot = standSpot(region, me, others, [], { walls, rings: WALL_STEP_RINGS, step: WALL_STEP_RINGS[WALL_STEP_RINGS.length - 1] });
-        if (!spot) return ctx.skip(`wallStep: no spot out of ${seen.join(', ')}'s sight in reach of the group`);
+        // No spot: the turn goes on down the list, and the search (80 spots, each against every wall caster) waits as after a step.
         ctx.memory.set('wallStepAt', Date.now());
+        if (!spot) return ctx.skip(`wallStep: no spot out of ${seen.join(', ')}'s sight in reach of the group`);
         ctx.doing('move', null, `out of ${seen.join(', ')}'s sight`);
         const w = await ctx.bot.walkTo(spot.x, spot.y, { z: spot.z, tolerance: 40, timeout: 6000 });
         ctx.result('wallStep', w.success || w.reason === 'timeout' ? { success: true, message: `out of ${seen.join(', ')}'s sight${w.success ? '' : ' (part way)'}` } : w);

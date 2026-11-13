@@ -2522,11 +2522,16 @@ export const buff = (): Behavior<TacticsSettings> => ({
         const stripped = strippedMembers(planned, held, lost, Date.now());
         // A threat on none of us beyond a door (two boars past our own portal keep's door, 16:44: "14 buffs to go", none cast) holds nothing up.
         const names = new Set(ctx.members().map(m => m.name));
-        const blocking = ctx.threats().filter(t => (!!t.target && names.has(t.target)) || !doorBetween(me.regionId, me, t, me.realm));
-        const quiet = QUIET_PHASES.has(ctx.orders().phase) && !blocking.length;
+        // Nor does a keep guard on none of us: guards stay hostile for seconds after their last shot, and inside a keep no door stands
+        // between, so a raid's stop (21:11, the Faste: "1 buff to go (Barrier of Negation on Ciaran)", 60 s with none cast) waited out.
+        const blocking = ctx.threats().filter(t => (!!t.target && names.has(t.target)) || (!t.keepGuard && !doorBetween(me.regionId, me, t, me.realm)));
+        const stop = QUIET_PHASES.has(ctx.orders().phase);
+        const quiet = stop && !blocking.length;
+        // A stop with a threat about: our buffs on ourselves still go, while nothing is aimed at us, nothing is in melee on us and no cast of ours runs.
+        const selfOnly = stop && !quiet && !ctx.threats().some(t => t.target === me.name) && !hammeredBy(ctx) && !castRunning(ctx) && !me.attacking;
         // Out of the quiet phases: only the concentration buffs of a member stripped of ours (rezzed, say), with no melee on us and no cast of ours running.
-        if (!quiet && (!stripped.size || hammeredBy(ctx) || castRunning(ctx) || me.attacking)) return false;
-        const tasks = quiet ? planned : planned.map(t => (!t.pet && t.spell.concentration > 0 && stripped.has(t.target) ? t : { ...t, covered: true }));
+        if (!quiet && !selfOnly && (!stripped.size || hammeredBy(ctx) || castRunning(ctx) || me.attacking)) return false;
+        const tasks = quiet ? planned : planned.map(t => (!t.pet && ((t.spell.concentration > 0 && stripped.has(t.target)) || (selfOnly && t.target === me.name)) ? t : { ...t, covered: true }));
         if (!tasks.length) return false;
         const conc = { current: me.concentration ?? 0, max: me.maxConcentration ?? 0, effects: ctx.sdk.getState()?.concentrationEffects?.length ?? 0 };
         const retry: Map<string, number> = ctx.memory.get('buffRetry') ?? new Map();
