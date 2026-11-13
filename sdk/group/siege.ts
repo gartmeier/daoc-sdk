@@ -141,10 +141,13 @@ export const FASTE: SiegeLayout = {
         // courtyard points each). COURTYARD sees all of them.
         { label: 'yard-1', kind: 'fighter', at: { x: 33353, y: 38186, z: 3720 }, aggro: 1000, rank: 3, stand: COURTYARD, who: 'all' },
         { label: 'yard-2', kind: 'fighter', at: { x: 33485, y: 38252, z: 3720 }, aggro: 1000, rank: 3, stand: COURTYARD, who: 'all' },
-        { label: 'wall-e-n', kind: 'caster', at: { x: 33976, y: 37722, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'ranged' },
-        { label: 'wall-e-s', kind: 'caster', at: { x: 33971, y: 38815, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'ranged' },
-        { label: 'wall-se', kind: 'caster', at: { x: 33679, y: 39074, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'ranged' },
-        { label: 'wall-n', kind: 'caster', at: { x: 33185, y: 37386, z: 3975 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'ranged' },
+        // Melee too (the user, in hibernia's raid 2026-11-13 17:25: "tanks need to go in. up the walls and kill the runemasters"):
+        // once the gate is broken the wall-walk stair at (33530-33660, 38860-38960) is a found route (meleeReach), so the tanks and
+        // melee climb to them while the ranged cover from the courtyard; before it, meleeReach keeps them off. Nearest the stair first.
+        { label: 'wall-se', kind: 'caster', at: { x: 33679, y: 39074, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all' },
+        { label: 'wall-e-s', kind: 'caster', at: { x: 33971, y: 38815, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all' },
+        { label: 'wall-e-n', kind: 'caster', at: { x: 33976, y: 37722, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all' },
+        { label: 'wall-n', kind: 'caster', at: { x: 33185, y: 37386, z: 3975 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all' },
         // The west wall: no reachable ground spot sees wall-sw, and wall-nw only from outside the walls; they see 1 and 6 of 215
         // courtyard points, not the building's door, not the roof. Optional: their stands are the wall-walk spots that see them
         // (up the stair from the courtyard), should one ever be wanted.

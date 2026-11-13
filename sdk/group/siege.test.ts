@@ -272,7 +272,7 @@ describe('raidOrders', () => {
         // The gate broken: the courtyard, the east wall casters with the yard pair.
         const yard = raidOrders(plan, view({ members, seen: [...garrison('albion', labelsUpTo(1)), ...doors], staged: true, broken: [252000301] }));
         expect(yard.ranged.step!.rank).toBe(3);
-        expect(FASTE.targets.filter(x => x.rank === 3).map(x => x.label)).toEqual(['yard-1', 'yard-2', 'wall-e-n', 'wall-e-s', 'wall-se', 'wall-n']);
+        expect(FASTE.targets.filter(x => x.rank === 3).map(x => x.label)).toEqual(['yard-1', 'yard-2', 'wall-se', 'wall-e-s', 'wall-e-n', 'wall-n']);
     });
 
     test('a door is done when a member saw it break', () => {

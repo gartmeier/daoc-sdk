@@ -113,13 +113,14 @@ describe('raid: the orders, step by step', () => {
         const b = step(five({ x: 34_650, y: 38_250, z: 3722 }), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem);
         expect(b.update).toMatchObject({ phase: 'recover', focus: null });
         expect('meleeFocus' in b.update).toBe(false);
-        // The gate broken (rank 3), the yard pair gone, the walls left: no step for the melee, they hold (live 08:36 they
-        // climbed to wall-se).
+        // The gate broken (rank 3), the yard pair gone, the walls left: the melee go up the wall-walk stair for the wall casters
+        // with the ranged (the user, 2026-11-13 17:25: "tanks need to go in. up the walls and kill the runemasters"; S2's siege.ts
+        // gives the courtyard-side wall casters to all). Before 17:25 they held (live 08:36 they had climbed the wall's side).
         const members = five({ x: 34_420, y: 38_275, z: 3720 });
         members[1] = { ...members[1]!, doorsBroken: [252000301] };
         const c = step(members, [guard(302, wall.at, { name: 'Sorcerer' })], { raid: { callId: 'x', staged: true, broken: [] as number[] } });
-        expect(c.update).toMatchObject({ phase: 'engage', focus: 302, meleeFocus: null });
-        expect(c.update.reason).toContain('melee hold');
+        expect(c.update).toMatchObject({ phase: 'engage', focus: 302, meleeFocus: undefined });
+        expect(c.update.reason).not.toContain('melee hold');
         // Travelling: no meleeFocus named, so the board drops it.
         expect('meleeFocus' in step(five(plan.rally)).update).toBe(false);
     });
