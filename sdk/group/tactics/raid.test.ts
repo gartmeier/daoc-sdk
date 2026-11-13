@@ -75,18 +75,21 @@ describe('raid: the orders, step by step', () => {
         expect(update.settings).toEqual({ raid: FASTE.keep, raidDoor: null });
     });
 
-    test('assault: the outer guards are the focus; then the walls for the ranged and the gate for the melee', () => {
+    test('assault: the outer guards are the focus; then the gate alone, the ranged waiting out of sight of the walls', () => {
         const outer = FASTE.targets.find(t => t.label === 'outer-armswoman')!;
         const a = step(five(plan.stage), [guard(301, outer.at)]);
         expect(a.update).toMatchObject({ phase: 'engage', focus: 301 });
         expect(a.mem.raid.staged).toBe(true);
-        // Rank 1 done (nothing at the outer posts, seen from OUTSIDE): the wall casters and the gate.
+        // Rank 1 done (nothing at the outer posts, seen from GATE_OUT): the gate, melee only (R5's ranks by the walls'
+        // line of sight, 11:13). A wall caster in view is rank 3's: no focus for anyone, the melee on the door.
         const wall = FASTE.targets.find(t => t.label === 'wall-e-n')!;
-        const b = step(five({ x: 35_500, y: 38_250, z: 3570 }), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem);
-        expect(b.update).toMatchObject({ phase: 'engage', focus: 302 });
+        const gateOut = { x: 34_650, y: 38_250, z: 3722 };
+        const b = step(five(gateOut), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem);
+        expect(b.update).toMatchObject({ phase: 'recover', focus: null });
+        expect(b.orders.ranged.step).toBeNull();
         expect((b.update.settings as any).raidDoor).toMatchObject({ doorId: 252000301, label: 'gate' });
         // The same object while the door stays.
-        expect(step(five({ x: 35_500, y: 38_250, z: 3570 }), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem).update.settings).toBe(b.update.settings);
+        expect(step(five(gateOut), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem).update.settings).toBe(b.update.settings);
     });
 
     test('a member read the gate broken: the melee leave it', () => {
@@ -99,17 +102,18 @@ describe('raid: the orders, step by step', () => {
         expect((update.settings as any).raidDoor).toBeNull();
     });
 
-    test('the melee\'s own focus: none on a rank of wall casters (they hold), the door\'s at the gate, the same on a fighter', () => {
+    test('the melee\'s own focus: the same on a fighter, none named at the gate (breakDoor\'s), none on the walls (they hold)', () => {
         const outer = FASTE.targets.find(t => t.label === 'outer-armswoman')!;
         const wall = FASTE.targets.find(t => t.label === 'wall-e-n')!;
         // Rank 1, a fighter for all: one focus.
         const a = step(five(plan.stage), [guard(301, outer.at)]);
         expect(a.update).toMatchObject({ focus: 301, meleeFocus: undefined });
-        // Rank 2 with the gate standing: the wall caster is the ranged half's, the melee are breakDoor's (no "hold").
-        const b = step(five({ x: 35_500, y: 38_250, z: 3570 }), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem);
-        expect(b.update).toMatchObject({ phase: 'engage', focus: 302, meleeFocus: null });
-        expect(b.update.reason).not.toContain('melee hold');
-        // The gate broken, the walls left: no step for the melee, they hold (live 08:36 they climbed to wall-se).
+        // Rank 2, the gate standing: nothing to engage; the melee are breakDoor's, and no meleeFocus is named.
+        const b = step(five({ x: 34_650, y: 38_250, z: 3722 }), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem);
+        expect(b.update).toMatchObject({ phase: 'recover', focus: null });
+        expect('meleeFocus' in b.update).toBe(false);
+        // The gate broken (rank 3), the yard pair gone, the walls left: no step for the melee, they hold (live 08:36 they
+        // climbed to wall-se).
         const members = five({ x: 34_420, y: 38_275, z: 3720 });
         members[1] = { ...members[1]!, doorsBroken: [252000301] };
         const c = step(members, [guard(302, wall.at, { name: 'Sorcerer' })], { raid: { callId: 'x', staged: true, broken: [] as number[] } });
