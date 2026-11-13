@@ -146,14 +146,16 @@ Times are targets. Work moves on when ready; restarts whenever faster, except du
 
 | What | Commits | Look for | Verdict |
 |---|---|---|---|
-| Walls block line of sight | c1a48b7, cf0bba3 | fewer deaths to wall Wizards; our casts refused through walls (`not_visible`) | |
-| The Faste's ranks by line of sight | fb9173e, a2ad09e | the gate taken by melee alone, then the courtyard set; the west wall skipped | |
-| Shut enemy doors are walls on the navmesh | 8e0a8d7, d7bc5af | nobody inside before the gate breaks | |
-| Melee only on what they can reach | e80c2bf, 2baafeb | no climb up the inside wall | |
-| Only a fighter pulls the raid off the lord | 48fa6a4 | the lord phase holds | |
-| The lord hold; the go waits while defenders outnumber us | 59b44a0 | raids ending `captured` instead of `timeout` | |
-| Warden: face after the side step; no heal retried each second | 8a0212a | Aine's styles landing | |
-| Turret and servant drop their list near crowd control | 23cef5c | `Broke cc` per sortie | |
+| Walls block line of sight | c1a48b7, cf0bba3 | fewer deaths to wall Wizards; our casts refused through walls (`not_visible`) | **partly**: 750 `not_visible` since 13:16, 550 in raid windows; wall-caster deaths not countable (`guard:midgard`) |
+| The Faste's ranks by line of sight | fb9173e, a2ad09e | the gate taken by melee alone, then the courtyard set; the west wall skipped | **partly**: hibernia went rank 1 → gate (melee) → rank 3 (ranged on wall-e-n, yard) 14:25-14:33; west wall never targeted; respawned outer guards sent it back to rank 1 twice; no "door is broken" line to tie rank 3 to |
+| Shut enemy doors are walls on the navmesh | 8e0a8d7, d7bc5af | nobody inside before the gate breaks | **works**: 42 walks refused at the shut gate (34333, 38275), 14:24-14:32 |
+| Melee only on what they can reach | e80c2bf, 2baafeb | no climb up the inside wall | **partly**: `melee: no_path` to the wall Runemaster while the gate was shut; but Laoghaire went for the wall-n Runemaster under "melee hold" at 14:33 and died |
+| Only a fighter pulls the raid off the lord | 48fa6a4 | the lord phase holds | not seen: no raid reached the lord |
+| The lord hold; the go waits while defenders outnumber us | 59b44a0 | raids ending `captured` instead of `timeout` | not seen: 0 `hold` events; every go read 0 defenders (nobody looked: S3's 41f707f); raids ended `timeout` |
+| Warden: face after the side step; no heal retried each second | 8a0212a | Aine's styles landing | too little data: one Taunting Blade, one `lastStand:interrupted`; no repeats |
+| Turret and servant drop their list near crowd control | 23cef5c | `Broke cc` per sortie | **likely works**: Etain broke cc 1 in 5 sorties (night 43 in 26), Morgause 0 in 5 (night 8 in 33) |
+
+**Raids 13:16-14:55 (S1's subagent, from the field log and the director logs):** Albion mustered 5 times; 3 were cut off by S1's field mode restarts (13:32, 13:38, 13:54, 14:45), one ended `timeout` (14:00-14:15, 4 lost); no Albion unit reached the stage (they stalled 1650-1800 short, camelot-s4 about 9000 short, repeating "on to the Faste, keep together"). Hibernia raided once, 14:17-14:34: `timeout`, 29 lost, 15 kills, through rank 1, the gate and rank 3, never the lord. Midgard holds the Faste: no change of hands. **Lesson for S1: every field mode restart ends the open raids; restart less, and between musters.**
 
 ## Deferred (not this stint)
 
@@ -254,7 +256,7 @@ Life cycle, playing per realm (mean of its samples):
 - **Mix from who plays** (`mixFor`, capped by `--mix`): 19 → 6,6,3,2,1,1; 13 → 5,5,2,1; 12 → 6,3,2,1; 8 → 5,2,1; 6 → 5,1. A unit sized 0 sits its next sortie out.
 - **Needed classes:** a main group's `requires.classes` (and a healer when none of those heals) stay on until another of the class is rested (up to 5 h), counted for the groups an hour ahead. **Finding:** Hibernia has two Druids and two Bards, so with two groups for ~9 evening hours the second group goes without one about 15-30 % of that time (each takes its 20-min break every ~5 h). One group: covered > 98 %. More Druids/Bards in the pool would fix it (a user call).
 - **Balance** (each realm's own board only): ours seen within 4000 of an enemy vs distinct enemies of each realm seen, 20-min window; one side over 1.5× for 10 min moves the realm's target by one (±3 at most), back toward 0 after 20 min even.
-- **Raids by numbers** (`wantsMuster`): ≥14 online, ≥10 alive out, 25 min since the last, not holding the Faste, not outnumbered. The go is the director's (S3).
+- **Raids by numbers** (`wantsMuster`, 098e62a: follows the curve, after S1 saw no realm could reach 14 at the afternoon's 12 or the night's 7): online ≥ the realm's target - 1, alive out ≥ max(5, 70 % of the target), 25 min since the last, not holding the Faste, not outnumbered. 12 → 11 on, 9 out; 7 → 6 on, 5 out; 19 → 18 on, 14 out. The go is the director's (S3).
 - **Waves:** a realm goes out (toward its last sighting outside enemy spawns); once out ≥12 min with its last fight over 90 s (or 30 min with none), a 4-7 min break: main groups walk to their own spot round the portal keep's arrival and idle (`loiter`: sit, turn, a step, stand). Fights, help calls and the muster come first. Squads keep roaming (not hooked).
 - **No director hook needed** (S3): the life cycle reads `director.lastBoard()` and `director.muster()` from field.ts, and field.ts starts the muster.
 - **Gear wear, 13:19 (opening):** all 60 read from the gateway's `/state` (observe only). Mean condition 100.0 %; lowest a weapon at 97 % (staffs, Merlin's, Galahad's sword, Thorgrim's axe), armour 100 %. `groups/lifecycle/gear-wear.jsonl`; again at ~15:00 and ~02:00 (`bun groups/gear-wear.ts --label=...`). Repair trips only if it falls toward 90 %.
@@ -262,6 +264,9 @@ Life cycle, playing per realm (mean of its samples):
 - **Shadow means no effect on play (452a364).** The first shadow run (13:32) still wrote the wave files, which the main groups (all restarted 13:32-13:36 with the hook) would have followed into breaks at the keep, spoiling the "before". Blocked at 13:36 by directories in the files' place (the running field.ts logs `wave file: EPERM` every 30 s until its next restart; harmless). From the next field.ts start, shadow writes no wave and `writeWave` clears the directories itself under `on`. Pinned-away bots (Emer's respec trip, Niamh) are now left entirely alone.
 - **lfg (S6), from the next field.ts start:** the life cycle reads `groups/lfg/state.json` `held` every 30 s. A held bot leaves at once, logs out where a log-in later is safe, is never logged in while held, and lowers its realm's target by one (the human plays in its seat). Let go, it rests as usual. So with `--life=on` S6 can use `--presence=lifecycle`.
 - **For the supervisor (S1):** a bot the life cycle logged out is not a dropped client: read `groups/swarm-control/state.json` or `groups/lifecycle/state.json` before bringing one back.
+- **On since 14:49:22 (S1's field.ts start #5).** First minutes: an early leave per realm every 90 s toward the afternoon 12 (Mimir, Deirdre, Hodur, Manannan logged out). Albion's two waits are right: Agravaine stood 1256 from the Faste, Morgana 6956 (inside 7000); they log out once their unit walks them away.
+- **Humans (300e72e, from the next field.ts start):** target = curve + shift - (setHumans + lfg-held bots of the realm). lfg's placed humans are counted from `held`, one seat each; `setHumans` is only for humans lfg did not place (Niamh: pinned away + `setHumans('hibernia', 1)` while the user plays). Before 300e72e it took the larger of the two.
+- **Gear wear, 14:51 (end of the opening, 56 read, 4 logged out):** lowest item 96 %, mean of the bots' means 99.96 %, the same as 13:19. About 1 % on the most-used weapons in 1.5 h of fighting: no repair trips; read again near 02:00.
 
 ## S2: The keep
 
@@ -374,6 +379,10 @@ Life cycle, playing per realm (mean of its samples):
 - **13:40, `/region` live (S1's hunks in at the 13:38 restart):** the first lines came from hibernia-2's caught call (`5 mids on us north of the Faste, help!`), through the voice file to its leader's `/region`. Two fixes (c6b3910, live at the next field.ts restart): one fight gave three lines in 20 s as the count moved (5, 2, 6): now again only when it got worse or grew by 3, with the call's own count; and an `omw` from the caller itself, on a stale answer after the director's restart (ids start over; told S3). lfg-watch runs (`--units=hibernia --presence=swarm`), nobody asked yet; the gateway's loop lag with it: max 15 ms, mean 1 ms.
 - **A returning bot (dd33838):** with `--presence=swarm`, once a bot the watcher logged back in is in game outside Thidranki (a login near an enemy keep lands at the bind), the watcher takes it back in with S4's `enterAlone`, every 4 min for up to 20; it stays in `held` meanwhile.
 - **For S4:** with `--presence=lifecycle`, a bot in `groups/lfg/state.json` `held` should be treated as a session ended now (leaving: out of line-ups, logged off safely) and never logged in while held; once it leaves `held` it rests as usual. Until then the watcher logs it out and in through the swarm control itself, and a bot it logs back in may land outside Thidranki (S1's finding): your `entering` takes it back in.
+- **14:49-14:55, after S1's restart (field start #5 loads c6b3910; lfg-watch 14:49:40 with `--units=hibernia --presence=lifecycle`, no asks yet):** no `omw` from a caller any more, and one call gives one line. Two more repeats remain, and both are fixed in the voice. They go live at the next field.ts restart, since the `/region` voice runs in field.ts's process. Group chat needs no restart, since every sortie loads it fresh.
+  - **9b15f5a:** the director opens one help call per unit, so two or three units that see the same enemy group each called it (14:44: hibernia, hibernia-2 and hibernia-s1, "8 mids … north of the Faste" three times in 10 s). Now help calls within 3000 of each other are one fight.
+  - **34edb9d:** the director closes a lapsed call and opens a new one there seconds later (hibernia-1 to -3, 14:51-14:53), so "7 mids … north-east of the Faste" came four times in a minute. Now a fight stays known for 60 s after its call closed. "Sighted" to "outnumbered" ("8 mids coming X" to "8 mids X") is the same news and no longer counts as worse; caught and camped still do.
+  - Group chat since the restart: hibernia said 17 lines in a 3-minute fight, all readable. One pair contradicts itself: `mezz on the Troll, leave it` and 4 s later `switch, focus the Troll` (two Trolls, or the mezz broke). This is not changed yet.
 - **First measure, 13:32-14:16 (`director-report.ts --since=13:32`), against last night's run B with the director on:**
 
   | | calls | someone coming | arrived | wiped | our dead per call | first sight | call to first arrival | nearest unit at the call | ask distance |
