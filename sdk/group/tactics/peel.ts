@@ -133,7 +133,9 @@ export const MEZZ_MELEE: MezzMeleeOptions = { by: 'support', within: 1400 };
 
 /**
  * The mezzer's assignment goes on the free enemy fighter (foeKind) within reach of it that is not the focus and not
- * immune to mezz: the one on one of ours first, then the nearest.
+ * immune to mezz: the one on one of ours first, then the one it already has (the last orders' cc), then the nearest. Without
+ * the keep, two melee at about the same distance swapped every tick and the cast was dropped each time (S5, hibernia 19:52:41-50:
+ * "cc Fiacra->472" / "->485" for 10 s, her first mezz at 19:52:51).
  */
 export function mezzMelee(ctx: Ctx, u: OrdersUpdate, o: MezzMeleeOptions = MEZZ_MELEE): OrdersUpdate {
     if (u.phase !== 'engage') return u;
@@ -141,10 +143,12 @@ export function mezzMelee(ctx: Ctx, u: OrdersUpdate, o: MezzMeleeOptions = MEZZ_
     if (!mezzer) return u;
     const names = new Set(ctx.picture.members.map(m => m.name));
     const on = (c: Contact) => Number(!!(c.target && names.has(c.target)));
+    const had = (ctx.orders.cc ?? []).find(a => a.by === mezzer.name)?.targetId;
+    const kept = (c: Contact) => Number(c.objectId === had);
     const melee = ctx.picture.contacts
         .filter(c => c.kind === 'player' && !c.stale && !c.cc && c.hp > 0 && !c.isShade && foeKind(c) === 'fighter' && c.objectId !== u.focus
             && (c.ccImmune?.mezz ?? 0) <= ctx.now && dist(mezzer, c) <= o.within)
-        .sort((a, b) => on(b) - on(a) || dist(mezzer, a) - dist(mezzer, b))[0];
+        .sort((a, b) => on(b) - on(a) || kept(b) - kept(a) || dist(mezzer, a) - dist(mezzer, b))[0];
     if (!melee) return u;
     const cc = (u.cc ?? []).filter(a => a.by !== mezzer.name && a.targetId !== melee.objectId);
     return { ...u, cc: [...cc, { targetId: melee.objectId, by: mezzer.name }], reason: `${u.reason} (mezz melee #${melee.objectId})` };

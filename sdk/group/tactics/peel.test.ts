@@ -49,6 +49,14 @@ describe('peel by crowd control', () => {
         const u = mezzMelee(ctx(foes), engage(1, { cc: [{ targetId: 1, by: 'Bard' }, { targetId: 3, by: 'Menta' }] }), MEZZ_MELEE);
         expect(u.cc).toEqual([{ targetId: 3, by: 'Menta' }, { targetId: 2, by: 'Bard' }]);
     });
+    test('mezzMelee: the mezzer keeps the one it has while it ranks the same, no swap with one a little nearer (S5, 19:52)', () => {
+        const foes = [foe(5, 600), foe(6, 620)];
+        expect(mezzMelee(ctx(foes), engage(1, { cc: [] }), MEZZ_MELEE).cc).toEqual([{ targetId: 5, by: 'Bard' }]);
+        expect(mezzMelee(ctx(foes, { orders: { cc: [{ targetId: 6, by: 'Bard' }] } }), engage(1, { cc: [] }), MEZZ_MELEE).cc).toEqual([{ targetId: 6, by: 'Bard' }]);
+        // One on one of ours still comes first.
+        const onUs = [foe(5, 600, { target: 'Menta' }), foe(6, 620)];
+        expect(mezzMelee(ctx(onUs, { orders: { cc: [{ targetId: 6, by: 'Bard' }] } }), engage(1, { cc: [] }), MEZZ_MELEE).cc).toEqual([{ targetId: 5, by: 'Bard' }]);
+    });
     test('rootMelee: the rooter off a caster onto the melee running at a soft member; a class kept on damage roots nothing', () => {
         const foes = [foe(1, 1000, { caster: true }), foe(2, 1200, { caster: true }), foe(3, 300, { target: 'Menta' }), foe(4, 900)];
         expect(rootMelee(ctx(foes), engage(1, { cc: [{ targetId: 2, by: 'Encha' }] }), ROOT_MELEE).cc).toEqual([{ targetId: 3, by: 'Encha' }]);
