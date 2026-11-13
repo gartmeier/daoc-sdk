@@ -600,7 +600,15 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // ... and no wall caster that sees the courtyard left: the wait before the rush (S3's "everyone OK") is where the body stands,
     // in the courtyard, and live 22:33 albion-149 skipped rank 3 for the rush and lost Elaine there while it waited.
     const wallsDown = plan.targets.filter(t => t.kind === 'caster' && !t.optional).every(t => isDone(t));
-    const rush = doorSteps.length > 0 && doorSteps.every(t => t.doorId !== undefined && broken.has(t.doorId)) && wallsDown;
+    // One of us already by the lord (the rush under way): a wall caster back at its post (guards respawn 5-25 min) doesn't call the
+    // raid back to its rank. Live 21:51, the user in hibernia's raid: Fionn alone on the roof with the lord at 67 %, the ranged sent
+    // back out of sight for wall-e-s ("everyone outside faste again instead of pushing"). It fights them from where it stands.
+    // Under way means him hurt too: one stray up there by an untouched lord (live 22:33's wait under the wall casters) is no rush.
+    const lordSeen = foes.find(s => plan.lordName.test(s.name)) ?? null;
+    const besideLord = !!lordSeen && (lordSeen.healthPercent ?? 100) < 100
+        && living.some(m => Math.hypot(m.x - lordSeen.x, m.y - lordSeen.y, m.z - lordSeen.z) <= LORD_BESIDE);
+    const doorsAll = doorSteps.length > 0 && doorSteps.every(t => t.doorId !== undefined && broken.has(t.doorId));
+    const rush = doorsAll && (wallsDown || besideLord);
     const open = atLord || rush ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
     const rank = open.length ? Math.min(...open.map(t => t.rank)) : null;
     const inRank = open.filter(t => t.rank === rank);
@@ -730,7 +738,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const ranged: RaidTask = archer ? { step: archerStep, focus: archer, stand: plan.roof } : t;
     // One of us already by the lord walked there: he is reachable, whatever the route check made of the raid's centre.
     const byLord = !!lord && living.some(m => Math.hypot(m.x - lord.x, m.y - lord.y, m.z - lord.z) <= LORD_BESIDE);
-    const melee: RaidTask = { ...t, focus: byLord || meleeOk(lord) ? lord : null };
+    // Every door broken (the rush): the stair is open, so he is reachable whatever the route check made of the raid's centre, its
+    // height between the courtyard and the roof (live 21:50:58, hibernia: "melee hold" for 30 s with both doors down).
+    const melee: RaidTask = { ...t, focus: byLord || rush || meleeOk(lord) ? lord : null };
     const boltStep = !onRoof ? plan.targets.find(x => x.bolt && !done.has(x.label) && atPost(plan, x, foes)) ?? null : null;
     const bolt: RaidTask | null = boltStep ? { step: boltStep, focus: atPost(plan, boltStep, foes), stand: boltStep.bolt! } : null;
     const why = archer ? `${archerStep!.label} on the roof first, then ${lord?.name ?? 'the lord'}` : lord ? `${lord.name} on the roof` : 'up to the roof';

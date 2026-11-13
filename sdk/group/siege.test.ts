@@ -329,6 +329,14 @@ describe('raidOrders', () => {
         const stray = [...at(plan.roof, 1), ...at({ x: 33100, y: 38250, z: 3722 }, 7).map(m => ({ ...m, id: m.id + 100 }))];
         // ... but with the wall casters all up (the whole garrison here) no rush: the wait for it would be under them (live 22:33).
         expect(raidOrders(plan, view({ members: stray, seen: garrison(), staged: true })).phase).toBe('assault');
+        // ... unless the rush is under way: one of us by the lord with him hurt, the wall casters back at their posts (guards respawn).
+        // Live 21:51, hibernia: Fionn alone on the lord at 67 % and the ranged sent back out of sight for wall-e-s. Both doors down.
+        const hurt = garrison().map(s => s.name === 'Lady Thidranki' ? { ...s, healthPercent: 67 } : s);
+        const under = raidOrders(plan, view({ members: stray, seen: hurt, staged: true, broken: [252000301, 252000302] }));
+        expect(under.phase).toBe('lord');
+        expect(under.melee.focus!.name).toBe('Lady Thidranki');
+        // The rush, both doors down: the melee go for him whatever the route check made of the centre (live 21:50:58 "melee hold").
+        expect(raidOrders(plan, view({ members: stray, seen: hurt, staged: true, broken: [252000301, 252000302], reach: () => false })).melee.focus!.name).toBe('Lady Thidranki');
         // Nobody up there: the ranks again.
         expect(raidOrders(plan, view({ members: at({ x: 33100, y: 38250, z: 3722 }, 8), seen: garrison(), staged: true })).phase).toBe('assault');
     });
