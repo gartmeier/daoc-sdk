@@ -156,9 +156,19 @@ export function ccOnIt(ctx: MemberContext, c: Contact): boolean {
 }
 
 /**
+ * What the side tick does with a turret on crowd control: back at the focus when the turret reaches it, else passive. An attack order stops
+ * the shot as passive does (ControlledMobBrain.Attack, StopCurrentSpellcast), and keeps the turret's list of what it has been fighting;
+ * passive wipes it (Disengage), and its own picks off that list after each kill were most of its damage: Etain's Forest's Sentry dealt
+ * 4676-7700 a sortie in hibernia's field run B before the turret went passive on crowd control, 0-1178 after (2125074).
+ */
+export function offCcMove(turret: Point | null, focus: Point | null): 'focus' | 'passive' {
+    return turret && focus && dist(turret, focus) <= TURRET_REACH - REACH_MARGIN / 2 ? 'focus' : 'passive';
+}
+
+/**
  * On the side tick: the turret off whatever it shoots once that is under crowd control or about to be, the focus or not (a turret takes its
  * own next target when one dies). In plantTurret's turn this missed most: Etain's 2.5 s casts held the turn, and the turret broke crowd
- * control 5, 2 and 6 times in hibernia's field sorties (run B). Passive stops a turret within a shot (learnings/pets.md "Commanding").
+ * control 5, 2 and 6 times in hibernia's field sorties (run B). Where it goes, offCcMove.
  */
 export const turretOffCc = (): Behavior<TacticsSettings> => ({
     name: 'turretOffCc',
@@ -168,7 +178,16 @@ export const turretOffCc = (): Behavior<TacticsSettings> => ({
         const petState = ctx.sdk.getPetState();
         const onIt = ctx.contact(petState?.targetObjectId);
         if (!petState || !onIt || petState.aggression === 'passive' || !ccOnIt(ctx, onIt) || waiting(ctx.memory, 'turretOffAt', Date.now() - OFF_CC_MS)) return false;
-        ctx.memory.set('turretOffAt', Date.now());
+        const now = Date.now();
+        ctx.memory.set('turretOffAt', now);
+        const go = focusToHit(ctx);
+        const focus = go && go.mob.objectId !== onIt.objectId && !ccOnIt(ctx, go.mob) ? go : null;
+        if (focus && offCcMove(ctx.sdk.getPet() ?? null, focus.seen) === 'focus') {
+            ctx.memory.set('turretOrder', focus.mob.objectId);
+            ctx.memory.set('turretOrderAt', now);
+            const r = await ctx.sdk.sendPetCommand('attack', focus.mob.objectId);
+            if (r.success) return false;
+        }
         await ctx.sdk.sendPetCommand('passive');
         return false;
     },
