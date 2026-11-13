@@ -419,7 +419,13 @@ describe('raidOrders', () => {
         const seen = [...garrison('albion', [...labelsUpTo(3), 'wall-sw', 'wall-nw', 'roof-e', 'roof-n', 'roof-s']), ...doors];
         const o = raidOrders(plan, view({ members, seen, staged: true, broken: [252000301] }));
         expect(o.melee.step!.label).toBe('keep-door');
-        expect(o.ranged.step!.label).toBe('floor-3');
+        // floor-3 stands behind the building's shut door: no step for the ranged until it breaks (live 23:10, albion-194), and the
+        // lord is nobody's focus.
+        expect(o.ranged.step?.label).not.toBe('floor-3');
+        expect(o.ranged.focus?.name).not.toBe('Lady Thidranki');
+        expect(o.melee.focus?.name).not.toBe('Lady Thidranki');
+        // The door broken: floor-3 is reachable, and with both doors down it is the rush.
+        expect(raidOrders(plan, view({ members, seen, staged: true, broken: [252000301, 252000302] })).phase).toBe('lord');
     });
 });
 

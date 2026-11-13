@@ -625,8 +625,13 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     const open = atLord || rush ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
     const rank = open.length ? Math.min(...open.map(t => t.rank)) : null;
     const inRank = open.filter(t => t.rank === rank);
-    const rangedStep = inRank.find(t => t.who !== 'melee') ?? null;
-    const meleeStep = inRank.find(t => t.who !== 'ranged') ?? null;
+    // A guard behind a door still shut to us (the building's floor-3 fighter behind its door) is no step for either half: nobody gets
+    // at it until the door breaks, and then it is the rush. Live 23:10, albion-194 at rank 4 "ranged: floor-3, melee: keep-door":
+    // the casters stepped about the courtyard after it ("too far away") under the roof archers while the melee beat on the door.
+    const shutBehind = (SIEGE_LAYOUTS[plan.keep]?.doors ?? []).filter(d => d.behind && !broken.has(d.id));
+    const reachableStep = (t: SiegeTarget) => t.kind === 'door' || !shutBehind.some(d => behindDoor(d.behind!, t.at));
+    const rangedStep = inRank.find(t => t.who !== 'melee' && reachableStep(t)) ?? null;
+    const meleeStep = inRank.find(t => t.who !== 'ranged' && reachableStep(t)) ?? null;
     const focusOf = (t: SiegeTarget | null): SiegeSeen | null => !t ? null : t.kind === 'door'
         ? view.seen.find(s => s.kind === 'object' && s.doorId === t.doorId) ?? null
         : atPost(plan, t, foes);
@@ -1138,8 +1143,12 @@ export function wallSight(regionId: number, p: Point3, ours = false): string[] {
 export function passedDoors(plan: Pick<RaidPlan, 'keep'>, members: readonly RaidMember[]): number[] {
     const layout = SIEGE_LAYOUTS[plan.keep];
     if (!layout) return [];
-    const inside = (b: NonNullable<SiegeDoor['behind']>, p: Point) => 'box' in b
+    return layout.doors.filter(d => d.behind && members.some(m => m.alive && behindDoor(d.behind!, m))).map(d => d.id);
+}
+
+/** Whether `p` stands in a door's `behind` area (SiegeDoor.behind). */
+function behindDoor(b: NonNullable<SiegeDoor['behind']>, p: Point): boolean {
+    return 'box' in b
         ? p.x >= b.box[0] && p.y >= b.box[1] && p.x <= b.box[2] && p.y <= b.box[3]
         : Math.hypot(p.x - b.centre.x, p.y - b.centre.y) <= b.r;
-    return layout.doors.filter(d => d.behind && members.some(m => m.alive && inside(d.behind!, m))).map(d => d.id);
 }
