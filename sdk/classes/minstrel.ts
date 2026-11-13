@@ -18,6 +18,7 @@ import type { Behavior } from '../group/member';
 import type { Contact, MemberReport } from '../group/types';
 import { interruptOnTheRun } from './bard';
 import { STUN_IMMUNE_MS } from './hero';
+import { wallStep } from './healer-stand';
 
 /** An enemy this near a member counts as on it in melee. */
 const ON_MEMBER = 350;
@@ -83,5 +84,5 @@ export const stunShout = (): Behavior<TacticsSettings> => ({
 });
 
 export function minstrel(): Character {
-    return { role: 'support', instant: [stunShout(), interruptOnTheRun()], react: [interrupt()] };
+    return { role: 'support', instant: [stunShout(), interruptOnTheRun()], urgent: [wallStep({ focusAny: true })], react: [interrupt()] };
 }

@@ -13,6 +13,7 @@ import { dotFamily, type SpellPick } from '../group/spells';
 import type { Contact, MemberReport, Orders, Point } from '../group/types';
 import { camelotMezzer } from './cleric';
 import { thrifty } from './thrifty';
+import { wallStep } from './healer-stand';
 
 export interface CabalistOptions {
     /** No nukes below this % power; 0 (the default): no floor. */
@@ -283,5 +284,5 @@ export function nukerFight(saveBelow: number, withOffFocus: boolean): Behavior<T
 }
 
 export function cabalist({ saveBelow = 0, offFocus: off = true, meleeDebuff: debuff = true, nearsight: ns = true }: CabalistOptions = {}): Character {
-    return { role: 'nuker', instant: [quickcastUnderFire(), ...(debuff ? [meleeDebuff()] : [])], ...(ns ? { react: [nearsight({ marked: camelotMezzer })] } : {}), fight: nukerFight(saveBelow, off) };
+    return { role: 'nuker', instant: [quickcastUnderFire(), ...(debuff ? [meleeDebuff()] : [])], urgent: [wallStep()], ...(ns ? { react: [nearsight({ marked: camelotMezzer })] } : {}), fight: nukerFight(saveBelow, off) };
 }

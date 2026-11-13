@@ -1,3 +1,14 @@
+import { bard } from './bard';
+import { cabalist } from './cabalist';
+import { eldritch } from './eldritch';
+import { enchanter } from './enchanter';
+import { mentalist } from './mentalist';
+import { minstrel } from './minstrel';
+import { runemaster } from './runemaster';
+import { sorcerer } from './sorcerer';
+import { spiritmaster } from './spiritmaster';
+import { theurgist } from './theurgist';
+import { wizard } from './wizard';
 import { describe, expect, test } from 'bun:test';
 import { rvrBehaviors } from '../group/rvr';
 import { packBehaviors } from '../group/pack';
@@ -5,7 +16,7 @@ import { withCharacter } from '../group/character';
 import { cleric } from './cleric';
 import { druid } from './druid';
 import { healer } from './healer';
-import { atKeep, seenBy, standSpot, STAND_REACH, type Foe } from './healer-stand';
+import { atKeep, seenBy, standSpot, STAND_REACH, WALL_STEP_RINGS, type Foe } from './healer-stand';
 
 // A wall along x = 200 from y = -1000 to 1000: it hides what is on the other side of it from a foe east of it.
 const wallX = 200;
@@ -124,5 +135,21 @@ describe('healer stand: an enemy keep wall guards (siege.ts wallSight)', () => {
     test('a spot hidden from the players but seen from the wall is never taken', () => {
         const me = { x: 0, y: 1400, z: 0 };
         expect(standSpot(1, me, [], [foe(1500, -500)], { ...flat, walls: p => (p.x === me.x && p.y === me.y ? 0 : 1) })).toBeNull();
+    });
+});
+
+describe('wallStep: supports and casters out of an enemy keep wall guards sight in a raid', () => {
+    test('farther rings than the healer step: a spot 700 away when the nearer ones are all seen', () => {
+        const me = { x: 0, y: -1400, z: 0 };
+        const walls = (p: { x: number }) => (p.x > -600 ? 1 : 0);
+        expect(standSpot(1, me, [], [], { ...flat, walls })).toBeNull();
+        const s = standSpot(1, me, [], [], { ...flat, walls, rings: WALL_STEP_RINGS, step: 1000 })!;
+        expect(s.x).toBeLessThanOrEqual(-600);
+        expect(Math.hypot(s.x - me.x, s.y - me.y)).toBeCloseTo(700, -1);
+    });
+
+    test('in the support and caster kits, above their main work', () => {
+        for (const c of [bard(), minstrel(), enchanter(), mentalist().character, eldritch(), wizard(), sorcerer(), cabalist(), theurgist(), runemaster(), spiritmaster()])
+            expect(c.urgent!.map(b => b.name)).toContain('wallStep');
     });
 });

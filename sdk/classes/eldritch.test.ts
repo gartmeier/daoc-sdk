@@ -54,7 +54,7 @@ describe('eldritch kit', () => {
         expect(list.indexOf('veil')).toBe(list.indexOf('stunCaster') + 1);
         expect(list.indexOf('veil')).toBeLessThan(list.indexOf('emergencyHeal'));
         expect(list.indexOf('offFocus')).toBe(list.indexOf('assist') + 1);
-        expect(eldritch({ areaMezz: false }).urgent!.map(b => b.name)).toEqual(['stunCaster']);
+        expect(eldritch({ areaMezz: false }).urgent!.map(b => b.name)).toEqual(['stunCaster', 'wallStep']);
     });
 
     test('the veil waits while an enemy aims at him', async () => {

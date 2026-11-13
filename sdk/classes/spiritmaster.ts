@@ -12,6 +12,7 @@ import type { Behavior } from '../group/member';
 import type { Contact } from '../group/types';
 import { quickcastUnderFire } from './cabalist';
 import { isNearsightEffect } from './healer';
+import { wallStep } from './healer-stand';
 
 /**
  * Her step toward an out-of-reach focus, whatever the group's standStep: a longer one against fanOut kept her walking
@@ -115,5 +116,5 @@ export const nukeInReach = (): Behavior<TacticsSettings> => ({
 });
 
 export function spiritmaster(): Character {
-    return { role: 'nuker', instant: [quickcastUnderFire()], fight: [steppingAssist(), nukeInReach()] };
+    return { role: 'nuker', instant: [quickcastUnderFire()], urgent: [wallStep()], fight: [steppingAssist(), nukeInReach()] };
 }

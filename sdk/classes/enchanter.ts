@@ -12,6 +12,7 @@ import { quickcastUnderFire } from './cabalist';
 import { slowTarget } from './healer';
 import { pbae } from './pbae';
 import { casterFight, noteTooFar, quickFlash, tooFarOf, viewDistance } from './mentalist';
+import { wallStep } from './healer-stand';
 
 /** Below this % power the debuffs wait: his power is for nukes. */
 export const DAZZLE_FLOOR = 40;
@@ -76,5 +77,5 @@ export interface EnchanterOptions {
 export function enchanter({ heatAllies = 0, offFocus = true }: EnchanterOptions = {}): Character {
     // pbae (pbae.ts): a Mana build's Disenchanting Emission on two or more enemies around him (the keep's gate and stair);
     // a Light build's Minor Emanation (52) is under its floor, so it does nothing there.
-    return { role: 'nuker', instant: [quickFlash(), dazzle(), quickcastUnderFire()], urgent: [pbae()], react: [resistDebuff({ allies: heatAllies })], fight: casterFight(offFocus) };
+    return { role: 'nuker', instant: [quickFlash(), dazzle(), quickcastUnderFire()], urgent: [pbae(), wallStep()], react: [resistDebuff({ allies: heatAllies })], fight: casterFight(offFocus) };
 }

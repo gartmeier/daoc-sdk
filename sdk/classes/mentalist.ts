@@ -10,6 +10,7 @@ import { nukerFight, QUICKCAST_REUSE_MS, quickcastUnderFire } from './cabalist';
 import type { Behavior } from '../group/member';
 import type { SpellPick } from '../group/spells';
 import type { Contact, MemberReport, Role } from '../group/types';
+import { wallStep } from './healer-stand';
 
 export interface MentalistKit {
     character: Character;
@@ -171,5 +172,5 @@ export function casterFight(withOffFocus = true): Behavior<TacticsSettings>[] {
 }
 
 export function mentalist({ offFocus = true }: { offFocus?: boolean } = {}): MentalistKit {
-    return { character: { role: 'nuker', instant: [quickFlash(), quickcastUnderFire()], urgent: [stunCaster()], fight: casterFight(offFocus) } };
+    return { character: { role: 'nuker', instant: [quickFlash(), quickcastUnderFire()], urgent: [stunCaster(), wallStep()], fight: casterFight(offFocus) } };
 }

@@ -19,9 +19,11 @@ import { keepAt } from '../group/keeps';
 import type { Behavior, MemberContext } from '../group/member';
 import type { MemberReport } from '../group/types';
 import { wallSight } from '../group/siege';
+import { castRunning } from '../group/pets';
 import { isWet } from '../group/water';
 import { getNavmeshStore, PolyFlags } from '../navmesh';
 import { fixtureSolid, lineOfSight, terrainGround, type Seen } from '../vision';
+
 
 /** Group heals reach 2000 (Heaven's Commendation, Favor of Battle, Renewing Conflux); a margin for moves and the server's 3D. */
 export const STAND_REACH = 1800;
@@ -82,6 +84,8 @@ export interface SpotOptions {
     within?: (p: Seen) => boolean;
     /** How many of an enemy keep's wall casters and roof archers see a spot (siege.ts wallSight); none by default. */
     walls?: (p: Seen) => number;
+    /** The rings of candidate steps (default 150, 300 and the step). */
+    rings?: readonly number[];
 }
 
 /**
@@ -105,7 +109,7 @@ export function standSpot(regionId: number, me: Seen, members: readonly (Pick<Me
     if (!now) return null;
     const closest = nearest(me) - NO_CLOSER;
     let best: { x: number; y: number; z: number; seen: number; d: number } | null = null;
-    for (const r of [150, 300, step]) {
+    for (const r of o.rings ?? [150, 300, step]) {
         for (let k = 0; k < 16; k++) {
             const a = (k / 16) * 2 * Math.PI;
             const p = { x: Math.round(me.x + Math.cos(a) * r), y: Math.round(me.y + Math.sin(a) * r) };
@@ -222,5 +226,42 @@ export const sightClock = (): Behavior<TacticsSettings> => ({
             c.keep = false;
         }
         return false;
+    },
+});
+
+/** wallStep's rings: farther than the healer's step, as a courtyard spot can be in a wall caster's sight for 600 or more. */
+export const WALL_STEP_RINGS = [150, 300, 450, 700, 1000] as const;
+
+/**
+ * In a raid on an enemy keep (Orders.settings.raid), at the keep: a step out of the sight of its wall casters and roof archers
+ * (siege.ts wallSight) when one sees her, keeping every member she reaches now in reach. For the supports and casters, who
+ * stand still to sing and cast (the user, 16:26: "Fiacra and Amergin are not safe, they are being hit by the Runemasters",
+ * both killed in the Faste's courtyard). `focusAny`: also while the orders' focus is an NPC; a nuker's focus in a raid is
+ * mostly a wall guard, which it must see, so for nukers only with no focus or a player's.
+ */
+export const wallStep = (o: { focusAny?: boolean } = {}): Behavior<TacticsSettings> => ({
+    name: 'wallStep',
+    async run(ctx) {
+        if (!(ctx.settings as { raid?: unknown }).raid || hammeredBy(ctx) || ctx.me().attacking || castRunning(ctx)) return false;
+        if (Date.now() - (ctx.memory.get('wallStepAt') ?? 0) < STAND_SPACING_MS) return false;
+        const me = ctx.me();
+        const self = ctx.members().find(m => m.name === me.name);
+        const region = self?.regionId ?? me.regionId;
+        if (!atKeep(region, me, false)) return false;
+        if (!o.focusAny) {
+            const focus = ctx.orders().focus;
+            if (focus != null && ctx.picture().contacts.find(c => c.objectId === focus)?.kind !== 'player') return false;
+        }
+        const walls = (p: Seen) => wallSight(region, p, false).length;
+        const seen = wallSight(region, me, false);
+        if (!seen.length) return false;
+        const others = ctx.members().filter(m => m.name !== me.name && !m.isDead && m.regionId === region);
+        const spot = standSpot(region, me, others, [], { walls, rings: WALL_STEP_RINGS, step: WALL_STEP_RINGS[WALL_STEP_RINGS.length - 1] });
+        if (!spot) return ctx.skip(`wallStep: no spot out of ${seen.join(', ')}'s sight in reach of the group`);
+        ctx.memory.set('wallStepAt', Date.now());
+        ctx.doing('move', null, `out of ${seen.join(', ')}'s sight`);
+        const w = await ctx.bot.walkTo(spot.x, spot.y, { z: spot.z, tolerance: 40, timeout: 6000 });
+        ctx.result('wallStep', w.success || w.reason === 'timeout' ? { success: true, message: `out of ${seen.join(', ')}'s sight${w.success ? '' : ' (part way)'}` } : w);
+        return true;
     },
 });

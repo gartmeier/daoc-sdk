@@ -11,6 +11,7 @@ import type { SpellPick } from '../group/spells';
 import { nukerFight, quickcastUnderFire } from './cabalist';
 import { pbae } from './pbae';
 import { giveGround } from './theurgist';
+import { wallStep } from './healer-stand';
 
 /**
  * Entangling Haze (Minor), Cold 24: 88 damage and a 35 % snare like Ice Blast's 88, but a 3 s cast against 2.6 s, and the
@@ -51,7 +52,7 @@ export function wizard({ saveBelow = 0, offFocus: off = true, giveGround: give =
         // No meleeDebuff: she has no instant spell.
         instant: [nukes(quickcastUnderFire())],
         // Steaming Blast (Cold 24: 133, radius 300) on two or more enemies around her (pbae.ts): the keep's gate and stair.
-        urgent: [pbae()],
+        urgent: [pbae(), wallStep()],
         ...(give ? { react: [giveGround()] } : {}),
         fight: nukerFight(saveBelow, off).map(nukes),
     };

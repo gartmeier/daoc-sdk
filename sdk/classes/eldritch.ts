@@ -20,6 +20,7 @@ import { quickcastUnderFire } from './cabalist';
 import { casterFight, noteTooFar, petOnMe, quickFlash, stunCaster, tooFarOf, viewDistance } from './mentalist';
 import { unlessAimedAt } from './druid';
 import { onlyLines } from './runemaster';
+import { wallStep } from './healer-stand';
 
 /** His damage lines by the names the server sends (Light baseline and spec); the Void and Mana nukes stay out. */
 export const ELDRITCH_NUKE_LINES: readonly string[] = ['Way of the Sun', 'Shadow Control'];
@@ -100,7 +101,7 @@ export function eldritch({ offFocus = true, lines = ELDRITCH_NUKE_LINES, areaMez
         instant: [quickFlash(), onlyLines(quickcastUnderFire(), lines)],
         // The veil only while nothing aims at him (unlessAimedAt, the Druid kit's): a 3 s cast under fire is a cast lost. Rounds
         // 128, 133 and 137 against Albion: he was their target (in melee 27-81 %), and 137's veil was cut by an enemy pet.
-        urgent: [stunCaster(), ...(areaMezz ? [unlessAimedAt(veil())] : [])],
+        urgent: [stunCaster(), ...(areaMezz ? [unlessAimedAt(veil())] : []), wallStep()],
         fight: casterFight(offFocus).map(b => onlyLines(b, lines)),
     };
 }

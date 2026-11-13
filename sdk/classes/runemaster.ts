@@ -14,6 +14,7 @@ import type { Behavior, MemberContext } from '../group/member';
 import type { SpellPick } from '../group/spells';
 import { quickcastUnderFire } from './cabalist';
 import { nukeInReach, steppingAssist } from './spiritmaster';
+import { wallStep } from './healer-stand';
 
 /** The Darkness nuker's lines (bots/gudrun/build.ts: Darkness 24): baseline Darkness and the spec line, Runes of Darkness. */
 export const DARKNESS_LINES: readonly string[] = ['Darkness', 'Runes of Darkness'];
@@ -48,6 +49,7 @@ export function runemaster(opts: { lines?: readonly string[] } = {}): Character 
     return {
         role: 'nuker',
         instant: [onlyLines(quickcastUnderFire(), lines)],
+        urgent: [wallStep()],
         fight: [onlyLines(steppingAssist(), lines), onlyLines(nukeInReach(), lines)],
     };
 }
