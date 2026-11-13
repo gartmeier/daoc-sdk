@@ -124,6 +124,24 @@ interface Kept {
  */
 export class ObservedMembers {
     private readonly kept = new Map<string, Kept>();
+    /**
+     * A human asked to be picked up (voice.ts readGroupAsk, the runner): until a member sees them or `until` passes, an
+     * observed member nobody sees reads at `place` (our portal keep's arrival), so the group's regroup walks there
+     * (rvr.ts holdObservedFar). Live 2026-11-13, Niamh: released to the PK, out of every bot's sight, never picked up.
+     */
+    private readonly pickups = new Map<string, { place: { regionId: number; x: number; y: number; z: number }; asked: number; until: number }>();
+
+    /** Read `name`, while nobody sees them, at `place` until `until` (or until a member sees them after `asked`). */
+    pickup(name: string, place: { regionId: number; x: number; y: number; z: number }, asked: number, until: number): boolean {
+        if (!this.kept.has(lower(name))) return false;
+        this.pickups.set(lower(name), { place: { ...place }, asked, until });
+        return true;
+    }
+
+    /** The pickups still open, by name. */
+    pickupsOpen(now: number): string[] {
+        return [...this.pickups].filter(([, p]) => p.until > now).map(([n]) => this.kept.get(n)?.entry.name ?? n);
+    }
 
     constructor(entries: readonly ObservedEntry[] = []) {
         for (const e of entries) this.kept.set(lower(e.name), { entry: e, window: null, windowAt: 0, seen: null, aim: null, pet: null, buffsBy: new Map(), since: 0 });
@@ -166,10 +184,15 @@ export class ObservedMembers {
             const seen = k.seen && now - k.seen.at <= OBSERVED_STALE_MS ? k.seen : null;
             const aim = k.aim && now - k.aim.at < OBSERVED_AIM_MS && !w.isDead ? k.aim : null;
             const pet = k.pet && now - k.pet.at <= OBSERVED_STALE_MS && !w.isDead ? k.pet : null;
+            // A pickup: ends once seen after the ask (then out of sight again reads as ever) or at its time.
+            const key = lower(w.name);
+            const pk = this.pickups.get(key);
+            if (pk && (pk.until <= now || (k.seen && k.seen.at > pk.asked))) this.pickups.delete(key);
+            const pick = !seen && !w.isDead ? this.pickups.get(key)?.place ?? null : null;
             out.push({
                 name: w.name, bot: '', role: observedRole(w.className, k.entry.role), className: w.className, level: w.level, experience: 0,
-                objectId: w.objectId, regionId: seen?.regionId ?? OUT_OF_SIGHT,
-                x: k.seen?.x ?? 0, y: k.seen?.y ?? 0, z: k.seen?.z ?? 0,
+                objectId: w.objectId, regionId: pick?.regionId ?? seen?.regionId ?? OUT_OF_SIGHT,
+                x: pick?.x ?? k.seen?.x ?? 0, y: pick?.y ?? k.seen?.y ?? 0, z: pick?.z ?? k.seen?.z ?? 0,
                 hp: w.hp, mana: w.mana, endurance: w.endurance, load: 0, isDead: w.isDead,
                 isSitting: !!seen?.isSitting, inCombat: !!seen?.inCombat || !!aim, attacking: !!aim, targetId: aim?.targetId ?? null,
                 effects: [...new Set([...k.buffsBy.values()].flat())],

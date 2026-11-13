@@ -186,6 +186,29 @@ describe('group chat', () => {
     });
 });
 
+describe('a human asks in group chat', () => {
+    test('pick me up, where are you, and nothing else', async () => {
+        const { readGroupAsk } = await import('./voice');
+        for (const t of ['pick me up', 'can you pick me up?', 'pickup pls', 'come get me', 'wait for me', 'wait up', "i'm at the pk"]) expect(readGroupAsk(t)).toBe('pickup');
+        for (const t of ['where are you?', 'where r u', 'where you at', 'where', 'loc?', 'where is everyone']) expect(readGroupAsk(t)).toBe('where');
+        for (const t of ['nice', 'inc', 'omw', 'ty for the rez', 'where is the faste']) expect(readGroupAsk(t)).toBeNull();
+    });
+    test('the answer: where we are; a pickup taken, or why not', async () => {
+        const { groupAnswer, pickupFree } = await import('./voice');
+        const st = { realm: 'hibernia' as const, regionId: 252 };
+        const team = [report('Fergus', { regionId: 252, x: 33000, y: 25000 }), report('Lugh', { regionId: 252, x: 33100, y: 25100 }), report('Niamh', { observed: true, regionId: -1 })];
+        const out = picture(team, [], { phase: 'travel', reason: 'wave: out toward where our realm last saw enemies' });
+        expect(groupAnswer('where', out, st, false)).toBe("we're north of the Faste, come to us");
+        expect(pickupFree(out.orders)).toBe(true);
+        expect(groupAnswer('pickup', out, st, true)).toBe('ok, coming to our PK for you, wait there');
+        const fight = picture(team, [], { phase: 'engage' });
+        expect(pickupFree(fight.orders)).toBe(false);
+        expect(groupAnswer('pickup', fight, st, false)).toBe("we're fighting north of the Faste, come to us or ask again after the fight");
+        expect(pickupFree(picture(team, [], { phase: 'travel', reason: 'call hibernia-4: help hibernia-2, 3000 away' }).orders)).toBe(false);
+        const dead = picture(team.map(m => ({ ...m, isDead: !m.observed })), [], { phase: 'recover' });
+        expect(groupAnswer('where', dead, st, false)).toBe('we are all dead, release and meet at our PK');
+    });
+});
 describe('/region', () => {
     const base = (over: Partial<RegionInput> = {}): RegionInput => ({ realm: 'hibernia', enabled: true, calls: [], foes: [], events: [], running: ['hib-1', 'hib-2'], ...over });
     const help = (over: Partial<RegionInput['calls'][number]> = {}) => ({ id: 'hibernia-7', kind: 'help', from: 'hib-1', why: 'outnumbered', at: { x: 38600, y: 36125 }, foes: 6, asked: [], coming: [], ...over });

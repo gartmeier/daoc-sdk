@@ -323,6 +323,50 @@ export function groupSaid(line: Line, st: GroupVoiceState): void {
     if (focus) { st.lastFocus = Number(focus[1]); st.focusSaidAt = line.at; st.lastLabel = /focus the (.+)$/.exec(line.text)?.[1] ?? /^next (.+)$/.exec(line.text)?.[1]; }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────────────── a human's asks in group chat
+
+/**
+ * What a human (observed member) asks in group chat that the group answers: to be picked up, or where we are.
+ * Live 2026-11-13, Niamh: "how can I ask the group to come pick me up?"; the bots read nothing of her group chat.
+ */
+export type GroupAsk = 'pickup' | 'where';
+
+const PICKUP_ASK = /\b(pick\s?(me\s?)?up|pickup|come (get|for|pick) me|get me|wait (for|4) me|wait up|hold up|i'?m at (the |our )?(pk|portal ?keep))\b/i;
+const WHERE_ASK = /\b(where(?: (?:are|r|is)|'?s) (?:you|u|ya|we|every(?:one|body)|the gr(?:ou)?p)(?: guys)?|where (?:you|u) at|location)\b|^\s*(where|loc)\s*\??\s*$/i;
+
+/** The ask in a human's group line ("pick me up", "wait for me", "where are you?"), or null. */
+export function readGroupAsk(text: string): GroupAsk | null {
+    if (PICKUP_ASK.test(text)) return 'pickup';
+    if (WHERE_ASK.test(text)) return 'where';
+    return null;
+}
+
+/** The group can go and fetch someone: no fight, no pull back, no realm call, raid or defence. */
+export function pickupFree(o: Pick<GroupPicture['orders'], 'phase' | 'reason' | 'objective'>): boolean {
+    if (o.phase === 'engage' || o.phase === 'retreat' || o.phase === 'pull') return false;
+    return !/^(call|raid|defen|muster|help)/i.test(o.reason ?? '') && !/\b(raid|defen[cd]e?|muster|help)\b/i.test(o.objective ?? '');
+}
+
+/** Where the bots are, as a player says it ("at our PK", "north of the Faste"); null with none alive. */
+export function whereWeAre(p: GroupPicture, st: Pick<GroupVoiceState, 'realm' | 'regionId'>): string | null {
+    const living = bots(p.members).filter(m => !m.isDead);
+    const here = living.filter(m => m.regionId === (st.regionId ?? THIDRANKI));
+    if (!here.length) return null;
+    const at = { x: here.reduce((t, m) => t + m.x, 0) / here.length, y: here.reduce((t, m) => t + m.y, 0) / here.length };
+    return placeName(at, st.realm, st.regionId ?? THIDRANKI);
+}
+
+/** The leader's answer to a human's ask. `picking`: a pickup was taken (the group comes to our PK). */
+export function groupAnswer(ask: GroupAsk, p: GroupPicture, st: Pick<GroupVoiceState, 'realm' | 'regionId'>, picking: boolean): string {
+    const where = whereWeAre(p, st);
+    const fight = p.orders.phase === 'engage' || p.orders.phase === 'retreat' || p.orders.phase === 'pull';
+    const we = where ? `we're ${fight ? 'fighting ' : ''}${where}` : 'we are all dead';
+    if (ask === 'where') return where ? `${we}, come to us` : `${we}, release and meet at our PK`;
+    if (picking) return where && /^at our PK$/.test(where) ? `${we}, come to us` : 'ok, coming to our PK for you, wait there';
+    if (!where) return `${we}, release and meet at our PK`;
+    return fight ? `${we}, come to us or ask again after the fight` : `${we} on a call, come to us or ask again in a bit`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────── /region
 
 /** The parts of a director update the region voice reads (director.ts DirectorUpdate). */

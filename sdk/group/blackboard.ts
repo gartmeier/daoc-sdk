@@ -626,6 +626,16 @@ export class Blackboard {
         return this.observed.names();
     }
 
+    /** An observed member asked to be picked up: read at `place` while nobody sees them, until `until` (ObservedMembers.pickup). */
+    askPickup(name: string, place: { regionId: number; x: number; y: number; z: number }, now: number, until: number): boolean {
+        return this.observed.pickup(name, place, now, until);
+    }
+
+    /** Observed members with a pickup still open. */
+    pickupsOpen(now: number): string[] {
+        return this.observed.pickupsOpen(now);
+    }
+
     /** Every member's report: the bots', then the observed members' (observed.ts). Just the bots' without observed members. */
     private everyone(now: number): MemberReport[] {
         const bots = [...this.reports.values()];

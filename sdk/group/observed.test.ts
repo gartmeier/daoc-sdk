@@ -167,6 +167,31 @@ describe('Blackboard: the observed member on the picture', () => {
         expect(m.reports(now)[0]!.effects).toEqual(['Holy Armor']);
     });
 
+    test('a pickup: unseen, it reads at the place until seen after the ask or its time is up', () => {
+        const m = new ObservedMembers([{ name: 'Vue' }]);
+        const t0 = Date.now();
+        const at = (x: number, t: number) => ({ regionId: R, x, y: 10_000, z: 0, inCombat: false, isSitting: false, at: t });
+        m.merge('Tank', [mate({ seen: at(10_100, t0) })], t0);
+        expect(m.reports(t0 + 10_000)[0]!.regionId).toBe(OUT_OF_SIGHT);
+        const pk = { regionId: R, x: 50_000, y: 50_000, z: 300 };
+        expect(m.pickup('vue', pk, t0 + 10_000, t0 + 190_000)).toBe(true);
+        expect(m.pickup('Nobody', pk, t0 + 10_000, t0 + 190_000)).toBe(false);
+        expect(m.reports(t0 + 11_000)[0]).toMatchObject({ regionId: R, x: 50_000, y: 50_000, z: 300 });
+        expect(m.pickupsOpen(t0 + 11_000)).toEqual(['Vue']);
+        // Seen after the ask: where seen, and the pickup is over (out of sight again reads as ever).
+        m.merge('Tank', [mate({ seen: at(49_000, t0 + 20_000) })], t0 + 20_000);
+        expect(m.reports(t0 + 20_000)[0]).toMatchObject({ regionId: R, x: 49_000 });
+        expect(m.reports(t0 + 40_000)[0]!.regionId).toBe(OUT_OF_SIGHT);
+        // Its time up, unseen: out of sight again.
+        m.pickup('Vue', pk, t0 + 40_000, t0 + 50_000);
+        expect(m.reports(t0 + 45_000)[0]!.x).toBe(50_000);
+        expect(m.reports(t0 + 51_000)[0]!.regionId).toBe(OUT_OF_SIGHT);
+        // Dead: no pickup.
+        m.pickup('Vue', pk, t0 + 60_000, t0 + 200_000);
+        m.merge('Tank', [mate({ isDead: true, seen: at(10_100, t0) })], t0 + 61_000);
+        expect(m.reports(t0 + 62_000)[0]!.regionId).toBe(OUT_OF_SIGHT);
+    });
+
     test('the bots\' observation asks for its name (observedNames), and none without observed members', () => {
         expect(new Blackboard({ observed: [{ name: 'Vue' }] }).observedNames()).toEqual(['Vue']);
         expect(new Blackboard().observedNames()).toEqual([]);

@@ -27,7 +27,8 @@ import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
 import { Coordinator, mergeSettings, type GroupStrategy } from './strategy';
 import type { GroupDefinition } from './types';
-import { GroupVoice } from './voice';
+import { groupAnswer, GroupVoice, pickupFree, readGroupAsk } from './voice';
+import { homeOf } from './keeps';
 import { regionInbox, voiceOn } from './voice-io';
 import { isLoggedEvent, type ControlRequest, type RunMeta, type RunResultView } from './wire';
 
@@ -230,6 +231,31 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
             log(`${region ? 'region' : 'said'}: ${text}`);
             void (region ? speaker.sdk.sendCommand(`/region ${text}`) : speaker.sdk.sendGroupSay(text)).catch(() => {});
         };
+        // A human's asks in group chat (voice.ts readGroupAsk): the leader answers where we are; "pick me up", with the
+        // group free, reads them at our portal keep for 3 min unless seen (ObservedMembers.pickup), and the regroup walks there.
+        const humans = new Set((def.observed ?? []).map(o => o.name.toLowerCase()));
+        let heardId = humans.size ? Math.max(0, ...speaker.sdk.getChat({ types: ['group'], limit: 0 }).map(m => m.id)) : 0;
+        const answered = new Map<string, number>();
+        const hearHumans = (now: number) => {
+            if (!voice || !humans.size) return;
+            for (const m of speaker.sdk.getChat({ types: ['group'], limit: 50 })) {
+                if (m.id <= heardId) continue;
+                heardId = m.id;
+                const from = m.sender ?? '';
+                if (!humans.has(from.toLowerCase())) continue;
+                const text = /"(.*)"\s*$/.exec(m.text)?.[1]?.trim() ?? m.text;
+                const ask = readGroupAsk(text);
+                if (!ask || now - (answered.get(`${from}:${ask}`) ?? 0) < 8000) continue;
+                answered.set(`${from}:${ask}`, now);
+                const pic = board.picture(now);
+                const regionId = voice.state.regionId ?? players[0]!.regionId;
+                const home = ask === 'pickup' && pickupFree(pic.orders) ? homeOf(regionId, realm)?.arrival : undefined;
+                const picking = !!home && board.askPickup(from, { regionId, x: home.x, y: home.y, z: home.z }, now, now + 180_000);
+                log(`heard: ${from}: ${text} (${ask}${picking ? ', picked up at our PK for 3 min unless seen' : ''})`);
+                speak(groupAnswer(ask, pic, voice.state, picking), false);
+                return; // one line a tick (the server drops group lines 500 ms apart)
+            }
+        };
 
         while (!run.signal.aborted) {
             await abortable(Bun.sleep(500), run.signal).catch(() => {});
@@ -238,6 +264,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
             try {
                 const line = voice?.hear(board.picture(now), now);
                 if (line) speak(line.text, false);
+                else hearHumans(now);
                 for (const text of inbox?.take(now) ?? []) speak(text, true);
             } catch (e) { log(`voice: ${errorText(e)}`); }
             if (now >= deadline && !coordinator.windingDown) { coordinator.windingDown = true; log('time is up: finishing the current fight'); }
