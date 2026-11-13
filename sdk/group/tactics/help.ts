@@ -279,6 +279,9 @@ export interface RoamSettings {
     homeClear: number;
 }
 
+/** A unit this big is a main group (a squad is 1-3). */
+const MAIN_SIZE = 4;
+
 export const ROAM_SETTINGS: RoamSettings = { far: 4500, near: 3000, minAlive: 3, homeClear: 7000 };
 
 /**
@@ -286,7 +289,11 @@ export const ROAM_SETTINGS: RoamSettings = { far: 4500, near: 3000, minAlive: 3,
  * there is none. Once farther than `far` we close up to `near` of it, then patrol on (memory.roamClose holds the state).
  */
 export function roamGoal(mem: Record<string, any>, centre: Point, home: Point | null, s: RoamSettings = ROAM_SETTINGS): { goal: Point; friend: UnitSpot; d: number } | null {
-    const friends = ((mem.realmUnits ?? []) as UnitSpot[]).filter(u => u.alive >= s.minAlive && (!home || dist(u, home) > s.homeClear));
+    const out = ((mem.realmUnits ?? []) as UnitSpot[]).filter(u => u.alive >= s.minAlive && (!home || dist(u, home) > s.homeClear));
+    // A main group first: a squad roams the edges and runs off (live 13:24, a group closed on midgard-s1 and lost it every few
+    // seconds); a trio only when no main group is out.
+    const mains = out.filter(u => u.size >= MAIN_SIZE);
+    const friends = mains.length ? mains : out;
     if (!friends.length) { mem.roamClose = undefined; return null; }
     const friend = friends.reduce((a, b) => (dist(a, centre) <= dist(b, centre) ? a : b));
     const d = dist(friend, centre);

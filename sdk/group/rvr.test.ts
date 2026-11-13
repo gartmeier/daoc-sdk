@@ -1451,3 +1451,12 @@ describe('decideRvr: help in time (S3, 2026-11-13)', () => {
         expect(decideRvr(ctx(picture(team()), { memory: { realmUnits: [friend(20_000)] }, settings: { roam: false } })).reason).toContain('patrol');
     });
 });
+
+describe('decideRvr: roaming by a main group first (S3, live 13:24)', () => {
+    test('a main group out is the friend to roam by, even farther than a trio', () => {
+        const spot = (unit: string, x: number, size: number) => ({ unit, x, y: 10_000, z: 0, alive: size, size, fight: false, phase: 'travel' });
+        const d = decideRvr(ctx(picture(team()), { memory: { realmUnits: [spot('hibernia-s1', 15_000, 3), spot('hibernia-2', 20_000, 6)] } }));
+        expect(d.reason).toContain('roam near: hibernia-2');
+        expect(decideRvr(ctx(picture(team()), { memory: { realmUnits: [spot('hibernia-s1', 15_000, 3)] } })).reason).toContain('roam near: hibernia-s1');
+    });
+});
