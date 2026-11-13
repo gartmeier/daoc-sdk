@@ -23,7 +23,7 @@ import type { Realm } from '../types';
 import { getNavmeshStore, type NavMesh, type NavmeshStore } from '../navmesh';
 import { setOwnDoors } from '../doors';
 import { BATTLEGROUND_LAYOUTS, keepAt, THIDRANKI, type Keep, type PlayerRealm } from './keeps';
-import type { Point, Point3 } from './types';
+import type { Point, Point3, Role } from './types';
 
 export type GuardKind = 'fighter' | 'caster' | 'archer' | 'lord';
 
@@ -79,6 +79,8 @@ export interface SiegeLayout {
     approach: Record<PlayerRealm, SiegeApproach>;
     /** Every door of the keep (the door table): the gate and the building's door break; posterns never do (IsPostern). */
     doors: SiegeDoor[];
+    /** Where its owner's defenders stand (defencePlan); absent: no defence from inside. */
+    defence?: DefenceLayout;
 }
 
 /**
@@ -179,6 +181,31 @@ export const FASTE: SiegeLayout = {
         { id: 252000305, at: { x: 32315, y: 37950, z: 3952 }, kind: 'postern', heading: 2058 },
         { id: 252000306, at: { x: 32311, y: 38669, z: 3952 }, kind: 'postern', heading: 2058 },
     ],
+    // The owner's defence from inside (defencePlan), measured 2026-11-13 with lineOfSight over zone252.occluders and the navmesh:
+    // - No wall-walk spot within 1500 of the stair sees anything outside the gate (merlons; the eye is below their tops), nor does
+    //   anything there see it. So the ranged stand where they see the courtyard: each wall stand sees 155-175 of 202 courtyard points
+    //   and the gate's inside, and is a found route from the stair's foot (526-1360 long). They fight once the gate is down.
+    // - A point-blank bomb has no line-of-sight check on the server (SpellHandler.SelectTargets, ENEMY with a radius:
+    //   GetPlayersInRadius), so a bomber 120 inside the gate reaches the melee breaking it from its outside stand (34420): 210 away.
+    // - The stair to the wall-walk climbs from (33500, 38950) at 3722 to (33664, 38863) at 3968; the spiral stair's top is the
+    //   roof's way in (32154, 38342, 4579).
+    defence: {
+        entry: { x: 34650, y: 38275, z: 3722 },
+        stands: [
+            { label: 'bomb-gate-n', job: 'bomb', at: { x: 34210, y: 38225, z: 3720 }, seats: 1, leash: 0 },
+            { label: 'bomb-gate-s', job: 'bomb', at: { x: 34210, y: 38325, z: 3720 }, seats: 1, leash: 0 },
+            { label: 'bomb-stair', job: 'bomb', at: { x: 33664, y: 38863, z: 3968 }, seats: 1, leash: 0 },
+            { label: 'bomb-roof', job: 'bomb', at: { x: 32154, y: 38342, z: 4579 }, seats: 1, leash: 0 },
+            { label: 'turret-gate', job: 'turret', at: { x: 33950, y: 38420, z: 3720 }, ground: { x: 34120, y: 38275, z: 3720 }, seats: 2, leash: 0 },
+            { label: 'wall-se', job: 'wall', at: { x: 33752, y: 38764, z: 3968 }, seats: 2, leash: 0 },
+            { label: 'wall-e', job: 'wall', at: { x: 34016, y: 38610, z: 3978 }, seats: 2, leash: 0 },
+            { label: 'wall-s-1', job: 'wall', at: { x: 33400, y: 39000, z: 3968 }, seats: 1, leash: 0 },
+            { label: 'wall-s-2', job: 'wall', at: { x: 33099, y: 39056, z: 3978 }, seats: 1, leash: 0 },
+            { label: 'wall-sw', job: 'wall', at: { x: 32890, y: 38958, z: 3978 }, seats: 1, leash: 0 },
+            { label: 'heal-stair', job: 'heal', at: { x: 33450, y: 38800, z: 3722 }, seats: 3, leash: 300 },
+            { label: 'yard-gate', job: 'yard', at: { x: 33900, y: 38275, z: 3720 }, seats: 8, leash: 700 },
+        ],
+    },
     // Each checked on the navmesh without swimming (bridges are the only wet stretches) and against every post's aggro:
     // at least 100 clear on the way to the stage (Hibernia's leaves its bridge 350 off a wall caster's circle, and
     // walls are 250+ up, so 3D adds to it), no monster camp within reach.
@@ -651,3 +678,212 @@ export function doorDamage(lines: readonly { text: string }[]): number {
 /** Whether `p` is within the lord's reach (3D): where an attacker or its pet must stand for him to take damage. */
 export const inLordReach = (plan: RaidPlan, p: Point3, lord: Point3 = plan.target) =>
     Math.hypot(p.x - lord.x, p.y - lord.y, p.z - lord.z) <= plan.lordReach;
+
+// ── The defence from inside (defencePlan, defenceOrders) ─────────────────────
+//
+// The keep's owner sends some units in (S3's defence call). Each member takes a stand by what it can cast, never by who it is: a
+// point-blank bomb at the gate's inside and the stairs, an Animist's turrets inside the gate, the ranged on the wall-walk where they
+// see the courtyard, the healers by the wall stair's foot, the melee in the courtyard behind the gate. Walks in go through our own
+// doors (openOwnDoors: walkTo interacts at each, sdk/doors.ts).
+
+/** What a member does in the defence, by its spells and the group role it plays. */
+export type DefenceJob = 'bomb' | 'turret' | 'wall' | 'heal' | 'yard';
+
+/** One place to stand and how many stand there. */
+export interface DefenceStand {
+    label: string;
+    job: DefenceJob;
+    at: Point3;
+    seats: number;
+    /** How far from it a member may go after a foe (3D): 0 never leaves it (it fights from there), else that far and back. */
+    leash: number;
+    /** A turret stand's ground target: where its turrets go (SummonAnimistPet stands them on it). */
+    ground?: Point3;
+}
+
+export interface DefenceLayout {
+    /** Outside the gate on the way in: the defenders come here first (over their own bridge), then through the gate. */
+    entry: Point3;
+    /** In order of need: within a job, the stands listed first fill first when equally near. */
+    stands: DefenceStand[];
+}
+
+/** What a member can cast that the defence asks about (SpellPick's fields). */
+export interface DefenceSpell {
+    type: string;
+    target: string;
+    range: number;
+    radius: number;
+    damage: number;
+}
+
+/** A bomb worth a seat: the point-blank damage sdk/classes/pbae.ts casts (Disenchanting Emission, Steaming Blast: 133, radius 300). */
+const isBomb = (s: DefenceSpell) => s.type === 'DirectDamage' && s.target === 'Enemy' && s.range === 0 && s.radius > 0 && s.damage >= 100;
+const isTurret = (s: DefenceSpell) => s.type === 'SummonAnimistPet' || s.type === 'SummonAnimistFnF';
+/** A nuke that reaches from the wall-walk into the courtyard: 1000 and more (a wall stand is 1100-1300 from the gate's inside). */
+const isRangedNuke = (s: DefenceSpell) => /^(DirectDamage|Bolt|Lifedrain|DamageOverTime|DirectDamageWithDebuff|DamageSpeedDecrease)$/.test(s.type) && s.range >= 1000 && s.target === 'Enemy';
+
+/**
+ * The jobs a member takes, best first, from its spells and its group role (never its name or class): a bomb, then turrets, then
+ * the healers, then a ranged nuke or a bow for the wall, the courtyard last. A job whose seats are full hands it to its next.
+ */
+export function defenceJobs(kit: { role: Role; spells: readonly DefenceSpell[]; archer?: boolean }): DefenceJob[] {
+    const jobs: DefenceJob[] = [];
+    if (kit.spells.some(isBomb)) jobs.push('bomb');
+    if (kit.spells.some(isTurret)) jobs.push('turret');
+    if (kit.role === 'healer') jobs.push('heal');
+    if (kit.archer || (kit.role !== 'tank' && kit.role !== 'melee' && kit.spells.some(isRangedNuke))) jobs.push('wall');
+    jobs.push('yard');
+    return jobs;
+}
+
+/** The plan for `realm` to hold a keep from inside. */
+export interface DefencePlan {
+    keep: string;
+    realm: PlayerRealm;
+    regionId: number;
+    /** The realm's own way to the island: the raid's rally and route to its stage, then the entry outside the gate. */
+    rally: Point3;
+    route: Point3[];
+    entry: Point3;
+    stands: DefenceStand[];
+    roof: Point3;
+    lord: Point3;
+    doors: SiegeDoor[];
+}
+
+/** The defence of `keep` (default the Faste) for its owner `realm`; null for a keep with no defence layout. */
+export function defencePlan(realm: PlayerRealm, keep = FASTE.keep): DefencePlan | null {
+    const layout = SIEGE_LAYOUTS[keep];
+    if (!layout?.defence) return null;
+    const a = layout.approach[realm];
+    const lord = layout.targets.find(t => t.kind === 'lord')!;
+    return {
+        keep, realm, regionId: layout.regionId, rally: a.rally, route: [...a.route, layout.defence.entry], entry: layout.defence.entry,
+        stands: layout.defence.stands, roof: layout.roof, lord: lord.at, doors: layout.doors,
+    };
+}
+
+/** A member of the defence: where it is and the jobs it takes (defenceJobs). */
+export interface Defender extends Point3 {
+    id: number;
+    alive: boolean;
+    jobs: readonly DefenceJob[];
+}
+
+export interface DefenceView {
+    /** The defending unit's members (or every defending unit's). */
+    defenders: readonly Defender[];
+    /** Enemy players and their pets seen near the keep (no guards). */
+    foes: readonly Point3[];
+    /** Who holds the keep now (KeepOwnerRead, or the guards' realm). */
+    owner: Realm | string;
+    /** Last tick's seats, stand label by defender id: a member keeps its seat while its job still fits. */
+    seats?: ReadonlyMap<number, string>;
+}
+
+export type DefencePhase = 'going' | 'holding' | 'roof' | 'lost';
+
+export interface DefenceOrders {
+    phase: DefencePhase;
+    /** Each living defender's stand, by id. On 'roof' the courtyard's and the healers' stand is the roof. Empty on 'lost'. */
+    seats: Map<number, DefenceStand>;
+    /** Foes outside the walls, in the courtyard, and on the roof (by the lord). */
+    threat: { outside: number; inside: number; roof: number };
+    why: string;
+}
+
+/** On its stand: within this of it on the ground, and DEFENCE_ON_Z of its height. */
+export const ON_STAND = 150;
+const DEFENCE_ON_Z = 100;
+/** Foes this close to the lord (3D) are on the roof: the courtyard and the healers go up. */
+export const ROOF_THREAT = 700;
+/** Holding once this share of the living stand on their stands. */
+export const HOLD_SHARE = 0.6;
+/** Inside the walls: this close to the keep's centre on the ground (the outer wall runs 900-1100 out). */
+const INSIDE = 1000;
+
+const insideOf = (centre: Point, p: Point) => Math.hypot(p.x - centre.x, p.y - centre.y) <= INSIDE;
+
+/**
+ * Seats: each living defender's first job with a free seat, the nearest such stand; last tick's seat kept while its job fits; a
+ * job whose stands are full hands the member to its next. Defenders in id order, so the same picture gives the same seats.
+ */
+export function defenceSeats(plan: Pick<DefencePlan, 'stands'>, defenders: readonly Defender[], prev?: ReadonlyMap<number, string>): Map<number, DefenceStand> {
+    const free = new Map(plan.stands.map(s => [s.label, s.seats]));
+    const out = new Map<number, DefenceStand>();
+    const take = (id: number, s: DefenceStand) => { out.set(id, s); free.set(s.label, free.get(s.label)! - 1); };
+    const alive = defenders.filter(d => d.alive).slice().sort((a, b) => a.id - b.id);
+    for (const d of alive) {
+        const label = prev?.get(d.id);
+        const s = label ? plan.stands.find(x => x.label === label) : undefined;
+        if (s && d.jobs[0] === s.job && (free.get(s.label) ?? 0) > 0) take(d.id, s);
+    }
+    const maxJobs = Math.max(0, ...alive.map(d => d.jobs.length));
+    for (let k = 0; k < maxJobs; k++) {
+        for (const d of alive) {
+            if (out.has(d.id)) continue;
+            const job = d.jobs[k];
+            if (!job) continue;
+            const kept = prev?.get(d.id);
+            const open = plan.stands.filter(s => s.job === job && (free.get(s.label) ?? 0) > 0);
+            if (!open.length) continue;
+            const mine = open.find(s => s.label === kept);
+            take(d.id, mine ?? open.slice().sort((a, b) => Math.hypot(a.at.x - d.x, a.at.y - d.y) - Math.hypot(b.at.x - d.x, b.at.y - d.y))[0]!);
+        }
+    }
+    return out;
+}
+
+/**
+ * The defence for this tick: 'lost' once the keep isn't ours; 'roof' while foes stand by the lord (the courtyard and the healers
+ * go up); else 'going' until HOLD_SHARE of the living stand on their stands, then 'holding'.
+ */
+export function defenceOrders(plan: DefencePlan, view: DefenceView): DefenceOrders {
+    const roof = view.foes.filter(f => Math.hypot(f.x - plan.lord.x, f.y - plan.lord.y, f.z - plan.lord.z) <= ROOF_THREAT).length;
+    const inside = view.foes.filter(f => insideOf(plan.lord, f)).length - roof;
+    const outside = view.foes.length - inside - roof;
+    const threat = { outside, inside, roof };
+    if (view.owner !== plan.realm) return { phase: 'lost', seats: new Map(), threat, why: `the keep is ${view.owner || 'nobody'}'s` };
+    const seats = defenceSeats(plan, view.defenders, view.seats);
+    if (roof > 0) {
+        const up: DefenceStand = { label: 'roof', job: 'yard', at: plan.roof, seats: 0, leash: 400 };
+        for (const [id, s] of seats) if (s.job === 'yard' || s.job === 'heal') seats.set(id, up);
+        return { phase: 'roof', seats, threat, why: `${roof} by the lord: the courtyard and the healers to the roof` };
+    }
+    const alive = view.defenders.filter(d => d.alive);
+    const on = alive.filter(d => {
+        const s = seats.get(d.id);
+        return s && Math.hypot(s.at.x - d.x, s.at.y - d.y) <= ON_STAND && Math.abs(s.at.z - d.z) <= DEFENCE_ON_Z;
+    }).length;
+    const holding = alive.length > 0 && on >= HOLD_SHARE * alive.length;
+    return { phase: holding ? 'holding' : 'going', seats, threat, why: `${on}/${alive.length} on their stands; ${outside} outside, ${inside} inside` };
+}
+
+/**
+ * The rest of the way in from `at`: the realm's bank and bridge to the stage (as routeFrom), then the entry outside the gate.
+ * Empty inside the walls or at the entry: from there walk to the stand itself, through our own doors.
+ */
+export function defenceRouteFrom(plan: DefencePlan, at: Point3): Point3[] {
+    if (insideOf(plan.lord, at) || Math.hypot(at.x - plan.entry.x, at.y - plan.entry.y) <= AT_SPOT) return [];
+    const way = [plan.rally, ...plan.route];
+    let best = 0, bestD = Infinity;
+    for (let i = 0; i < way.length; i++) {
+        const d = Math.hypot(way[i]!.x - at.x, way[i]!.y - at.y);
+        if (d < bestD) { best = i; bestD = d; }
+    }
+    const next = way[best + 1];
+    const onLeg = next && Math.hypot(next.x - at.x, next.y - at.y) < Math.hypot(next.x - way[best]!.x, next.y - way[best]!.y);
+    return way.slice(bestD <= AT_SPOT || onLeg ? best + 1 : best);
+}
+
+/**
+ * Open our own keep's doors to this process's walks (applyDoors with ours): call it each tick of the defence, with the doors seen
+ * broken. Without a mesh it only registers them, and walkTo still goes through them by interact.
+ */
+export function openOwnDoors(plan: Pick<DefencePlan, 'keep' | 'regionId' | 'doors' | 'lord'>, broken: readonly number[] = [], store: NavmeshStore = getNavmeshStore()): void {
+    const layout = { keep: plan.keep, regionId: plan.regionId, doors: plan.doors };
+    const mesh = store.available() ? store.at(plan.regionId, plan.lord.x, plan.lord.y) : null;
+    if (mesh) applyDoors(layout, { ours: true, broken }, mesh);
+    else useOwnDoors(layout, { ours: true, broken });
+}

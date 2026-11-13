@@ -1,0 +1,145 @@
+import { afterEach, describe, expect, test } from 'bun:test';
+import { NavmeshStore } from '../navmesh';
+import { getOccluderStore } from '../occluders';
+import { lineOfSight } from '../vision';
+import { clearOwnDoors, ownDoors } from '../doors';
+import {
+    defenceJobs, defenceOrders, defencePlan, defenceRouteFrom, defenceSeats, FASTE, openOwnDoors, ROOF_THREAT,
+    type Defender, type DefenceSpell } from './siege';
+import type { Point3 } from './types';
+
+const plan = defencePlan('midgard')!;
+const stand = (l: string) => plan.stands.find(s => s.label === l)!;
+
+// Spells as the DB has them (SpellPick's fields).
+const BOMB: DefenceSpell = { type: 'DirectDamage', target: 'Enemy', range: 0, radius: 300, damage: 133 };
+const NUKE: DefenceSpell = { type: 'DirectDamage', target: 'Enemy', range: 1500, radius: 0, damage: 120 };
+const BOLT: DefenceSpell = { type: 'Bolt', target: 'Enemy', range: 1875, radius: 0, damage: 150 };
+const TURRET: DefenceSpell = { type: 'SummonAnimistPet', target: 'Self', range: 1000, radius: 0, damage: 0 };
+const HEAL: DefenceSpell = { type: 'Heal', target: 'Realm', range: 2000, radius: 0, damage: 0 };
+const SHORT_BOMB: DefenceSpell = { ...BOMB, damage: 52 };
+
+describe('defenceJobs: by spells and role, never by name', () => {
+    test('a bomb first, then the wall with a nuke', () => expect(defenceJobs({ role: 'nuker', spells: [BOMB, NUKE] })).toEqual(['bomb', 'wall', 'yard']));
+    test('turrets', () => expect(defenceJobs({ role: 'support', spells: [TURRET, BOLT] })).toEqual(['turret', 'wall', 'yard']));
+    test('a healer by its role', () => expect(defenceJobs({ role: 'healer', spells: [HEAL] })).toEqual(['heal', 'yard']));
+    test('a weak bomb is no bomb', () => expect(defenceJobs({ role: 'nuker', spells: [SHORT_BOMB, NUKE] })).toEqual(['wall', 'yard']));
+    test('an archer goes on the wall', () => expect(defenceJobs({ role: 'melee', spells: [], archer: true })).toEqual(['wall', 'yard']));
+    test('a tank with a nuke stays in the courtyard', () => expect(defenceJobs({ role: 'tank', spells: [NUKE] })).toEqual(['yard']));
+});
+
+const d = (id: number, jobs: Defender['jobs'], at: Point3 = { x: 36300, y: 38300, z: 3349 }, alive = true): Defender => ({ id, ...at, alive, jobs });
+
+describe('defenceSeats', () => {
+    test('each job to its stands; a full job hands over to the next', () => {
+        const bombers = [1, 2, 3, 4, 5].map(i => d(i, ['bomb', 'wall', 'yard']));
+        const seats = defenceSeats(plan, bombers);
+        expect([...seats.values()].filter(s => s.job === 'bomb')).toHaveLength(4);
+        expect(seats.get(5)!.job).toBe('wall');
+    });
+
+    test('the gate\'s bomb seats fill first for one coming from outside', () => {
+        const seats = defenceSeats(plan, [d(1, ['bomb', 'yard'])]);
+        expect(seats.get(1)!.label).toMatch(/^bomb-gate/);
+    });
+
+    test('the dead take no seat; last tick\'s seat is kept', () => {
+        const prev = new Map([[2, 'wall-sw']]);
+        const seats = defenceSeats(plan, [d(1, ['wall', 'yard'], undefined, false), d(2, ['wall', 'yard'])], prev);
+        expect(seats.has(1)).toBe(false);
+        expect(seats.get(2)!.label).toBe('wall-sw');
+    });
+
+    test('everyone gets a seat for a full group of eight', () => {
+        const eight: Defender[] = [
+            d(1, ['bomb', 'wall', 'yard']), d(2, ['turret', 'wall', 'yard']), d(3, ['heal', 'yard']), d(4, ['heal', 'yard']),
+            d(5, ['wall', 'yard']), d(6, ['yard']), d(7, ['yard']), d(8, ['wall', 'yard']),
+        ];
+        const seats = defenceSeats(plan, eight);
+        expect(seats.size).toBe(8);
+        expect(seats.get(3)!.job).toBe('heal');
+        expect(seats.get(6)!.job).toBe('yard');
+    });
+});
+
+describe('defenceOrders', () => {
+    const owner = 'midgard';
+    test('lost once the keep is another realm\'s', () => {
+        const o = defenceOrders(plan, { defenders: [d(1, ['yard'])], foes: [], owner: 'hibernia' });
+        expect(o.phase).toBe('lost');
+        expect(o.seats.size).toBe(0);
+    });
+
+    test('going until most stand on their stands, then holding', () => {
+        const far = defenceOrders(plan, { defenders: [d(1, ['yard']), d(2, ['heal', 'yard'])], foes: [], owner });
+        expect(far.phase).toBe('going');
+        const there = defenceOrders(plan, { defenders: [d(1, ['yard'], stand('yard-gate').at), d(2, ['heal', 'yard'], stand('heal-stair').at)], foes: [], owner });
+        expect(there.phase).toBe('holding');
+    });
+
+    test('foes by the lord send the courtyard and the healers to the roof; the wall stays', () => {
+        const o = defenceOrders(plan, {
+            defenders: [d(1, ['yard']), d(2, ['heal', 'yard']), d(3, ['wall', 'yard'])],
+            foes: [{ x: plan.lord.x + 100, y: plan.lord.y, z: plan.lord.z }, { x: 35000, y: 38275, z: 3700 }], owner,
+        });
+        expect(o.phase).toBe('roof');
+        expect(o.seats.get(1)!.at).toEqual(plan.roof);
+        expect(o.seats.get(2)!.at).toEqual(plan.roof);
+        expect(o.seats.get(3)!.job).toBe('wall');
+        expect(o.threat).toEqual({ outside: 1, inside: 0, roof: 1 });
+        expect(ROOF_THREAT).toBeGreaterThan(400);
+    });
+});
+
+describe('defenceRouteFrom', () => {
+    test('from the realm\'s bank over its bridge, ending outside the gate', () => {
+        const r = defenceRouteFrom(plan, { ...plan.rally });
+        expect(r.at(-1)).toEqual(plan.entry);
+        expect(r[0]).toEqual(FASTE.approach.midgard.route[0]);
+    });
+    test('nothing left inside the walls or at the entry', () => {
+        expect(defenceRouteFrom(plan, { x: 33100, y: 38250, z: 3722 })).toEqual([]);
+        expect(defenceRouteFrom(plan, { ...plan.entry })).toEqual([]);
+    });
+});
+
+describe('openOwnDoors', () => {
+    afterEach(() => clearOwnDoors());
+    test('registers the keep\'s unbroken doors as ours to use', () => {
+        openOwnDoors(plan, [252000301], new NavmeshStore({ dir: 'C:/nonexistent-navmesh-dir' }));
+        const ids = ownDoors(252).map(x => x.doorId);
+        expect(ids).not.toContain(252000301);
+        expect(ids).toContain(252000302);
+    });
+});
+
+const navStore = new NavmeshStore();
+const meshReady = navStore.available() && navStore.at(252, 33089, 38271) !== null;
+
+describe.skipIf(!meshReady || getOccluderStore().forZone(252) === null)('the defence stands on the Faste\'s navmesh and walls', () => {
+    const mesh = navStore.at(252, 33089, 38271)!;
+    const foot = mesh.closestPoint({ x: 33500, y: 38950, z: 3722 })!;
+    const outside = mesh.closestPoint(plan.entry)!;
+
+    test('every stand stands on the mesh, and a route reaches it from outside the gate with every door open', () => {
+        for (const s of plan.stands) {
+            const c = mesh.closestPoint(s.at, { x: 32, y: 32, z: 64 });
+            expect([s.label, !!c && Math.abs(c.z - s.at.z) <= 40]).toEqual([s.label, true]);
+            expect([s.label, mesh.findPath(outside, c!).status]).toEqual([s.label, 'found']);
+        }
+    });
+
+    test('each wall stand sees the courtyard and the gate\'s inside, and nothing outside the gate sees it', () => {
+        const yard = [{ x: 33100, y: 38250, z: 3722 }, { x: 33700, y: 38250, z: 3720 }, { x: 33900, y: 38275, z: 3720 }];
+        const out = [{ x: 34650, y: 38250, z: 3722 }, { x: 34420, y: 38275, z: 3720 }, { x: 35000, y: 38275, z: 3700 }];
+        for (const s of plan.stands.filter(x => x.job === 'wall')) {
+            expect([s.label, yard.filter(p => lineOfSight(252, s.at, p)).length]).toEqual([s.label, yard.length]);
+            expect([s.label, out.filter(p => lineOfSight(252, p, s.at)).length]).toEqual([s.label, 0]);
+        }
+        expect(mesh.findPath(foot, stand('wall-se').at).status).toBe('found');
+    });
+
+    test('the gate\'s bombers reach the gate\'s outside stand with a radius-300 bomb, less the margin', () => {
+        for (const s of plan.stands.filter(x => x.label.startsWith('bomb-gate'))) expect(Math.hypot(s.at.x - 34420, s.at.y - 38275, s.at.z - 3720)).toBeLessThanOrEqual(240);
+    });
+});
