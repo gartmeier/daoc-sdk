@@ -27,6 +27,8 @@ import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
 import { Coordinator, mergeSettings, type GroupStrategy } from './strategy';
 import type { GroupDefinition } from './types';
+import { GroupVoice } from './voice';
+import { regionInbox, voiceOn } from './voice-io';
 import { isLoggedEvent, type ControlRequest, type RunMeta, type RunResultView } from './wire';
 
 export interface GroupRunOptions<S> {
@@ -218,11 +220,26 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         applyWindDown(Date.now());
         publisher?.running(() => coordinator.memory, () => ({ windingDown: coordinator.windingDown, deadline, hardStop }));
         loops = [coordinator.run(run.signal), ...agents.map(a => a.run(run.signal))].map(p => p.catch(e => { if (!run.signal.aborted) run.abort(e); }));
+        // The voice (voice.ts): the leader says in group chat what the group does, and in /region the director's lines for this unit.
+        const speaker = members.find(m => m.bot === (def.leader ?? def.members[0]!.bot)) ?? members[0]!;
+        const realm = players[0]!.realm;
+        const voice = voiceOn() && realm !== 'none' ? new GroupVoice({ speaker: speaker.sdk.getPlayer()!.name, realm, regionId: players[0]!.regionId }) : null;
+        const inbox = voiceOn() && realm !== 'none' ? regionInbox(basename(opts.dir), realm) : null;
+        const speak = (text: string, region: boolean) => {
+            if (!speaker.sdk.isConnected()) return;
+            log(`${region ? 'region' : 'said'}: ${text}`);
+            void (region ? speaker.sdk.sendCommand(`/region ${text}`) : speaker.sdk.sendGroupSay(text)).catch(() => {});
+        };
 
         while (!run.signal.aborted) {
             await abortable(Bun.sleep(500), run.signal).catch(() => {});
             const now = Date.now();
             applyWindDown(now);
+            try {
+                const line = voice?.hear(board.picture(now), now);
+                if (line) speak(line.text, false);
+                for (const text of inbox?.take(now) ?? []) speak(text, true);
+            } catch (e) { log(`voice: ${errorText(e)}`); }
             if (now >= deadline && !coordinator.windingDown) { coordinator.windingDown = true; log('time is up: finishing the current fight'); }
             const phase = board.getOrders().phase;
             // A corpse waiting for a rez would otherwise be left dead, and a member's report says so: wait for it too, up to the hard stop.
