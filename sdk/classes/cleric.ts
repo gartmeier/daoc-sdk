@@ -11,7 +11,10 @@ import type { Character } from '../group/character';
 import type { Behavior } from '../group/member';
 import type { SpellPick } from '../group/spells';
 import type { Contact, MemberReport } from '../group/types';
+import { groupHeal } from './druid';
+import { unlessHammered } from './healer';
 import { topUp } from './friar';
+import { sightClock, standOutOfSight } from './healer-stand';
 import { thrifty } from './thrifty';
 
 export interface ClericOptions {
@@ -21,6 +24,12 @@ export interface ClericOptions {
     stun?: boolean;
     /** The Friar kit's topUp: heal a member below this % in her spare turns, above 50 % power. 0: off. */
     topUpBelow?: number;
+    /** groupHeal (the Druid's): Heaven's Commendation when this many around her (her too) each miss most of its 97. */
+    groupHealMin?: number;
+    /** groupHeal: below this % power she keeps it for single heals. */
+    groupHealAbove?: number;
+    /** standOutOfSight (healer-stand.ts): step out of the enemy's sight, in group-heal reach. On by default. */
+    stand?: boolean;
 }
 
 /** Stunning Flare's length at 24; a player is immune to stuns for 60 s after one ends (immunity_timer_flat_length). */
@@ -161,6 +170,14 @@ const notOnPlayers = (inner: Behavior<TacticsSettings>): Behavior<TacticsSetting
  * Below the stun and above her Smite, topUp (friar.ts) at 85 %: arena round 128 (2026-11-10), 5 heals in a 197 s fight and idle 32 %
  * on "no smite at players" while all five died. Her turns there were going nowhere.
  */
-export function cleric({ saveBelow = 50, stun = true, topUpBelow = 85 }: ClericOptions = {}): Character {
-    return { role: 'healer', instant: [instantHealSave()], fight: [...(stun ? [stunPeel({ marked: camelotMezzer })] : []), ...(topUpBelow > 0 ? [topUp(topUpBelow, 50)] : []), notOnPlayers(thrifty(assist(), saveBelow))] };
+export function cleric({ saveBelow = 50, stun = true, topUpBelow = 85, groupHealMin = 3, groupHealAbove = 30, stand = true }: ClericOptions = {}): Character {
+    // Heaven's Commendation (Rejuvenation 15: 97 on everyone within 2000, 3.7 s, 42 power): heal() never picks a group heal
+    // (druid.ts), so it was never cast. Above heal, as the Druid's; under a melee a 3.7 s cast only ends interrupted.
+    // The stand and the clock: healer-stand.ts (stint 2026-11-13, milestone 6).
+    return {
+        role: 'healer', instant: [instantHealSave()],
+        urgent: [unlessHammered(groupHeal(groupHealMin, groupHealAbove)), ...(stand ? [standOutOfSight()] : [])],
+        chores: [sightClock()],
+        fight: [...(stun ? [stunPeel({ marked: camelotMezzer })] : []), ...(topUpBelow > 0 ? [topUp(topUpBelow, 50)] : []), notOnPlayers(thrifty(assist(), saveBelow))],
+    };
 }

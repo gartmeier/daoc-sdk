@@ -144,3 +144,13 @@ Nothing else needed from her at that camp: at any `ready.mana` from 10 to 35 her
 - **Group heals:** Eir's Glorious Touch is instant, for fights where several are hurt at once. A rule would have to count who is hurt.
 - **Root:** Deny Movement isn't taken while she has a mezz, and it lasts 9 s.
 - **Cures** for poison, disease and nearsight.
+
+## Group heal and the stand (stint 2026-11-13, S5)
+
+**Favor of Battle** (Mending 16: 103 on every member within 2000, 3.7 s, 44 power) was reached and never cast: `heal` picks the cheapest single heal that covers one member. `healer()` now takes options and has the Druid's `groupHeal` in `urgent` after the mezz cure and before the Nearsight cure, wrapped in `unlessHammered`: three or more members around her (her too) each missing 70 % of it, in a fight, above 30 % power. Options `groupHealMin`, `groupHealAbove`, `stand`. Eir's Glorious Touch (instant, 50 %, 20 min timer) still isn't cast.
+
+**The stand** (`sdk/classes/healer-stand.ts`, the Druid, Cleric and Healer kits):
+- **`stand`, in `urgent` after `groupHeal`:** in a fight, a step of at most 450 to a spot that no free enemy player within 2300 sees (the client's own line of sight: terrain heightmap, keep walls and buildings, `sdk/vision.ts`), keeping every member she reaches now within 1800 (group heals reach 2000). Only while nobody in her reach is under the heal line (`settings.heal`), or when an enemy player targeting her has just cast. Never with a melee on her (flee's), never nearer the nearest enemy than she is, never into water or through a wall, at most once per 3 s. A spot seen by fewer than now when none is hidden.
+- **Measured, offline (Thidranki terrain and walls, a grid every 1500 with three enemies 1600 away on one side):** seen in 81 % of the spots, a better spot in reach in 52 % of those, fully hidden in 30 %. 1.3 ms a search on average.
+- **`sightClock`, on the side tick:** once a second in a fight, whether any free enemy player within 2300 sees her; at the fight's end a note in the run log, `<Name>: in enemy sight 12.0 s of 41.5 s in the fight (29 %)`. Sum them with `grep "in enemy sight"` over a unit's run logs.
+- **To look for:** `stand (n)` in her Actions, the sight share per fight against the first sorties' (before the stand), and whether heals or deaths change. `stand: false` in the kit's options leaves the step out and keeps the clock.

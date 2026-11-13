@@ -10,6 +10,7 @@ import type { Behavior } from '../group/member';
 import type { Contact, MemberReport, Role } from '../group/types';
 import type { SpellPick } from '../group/spells';
 import { cureNearsight, unlessHammered } from './healer';
+import { sightClock, standOutOfSight } from './healer-stand';
 import { noteTooFar, tooFarOf, viewDistance } from './mentalist';
 import { thrifty } from './thrifty';
 
@@ -20,6 +21,8 @@ export interface DruidOptions {
     groupHealMin?: number;
     /** groupHeal: below this % power she keeps it for single heals. */
     groupHealAbove?: number;
+    /** standOutOfSight (healer-stand.ts): step out of the enemy's sight, in group-heal reach. On by default. */
+    stand?: boolean;
 }
 
 /** Each counts when it misses this share of the heal: more of the heal is wasted on it than this leaves. */
@@ -191,10 +194,12 @@ export const unlessAimedAt = <S>(inner: Behavior<S>): Behavior<S> => ({
     run: ctx => (ctx.threats().some(t => !t.stale && !t.cc && t.target === ctx.name) ? false : inner.run(ctx)),
 });
 
-export function druid({ dotsAbove, groupHealMin = 3, groupHealAbove = 25 }: DruidOptions = {}): Character {
+export function druid({ dotsAbove, groupHealMin = 3, groupHealAbove = 25, stand = true }: DruidOptions = {}): Character {
     return {
         role: 'healer',
-        urgent: [rootDiver(), groupHeal(groupHealMin, groupHealAbove)],
+        // The stand and the sight clock: healer-stand.ts (stint 2026-11-13, milestone 6).
+        urgent: [rootDiver(), groupHeal(groupHealMin, groupHealAbove), ...(stand ? [standOutOfSight()] : [])],
+        chores: [sightClock()],
         // Cure Nearsight I (Regrowth, 6 s, 30 power): Albion's Obscuring Dust cut our spell ranges by 35 % in round 35
         // (orchestrator, 13f8de7). The Midgard Healer kit's cure, in her idle turns (react: at shedLoad in the pack's
         // healer list), never under a melee, and in a fight only above 40 % of her 197 power.

@@ -25,6 +25,8 @@ import type { Behavior } from '../group/member';
 import type { SpellPick } from '../group/spells';
 import type { Contact, MemberReport } from '../group/types';
 import { stunPeel } from './cleric';
+import { groupHeal } from './druid';
+import { sightClock, standOutOfSight } from './healer-stand';
 
 /** `inner` only while no enemy player is in melee on us: its cast would be interrupted (hammeredBy). */
 export const unlessHammered = (inner: Behavior<TacticsSettings>): Behavior<TacticsSettings> => ({
@@ -138,6 +140,24 @@ export const cureNearsight = (): Behavior<TacticsSettings> => ({
     },
 });
 
-export function healer(): Character {
-    return { role: 'healer', instant: [hinder()], urgent: [unlessHammered(cureMezz()), unlessHammered(cureNearsight())], fight: [unlessHammered(stunPeel({ minMana: EXTRAS_FLOOR }))] };
+export interface HealerOptions {
+    /** groupHeal (the Druid's): Favor of Battle when this many around her (her too) each miss most of its 103. */
+    groupHealMin?: number;
+    /** groupHeal: below this % power she keeps it for single heals. */
+    groupHealAbove?: number;
+    /** standOutOfSight (healer-stand.ts): step out of the enemy's sight, in group-heal reach. On by default. */
+    stand?: boolean;
+}
+
+/**
+ * Favor of Battle (Mending 16: 103 on everyone within 2000, 3.7 s, 44 power) through the Druid's groupHeal, after the mezz
+ * cure and before the Nearsight cure: heal() never picks a group heal (druid.ts). The stand and the clock: healer-stand.ts.
+ */
+export function healer({ groupHealMin = 3, groupHealAbove = 30, stand = true }: HealerOptions = {}): Character {
+    return {
+        role: 'healer', instant: [hinder()],
+        urgent: [unlessHammered(cureMezz()), unlessHammered(groupHeal(groupHealMin, groupHealAbove)), ...(stand ? [standOutOfSight()] : []), unlessHammered(cureNearsight())],
+        chores: [sightClock()],
+        fight: [unlessHammered(stunPeel({ minMana: EXTRAS_FLOOR }))],
+    };
 }

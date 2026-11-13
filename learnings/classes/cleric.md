@@ -147,3 +147,13 @@ Her `buff:no_response` failures (5-8 a round, 39 in round 26) are the server's c
 - **The idle reason's wording:** with `spareNuke` off, "no smite at players below spareNuke's floor" means nothing to heal, which hides the real reason. A plainer skip text in `cleric.ts` is a code change for after the freeze.
 - No way to heal through a melee on her beyond the one 15-minute instant.
 - Cure Nearsight needs Rejuvenation 20 (she has 19), and the build is the group's.
+
+## Group heal and the stand (stint 2026-11-13, S5)
+
+**Heaven's Commendation** (Rejuvenation 15: 97 on every member within 2000, 3.7 s, 42 power) was reached and never cast: `heal` picks the cheapest single heal that covers one member. The kit now has the Druid's `groupHeal` in `urgent` (above `heal` in the wolf pack's list), wrapped in `unlessHammered`: when three or more members around her (her too) each miss 70 % of what it restores, in a fight, above 30 % power. Options `groupHealMin`, `groupHealAbove`. Its result kind is `groupHeal`, apart from `heal`.
+
+**The stand** (`sdk/classes/healer-stand.ts`, the Druid, Cleric and Healer kits):
+- **`stand`, in `urgent` after `groupHeal`:** in a fight, a step of at most 450 to a spot that no free enemy player within 2300 sees (the client's own line of sight: terrain heightmap, keep walls and buildings, `sdk/vision.ts`), keeping every member she reaches now within 1800 (group heals reach 2000). Only while nobody in her reach is under the heal line (`settings.heal`), or when an enemy player targeting her has just cast. Never with a melee on her (flee's), never nearer the nearest enemy than she is, never into water or through a wall, at most once per 3 s. A spot seen by fewer than now when none is hidden.
+- **Measured, offline (Thidranki terrain and walls, a grid every 1500 with three enemies 1600 away on one side):** seen in 81 % of the spots, a better spot in reach in 52 % of those, fully hidden in 30 %. 1.3 ms a search on average.
+- **`sightClock`, on the side tick:** once a second in a fight, whether any free enemy player within 2300 sees her; at the fight's end a note in the run log, `<Name>: in enemy sight 12.0 s of 41.5 s in the fight (29 %)`. Sum them with `grep "in enemy sight"` over a unit's run logs.
+- **To look for:** `stand (n)` in her Actions, the sight share per fight against the first sorties' (before the stand), and whether heals or deaths change. `stand: false` in the kit's options leaves the step out and keeps the clock.
