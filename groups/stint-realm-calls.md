@@ -168,7 +168,9 @@ Append it here:
   - Units of realms not in a run stood idle in the field and were hunted (attempts 1-2). Now every realm always plays.
   - Raids end on the clock in the lord phase (above).
   - The user watched three things: walls don't block LoS, bots walk through shut doors, and a melee climbed the inside wall. All three have fixes, either on the branch or after 10:00.
+  - 10:01: an import check (R3) imported `groups/field.ts`, which has no import.meta.main guard, so a second field mode started with default flags. It pre-empted D3's three main groups (BotPreemptedError at 10:01:43, two quick ends, a 5 min wait) and was stopped at 10:03. D3 recovered on its own. Import checks cover the rvr.ts files only from now on.
   - Nothing is pushed. Local main is ahead of origin.
+- **The end (R1, 10:31):** field mode stopped at 10:31:05. All 60 clients quit with swarm-check `--quit` (SWARM CHECK PASS; every one exit 0, logins 1, so no client dropped all night). The gateway and the keep-awake script are stopped. Logs: `groups/stint-field-*.log`, `groups/stint-probe*.log`, `groups/stint-swarm.log`, `groups/stint-gateway.log`.
 
 ## R2: Realm director
 
@@ -240,6 +242,13 @@ interface RealmCall {
   1. A muster's close reports `lost: 0` always and counts `kills` only over units that arrived (Midgard's raid logged `kills: null`). It should count losses and kills over every asked unit.
   2. When no unit is asked, the log doesn't say why (out of reach, in a fight, busy with another call, low health). Add the nearest refused unit and its reason to the open event.
   3. D2's last Hibernia raid closed `broken` at 05:00:08, at the field.ts restart: the units stopped before the director did. `stop()` should close open calls as `stopped`, so a restart doesn't read as a broken raid.
+
+**R2, 10:30: the two raid holds landed in 59b44a0 (live from the next stint's field.ts start).** Offline tests: 35 in `director.test.ts` and `realm-board.test.ts` (3 new). `squad.test.ts` and `tactics/` (160) still pass, there are no type errors in my files, and the rvr.ts files import clean.
+- **The lord hold:** past the 15 min in 'go', the clock waits while a raid unit's reason reads `raid lord` (tactics/raid.ts writes `raid <phase>: ...`), read within the last 30 s (`lordGraceMs`), for up to 10 min more (`lordMaxMs`). Without a lord read it ends at 15 min as before.
+- **The defence hold:** the rally doesn't go while more enemy players were seen within 4500 of the target in the last 60 s than the raid has living (`defenceRadius`, `defenceMemoryMs`, `defenceShare: 1`). Held 10 min without a break (`defenceMaxMs`), the muster ends `defended`, and field.ts's rhythm starts the next one 30 min later. **It counts only what our units see:** from the rally, 5500 out, the raid sees few defenders, so a squad or scout near the keep is what feeds it.
+- **On the call:** a muster now carries `defenders` (that count) and `hold: 'defenders' | 'lord'` while one holds. A new log event `hold` (`why`, `on`, `defenders`, `living`) marks each start and end. field.ts ignores it; R1 can add a ledger row for it.
+- **Also fixed (my 05:50 carry-over 1):** a muster's close counts `lost` and `kills` over every unit in the raid, not only the caller and arrivals. Before, it was always 0 and null.
+- **Still open (carry-over 3):** a field.ts restart closes an open muster as `broken`, because the units stop before the director does. Stopping the director first, in field.ts, is R1's side.
 
 ## R5: The Faste
 
@@ -405,6 +414,15 @@ There is no door to break. `keeps.ts` lifts the Faste's keep circle only for a u
 - **Its breaks** stayed at 0-3 a sortie. Six were on players: 5 mezzes and a root. The side tick catches what the turret is already shooting, not the next target it takes off its list after a kill. The carry-over: a middle way such as passive while a mezzed enemy stands within its reach. b2ee129's return to the focus wasn't it: 3 breaks in its one sortie.
 - **Morgause's servant** broke 2 mezzes. Same carry-over: a cc check on what the servant picks itself.
 
+**10:19, the turret and servant carry-overs landed for the next stint (23cef5c; tests 338 pass, the typecheck clean for these files; nothing live after 10:30).**
+- New `sdk/classes/pet-cc.ts`, `petOffCc`, on the side tick.
+- The pet's own target under crowd control sends it passive, as before.
+- Crowd control newly landing on any enemy within the pet's reach does too. Passive wipes the pet's list, where its own picks after a kill came from.
+- Then it attacks the clean focus if that is in reach: the turret within 900 of it, the servant within 2000 of Morgause.
+- The Animist's `turretOffCc` now uses it, and the Necromancer gets `servantOffCc`, whose wipe for crowd control nearby waits out the servant's 3 s cast half.
+- Not seen live: the next stint's first sorties are its check. Read `Broke cc` and the pet damage in the Pets table.
+- Still open: Morgause's Vitality Theft `no_response` and `walk:water`, and Etain's `petAttack:out_of_range` (the focus 1287-1545 from the turret while `plantTurret` read it as in reach).
+
 ## R3: Group play
 
 **Landed 19:05-19:15 (913e38f; the realm `rvr.ts` mains are private), live from each main group's next sortie** (`sdk/group/rvr.ts`, new `sdk/group/tactics/help.ts`, the realm `rvr.ts` mains; import check ok for all six main groups; field.ts never waited on my `.editing` locks).
@@ -507,6 +525,16 @@ There is no door to break. `keeps.ts` lifts the Faste's keep circle only for a u
   2. **Squads don't lead.** A squad of 1-3 holds at a waypoint before the stage, e.g. (34500, 35200) on the Hibernian route, until a main group passes it. At an enemy-held keep, the stage itself is within the defenders' reach (the squads were caught next to it).
   3. **Find why hibernia-s4 didn't move.** Watch a solo squad's member reason (`ctx.skip`/`doing`) at the raid approach's first waypoint.
 
+**Landed 10:08 (e80c2bf): the melee's own focus** (R1's ask from 08:45: midgard-2's Egil, Leif and Sigurd walked up the inside wall to wall-se's Wizard at 08:36). The interface was agreed with R5 ("R5: pathing inside the keep", item 3).
+- **`Orders.meleeFocus`:** the focus for tanks and melee when it isn't the unit's. null means none: they hold at the anchor. It lasts one decide; an update that doesn't name it drops it (`Blackboard.setOrders`), so it can't outlive the raid.
+- **`MemberContext.orders()`:** hands a tank or melee member that focus, before the skill lens (`sdk/group/melee-focus.ts`).
+- **`raidStep`:** the unit's focus is the ranged half's. `meleeFocus` is `RaidOrders.melee.focus` when that's an NPC, otherwise null:
+  - At the gate (rank 2), that's breakDoor's job.
+  - On a rank with only wall or roof casters (rank 2 once the gate is broken, ranks 4-5), the melee hold ("; melee hold" in the reason).
+- **Not covered yet: the case at 08:36.** It was "Wizard is on us", and `raidOrders` gives that to the melee too. It waits for R5's `meleeReach(regionId, from, to, { broken, ours })`; I fill `RaidView.reach` from the unit's centre once that lands. That's a one-line change in `raidStep`.
+- Tests: `melee-focus.test.ts` (4), `tactics/raid.test.ts` +1. `bun test sdk/group`: 2302 pass. The one failure was `siege.test.ts` while R5 was editing it, and it is green after 48fa6a4. All 23 guarded `rvr.ts` files import cleanly. Live from each unit's next sortie.
+- **My mistake, 10:01:30-10:03:** my first import check also imported `groups/field.ts`, which has no `import.meta.main` guard. It started a second field mode, which pre-empted D3's camelot, midgard and hibernia sorties (10:01:43-10:02:23). I stopped it at about 10:03, and no stray process is left. camelot and midgard were back at 10:07:34, and hibernia's 5-minute wait ended at about 10:10. From now on I import-check guarded files only.
+
 ## R7: Melee and song kits
 
 **Status (19:40 machine clock): all six kits written, tested offline, checked live, and in their bots' `character.ts`. None goes on the bench.** Commit 82b23fa (kits, tests, guides, the `spells.ts` edit) plus a second commit for the live fixes. Files: `sdk/classes/{mercenary,reaver,savage,champion,valewalker,minstrel}.ts` with tests, the shared `sdk/classes/hybrid.ts`, guides in `learnings/classes/<class>.md`, live checks `sdk/test/live/kits-r7-live.ts` and `kit-probe-r7.ts`.
@@ -565,6 +593,12 @@ Now, when no member of hers is alive within 2000 and an enemy player targets her
   - Mostly she wasn't on her own: Niamh or Fionn was alive within 2000.
   - Or the squad's `retreat`, which ranks above it, took her. At 20:47:31 a caught fight, 1 vs 2: she swung for 5 s, then `retreat: flee` at 1 vs 5, and she died running 12 s later. That one is R4's caught rule.
 - **No change during the frozen window.** Both carry-overs are in `sdk/classes/warden.ts`, and I'll do them after 10:00 unless R1 says otherwise.
+- **Landed 10:18 in 8a0212a, live at the next stint** (R1, 10:10).
+  - After the side step she faces him.
+  - A heal refused with `must_wait` counts as none for its seconds (`healWaitMs`).
+  - `bun test sdk/classes` passes (336), and the import check passes for 90 modules.
+  - Not yet seen live. To check: "not in view" gone, and any Glowing Blade landing.
+  - **Still open:** the Reaver, Minstrel and Savage carry-overs above.
 
 **The six kits, 22:30 to 05:45** (observer reports of camelot, camelot-2, hibernia, hibernia-2, midgard, midgard-2; per sortie, against their units' other members):
 
@@ -1108,3 +1142,16 @@ Raids as they come. Each row gives the go, the end and the time from the ledger,
 - **Timeline:** muster at 09:11:46; go at 09:13:54 with 15 of 19 (2:08); lord phase at 09:17:14, 3:20 after the go; the lord at 81 % at 09:19:19 with Ivar and Vidar on the roof. "The forces of Midgard have captured Thidranki Faste!" at 09:22:36; the owner read `midgard (by capture)` at 09:22:38-39; the director closed the muster as `captured` (650 s).
 - **8:42 from go to capture, 12 dead (floor).** Like the two before, the lord fell to melee on the roof while the casters stood in the courtyard.
 - **The new lord is "Jarl Thidranki" L33 midgard,** keep level 1 again, and it matches `lordName`. All three lords are now seen: Lady (Albion), Chieftain (Hibernia), Jarl (Midgard).
+
+### R5: the frozen window in sum (06:00-10:00, run D3, nothing loaded changed)
+
+- **Raids: 11.** Midgard 5 (06:04, 06:53, 07:40, 08:26, 09:13), Hibernia 5 (06:20, 07:11, 07:57, 08:45, 09:33), Albion 1 (09:27).
+- **Captures: 1.** Midgard at 09:22:36, 8:42 from its go, with 12 dead (floor). The other 10 ended in `timeout` at 15:00-15:01. Seven of those reached the lord phase; the lord's lowest reads were 34 % (Hibernia 07:19) and 43 % (Albion 09:41).
+- **Owner changes in the window: one,** Albion → Midgard at 09:22:36. Albion's retake (09:27) and Hibernia's raid (09:33) on Midgard's Faste both timed out at the lord.
+- **Losses per raid, my 10 s samples (floor):** 24-49 for the timeouts, 12 for the capture. By the observer's reports, most fell to players (Albion's defenders first), not to guards. See "why the raids since 05:13 end in timeout".
+- **The night's owner changes:** Albion → Hibernia 03:38:48 → Albion 03:51:04 → Midgard 09:22:36. All three lords seen: Lady (Albion), Chieftain (Hibernia), Jarl (Midgard), all L33 at keep level 1.
+- **What would have turned the timeouts, all carry-overs listed above:**
+  - the clock holding while a unit is on the lord (R2);
+  - static guards not taking the focus from the lord (R5);
+  - casters up on the roof (R3);
+  - a go that weighs the defenders (R2).
