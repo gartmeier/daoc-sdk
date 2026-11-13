@@ -905,11 +905,13 @@ export class RealmDirector {
         for (const x of this.open.values()) { if (x.call.kind === 'help') busy.add(x.call.from); for (const a of x.call.asked) busy.add(a); for (const c of x.call.coming) busy.add(c); }
         const ok = (u: UnitView) => u.running && !!u.centre && u.alive > 0 && !busy.has(u.unit) && u.hp >= s.helperHp;
         const cur = this.picketNow ? board.units.find(u => u.unit === this.picketNow!.unit) : undefined;
-        const keepIt = cur && cur.running && cur.alive > 0 && (now - this.picketNow!.since < s.picketMs);
-        if (keepIt) { this.picketNow = { ...this.picketNow!, at, keep }; return; }
         // Squads first (a main group is worth more in the field), then the nearest to the spot; the last picket only if nobody else.
         const free = board.units.filter(u => ok(u) && !u.inFight)
             .sort((a, b) => Number(a.size > 3) - Number(b.size > 3) || Number(a.unit === was) - Number(b.unit === was) || dist2(a.centre!, at) - dist2(b.centre!, at));
+        // Kept while it can, for picketMs, unless it is a main group and a squad is free now (live 18:11: midgard stood picket because
+        // no squad was out yet at the start).
+        const keepIt = cur && cur.running && cur.alive > 0 && now - this.picketNow!.since < s.picketMs && !(cur.size > 3 && free.some(u => u.size <= 3));
+        if (keepIt) { this.picketNow = { ...this.picketNow!, at, keep }; return; }
         const pick = free[0];
         if (pick) set({ unit: pick.unit, at, keep, since: now }, `free${pick.size <= 3 ? ', a squad' : ''}, ${Math.round(dist2(pick.centre!, at))} from the spot`);
         else if (cur && cur.running && cur.alive > 0) this.picketNow = { ...this.picketNow!, at, keep, since: now };

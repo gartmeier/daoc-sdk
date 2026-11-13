@@ -539,6 +539,14 @@ describe('the defence call (S3, 2026-11-13)', () => {
         expect(Math.hypot(home.x - faste.x, home.y - faste.y)).toBeGreaterThan(3200);
     });
 
+    test('a main group standing picket hands it to a squad as soon as one is free (live 18:11)', () => {
+        const d = director({ units: UNITS6, targetOwner: () => 'albion', settings: { sight: false } });
+        const mains = { camelot: frame({ id: 'camelot', members: at(faste.x + 6000, faste.y, 6, 'G') }) };
+        expect((d.update(mains, 0, []).events.find(x => x.kind === 'picket') as any)?.unit).toBe('camelot');
+        const e = d.update({ ...mains, 'camelot-s2': frame({ id: 'camelot-s2', members: at(faste.x, faste.y + 8000, 2, 'T') }) }, 10_000, []).events.find(x => x.kind === 'picket') as any;
+        expect(e).toMatchObject({ unit: 'camelot-s2', was: 'camelot' });
+    });
+
     test('picketFor reads the duty for its own unit only', () => {
         const file: CallsFile = { v: 1, realm: 'albion', at: 1000, enabled: true, calls: [], picket: { unit: 'camelot-s2', at: { x: 1, y: 2, z: 3 }, keep: { x: 0, y: 0, z: 0 } } };
         expect(picketFor(file, 'camelot-s2', 2000)?.at).toEqual({ x: 1, y: 2, z: 3 });
