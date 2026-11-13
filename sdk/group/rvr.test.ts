@@ -1485,6 +1485,11 @@ describe('decideRvr: buffed before leaving home, never a fight with our own real
         expect(homeBuffHold({}, owed, owed, { x: 30_000, y: 30_000 }, home, 0)).toBeNull();
         const casting = team({ Bard: { activity: { kind: 'buff', targetId: null, detail: '', since: 0 } as any } }, home);
         expect(homeBuffHold({}, casting, casting, home, home, 0)).toMatch(/1 casting/);
+        // In the field, while resting (the user, 16:41): up to 60 s from the rest's start; not resting, none.
+        const field = { x: 40_000, y: 40_000 };
+        expect(homeBuffHold({ recoverSince: 0 }, owed, owed, field, home, 30_000, true)).toMatch(/^buff up before going on/);
+        expect(homeBuffHold({ recoverSince: 0 }, owed, owed, field, home, 61_000, true)).toBeNull();
+        expect(homeBuffHold({ recoverSince: 0 }, owed, owed, field, home, 30_000, false)).toBeNull();
     });
     test('a monster of our realm (an observed member\'s charmed pet) is never a focus', () => {
         const pet = contact(80, { kind: 'npc', name: 'perturbed bwca', realm: 'hibernia', level: 23, regionId: R, x: 10_300, y: 10_000, threat: true, target: 'Tank' } as any);

@@ -611,20 +611,28 @@ export const HOME_BUFF_RADIUS = 3000;
 /** It waits for owed buffs at most this long after arriving home; past it they catch up on the way. */
 export const HOME_BUFF_MAX_MS = 90_000;
 
+/** A rest in the field waits for owed buffs at most this long from its start (memory.recoverSince). */
+export const REST_BUFF_MAX_MS = 60_000;
+
 /**
- * Why the group stays home to buff (a reason), or null: at our portal keep, within HOME_BUFF_MAX_MS of arriving (memory.homeBuffSince),
- * while a member is casting a buff or one of ours still owes a member a buff (buffs.ts planBuffs, not yet on it; members and observed).
+ * Why the group stays to buff (a reason), or null. At our portal keep: within HOME_BUFF_MAX_MS of arriving (memory.homeBuffSince).
+ * Anywhere else while it rests (`resting`, its orders a recover): within REST_BUFF_MAX_MS of the rest's start (memory.recoverSince).
+ * Either while a member is casting a buff or one of ours still owes a member a buff (buffs.ts planBuffs, not yet on it; members
+ * and observed). The user, 16:41: "rest and buffing got interrupted again, this time on the field. ... a group needs buffs."
  */
-export function homeBuffHold(mem: Record<string, any>, members: readonly MemberReport[], here: readonly MemberReport[], centre: Point, home: Point | null, now: number): string | null {
-    if (!home || dist(centre, home) > HOME_BUFF_RADIUS) { mem.homeBuffSince = undefined; return null; }
-    mem.homeBuffSince ??= now;
-    if (now - mem.homeBuffSince >= HOME_BUFF_MAX_MS) return null;
+export function homeBuffHold(mem: Record<string, any>, members: readonly MemberReport[], here: readonly MemberReport[], centre: Point, home: Point | null, now: number, resting = false): string | null {
+    const atHome = !!home && dist(centre, home) <= HOME_BUFF_RADIUS;
+    if (atHome) mem.homeBuffSince ??= now;
+    else mem.homeBuffSince = undefined;
+    const since: number | undefined = atHome ? mem.homeBuffSince : resting ? mem.recoverSince : undefined;
+    const max = atHome ? HOME_BUFF_MAX_MS : REST_BUFF_MAX_MS;
+    if (since === undefined || now - since >= max) return null;
     const living = members.filter(m => !m.isDead);
     const casting = here.filter(m => m.activity?.kind === 'buff');
     const owed = here.flatMap(c => planBuffs(c.name, living).filter(t => !t.covered && t.rank < 99 && !t.pet).map(t => `${t.spell.name} on ${t.target}`));
     if (!casting.length && !owed.length) return null;
-    const left = Math.ceil((HOME_BUFF_MAX_MS - (now - mem.homeBuffSince)) / 1000);
-    return `buff up before leaving: ${casting.length} casting${owed.length ? `, ${owed.length} buff${owed.length === 1 ? '' : 's'} to go (${owed.slice(0, 2).join(', ')})` : ''}, ${left} s at most`;
+    const left = Math.ceil((max - (now - since)) / 1000);
+    return `buff up before ${atHome ? 'leaving' : 'going on'}: ${casting.length} casting${owed.length ? `, ${owed.length} buff${owed.length === 1 ? '' : 's'} to go (${owed.slice(0, 2).join(', ')})` : ''}, ${left} s at most`;
 }
 
 export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
@@ -880,8 +888,11 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // ── Buffed before leaving home (the user, playing Niamh at 16:38: "I have no buffs. We're not leaving without buffs."): at our portal
     // keep, while a buff of ours is still owed to a member (observed ones included) or one is being cast, rest and buff there before any
     // way out (hunt, wave, gather, call, muster, raid, patrol), at most HOME_BUFF_MAX_MS from arriving. Fights (above) come first. ──
-    const homeHold = homeBuffHold(mem, p.members, here, centre, homeAt, now);
-    if (homeHold) return { ...calm, phase: 'recover', anchor: restAt().at, waiting: low, objective: `buff up at our portal keep${gone}`, reason: homeHold };
+    // A rest in the field holds the same way (REST_BUFF_MAX_MS from its start): the last orders were a recover.
+    if (o.phase === 'recover') mem.recoverSince ??= now;
+    else mem.recoverSince = undefined;
+    const homeHold = homeBuffHold(mem, p.members, here, centre, homeAt, now, o.phase === 'recover');
+    if (homeHold) return { ...calm, phase: 'recover', anchor: restAt().at, waiting: low, objective: `buff up${gone}`, reason: homeHold };
 
     // ── Hunting: enemy players in sight beyond engageRadius. Too many: fall back (toward home unless they stand that way) ──
     // Raiding: no hunt and no fall-back for those in sight; one that comes within RAID_FOE_REACH is fought (inFight).
