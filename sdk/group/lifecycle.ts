@@ -34,7 +34,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { join } from 'node:path';
 import { BATTLEGROUND_LAYOUTS, THIDRANKI, type PlayerRealm } from './keeps';
 import { findBotEnv, parseEnvFile } from '../index';
-import { enterBattleground } from './battleground';
+import { enterBattleground, leaveBattleground } from './battleground';
+import { findNpcSpawns } from '../../data/index';
 import { lineupPool } from './lineup';
 import type { Member } from './member';
 import { connectBot, loadGroup } from './roster';
@@ -72,6 +73,13 @@ export interface LifecycleSettings {
     enterMaxMs: number;
     /** A log-out waits while the bot stands within this of a keep not ours (or the Faste at all: it may be in combat). */
     keepClear: number;
+    /**
+     * Lost constitution (PvE deaths, the Faste's guards) at least this much: the session ends with a healer trip, out by the
+     * realm's exit to the healer by where it lands (each within 1500), then the log-out there; the next log-in walks back
+     * in (entering). Over the target, the worst leave first. `healRefreshMs`: how often an online bot's loss is read.
+     */
+    healAt: number;
+    healRefreshMs: number;
     /** At most one log-out (and `logInsPerStep` log-ins) per realm this often. */
     stepMs: number;
     logInsPerStep: number;
@@ -140,6 +148,8 @@ export const LIFECYCLE_SETTINGS: LifecycleSettings = {
     enterRetryMs: 4 * 60_000,
     enterMaxMs: 20 * 60_000,
     keepClear: 7000,
+    healAt: 10,
+    healRefreshMs: 5 * 60_000,
     stepMs: 90_000,
     logInsPerStep: 2,
     joinTimeoutMs: 5 * 60_000,
@@ -256,12 +266,14 @@ export interface Life extends LifeBot {
     askedAt?: number;
     /** leaving: when a log-out near a keep was last put off (logged once in leaveRetryMs). */
     waitedAt?: number;
+    /** leaving: when its healer trip was asked (one per leave). */
+    healAskedAt?: number;
     /** Why it is in this state (a log). */
     why: string;
 }
 
-export type LifeAction = { kind: 'logIn' | 'logOut' | 'enter'; bot: string; realm: PlayerRealm; why: string };
-export type LifeEvent = { kind: 'joined' | 'left' | 'leave' | 'extend' | 'join' | 'adopt' | 'lost' | 'stuck' | 'entering' | 'wait'; bot: string; realm: PlayerRealm; why: string };
+export type LifeAction = { kind: 'logIn' | 'logOut' | 'enter' | 'heal'; bot: string; realm: PlayerRealm; why: string };
+export type LifeEvent = { kind: 'joined' | 'left' | 'leave' | 'extend' | 'join' | 'adopt' | 'lost' | 'stuck' | 'entering' | 'wait' | 'heal'; bot: string; realm: PlayerRealm; why: string };
 
 export interface RealmStep {
     /** Bots of the realm that should play now (the curve, the shift, the humans in it). */
@@ -284,6 +296,10 @@ export interface RealmStep {
      * safely, at once, never extended), never logged in while held; once let go they rest as usual.
      */
     lfg?: ReadonlySet<string>;
+    /** Constitution lost per bot, as last read (missing: unknown, taken as none). */
+    conLost?: ReadonlyMap<string, number>;
+    /** Bots on a healer trip now (the caller's): left alone until it ends. */
+    healing?: ReadonlySet<string>;
     /** Last log-out and log-in steps (ms), kept by the caller between steps. */
     lastOut: number;
     lastIn: number;
@@ -312,12 +328,14 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
     const events: LifeEvent[] = [];
     let { lastOut, lastIn } = o;
     const ev = (kind: LifeEvent['kind'], l: Life, why: string) => events.push({ kind, bot: l.bot, realm: l.realm, why });
-    const set = (l: Life, state: LifeState, until: number, why: string) => { l.state = state; l.since = now; l.until = until; l.why = why; };
+    const set = (l: Life, state: LifeState, until: number, why: string) => { l.state = state; l.since = now; l.until = until; l.why = why; l.healAskedAt = undefined; };
+    const worn = (l: Life) => { const c = o.conLost?.get(l.bot) ?? 0; return c >= s.healAt ? c : 0; };
 
     // 1. What is in game, and where.
     const enter = (l: Life, why: string) => { l.askedAt = now; actions.push({ kind: 'enter', bot: l.bot, realm: l.realm, why }); };
     for (const l of lives) {
-        if (o.pinned.away.has(l.bot)) continue;
+        // On a healer trip: its zone jump can blink it out of the gateway's list; nothing changes until the trip ends.
+        if (o.pinned.away.has(l.bot) || o.healing?.has(l.bot)) continue;
         const inGame = o.inGame.has(l.bot);
         const outside = inGame && !!o.outside?.has(l.bot);
         if (l.state === 'joining' && outside) { set(l, 'entering', now, 'logged in outside the battleground'); ev('entering', l, 'logged in outside Thidranki: back in first'); enter(l, l.why); }
@@ -373,7 +391,7 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
 
     // 3. Over the target: one leaves early (played longest past earlyAfterMs, its class not needed).
     if (!outThisStep && playing().length > o.target) {
-        const l = lives.filter(x => x.state === 'online' && !o.pinned.stay.has(x.bot) && !o.pinned.away.has(x.bot) && now - x.since >= s.earlyAfterMs && !breaks(x)).sort((a, b) => a.until - b.until)[0];
+        const l = lives.filter(x => x.state === 'online' && !o.pinned.stay.has(x.bot) && !o.pinned.away.has(x.bot) && now - x.since >= s.earlyAfterMs && !breaks(x)).sort((a, b) => worn(b) - worn(a) || a.until - b.until)[0];
         if (l) { const played = Math.round((now - l.since) / 60_000); set(l, 'leaving', now, 'early'); ev('leave', l, `early after ${played} min: ${playing().length + 1} playing for a target of ${o.target}`); lastOut = now; outThisStep = true; }
     }
 
@@ -393,7 +411,15 @@ export function stepRealm(lives: Life[], o: RealmStep, now: number, rand: () => 
 
     // 5. Leaving bots no unit holds, standing where a log-in later is safe: log out (again, if the last ask didn't take).
     for (const l of lives) {
-        if (l.state !== 'leaving' || o.held.has(l.bot) || !o.inGame.has(l.bot) || o.pinned.away.has(l.bot)) continue;
+        if (l.state !== 'leaving' || o.held.has(l.bot) || !o.inGame.has(l.bot) || o.pinned.away.has(l.bot) || o.healing?.has(l.bot)) continue;
+        // Constitution lost: out by the exit to the healer first (from anywhere inside: the walk takes it away from any keep).
+        if (worn(l) && !l.healAskedAt && !o.outside?.has(l.bot)) {
+            l.healAskedAt = now;
+            const why = `${worn(l)} constitution lost: out to the healer, logs out there`;
+            ev('heal', l, why);
+            actions.push({ kind: 'heal', bot: l.bot, realm: l.realm, why });
+            continue;
+        }
         if (o.unsafe?.has(l.bot)) {
             if (!l.waitedAt || now - l.waitedAt >= s.leaveRetryMs) { l.waitedAt = now; ev('wait', l, 'near a keep: a log-in there would land at the bind, waits to log out'); }
             continue;
@@ -590,6 +616,10 @@ export interface LifecycleOptions {
     presence: { logIn(bot: string): Promise<unknown>; logOut(bot: string): Promise<unknown> };
     /** Bots in game now, any region (default: the gateway's /status). */
     inGame?: () => Promise<Set<string>>;
+    /** A bot's lost constitution (default: the gateway's /state/<user> player.constitutionLost); null when unknown. */
+    conLost?: (bot: string) => Promise<number | null>;
+    /** A healer trip (default: healerTrip, by the bot's own control connection). */
+    heal?: (bot: string) => Promise<{ success: boolean; message: string }>;
     /** Where a bot in game stands (default: the gateway's /status/<user>); null when unknown. */
     where?: (bot: string) => Promise<{ regionId: number; x: number; y: number } | null>;
     /** Take a bot no unit holds back into Thidranki (default: enterBattleground for that bot alone, by its own control connection). */
@@ -661,6 +691,55 @@ async function gatewayWhere(bot: string): Promise<{ regionId: number; x: number;
         return p && Number.isFinite(p.regionId) && Number.isFinite(p.x) && Number.isFinite(p.y) ? { regionId: p.regionId!, x: p.x!, y: p.y! } : null;
     } catch {
         return null;
+    }
+}
+
+async function gatewayConLost(bot: string): Promise<number | null> {
+    try {
+        const res = await fetch(`${GATEWAY()}/state/${encodeURIComponent(userOf(bot))}`, { signal: AbortSignal.timeout(4000) });
+        if (!res.ok) return null;
+        const c = ((await res.json()) as { player?: { constitutionLost?: number } }).player?.constitutionLost;
+        return Number.isFinite(c) ? c! : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * One leaving bot to the healer: out of Thidranki by its realm's exit (leaveBattleground), then the town healer by where
+ * it lands (Sister Ellayne, Hagdar, Ilyana: each within 1500), its constitution bought back. It stays there; the
+ * life cycle logs it out, and its next log-in walks back in (enterAlone).
+ */
+export async function healerTrip(bot: string, className: string, log?: (line: string) => void): Promise<{ success: boolean; message: string }> {
+    const c = await connectBot(bot);
+    try {
+        const m: Member = { bot, role: roleForClass(className), sdk: c.sdk, actions: c.bot };
+        const out = await leaveBattleground([m], { regionId: THIDRANKI, log });
+        const p = c.sdk.getPlayer();
+        if (!p || p.regionId === THIDRANKI) return { success: false, message: `still in Thidranki: ${out.message}` };
+        const before = p.constitutionLost ?? 0;
+        const spot = findNpcSpawns({ regionId: p.regionId, near: p, radius: 4000, classType: /GameHealer/, limit: 1 })[0];
+        if (!spot) return { success: false, message: `out in region ${p.regionId}: no healer within 4000` };
+        if (Math.hypot(spot.x - p.x, spot.y - p.y) > 400) {
+            const w = await c.bot.walkTo(spot.x, spot.y, { z: spot.z, tolerance: 200 });
+            if (!w.success) return { success: false, message: `to ${spot.name}: ${w.reason ?? ''} ${w.message}` };
+        }
+        await c.sdk.waitForCondition(() => !!c.sdk.findNearbyNpc(spot.name), 5000).catch(() => null);
+        const since = c.sdk.getGameMessages().at(-1)?.id ?? 0;
+        const hi = await c.bot.interactWith(spot.name);
+        if (!hi.success) return { success: false, message: `${spot.name}: ${hi.message}` };
+        // "It will cost N to have your lost constitution restored. Do you accept?" (Healer.cs)
+        if (await c.sdk.waitForCondition(s => !!s.dialog, 4000).then(() => true).catch(() => false)) {
+            await c.bot.respondToDialog(true);
+            await c.sdk.waitForCondition(() => c.sdk.getGameMessages().some(g => g.id > since && /restores \d+ points? of your lost constitution|don't have that much/i.test(g.text)), 4000).catch(() => null);
+        }
+        await Bun.sleep(1000);
+        const after = c.sdk.getPlayer()?.constitutionLost ?? before;
+        const said = c.sdk.getGameMessages().filter(g => g.id > since && /constitution|don't have/i.test(g.text)).map(g => g.text).join(' | ');
+        return { success: after < before, message: `${spot.name}: constitution lost ${before} → ${after}${said ? ` (${said})` : ''}` };
+    } finally {
+        await c.sdk.sendStop().catch(() => null);
+        await c.sdk.disconnect().catch(() => null);
     }
 }
 
@@ -742,6 +821,11 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
     let stopped = false, busy = false;
     /** Bots on their way back in now (enterAlone running). */
     const enteringNow = new Set<string>();
+    /** Bots on a healer trip now, and each bot's lost constitution as last read (read every healRefreshMs, leaving ones every step). */
+    const healingNow = new Set<string>();
+    const conRead = new Map<string, { at: number; lost: number }>();
+    const conLostOf = opts.conLost ?? gatewayConLost;
+    const healOne = opts.heal ?? ((bot: string) => healerTrip(bot, classOf(bot), line => log(`lifecycle heal ${bot}: ${line}`)));
     const where = opts.where ?? gatewayWhere;
     const classOf = (bot: string) => opts.realms.flatMap(r => r.bots).find(b => b.bot === bot)?.className ?? '';
     const enterOne = opts.enter ?? ((bot: string) => enterAlone(bot, classOf(bot), line => log(`lifecycle enter ${bot}: ${line}`)));
@@ -768,6 +852,10 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
             const look = [...lives.values()].filter(l => inGame.has(l.bot) && (l.state !== 'online' || !opts.held(l.bot)) && l.state !== 'offline');
             const places = new Map<string, { regionId: number; x: number; y: number } | null>();
             await Promise.all(look.map(async l => { places.set(l.bot, await where(l.bot)); }));
+            // Lost constitution: the leaving ones each step (a trip on the way out), the others now and then (who leaves first).
+            const due = [...lives.values()].filter(l => inGame.has(l.bot) && (l.state === 'leaving' || (l.state === 'online' && now - (conRead.get(l.bot)?.at ?? 0) >= s.healRefreshMs)));
+            await Promise.all(due.map(async l => { const c = await conLostOf(l.bot); if (c !== null) conRead.set(l.bot, { at: now, lost: c }); }));
+            const conLost = new Map([...conRead].map(([b, r]) => [b, r.lost]));
             for (const r of opts.realms) {
                 const board = opts.board?.(r.realm) ?? null;
                 // Balance and wave from the realm's own board.
@@ -798,12 +886,21 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
                     if (p.regionId !== THIDRANKI) outside.add(bot);
                     else if (logOutUnsafe(p, r.realm, keepOwner, s.keepClear)) unsafe.add(bot);
                 }
-                const res = stepRealm(realmLives(r.realm), { target: t, inGame, outside, unsafe, lfg, held, needs: groupNeeds(r.requires, r.bots), needsAt: soon, pinned: pins, lastOut: lastOut[r.realm]!, lastIn: lastIn[r.realm]! }, now, rand, s);
+                const res = stepRealm(realmLives(r.realm), { target: t, inGame, outside, unsafe, lfg, conLost, healing: healingNow, held, needs: groupNeeds(r.requires, r.bots), needsAt: soon, pinned: pins, lastOut: lastOut[r.realm]!, lastIn: lastIn[r.realm]! }, now, rand, s);
                 lastOut[r.realm] = res.lastOut; lastIn[r.realm] = res.lastIn;
                 for (const e of res.events) { record({ ...e, kind: e.kind, target: t }); log(`lifecycle ${r.realm}: ${e.bot} ${e.kind}: ${e.why}`); }
                 for (const a of res.actions) {
                     record({ kind: a.kind, bot: a.bot, realm: a.realm, why: a.why, shadow });
                     if (shadow) continue;
+                    if (a.kind === 'heal') {
+                        if (healingNow.has(a.bot)) continue;
+                        healingNow.add(a.bot);
+                        void healOne(a.bot)
+                            .then(e => { record({ kind: 'healed', bot: a.bot, success: e.success, message: e.message.slice(0, 300) }); log(`lifecycle: ${a.bot} healer trip: ${e.success ? 'yes' : 'no'}, ${e.message.slice(0, 200)}`); })
+                            .catch((e: Error) => { record({ kind: 'heal-error', bot: a.bot, error: e.message }); log(`lifecycle: ${a.bot} healer trip failed: ${e.message}`); })
+                            .finally(() => { healingNow.delete(a.bot); conRead.delete(a.bot); });
+                        continue;
+                    }
                     if (a.kind === 'enter') {
                         if (enteringNow.has(a.bot)) continue;
                         enteringNow.add(a.bot);

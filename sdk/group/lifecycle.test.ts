@@ -239,6 +239,32 @@ describe('sessions', () => {
         expect(free.actions).toEqual([expect.objectContaining({ kind: 'logIn', bot: 'cathbad' })]);
     });
 
+    test('constitution lost: a leaving bot goes to the healer first, then logs out outside; the worst leave first', () => {
+        const now = at(20);
+        const lives = initialLives(HIB.slice(0, 2), 'hibernia', new Set(['amergin', 'fiacra']), now - 100 * MIN, seeded(3));
+        lives[0]!.state = 'leaving' as Life['state'];
+        const conLost = new Map([['amergin', 66], ['fiacra', 3]]);
+        const base = { target: 1, inGame: new Set(['amergin', 'fiacra']), held: new Set<string>(), needs: [] as string[][], pinned: { away: new Set<string>(), stay: new Set<string>() }, lastOut: now, lastIn: now, conLost };
+        // Near a keep or not: the trip walks it out.
+        const r = stepRealm(lives, { ...base, unsafe: new Set(['amergin']) }, now, seeded(3));
+        expect(r.actions.map(a => [a.kind, a.bot])).toEqual([['heal', 'amergin']]);
+        expect(r.events.map(e => e.kind)).toEqual(['heal']);
+        // On its way: left alone, even while its zone jump blinks it out of the list.
+        expect(stepRealm(lives, { ...base, inGame: new Set(['fiacra']), healing: new Set(['amergin']) }, now + MIN, seeded(3)).actions).toEqual([]);
+        expect(lives[0]!.state).toBe('leaving');
+        // Back outside after the trip (healed or not): logs out there, no second trip.
+        const out = stepRealm(lives, { ...base, outside: new Set(['amergin']) }, now + 5 * MIN, seeded(3));
+        expect(out.actions.map(a => [a.kind, a.bot])).toEqual([['logOut', 'amergin']]);
+        // Under healAt: logs out as before.
+        lives[1]!.state = 'leaving' as Life['state'];
+        expect(stepRealm(lives, { ...base, inGame: new Set(['fiacra']) }, now + 6 * MIN, seeded(3)).actions.map(a => [a.kind, a.bot])).toEqual([['logOut', 'fiacra']]);
+        // Over the target: the one with constitution lost leaves early first, though its session runs longer.
+        const two = initialLives(HIB.slice(0, 3), 'hibernia', new Set(['amergin', 'fiacra', 'cathbad']), now - 100 * MIN, seeded(3));
+        two[0]!.until = now + 10 * MIN; two[1]!.until = now + 100 * MIN; two[2]!.until = now + 20 * MIN;
+        const e = stepRealm(two, { ...base, target: 2, inGame: new Set(['amergin', 'fiacra', 'cathbad']), lastOut: 0, conLost: new Map([['fiacra', 40]]) }, now, seeded(3));
+        expect(e.events.find(x => x.kind === 'leave')?.bot).toBe('fiacra');
+    });
+
     test('a leaving bot near a keep waits to log out', () => {
         const now = at(20);
         const lives = initialLives(HIB.slice(0, 1), 'hibernia', new Set(['amergin']), now, seeded(3));
