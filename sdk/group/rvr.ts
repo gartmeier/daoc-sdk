@@ -44,7 +44,7 @@ import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry } from './water';
 import { AMBUSH_AFTER, AMBUSH_WAIT_MS, ambushSpot, lieInWait, LOST_WITHIN_MS, loseQuarry, noteTracks, quarryLike, TRAIL_MS, trailGoal, type Quarry, type Tracks } from './tactics/ambush';
 import { offRoadsOut, onRoadOut, roadsOut } from './tactics/roads';
-import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, noteArrival, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
+import { alliesNear, CALL_SETTINGS, callerAllies, flushAnswers, helperPoint, helpStep, leaveWiped, noteArrival, type CallSettings, type CallSource, type RealmCall } from './tactics/help';
 import { withHasten, withHastener } from './tactics/hasten';
 import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
 import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDefence, withDefence } from './tactics/defend';
@@ -615,6 +615,9 @@ export const HOME_BUFF_RADIUS = 3000;
 /** It waits for owed buffs at most this long after arriving home; past it they catch up on the way. */
 export const HOME_BUFF_MAX_MS = 90_000;
 
+/** At our portal keep the group waits for everyone (dead, released, walking in) at most this long from arriving, before a raid or a call. */
+export const HOME_WAIT_MS = 120_000;
+
 /** A rest in the field waits for owed buffs at most this long from its start (memory.recoverSince). */
 export const REST_BUFF_MAX_MS = 60_000;
 
@@ -982,6 +985,17 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         mem.hunted = undefined;
     }
 
+    // ── Full force first (the user at 20:12: "they just left without me"): at our portal keep, with one of us dead or in another region
+    // (released, a human out of view walking in), wait there for them, HOME_WAIT_MS at most from arriving, before the raid
+    // or any call. Not for our keep's defence, nor in a pair round (the arena: it goes for the ring and waits there). ──
+    // Away members (out in the field) are met by the gather below, as before.
+    const notIn = p.members.filter(m => m.isDead || m.regionId !== regionId);
+    const homeNow = !!homeAt && dist(centre, homeAt) <= HOME_BUFF_RADIUS && mem.homeBuffSince !== undefined;
+    if (homeNow && notIn.length && !defending && !s.opponent && now - mem.homeBuffSince < HOME_WAIT_MS) {
+        const left = Math.ceil((HOME_WAIT_MS - (now - mem.homeBuffSince)) / 1000);
+        return { ...calm, phase: 'recover', anchor: restAt().at, waiting: [...notIn.map(m => ({ name: m.name, why: m.isDead ? 'dead' : 'missing' })), ...low], objective: `wait for everyone at our portal keep${gone}`, reason: `full force first: waiting at our portal keep for ${names(notIn)}, ${left} s at most` };
+    }
+
     // ── The raid (tactics/raid.ts, siege.ts): the muster said go. Enemy players first (above); then over our own bridge to the
     // stage, and rank by rank to the lord, whoever is dead or low: raidOrders counts the living, and rest comes with nothing to hit. ──
     if (raid) {
@@ -1298,6 +1312,11 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         mem.realmCalls = calls;
         // Our own calls (their helpers) and the realm's other units (roaming near them): help.ts helperPoint, roamGoal.
         try { mem.ownCalls = src?.mine?.() ?? []; mem.realmUnits = src?.units?.() ?? []; mem.picket = src?.picket?.() ?? null; mem.realmSeen = src?.seen?.() ?? []; } catch { mem.ownCalls = []; mem.realmUnits = []; mem.picket = null; mem.realmSeen = []; }
+        try { mem.helpWiped = src?.wiped?.() ?? {}; } catch { mem.helpWiped = {}; }
+        // Half of us or more dead on a raid: we leave it (help.ts leaveWiped), whatever the strategy (a pack's broken run home too).
+        const onRaid = raidCall(mem);
+        const deadNow = ctx.picture.members.filter(m => m.isDead).length;
+        if (onRaid && ctx.picture.members.length && deadNow * 2 >= ctx.picture.members.length) leaveWiped(mem, onRaid, deadNow, ctx.picture.members.length, ctx.now);
         let out = strategy.decide(ctx);
         // The raid's patch (Orders.settings, tactics/raid.ts) over whatever the strategy's own wrappers set there: Hibernia's
         // withMakeUp and Camelot's withOurMakeUp put their patch (or null) on every tick, and the board showed no guard (attempt 3,

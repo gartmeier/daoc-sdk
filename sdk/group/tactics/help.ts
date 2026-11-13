@@ -191,6 +191,11 @@ export function helpStep(mem: Record<string, any>, o: { unit: string; centre: Po
     const { now, settings: s, centre } = o;
     const calls: RealmCall[] = mem.realmCalls ?? [];
     const left: Record<string, number> = (mem.helpLeft ??= {});
+    // Calls this unit left wiped, by an earlier sortie too (CallSource.wiped, memory.helpWiped): not one opened after the leave.
+    for (const [id, at] of Object.entries((mem.helpWiped ?? {}) as Record<string, number>)) {
+        const c = calls.find(x => x.id === id);
+        if (c && (c.since ?? 0) <= at && now - at < WIPED_LEAVE_MS) left[id] = Math.max(left[id] ?? 0, at + WIPED_LEAVE_MS);
+    }
     for (const [id, until] of Object.entries(left)) if (until <= now) delete left[id];
     let a: Answering | undefined = mem.help;
     if (a && !calls.some(c => c.id === a!.id)) { mem.help = a = undefined; }
@@ -236,6 +241,23 @@ export interface CallSource {
     picket?(): PicketDuty | null;
     /** Where the realm saw enemies lately (director.ts Sighting): the roam's places (tactics/roam.ts). */
     seen?(): readonly { x: number; y: number; n: number; at: number }[];
+    /** The calls this unit left wiped (leaveWiped), by id: when. From its answers file, so a new sortie knows them too. */
+    wiped?(): Readonly<Record<string, number>>;
+}
+
+/** A call left wiped isn't answered again for this long (memory.helpLeft), by this sortie or the next. */
+export const WIPED_LEAVE_MS = 30 * 60_000;
+
+/**
+ * Half of us or more dead on a raid (the muster at go): leave it, 'left' with a why starting "wiped", and no answering it again for
+ * WIPED_LEAVE_MS. The user, playing Niamh at 20:12 and 20:15: after the wipe at the Faste the unit went straight back out on the
+ * same muster from our portal keep, twice, without the user ("they just left without me").
+ */
+export function leaveWiped(mem: Record<string, any>, call: Pick<RealmCall, 'id'>, dead: number, of: number, now: number): void {
+    send(mem, call.id, 'left', `wiped: ${dead} of ${of} dead`);
+    (mem.helpLeft ??= {})[call.id] = now + WIPED_LEAVE_MS;
+    mem.help = undefined;
+    mem.raid = undefined;
 }
 
 /** director.ts Picket: stand at `at`, within sight of our keep at `keep`. */

@@ -1307,6 +1307,7 @@ export function callWatch(unit: string, realm: PlayerRealm, dir = DIRECTOR_DIR):
         units: () => unitsFor(file, unit),
         picket: () => picketFor(file, unit),
         seen: () => seenFor(file),
+        wiped: () => Object.fromEntries(Object.entries(answers.answers).filter(([, a]) => a.state === 'left' && /^wiped/.test(a.why)).map(([id, a]) => [id, a.at])),
         answer: (callId, state, why = '') => {
             answers.answers[callId] = { state, why: why.slice(0, 200), at: Date.now() };
             // Keep the newest 20.
