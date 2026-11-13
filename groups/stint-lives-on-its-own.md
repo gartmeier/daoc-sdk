@@ -192,6 +192,22 @@ Times are targets. Work moves on when ready; restarts whenever faster, except du
 **13:38, field mode restarted again (S1) for S6:** a unit's size counts its observed members (a human takes a bot's place), and the directors' calls go out in `/region` (`regionVoiceHook` in each director's onUpdate).
 - **The lfg watcher** runs under a second supervisor (`bun scripts/supervisor.ts groups/supervisor-extra.json`; log `groups/supervisor-extra.log`, process log `groups/stint2-lfg.log`; stop with `touch groups/supervisor-extra.stop`): `bun sdk/group/lfg-watch.ts --units=hibernia --presence=swarm`. Only `hibernia` takes a human for now; `--presence=lifecycle` once the life cycle is on.
 
+**13:54, field mode restarted (S1):** it writes `groups/alive.jsonl`, one line per unit a minute (its living's centre, living count, fighting or not). `bun scripts/alive.ts [--from=HH:MM] [--to=HH:MM]` gives the "alive" table by the hour.
+
+**The "before", 13:55-14:45** (life cycle in shadow, 60 online, raids every 30 min):
+
+| Hour | Min | Fight near PK: median (share within 15k) | All sizes fighting (10-min windows) | Uneven > 1.5:1 (min, longest) | Living in zone per realm |
+|---|---|---|---|---|---|
+| 13:00 | 5 | hib 22549 (0 %), mid 19422 (0 %), alb 21379 (40 %) | 0 of 2 | 2, 1 | mid 13, hib 11.4, alb 16.4 |
+| 14:00 | 45 | hib 21207 (27 %), mid 8795 (80 %), alb 13796 (60 %) | 5 of 5 | 7, 5 | mid 17.2, hib 16.8, alb 18.2 |
+
+Life cycle, playing per realm (mean of its samples):
+  13 (shadow): albion 16.0, midgard 16.0, hibernia 16.0
+  14 (shadow): albion 11.7, midgard 12.1, hibernia 11.4
+
+**14:49, the life cycle is on (S1):** `groups/field.flags` is `--life=on` and `--raid-every=life`; field mode restarted under the supervisor (its 5th start). First steps: Mimir and Deirdre logged out at once (58 online), Agravaine held because he stood near a keep. The lfg watcher restarted with `--presence=lifecycle`.
+- **Never tree-kill the main supervisor** (`taskkill /T`): the swarm is in its process tree, and every client would drop link-dead. Ending the small one for lfg-watch that way took the watcher with it, as wanted.
+
 **Logging one bot out and in (for S4's life cycle and S6's lfg): the swarm's control folder.**
 - `bun client/swarm-control.ts logout <bot> [...] [--wait=90]` and `bun client/swarm-control.ts login <bot> [...] [--wait=120]`; `bun client/swarm-control.ts status`.
 - From code: `requestControl('login' | 'logout', bot)` and `readControlState()` from `client/swarm-control.ts`. The swarm acts within 3 s; `groups/swarm-control/state.json` says each bot's `online`, `logging-in`, `leaving` or `offline`.
@@ -228,6 +244,8 @@ Times are targets. Work moves on when ready; restarts whenever faster, except du
 - One thing seen on the way: when field mode closed the unit she had been in (13:33), it connected to her for a moment while she was already pinned away, and that ended my trip script (`BotPreemptedError`). It was harmless and I ran the trip again, but a script driving a pinned bot at a unit's end gets cut off.
 - **Etain's defence turret (4bfb241):** reads `settings.defence.seats[name].ground` from S2's plan.
 
+**14:00, the healer stand only in keep fights (c9ca00a; the user: the idea was keep fights and the inner keep's floors, and in the field healers have other uses).** The step out of sight now runs only within a battleground keep's area (3000 of the Faste) or on a defence seat, and on a seat within its leash, so it never fights S2's `holdDefenceStand`. Spots sit on her own navmesh floor and need a short navmesh walk (stairs, wall-walk, inner keep). Offline at the Faste: a better spot in 40 % of the cases where she is seen, 1.2 ms a search. Group heals and the sight clock stay everywhere; the clock's note adds `, at the keep` for keep fights, so the morning report can set keep fights against field fights.
+
 ## S4: Life cycle
 
 **13:50, offline and committed (e90e362, ccfabe0), not on yet.** `sdk/group/lifecycle.ts` + 23 tests; `sdk/group/waves.ts` hooked into `rvr.ts` (no wave file: no change). field.ts side for S1: `S4-lifecycle-field-side.md` in the sessions' notes folder (flag `--life=on|shadow|off`, `--raid-every=life`).
@@ -242,19 +260,72 @@ Times are targets. Work moves on when ready; restarts whenever faster, except du
 - **Gear wear, 13:19 (opening):** all 60 read from the gateway's `/state` (observe only). Mean condition 100.0 %; lowest a weapon at 97 % (staffs, Merlin's, Galahad's sword, Thorgrim's axe), armour 100 %. `groups/lifecycle/gear-wear.jsonl`; again at ~15:00 and ~02:00 (`bun groups/gear-wear.ts --label=...`). Repair trips only if it falls toward 90 %.
 - **Logins outside Thidranki (S1's finding, 87efefc):** a bot that logs in outside the battleground, or one no unit holds found outside, is `entering`: the life cycle takes it back in itself (`enterAlone`: enterBattleground for that bot alone, by its own control connection, never a bot a unit holds) before it counts as online; retried every 4 min, after 20 min it logs out to rest. A leaving bot within 7000 of the Faste (whoever holds it) or an enemy portal keep waits to log out (`logOutUnsafe`; the server looks within 6000). After a sortie field.ts walks units home first, so this is the rare case.
 - **Shadow means no effect on play (452a364).** The first shadow run (13:32) still wrote the wave files, which the main groups (all restarted 13:32-13:36 with the hook) would have followed into breaks at the keep, spoiling the "before". Blocked at 13:36 by directories in the files' place (the running field.ts logs `wave file: EPERM` every 30 s until its next restart; harmless). From the next field.ts start, shadow writes no wave and `writeWave` clears the directories itself under `on`. Pinned-away bots (Emer's respec trip, Niamh) are now left entirely alone.
+- **lfg (S6), from the next field.ts start:** the life cycle reads `groups/lfg/state.json` `held` every 30 s. A held bot leaves at once, logs out where a log-in later is safe, is never logged in while held, and lowers its realm's target by one (the human plays in its seat). Let go, it rests as usual. So with `--life=on` S6 can use `--presence=lifecycle`.
 - **For the supervisor (S1):** a bot the life cycle logged out is not a dropped client: read `groups/swarm-control/state.json` or `groups/lifecycle/state.json` before bringing one back.
 
 ## S2: The keep
 
-**13:25, own doors and the defence plan landed (4c97350, 3e10179, e6b42ed); nothing calls the defence yet, so nothing changed live.** Throwaway stack `s2keep` (game 10310, gateway 7823); the shared server untouched. Import check 23/23 rvr.ts; tests: own-doors 15, siege-defence 19, defence 4, siege/raid 88.
-- **Own doors (`sdk/doors.ts`, `walkTo`):** where a planned route passes a door registered as ours, the walk stops 90 out, `sendInteract`s, and watches for the server's jump (150 past a gate, 100 past an inner door or postern, at the door's z), then plans on from the other side. A door that doesn't open is dropped (walk reason `door`). Doors are registered by `applyDoors(layout, { ours: true, broken }, mesh)` / `openOwnDoors(plan, broken)`; with nothing registered `walkTo` is unchanged.
-  - **Live (throwaway, an L24 Albion Wizard, Albion holding the Faste):** interact at 116 out → 150 inside in 47 ms. Outside the gate → up the wall-walk stair → (33877, 38851, 3978) in 9.4 s; back out the same way (34201 → 34536). From Albion's rally over its bridge, through the gate, to a wall stand in 85 s.
-- **The defence plan (`sdk/group/siege.ts`, pure):** `defencePlan(realm)`, `defenceJobs({ role, spells, archer? })`, `defenceOrders(plan, { defenders, foes, owner, seats })` → `{ phase: going|holding|roof|lost, seats: Map<id, stand>, threat }`, `defenceRouteFrom(plan, at)`, `openOwnDoors(plan, broken)`.
-  - **Jobs by spell and group role, never by name:** a point-blank bomb ≥ 100 → `bomb`; an Animist turret → `turret`; role healer → `heal`; a ranged nuke ≥ 1000 (not tank/melee) or a bow → `wall`; else `yard`. A full job hands the member to its next.
-  - **The Faste's stands (measured):** bombers 120 inside the gate (the server's point-blank AE has no line-of-sight check, so it reaches the melee breaking the gate at 210) and at the two stair tops (wall-walk, roof); turrets inside the gate (ground target in `stand.ground`); the ranged on five wall-walk spots that each see 155-175 of 202 courtyard points; healers by the wall stair's foot; melee behind the gate (leash 700). **No wall-walk spot sees outside the gate, and nothing outside sees them** (the merlons), so the wall fights once the gate is down; until then only the gate bombers reach the gate-breakers. `roof`: foes within 700 of the lord send the courtyard and the healers to the roof.
-- **The member side (`sdk/group/defence.ts`):** `defenceSettings(plan, orders, idToName, broken, prev)` → `Orders.settings.defence`; `holdDefenceStand` (put first in each role's list while it's set) walks in over the bridge and through our doors to its stand, and falls through on it (or within its leash in a fight) so the kit fights from there.
-- **For S3 (interface sent 13:20):** at the defence call, per tick: `openOwnDoors`, `defenceOrders`, the settings patch, the behaviour first. Next for me: the pathing in `actions.ts` (the straight last step and the chase), then a defence on the throwaway with a few members, then live (19:00-02:00).
-- **0x99 door state:** not needed so far (doors broken are read from chat as before). If it becomes needed it goes to S1 for a swarm restart before 19:00.
+**13:45. Landed:** own doors 4c97350, the defence plan 3e10179, e6b42ed, abcd848, ef5287b and 1b27098, pathing 96deee4 and 65b29cf. The defence path in `rvr.ts` is S3's (20e084b, `tactics/defend.ts`). All of it runs on my throwaway `s2keep` (game 10310, gateway 7823); the shared server is untouched by me. Import check 23/23 rvr.ts. Tests: actions 1314, own-doors and layer-route 22, siege-defence 20, defence 4, siege and raid 88.
+
+**Own doors** (`sdk/doors.ts`, inside `walkTo`):
+- Where a planned route passes a door registered as ours, the walk stops 90 out, `sendInteract`s, and watches for the server's jump: 150 past a gate, 100 past an inner door or postern, at the door's z. Then it plans on from the other side.
+- A door that doesn't open is dropped, and the walk ends with reason `door`.
+- Who registers: `applyDoors` with `ours: true`, `openOwnDoors(plan, broken)`, and `holdDefenceStand` on every turn. With nothing registered, `walkTo` is unchanged.
+- Live, with an L24 Albion Wizard while Albion held the Faste:
+  - an interact at 116 out put her 150 inside, 47 ms later;
+  - outside the gate to the wall-walk, up the stair at (33530-33660, 38860-38960), took 9.4 s, and back out worked the same way;
+  - from Albion's rally, over its bridge and through the gate to a wall stand, took 85 s.
+
+**No straight move through a keep door** (65b29cf):
+- `applyDoors` also registers an enemy keep's unbroken doors as shut.
+- The melee chase gives `out_of_reach` for a target beyond our own door (which opens only by interact) or beyond a shut one.
+
+**Pathing** (96deee4):
+- A move onto another layer (a target 100 or more up or down) takes only the navmesh's found route.
+- `walkToObject`'s step onto a target that is close on the ground needs a route no longer than 1.5 × the 3D distance + 100, else `out_of_reach`. Melee under a wall Wizard no longer climb the wall.
+- The chase takes the found route of any length, for example up the stair after a target.
+- Without a mesh, or on one level, it behaves as before.
+
+**The defence plan** (`siege.ts`):
+- The calls: `defencePlan(realm)`, `defenceJobs`, `defenceSeats`, `defenceOrders` (phases going, holding, roof, lost), `defenceRouteFrom`, `openOwnDoors`, and `inDefenceReach` (1450 from the keep's centre).
+- **Jobs come from spells and the group role, never from names.** Each member reports its own in `capabilities.defence`:
+  - a point-blank bomb of 100 or more → `bomb`;
+  - an Animist turret → `turret`;
+  - role healer → `heal`;
+  - a ranged nuke of 1000 or more, or a bow → `wall`;
+  - anything else → `yard`.
+- **The Faste's stands:**
+  - bombers 120 inside the gate, and at both stair tops;
+  - turrets inside the gate;
+  - the ranged on five wall-walk spots that each see 155-175 of 202 courtyard points;
+  - healers by the wall stair's foot;
+  - melee behind the gate.
+- **The wall sees nothing outside the gate, and nothing outside sees it** (merlons). Until the gate breaks, only the gate's bombers reach the gate-breakers. **The server's point-blank AE has no line-of-sight check**, so it hits them through the shut gate.
+
+**Rehearsal on the throwaway** (13:33-13:40): Camelot's strategy for 4 Albion defenders (Armsman, Ice Wizard, Cleric, Sorcerer), a stand-in `defend` call, and 2 Midgard melee breaking the gate.
+- All 4 were on their stands 12 s after the call: Armsman behind the gate, Wizard at the gate's inside, Cleric by the stair foot, Sorcerer on the east wall-walk.
+- The Wizard's bomb hit the gate-breakers through the gate for 118-127 a cast, and one died in 10 s.
+- **Found:**
+  1. The Armsman chased straight out through his own shut gate. Fixed in 65b29cf.
+  2. The coordinator engaged attackers at the stage, 3200 out, and the defenders went out to them. This is S3's: focus only on `inDefenceReach` while defending (sent 13:42).
+  3. "Inside" was measured from the lord's spot, not the keep's centre. Fixed in 1b27098.
+
+**Rehearsal 2** (13:44-13:50), with S3's filter (378c637) and fixes 0240425 and 65b29cf:
+- The coordinator no longer goes out to the stage.
+- The Ice Wizard took the gate's bomb seat and hit the gate-breakers through the shut gate for 138 a cast, until she ran out of power (starter gear).
+- The Armsman held inside: `kill: out_of_reach (Troll is beyond the door 252000301)`, but he retried every second. S3's 5e8aff3 now gives tanks and melee no melee focus beyond a door while defending.
+- The Sorcerer on the wall and the Cleric by the stair got `not_visible` at the gate's outside, as measured: the wall doesn't see out.
+
+**Stair fix (13:47, live on the throwaway):**
+- `walkTo` said "Arrived" a floor too low on the spiral stair, because the stair passes over the same x/y lower down.
+- While moving, an arrival now also needs the destination's height within 100. "Already at destination" also checks for a floor above or below.
+- Courtyard → building door (interact) → roof in 8.6 s. Committed 92a8b96 (14:10, actions 1314 pass): only while the mover still has the stair's turns ahead, so a cliff keeps its old arrival.
+
+**Live, shared server (read only):** Midgard's director opened two defend calls on its Faste, and neither asked a unit. midgard-10 closed 14:06 quiet (70 s, up to 7 Albions); midgard-15 closed 14:10 quiet (52 s, 2). The /region lines went out and nobody came. S3: the rule working, not a bug. At 14:05 both main groups were fighting Hibernians elsewhere; at 14:10 midgard was recovering and midgard-2 was filtered out. Squads aren't asked yet. From 12ea297 a `refused` event in the director log names each reason.
+
+**0x99 door state:** not needed so far. Broken doors are read from chat as before.
+
+**Next:** rehearse again after S3's filter, then a defence live on the shared server once Midgard's Faste is attacked (the director's `defend` call is live since field mode restarted at about 13:25).
 
 ## S3: Director
 
@@ -291,7 +362,7 @@ Times are targets. Work moves on when ready; restarts whenever faster, except du
   - First live hour (12:16-12:33 UTC): every realm talking, about one line per unit a minute; the four lines that read badly (re-said inc for every +1, three rez lines in a row, "pulling back to north-east of the Faste", solos) are fixed in 24fd9a9.
 - **`/region`** (`regionClaims` in voice.ts, `sdk/group/voice-io.ts`): the director's update in, one line every 5 s at most per realm (5 a minute), said by a unit's leader with `/region` (only our realm hears it):
   - help with count and place, by the caller: `6 mids at the mid bridge, need help`, `4 albs coming north of the Faste, need help` (sighted), `3 hibs on us at our bridge, help!` (caught), `2 mids camping our PK, need help`; again only if it grew by 3; `omw` by each unit that answers coming;
-  - the muster: `Faste raid, gather at our bridge`, `5 on the Faste, wait at the rally`, `they are fighting at the Faste, wait for the winner`, `go go, Faste!`, then `Faste is ours!` / `raid broke, back to our PK` / `too many on the Faste, calling it off`;
+  - the muster: `Faste raid, gather at our bridge`, `5 on the Faste, wait at the rally`, `they are fighting at the Faste, wait for the winner`, `go go, Faste!` (with why now from S3's stage event: `mids are busy elsewhere`, `only 2 on it`), then `Faste is ours!` / `raid broke, back to our PK` / `too many on the Faste, calling it off`;
   - the defence: `Faste under attack, 5 albs there, defend!`, then `Faste holds, nice` / `Faste lost`.
   - Transport: the director's process writes `groups/director/<realm>-voice.json` (the line and the unit to say it); each unit's run reads it and its leader says the lines named for it (lines older than 12 s are dropped). Nothing in director.ts changes.
 - **"lfg"** (`sdk/group/lfg.ts` pure, `sdk/group/lfg-watch.ts` the process): a human whispers any bot of their realm `lfg` (or `lfg ment`, `any room?`), or says it in `/region`. The bot answers `sure, what class are you?` if the words named none. The watcher picks the realm's main group missing the human's role (then the fewest of it; never a squad, one human a unit), and one bot of it steps out: of the human's role if it has one, else of its most doubled role, never the leader nor a required class (Druid, Bard). Then: group.json gets `observed: [{ name }]` and the bot goes to the bench (under `.editing`), the bot logs off, the asked bot answers `inv coming from <leader> in a minute, ...`, and the unit's run winds down so the next sortie invites. Once the human has been out of the leader's group window 45 s (or never joined within 8 min), `observed` goes and the bot logs back in. State `groups/lfg/state.json` (`held`: bots stepped out), log `groups/lfg/log.jsonl`.
@@ -300,4 +371,18 @@ Times are targets. Work moves on when ready; restarts whenever faster, except du
   1. `chooseLineup`: `const size = sizeOf(u);` → `const size = Math.max(1, sizeOf(u) - (def.observed?.length ?? 0));` (a human takes a bot's place).
   2. The `/region` hook, in the director's `onUpdate` (after the ledger): `import { regionVoiceHook } from '../sdk/group/voice-io';` and per realm `const regionVoice = regionVoiceHook(realmOf(g) as PlayerRealm, () => director.enabled, { log });` (declared before `startDirector`; `director` is read only when an update comes), then `regionVoice(out);` in `onUpdate`. Takes effect at a field.ts restart.
   3. Run the watcher under the supervisor: `bun sdk/group/lfg-watch.ts` (all realms) with `--presence=lifecycle` once the life cycle is on (S4 then does the log-out and log-in), `--presence=swarm` (default) before. It only reads the gateway (60 `/chat` reads every 4 s) and writes group.json under `.editing`; it never takes control. For the user's hour: `--units=hibernia` puts a human only in `hibernia`. Niamh pinned away (as planned) and logged off, the user logs in and whispers any Hibernian `lfg`.
+- **13:40, `/region` live (S1's hunks in at the 13:38 restart):** the first lines came from hibernia-2's caught call (`5 mids on us north of the Faste, help!`), through the voice file to its leader's `/region`. Two fixes (c6b3910, live at the next field.ts restart): one fight gave three lines in 20 s as the count moved (5, 2, 6): now again only when it got worse or grew by 3, with the call's own count; and an `omw` from the caller itself, on a stale answer after the director's restart (ids start over; told S3). lfg-watch runs (`--units=hibernia --presence=swarm`), nobody asked yet; the gateway's loop lag with it: max 15 ms, mean 1 ms.
+- **A returning bot (dd33838):** with `--presence=swarm`, once a bot the watcher logged back in is in game outside Thidranki (a login near an enemy keep lands at the bind), the watcher takes it back in with S4's `enterAlone`, every 4 min for up to 20; it stays in `held` meanwhile.
 - **For S4:** with `--presence=lifecycle`, a bot in `groups/lfg/state.json` `held` should be treated as a session ended now (leaving: out of line-ups, logged off safely) and never logged in while held; once it leaves `held` it rests as usual. Until then the watcher logs it out and in through the swarm control itself, and a bot it logs back in may land outside Thidranki (S1's finding): your `entering` takes it back in.
+- **First measure, 13:32-14:16 (`director-report.ts --since=13:32`), against last night's run B with the director on:**
+
+  | | calls | someone coming | arrived | wiped | our dead per call | first sight | call to first arrival | nearest unit at the call | ask distance |
+  |---|---|---|---|---|---|---|---|---|---|
+  | 13:32-14:16 | 94 | 53 | 32 (34 %) | 3 | 0.71 | 72 (77 %) | 15 s | 2328 | 5644 |
+  | run B, 11-12 | 308 | 139 | 81 (26 %) | 21 | 1.03 | - | 22 s | - | 5231 |
+
+  - Midgard 47 calls (45 % arrived), Hibernia 47 (23 %), Albion none: it raided the Faste the whole time, with no enemy players near.
+  - With help against without: dead 1.06 vs 0.53 per call, kills 2.16 vs 0.71. Calls with an arrival are the bigger fights, so this is no proof that help costs lives; kills triple.
+  - Wipes per call dropped from 7 % to 3 %. Most calls are now `sighted`, so many close before any fight.
+- **Raids, 13:35-14:15 (Albion, three musters, field.ts restarted in between):** every go read 0 defenders. Nobody looks at the keep from the rally (5500 out), and the squads now hold 3000+ from the stage, so "few defenders seen" is no reading. Albion lost 15 to the Faste's Huscarls (12:56-12:58 by the log clock, inside the gate), and its third raid stood still from 13:01 to 13:15 (log clock) 1700-3400 short of the stage: camelot, camelot-2 and camelot-s1 all froze within 3 s with unchanged orders, then timed out. Cause not found yet. It's not water and not the squad hold. Watching the next Albion raid live.
+- **The defence:** Midgard holds the Faste. Three defend calls (14:05, 14:10, 14:14) asked nobody: both main groups were in fights elsewhere, then recovering. 12ea297 logs why each unit was passed over (`refused`, live at the next field.ts start). c8e2151: an answer older than its call (an id reused after a restart) is ignored (S6).
