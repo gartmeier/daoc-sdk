@@ -216,7 +216,13 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     // healers stay at ro.stand, the melee get the caster. The user at 17:3x: "Fiacra and Amergin are not safe, they are being hit by
     // the Runemasters" (they followed the melee's focus into the courtyard).
     if (ro.ranged.hold) {
-        return { orders: ro, update: { phase: 'engage', focus: null, meleeFocus: melee?.id ?? null, anchor: ro.stand, ...(melee ? { facing: { x: melee.x, y: melee.y } } : {}), settings, objective, reason: `${reason}; ranged out of sight: ${ro.ranged.hold}` } };
+        // Two or more wall casters up and reachable (siege.ts melee.split, nearest the stair first): one tank or melee on each, in turn
+        // (the user, 18:0x: "tanks go in. up the stairs. one for each runi. then the casters").
+        const split = (ro.melee.split ?? []).filter(x => x.kind === 'npc');
+        const climbers = o.members.filter(m => !m.isDead && (m.role === 'tank' || m.role === 'melee'));
+        const meleeSplit = split.length > 1 && climbers.length > 1 ? Object.fromEntries(climbers.map((m, i) => [m.name, split[i % split.length]!.id])) : undefined;
+        const spread = meleeSplit ? `; ${split.length} wall casters, one each` : '';
+        return { orders: ro, update: { phase: 'engage', focus: null, meleeFocus: melee?.id ?? null, ...(meleeSplit ? { meleeSplit } : {}), anchor: ro.stand, ...(melee ? { facing: { x: melee.x, y: melee.y } } : {}), settings, objective, reason: `${reason}; ranged out of sight: ${ro.ranged.hold}${spread}` } };
     }
     const focus = npc(ro.ranged.focus) ?? melee;
     if (focus) {

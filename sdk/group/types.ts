@@ -294,6 +294,11 @@ export interface Orders {
      * that doesn't name it drops it (Blackboard.setOrders).
      */
     meleeFocus?: number | null;
+    /**
+     * Each tank's and melee's own focus by member name, over meleeFocus: a raid spreads them over the rank's wall casters, one
+     * each (tactics/raid.ts; the user, 18:0x: "tanks go in. up the stairs. one for each runi"). Lasts one decide, as meleeFocus.
+     */
+    meleeSplit?: Record<string, number>;
     /** Who brings the focus to the anchor. */
     puller: string | null;
     /** Crowd-control assignments. */

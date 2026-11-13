@@ -60,3 +60,22 @@ describe('meleeFocus in a member: MemberContext.orders() by its role', () => {
         expect(agentOf('melee', board).ctx.orders().focus).toBe(302);
     });
 });
+
+describe('meleeSplit: one wall caster each (the user, 18:0x: "tanks go in. up the stairs. one for each runi")', () => {
+    test('a tank or melee named in meleeSplit takes its own; one not named takes meleeFocus; the others the unit\'s focus', () => {
+        const o = base({ focus: null, meleeFocus: 401, meleeSplit: { Gareth: 401, Percival: 402 } });
+        expect(ordersForRole(o, 'tank', 'Gareth').focus).toBe(401);
+        expect(ordersForRole(o, 'melee', 'Percival').focus).toBe(402);
+        expect(ordersForRole(o, 'melee', 'Lancelot').focus).toBe(401);
+        expect(ordersForRole(o, 'melee').focus).toBe(401);
+        expect(ordersForRole(o, 'nuker', 'Percival')).toBe(o);
+    });
+    test('the split lasts one decide, as meleeFocus; a new split is a material change', () => {
+        const b = new Blackboard();
+        b.setOrders({ phase: 'engage', focus: null, meleeFocus: 401, meleeSplit: { Gareth: 401, Percival: 402 } } as any);
+        expect(b.getOrders().meleeSplit).toEqual({ Gareth: 401, Percival: 402 });
+        expect(b.setOrders({ phase: 'engage', focus: null, meleeFocus: 401, meleeSplit: { Gareth: 402, Percival: 401 } } as any)).toBe(true);
+        b.setOrders({ phase: 'engage', focus: null, meleeFocus: 401 } as any);
+        expect(b.getOrders().meleeSplit).toBeUndefined();
+    });
+});

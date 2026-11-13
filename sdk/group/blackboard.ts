@@ -518,10 +518,11 @@ export function emptyOrders(now = Date.now()): Orders {
 const moved = (a: { x: number; y: number } | null, b: { x: number; y: number } | null, by: number) =>
     !a !== !b || (!!a && !!b && Math.hypot(a.x - b.x, a.y - b.y) > by);
 const ccKey = (o: Orders) => o.cc.map(c => `${c.targetId}:${c.by}`).sort().join(',');
+const splitKey = (o: Orders) => (o.meleeSplit ? Object.entries(o.meleeSplit).map(([n, id]) => `${n}:${id}`).sort().join(',') : '');
 
 /** Orders changed in a way that should interrupt what members are doing. */
 export function isMaterialChange(a: Orders, b: Orders): boolean {
-    return a.phase !== b.phase || a.focus !== b.focus || a.meleeFocus !== b.meleeFocus || a.puller !== b.puller || ccKey(a) !== ccKey(b)
+    return a.phase !== b.phase || a.focus !== b.focus || a.meleeFocus !== b.meleeFocus || splitKey(a) !== splitKey(b) || a.puller !== b.puller || ccKey(a) !== ccKey(b)
         || moved(a.retreatTo, b.retreatTo, 300) || moved(a.anchor, b.anchor, 300) || (a.column?.driver ?? null) !== (b.column?.driver ?? null);
 }
 
@@ -1030,6 +1031,7 @@ export class Blackboard {
         const next: Orders = { ...prev, ...update, seq: prev.seq, issuedAt: prev.issuedAt };
         // The melee's own focus lasts one decide: one that doesn't name it (the raid over, a fight with players) drops it.
         if (!('meleeFocus' in update)) delete next.meleeFocus;
+        if (!('meleeSplit' in update)) delete next.meleeSplit;
         const material = isMaterialChange(prev, next);
         if (material) {
             next.seq = prev.seq + 1;

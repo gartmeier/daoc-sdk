@@ -7,8 +7,14 @@ import type { Orders, Role } from './types';
 /** The roles that read Orders.meleeFocus as their focus: siege.ts's melee half (tactics/raid.ts DOOR_ROLES). */
 export const MELEE_FOCUS_ROLES: ReadonlySet<Role> = new Set<Role>(['tank', 'melee']);
 
-/** The orders as a member of `role` acts on them: a tank or melee gets meleeFocus as its focus when the orders set one apart. */
-export function ordersForRole(o: Orders, role: Role): Orders {
-    if (o.meleeFocus === undefined || o.meleeFocus === o.focus || !MELEE_FOCUS_ROLES.has(role)) return o;
+/**
+ * The orders as a member of `role` acts on them: a tank or melee gets its own target from meleeSplit (by `name`) when the orders
+ * spread them, else meleeFocus as its focus when the orders set one apart.
+ */
+export function ordersForRole(o: Orders, role: Role, name?: string): Orders {
+    if (!MELEE_FOCUS_ROLES.has(role)) return o;
+    const own = name !== undefined ? o.meleeSplit?.[name] : undefined;
+    if (own !== undefined) return own === o.focus ? o : { ...o, focus: own };
+    if (o.meleeFocus === undefined || o.meleeFocus === o.focus) return o;
     return { ...o, focus: o.meleeFocus };
 }

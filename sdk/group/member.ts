@@ -156,7 +156,7 @@ export class MemberContext<S = any> {
     /** The group's picture as this member takes it in: with a skill (skill.ts), only the contacts it has reacted to, and its own focus. */
     picture(): GroupPicture { return this.agent.skilled ? this.agent.seen().picture : this.agent.board.picture(); }
     /** The coordinator's orders as this member acts on them: as its role reads them (a tank's or melee's own focus, melee-focus.ts), and with a skill the focus it has switched to so far. */
-    orders(): Orders { return this.agent.skilled ? this.agent.seen(true).orders : ordersForRole(this.agent.board.getOrders(), this.role); }
+    orders(): Orders { return this.agent.skilled ? this.agent.seen(true).orders : ordersForRole(this.agent.board.getOrders(), this.role, this.name); }
     members(): MemberReport[] { return this.picture().members; }
     member(name: string): MemberReport | undefined { return this.members().find(m => m.name === name); }
     /** The living tank, if the group has one. */
@@ -313,7 +313,7 @@ export class MemberAgent<S = any> {
         this.unsubscribe.push(member.sdk.onStateUpdate(() => this.publish()));
         this.unsubscribe.push(board.onOrders((next, prev) => {
             if (this.skilled) this.lookAgain();
-            else if (this.affected(ordersForRole(next, this.member.role), ordersForRole(prev, this.member.role))) this.interrupt(`orders: ${next.phase}`);
+            else if (this.affected(ordersForRole(next, this.member.role, this.charName()), ordersForRole(prev, this.member.role, this.charName()))) this.interrupt(`orders: ${next.phase}`);
         }));
         // With stayDry (RvR and the pack have it, PvE has none), no fight move of ours ends in the river: casts from the bank
         // (water.ts dryMoveGuard). Only while pulling or engaged: travel, recovery and retreat legs cross rivers and must not
@@ -343,8 +343,11 @@ export class MemberAgent<S = any> {
         if (forOrders && this.seenCache && now - this.seenCache.at < SKILL_PICTURE_MS) picture = this.seenCache.picture;
         else this.seenCache = { at: now, picture: picture = this.board.picture(now) };
         const target = this.member.sdk.getPlayer()?.targetObjectId;
-        return this.lens!.view(picture, ordersForRole(this.board.getOrders(), this.member.role), now, target ? new Set([target]) : undefined);
+        return this.lens!.view(picture, ordersForRole(this.board.getOrders(), this.member.role, this.charName()), now, target ? new Set([target]) : undefined);
     }
+
+    /** This member's character name (its own client), as the orders name members (Orders.meleeSplit). */
+    private charName(): string { return this.member.sdk.getPlayer()?.name ?? this.member.bot; }
 
     /** With a skill: an orders change as the member sees it interrupts as a board change does without. */
     private lookAgain(): void {
