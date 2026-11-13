@@ -1181,3 +1181,25 @@ Raids as they come. Each row gives the go, the end and the time from the ledger,
   3. **R5, own doors:** `sendInteract` at our own keep's doors on the way (the 100-150 jump). Unneeded until a unit walks inside a keep we hold.
   4. **The client reading 0x99 door state:** a client change and a swarm restart.
   5. **R2:** the muster's clock should hold while a unit is on the lord, and the go should weigh the defenders.
+
+### R5: the Faste's ranks by line of sight (R1's ask 11:10, landed fb9173e)
+
+Measured with `lineOfSight` over `zone252.occluders` after the walls branch merged (d6ab2be):
+- `OUTSIDE` sees one outer fighter; `GATE_OUT` sees all five and no wall caster.
+- The gate's stand is seen by no caster.
+- `COURTYARD` sees wall-e-n, wall-e-s, wall-se, wall-n and the yard pair.
+- wall-sw is seen from no reachable ground spot, wall-nw only from 8 outside the walls. They see 1 and 6 of 215 courtyard points and not the roof.
+- The roof archers are seen from the roof only. roof-n and roof-s see none of the courtyard, roof-e sees 30 points.
+
+**New ranks:**
+1. Outer fighters from `GATE_OUT`.
+2. The gate, melee only; the ranged wait at its stand.
+3. The courtyard: the yard pair, wall-e-n, wall-e-s, wall-se and wall-n.
+4. The building's door and floor-3.
+5. The lord phase on the roof: ranged take the roof archers first, melee stay on the lord.
+
+The west wall casters and the roof archers are `optional`.
+
+**Tests (`siege.test.ts`, skipped without the mesh and occluders):** every caster, archer and the lord is seen from its stand; no wall or roof guard sees the outer and gate stands; the courtyard is seen only by ranks up to 3; the roof sees its archers and the lord; every stand is reachable from the stage once the doors before its rank are broken. siege, squad, keeps and navmesh doors: 140 pass. Learnings updated (`learnings/rvr.md`, "The raid plan").
+
+**For R3:** two tests in `sdk/group/tactics/raid.test.ts` encode the old rank 2 (a wall caster for the ranged while melee break the gate) and fail until updated. R3 has the details.
