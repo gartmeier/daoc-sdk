@@ -82,12 +82,14 @@ describe('raid: the orders, step by step', () => {
         expect(a.update).toMatchObject({ phase: 'engage', focus: 301 });
         expect(a.mem.raid.staged).toBe(true);
         // Rank 1 done (nothing at the outer posts, seen from GATE_OUT): the gate, melee only (R5's ranks by the walls'
-        // line of sight, 11:13). A wall caster in view is rank 3's: no focus for anyone, the melee on the door.
+        // line of sight, 11:13). A wall caster in view with an outside spot that sees it: the ranged half works it from there
+        // while the melee break the door (S2, after the user nuked a Runemaster from outside the walls, 2026-11-13 18:41).
         const wall = FASTE.targets.find(t => t.label === 'wall-e-n')!;
         const gateOut = { x: 34_650, y: 38_250, z: 3722 };
         const b = step(five(gateOut), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem);
-        expect(b.update).toMatchObject({ phase: 'recover', focus: null });
-        expect(b.orders.ranged.step).toBeNull();
+        expect(b.update).toMatchObject({ phase: 'engage', focus: 302 });
+        expect(b.orders.ranged.step?.label).toBe('wall-e-n');
+        expect(b.orders.ranged.stand).toEqual(wall.outside!);
         expect((b.update.settings as any).raidDoor).toMatchObject({ doorId: 252000301, label: 'gate' });
         // The same object while the door stays.
         expect(step(five(gateOut), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem).update.settings).toBe(b.update.settings);
@@ -109,18 +111,23 @@ describe('raid: the orders, step by step', () => {
         // Rank 1, a fighter for all: one focus.
         const a = step(five(plan.stage), [guard(301, outer.at)]);
         expect(a.update).toMatchObject({ focus: 301, meleeFocus: undefined });
-        // Rank 2, the gate standing: nothing to engage; the melee are breakDoor's, and no meleeFocus is named.
+        // Rank 2, the gate standing: the ranged on a wall caster from its outside spot; the melee are breakDoor's, with no focus
+        // of their own (S2, 2026-11-13 18:41).
         const b = step(five({ x: 34_650, y: 38_250, z: 3722 }), [guard(302, wall.at, { name: 'Sorcerer' })], a.mem);
-        expect(b.update).toMatchObject({ phase: 'recover', focus: null });
-        expect('meleeFocus' in b.update).toBe(false);
+        expect(b.update).toMatchObject({ phase: 'engage', focus: 302 });
+        expect(b.update.meleeFocus ?? null).toBeNull();
         // The gate broken (rank 3), the yard pair gone, the walls left: the melee go up the wall-walk stair for the wall casters
-        // (the user, 2026-11-13 17:25: "tanks need to go in. up the walls and kill the runemasters"), and the ranged half holds out of
-        // the walls' sight with no focus of its own (S2 1350a4a; the user: "Fiacra and Amergin are not safe").
+        // (the user, 2026-11-13 17:25: "tanks need to go in. up the walls and kill the runemasters"). wall-e-n has a spot outside the
+        // walls that sees it, so the ranged half works it from there meanwhile (S2, 18:41: "you can kill the Runemasters like I just
+        // did"): one focus for both halves. A wall caster with no such spot leaves the ranged holding out of sight (S2 1350a4a).
         const members = five({ x: 34_420, y: 38_275, z: 3720 });
         members[1] = { ...members[1]!, doorsBroken: [252000301] };
         const c = step(members, [guard(302, wall.at, { name: 'Sorcerer' })], { raid: { callId: 'x', staged: true, broken: [] as number[] } });
-        expect(c.update).toMatchObject({ phase: 'engage', focus: null, meleeFocus: 302 });
-        expect(c.update.reason).toContain('ranged out of sight');
+        expect(c.update).toMatchObject({ phase: 'engage', focus: 302, meleeFocus: undefined, anchor: wall.outside! });
+        const se = FASTE.targets.find(t => t.label === 'wall-se')!;
+        const d = step(members, [guard(303, se.at, { name: 'Sorcerer' })], { raid: { callId: 'x', staged: true, broken: [] as number[] } });
+        expect(d.update).toMatchObject({ phase: 'engage', focus: null, meleeFocus: 303 });
+        expect(d.update.reason).toContain('ranged out of sight');
         // Travelling: no meleeFocus named, so the board drops it.
         expect('meleeFocus' in step(five(plan.rally)).update).toBe(false);
     });

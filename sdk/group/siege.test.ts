@@ -261,14 +261,15 @@ describe('raidOrders', () => {
         expect(o.stand).toEqual(o.ranged.step!.stand);
     });
 
-    test('then the gate, melee only: the ranged wait at its stand, out of the east wall\'s sight', () => {
+    test('then the gate, melee only; the ranged on a wall caster from its outside spot meanwhile', () => {
         const members = at({ x: 34650, y: 38250, z: 3722 }, 10);
         const o = raidOrders(plan, view({ members, seen: [...garrison('albion', labelsUpTo(1)), ...doors], staged: true }));
         expect(o.melee.step!.label).toBe('gate');
         expect(o.melee.focus!.id).toBe(503);
         expect(o.melee.stand).toEqual(o.melee.step!.stand);
-        expect(o.ranged.step).toBeNull();
-        expect(o.ranged.stand).toEqual(o.melee.step!.stand);
+        // The nearest wall caster with an outside spot (S2, after the user nuked a Runemaster from outside, 2026-11-13 18:41).
+        expect(o.ranged.step!.label).toBe('wall-e-n');
+        expect(o.ranged.stand).toEqual(o.ranged.step!.outside!);
         // The gate broken: the courtyard, the east wall casters with the yard pair.
         const yard = raidOrders(plan, view({ members, seen: [...garrison('albion', labelsUpTo(1)), ...doors], staged: true, broken: [252000301] }));
         expect(yard.ranged.step!.rank).toBe(3);

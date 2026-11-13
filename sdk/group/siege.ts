@@ -46,6 +46,11 @@ export interface SiegeTarget {
     /** A door's id (DbDoor.InternalID), as NearbyObject.doorId has it. */
     doorId?: number;
     /**
+     * A wall caster's spot outside the walls that sees it within a nuke's reach and that no other wall caster or roof archer sees
+     * (a merlon gap works both ways): the ranged half works it from there before the gate breaks, or while the melee climb.
+     */
+    outside?: Point3;
+    /**
      * Known at its post but no step of the raid: it holds up no rank. It sees too little of where the raid stands to matter
      * (the west wall), or it is fought from the roof in the lord phase (the roof archers). A guard on us within reach is still
      * the focus, as any other.
@@ -146,15 +151,18 @@ export const FASTE: SiegeLayout = {
         // Melee too (the user, in hibernia's raid 2026-11-13 17:25: "tanks need to go in. up the walls and kill the runemasters"):
         // once the gate is broken the wall-walk stair at (33530-33660, 38860-38960) is a found route (meleeReach), so the tanks and
         // melee climb to them while the ranged cover from the courtyard; before it, meleeReach keeps them off. Nearest the stair first.
+        // Their `outside` spots (lineOfSight both ways, measured 2026-11-13 after the user nuked a Runemaster from outside the
+        // north-west wall): seen by that caster alone, within 1250 of it in 3D, reachable from the stage with the gate shut.
+        // wall-se and wall-sw have none.
         { label: 'wall-se', kind: 'caster', at: { x: 33679, y: 39074, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all' },
-        { label: 'wall-e-s', kind: 'caster', at: { x: 33971, y: 38815, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all' },
-        { label: 'wall-e-n', kind: 'caster', at: { x: 33976, y: 37722, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all' },
-        { label: 'wall-n', kind: 'caster', at: { x: 33185, y: 37386, z: 3975 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all' },
+        { label: 'wall-e-s', kind: 'caster', at: { x: 33971, y: 38815, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all', outside: { x: 35000, y: 39400, z: 3619 } },
+        { label: 'wall-e-n', kind: 'caster', at: { x: 33976, y: 37722, z: 3976 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all', outside: { x: 35000, y: 37150, z: 3712 } },
+        { label: 'wall-n', kind: 'caster', at: { x: 33185, y: 37386, z: 3975 }, aggro: 1850, rank: 3, stand: COURTYARD, who: 'all', outside: { x: 33200, y: 36900, z: 3724 } },
         // The west wall: no reachable ground spot sees wall-sw, and wall-nw only from outside the walls; they see 1 and 6 of 215
         // courtyard points, not the building's door, not the roof. Optional: their stands are the wall-walk spots that see them
         // (up the stair from the courtyard), should one ever be wanted.
         { label: 'wall-sw', kind: 'caster', at: { x: 32478, y: 39130, z: 3976 }, aggro: 1850, rank: 4, stand: { x: 32592, y: 39293, z: 3994 }, who: 'ranged', optional: true },
-        { label: 'wall-nw', kind: 'caster', at: { x: 32441, y: 37328, z: 3991 }, aggro: 1850, rank: 4, stand: { x: 32441, y: 37828, z: 3978 }, who: 'ranged', optional: true },
+        { label: 'wall-nw', kind: 'caster', at: { x: 32441, y: 37328, z: 3991 }, aggro: 1850, rank: 4, stand: { x: 32441, y: 37828, z: 3978 }, who: 'ranged', optional: true, outside: { x: 32300, y: 37050, z: 3720 } },
         // The building's door, then the fighter on its third floor (he comes down to us). No wall or roof guard sees the door's stand
         // but the courtyard's own.
         { label: 'keep-door', kind: 'door', at: { x: 32654, y: 38180, z: 3720 }, aggro: 0, rank: 4, stand: { x: 32740, y: 38180, z: 3720 }, who: 'melee', doorId: 252000302 },
@@ -593,6 +601,18 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         const f = focusOf(step);
         return !!f && !!view.reach && meleeOk(f);
     };
+    // The ranged half's work from outside the walls: the live wall caster with an `outside` spot nearest the raid, from that spot
+    // (the user, 18:41: "you can kill the Runemasters like I just did", from outside the north-west wall). Before the lord only.
+    const outsideWork = (): RaidTask | null => {
+        if (rank === null) return null;
+        const live = plan.targets
+            .filter(t => t.outside && t.kind === 'caster' && !done.has(t.label))
+            .map(t => ({ t, f: atPost(plan, t, foes) }))
+            .filter((x): x is { t: SiegeTarget; f: SiegeSeen } => !!x.f)
+            .sort((a, b) => Math.hypot(a.t.outside!.x - centre.x, a.t.outside!.y - centre.y) - Math.hypot(b.t.outside!.x - centre.x, b.t.outside!.y - centre.y));
+        const w = live[0];
+        return w ? { step: w.t, focus: w.f, stand: w.t.outside! } : null;
+    };
     // The wall casters the melee can go for now, one each: those of this rank, alive at their posts, reachable.
     const splitOf = (): SiegeSeen[] => rank === null || !doorsDown(rank) ? [] : inRank
         .filter(t => t.kind === 'caster' && t.who !== 'ranged')
@@ -630,10 +650,14 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         // A wall caster that sees the courtyard still up, and the melee can go for it: the ranged half (casters, healers,
         // support) waits out of every wall caster's sight while the melee climb (the user, 2026-11-13 17:30: "Fiacra and
         // Amergin are not safe, they are being hit by the Runemasters", killed in the courtyard).
+        const fromOutside = outsideWork();
         if (wallsHold(meleeStep)) {
-            ranged = { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${meleeStep!.label} on the wall` };
+            ranged = fromOutside ?? { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${meleeStep!.label} on the wall` };
             const split = splitOf();
             if (split.length > 1) melee = { ...melee, split };
+        } else if (!rangedStep && fromOutside) {
+            // Melee alone on this rank's step (the gate): the ranged half works a wall caster from outside meanwhile.
+            ranged = fromOutside;
         }
         const why = [rangedStep && `ranged: ${ranged.hold ? `out of sight while ${ranged.hold}` : rangedStep.label}`, meleeStep && meleeStep !== rangedStep && `melee: ${meleeStep.label}`].filter(Boolean).join(', ');
         return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `rank ${rank}: ${why}` };

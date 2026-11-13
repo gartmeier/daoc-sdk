@@ -242,7 +242,10 @@ describe('raidOrders: the hold only once the gate is broken, and one wall caster
     test('the gate broken and three wall casters up: the melee get all three to spread over', async () => {
         const { raidOrders } = await import('./siege');
         const o = raidOrders(raid(), { members, seen: [rune(7, 'wall-se'), rune(8, 'wall-e-s'), rune(9, 'wall-e-n')], owner: 'midgard', staged: true, broken: [252000301], reach: () => true });
-        expect(o.ranged.hold).toBeDefined();
+        // The ranged work one with an outside spot from there (no hold while one is up), the melee spread over all three.
+        expect(o.ranged.hold).toBeUndefined();
+        expect([8, 9]).toContain(o.ranged.focus?.id ?? 0);
+        expect(o.ranged.stand).toEqual(FASTE.targets.find(t => t.label === (o.ranged.focus?.id === 8 ? 'wall-e-s' : 'wall-e-n'))!.outside!);
         expect(o.melee.focus?.id).toBe(7);
         expect(o.melee.split?.map(s => s.id)).toEqual([7, 8, 9]);
     });
@@ -282,5 +285,21 @@ describe('raidOrders: a fighter behind a door shut to us is no focus', () => {
         const base = { members, owner: 'midgard' as const, staged: true, broken: [252000301] };
         expect(raidOrders(raid, { ...base, seen: [hus, yard], reach: () => false }).ranged.focus?.id).not.toBe(5);
         expect(raidOrders(raid, { ...base, seen: [hus, yard], reach: () => true }).ranged.focus?.id).toBe(5);
+    });
+});
+
+describe.skipIf(!meshReady || getOccluderStore().forZone(252) === null)('the wall casters\' outside spots', () => {
+    test('each sees its caster within a nuke\'s reach, is seen by no other wall caster or roof archer, and is reachable from the stage with the gate shut', async () => {
+        const { applyDoors } = await import('./siege');
+        const mesh = navStore.at(252, 33089, 38271)!;
+        applyDoors(FASTE, { ours: false, broken: [] }, mesh);
+        const stage = mesh.closestPoint(FASTE.stage, { x: 64, y: 64, z: 256 })!;
+        const statics = FASTE.targets.filter(t => t.kind === 'caster' || t.kind === 'archer');
+        for (const t of FASTE.targets.filter(x => x.outside)) {
+            const o = t.outside!;
+            expect([t.label, lineOfSight(252, o, t.at), Math.hypot(o.x - t.at.x, o.y - t.at.y, o.z - t.at.z) <= 1450]).toEqual([t.label, true, true]);
+            expect([t.label, statics.filter(s => s !== t && Math.hypot(s.at.x - o.x, s.at.y - o.y, s.at.z - o.z) <= s.aggro && lineOfSight(252, s.at, o)).map(s => s.label)]).toEqual([t.label, []]);
+            expect([t.label, mesh.findPath(stage, mesh.closestPoint(o, { x: 32, y: 32, z: 64 })!).status]).toEqual([t.label, 'found']);
+        }
     });
 });
