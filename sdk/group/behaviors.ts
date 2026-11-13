@@ -2361,7 +2361,8 @@ export function buffRetryMs(c: { success: boolean; reason?: string; message?: st
     if (c.followUpMs !== undefined) return (c.retryAfterMs ?? 0) + c.followUpMs + FOLLOW_UP_SHOWS_MS;
     if (/concentration/i.test(c.message ?? '')) return 300_000;
     // A mezz or a stun that broke it is an interrupt too, and reads as this since it names itself. While it lasts the next try is refused for free, and a mezz holds the turns anyway (MemberAgent.noteHeld).
-    if (c.reason === 'out_of_range' || c.reason === 'water' || c.reason === 'interrupted' || c.reason === 'must_wait' || c.reason === 'crowd_controlled') return 8_000;
+    // Out of sight is a step away too: castSpell steps once and tries again, and a member who moves round the wall is in sight by the next turn. 60 s of it cost Niamh (observed) her base con: the group left recover 23 s later (S5, 2026-11-13 15:17).
+    if (c.reason === 'out_of_range' || c.reason === 'not_visible' || c.reason === 'water' || c.reason === 'interrupted' || c.reason === 'must_wait' || c.reason === 'crowd_controlled') return 8_000;
     return 60_000;
 }
 

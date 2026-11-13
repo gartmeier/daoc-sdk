@@ -1086,6 +1086,10 @@ describe('a cast that crowd control broke', () => {
         expect(buffRetryMs({ success: false, reason: 'interrupted', message: 'Your spell is interrupted.' })).toBe(8000);
     });
 
+    test('out of sight is a step away: tried again after 8 s, not 60', () => {
+        expect(buffRetryMs({ success: false, reason: 'not_visible', message: "You can't see your target from here!" })).toBe(8000);
+    });
+
     test.each([['You are stunned!', 'Stunning Flash'], ['You are entranced!', 'Minor Mesmerization']])('a summon broken by "%s" tries again in 8 s: no pet for 60 s of a 180 s round', async (line, effect) => {
         const m = member({ list: [summonPet()], spells: [SUMMON], orders: { phase: 'recover', focus: null, cc: [], anchor: ANCHOR }, world: { pet: null, nearbyNpcs: [] } });
         m.w.handlers.castSpell = (_a, world) => {
