@@ -158,3 +158,23 @@ describe.skipIf(!meshReady || getOccluderStore().forZone(252) === null)('the def
         for (const s of plan.stands.filter(x => x.label.startsWith('bomb-gate'))) expect(Math.hypot(s.at.x - 34420, s.at.y - 38275, s.at.z - 3720)).toBeLessThanOrEqual(240);
     });
 });
+
+describe('raidOrders: a broken door is the raid past the ranks before it', () => {
+    test('outer fighters back at their posts after the gate broke send no raid back to rank 1', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('hibernia')!;
+        const guard = (label: string, id: number) => {
+            const t = FASTE.targets.find(x => x.label === label)!;
+            return { id, name: 'Huscarl', realm: 'midgard', kind: 'npc' as const, ...t.at };
+        };
+        const gate = { id: 900, name: 'Keep Door', realm: 'midgard', kind: 'object' as const, x: 34333, y: 38275, z: 3720, doorId: 252000301 };
+        // Rank 1's five back at their posts, the yard pair at theirs; the raid at the gate's stand.
+        const seen = [guard('outer-armswoman', 1), guard('outer-se', 2), guard('outer-ne', 3), guard('outer-n', 4), guard('outer-s', 5), guard('yard-1', 6), guard('yard-2', 7), gate];
+        const members = Array.from({ length: 8 }, (_, i) => ({ id: 100 + i, x: 34600, y: 38250 + i * 10, z: 3722, alive: true }));
+        const before = raidOrders(raid, { members, seen, owner: 'midgard', staged: true });
+        expect(before.ranged.step?.rank).toBe(1);
+        const after = raidOrders(raid, { members, seen, owner: 'midgard', staged: true, broken: [252000301] });
+        expect(after.phase).toBe('assault');
+        expect(after.ranged.step?.rank).toBe(3);
+    });
+});

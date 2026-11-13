@@ -507,8 +507,11 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
 
     const done = new Set(view.done ?? []);
     const broken = new Set(view.broken ?? []);
+    // A door broken is the raid past every rank before it: a guard of those respawning at its post (5-25 min) doesn't send the
+    // raid back (live 14:33, hibernia back to rank 1 with the gate down). One that comes at us is still the focus (onUs, offPost).
+    const passed = Math.max(0, ...plan.targets.filter(t => t.kind === 'door' && t.doorId !== undefined && broken.has(t.doorId)).map(t => t.rank));
     const isDone = (t: SiegeTarget): boolean => {
-        if (done.has(t.label) || t.optional) return true;
+        if (done.has(t.label) || t.optional || t.rank < passed) return true;
         if (t.kind === 'door') return t.doorId !== undefined && broken.has(t.doorId);
         if (atPost(plan, t, foes)) return false;
         // Nothing at the post: gone, if one of us is near enough to see it; else assume it still stands. Seeing no guard
