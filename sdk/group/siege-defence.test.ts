@@ -272,6 +272,14 @@ describe('raidOrders: a roof archer on us keeps the hold for the walls', () => {
         expect(o.ranged.hold).toBeDefined();
         expect(o.ranged.focus).toBeNull();
         expect(o.melee.focus?.id).toBe(7);
+        // A wall caster with a spot outside the walls up too: the ranged work it from there instead of waiting out of sight (live 23:30,
+        // hibernia "ranged out of sight" for minutes while a wall caster or a roof archer was on one of us).
+        const withOutside = [...seen, { id: 8, name: 'Runemaster', realm: 'midgard', kind: 'npc' as const, ...at('wall-e-s') }];
+        const out = raidOrders(raid, { members, seen: withOutside, owner: 'midgard', staged: true, broken: [252000301], reach });
+        expect(out.ranged.hold).toBeUndefined();
+        expect(out.ranged.focus?.id).toBe(8);
+        expect(out.ranged.stand).toEqual(FASTE.targets.find(t => t.label === 'wall-e-s')!.outside!);
+        expect(out.melee.focus?.id).toBe(7);
     });
 });
 

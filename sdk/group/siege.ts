@@ -702,8 +702,11 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         const firstPost = postOf(plan, first);
         if (firstPost && firstPost.kind !== 'fighter' && !(meleeOk(first) && firstPost.kind === 'caster' && firstPost.rank === rank)) {
             const melee: RaidTask = { ...task(meleeStep, rangedStep), ...(splitOf().length > 1 ? { split: splitOf() } : {}) };
-            const ranged: RaidTask = { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${meleeStep!.label} on the wall` };
-            return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `${first.name} is on us; ranged out of sight, the melee on ${meleeStep!.label}` };
+            // From outside the walls when a wall caster has a spot there (the user's way, 18:41), else out of sight: a wall caster is
+            // on one of us nearly all the time, and live 23:30 hibernia sat "ranged out of sight" for minutes, never outside.
+            const outside = outsideWork();
+            const ranged: RaidTask = outside ?? { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${meleeStep!.label} on the wall` };
+            return { phase: 'assault', stand: ranged.stand, ranged, melee, why: `${first.name} is on us; ${outside ? `ranged outside on ${outside.step!.label}` : 'ranged out of sight'}, the melee on ${meleeStep!.label}` };
         }
     }
     if (first) {
@@ -714,9 +717,10 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         // A wall caster on us that the melee can reach: theirs; the ranged half waits out of the walls' sight.
         const firstPost = postOf(plan, first);
         if (firstPost && wallsHold(firstPost) && melee.focus?.id === first.id) {
-            const ranged: RaidTask = { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${firstPost.label} on the wall` };
+            const outside = outsideWork();
+            const ranged: RaidTask = outside ?? { step: rangedStep, focus: null, stand: plan.outOfSight!, hold: `${firstPost.label} on the wall` };
             const split = splitOf();
-            return { phase: 'assault', stand: ranged.stand, ranged, melee: split.length > 1 ? { ...melee, split } : melee, why: `${first.name} is on us; ranged out of sight` };
+            return { phase: 'assault', stand: ranged.stand, ranged, melee: split.length > 1 ? { ...melee, split } : melee, why: `${first.name} is on us; ${outside ? `ranged outside on ${outside.step!.label}` : 'ranged out of sight'}` };
         }
         return { phase: rank === null ? 'lord' : 'assault', stand, ranged: t, melee, why: `${first.name} is on us` };
     }
