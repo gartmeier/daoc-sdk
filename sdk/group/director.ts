@@ -228,6 +228,9 @@ export interface DirectorSettings {
     defendShare: number;
     defendClearMs: number;
     defendMaxMs: number;
+    /** After a big wave (defendBigFoes or more seen at once) the call stays open defendClearBigMs (S2, 15:22: the defenders walked out between two waves of one raid). */
+    defendBigFoes: number;
+    defendClearBigMs: number;
     /** Only units this big are asked in (main groups: squads don't answer a defence yet). */
     defendMinSize: number;
     /** In 'go', the raid broke once its living fell below this share of those it went with. */
@@ -248,7 +251,7 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000,
     fewShare: 0.5, fewMin: 2, ownersAwayMin: 3, ownersAwayFrom: 8000, ownersAwayPair: 2500,
     onWayMs: 120_000, onWayMin: 1000,
-    defend: true, defendRadius: 4500, defendMin: 2, defendMemoryMs: 30_000, defendReach: 14_000, defendShare: 0.5, defendClearMs: 45_000, defendMaxMs: 900_000, defendMinSize: 4,
+    defend: true, defendRadius: 4500, defendMin: 2, defendMemoryMs: 30_000, defendReach: 14_000, defendShare: 0.5, defendClearMs: 45_000, defendMaxMs: 900_000, defendMinSize: 4, defendBigFoes: 6, defendClearBigMs: 180_000,
 };
 
 /** A unit's orders reason in siege.ts's lord phase (tactics/raid.ts writes `raid <phase>: ...`). */
@@ -891,7 +894,8 @@ export class RealmDirector {
         if (near.length) o.heldAt = now;
         o.foesMax = Math.max(o.foesMax, attackers);
         o.oursMax = Math.max(o.oursMax, ours);
-        const end = now - o.heldAt > s.defendClearMs ? 'quiet' : now - call.since > s.defendMaxMs ? 'timeout' : null;
+        const clearMs = o.foesMax >= s.defendBigFoes ? Math.max(s.defendClearMs, s.defendClearBigMs) : s.defendClearMs;
+        const end = now - o.heldAt > clearMs ? 'quiet' : now - call.since > s.defendMaxMs ? 'timeout' : null;
         if (end) { events.push(this.close(o, end, board, now)); this.keepSeen.clear(); return; }
         // Ask in the nearest free units until ours there (and those on the way) outnumber the attackers: at most defendShare of
         // the running units, so a feint doesn't empty the field. A unit already there counts without being asked.

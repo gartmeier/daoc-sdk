@@ -518,6 +518,13 @@ describe('the defence call (S3, 2026-11-13)', () => {
         expect(d.update(f, 31_000, []).events.find(e => e.kind === 'refused')).toBeDefined();
     });
 
+    test('after a big wave the call stays open 3 min, not 45 s (S2, 15:22)', () => {
+        const d = director({ units: UNITS6, targetOwner: () => 'albion', settings: { sight: false } });
+        d.update(frames(7), 0, []);
+        expect(d.update(frames(0), 60_000, []).calls.find(x => x.kind === 'defend')).toBeDefined();
+        expect(d.update(frames(0), 200_000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'quiet' });
+    });
+
     test('one attacker is no defence; the keep lost closes it', () => {
         let owner = 'albion';
         const d = director({ units: UNITS6, targetOwner: () => owner, settings: { sight: false } });

@@ -206,7 +206,7 @@ export function helpStep(mem: Record<string, any>, o: { unit: string; centre: Po
     const goal = callGoal(call);
     const d = Math.round(dist(centre, goal));
     // The defence: each member walks to its stand itself (tactics/defend.ts, holdDefenceStand), never the group to `at`.
-    if (call.kind === 'defend') return { kind: 'hold', call, at: goal, objective: `answer ${callText(call)}`, reason: `call ${call.id}: ${callText(call)}, ${d} away${mem.defenceWhy ? `; ${mem.defenceWhy}` : ''}` };
+    if (call.kind === 'defend') return { kind: 'hold', call, at: goal, objective: `answer ${callText(call)}`, reason: `call ${call.id}: ${callText(call)}${mem.defenceInside ? '' : `, ${d} away`}${mem.defenceWhy ? `; ${mem.defenceWhy}` : ''}` };
     if (a.state !== 'arrived') {
         return { kind: 'go', call, goal, objective: `answer ${callText(call)} at ${where(goal)}`, reason: `call ${call.id}: ${callText(call)}, ${d} away` };
     }
