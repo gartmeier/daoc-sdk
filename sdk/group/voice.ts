@@ -347,10 +347,17 @@ export function readGroupAsk(text: string): GroupAsk | null {
 }
 
 /** The group can go and fetch someone: no fight, no pull back, no realm call, raid or defence. */
-export function pickupFree(o: Pick<GroupPicture['orders'], 'phase' | 'reason' | 'objective'>): boolean {
+export function pickupFree(o: Pick<GroupPicture['orders'], 'phase' | 'reason' | 'objective'>, where?: string | null): boolean {
     if (o.phase === 'engage' || o.phase === 'retreat' || o.phase === 'pull') return false;
+    // At our PK, or near it, a pickup there is never refused for a call: live 20:11, Niamh released and walking in at our PK
+    // was told "we're near our PK on a call, ... ask again in a bit". The wait for everyone at our PK (rvr.ts "full force
+    // first", before the raid or any call) is a pickup already.
+    if (/^full force first\b/i.test(o.reason ?? '') || nearOurPk(where)) return true;
     return !/^(call|raid|defen|muster|help)/i.test(o.reason ?? '') && !/\b(raid|defen[cd]e?|muster|help)\b/i.test(o.objective ?? '');
 }
+
+/** whereWeAre's "at our PK" (within 6000) or "near our PK" (within 10000). */
+export const nearOurPk = (where: string | null | undefined): boolean => !!where && /^(at|near) our PK$/.test(where);
 
 /** Where the bots are, as a player says it ("at our PK", "north of the Faste"); null with none alive. */
 export function whereWeAre(p: GroupPicture, st: Pick<GroupVoiceState, 'realm' | 'regionId'>): string | null {
@@ -367,7 +374,7 @@ export function groupAnswer(ask: GroupAsk, p: GroupPicture, st: Pick<GroupVoiceS
     const fight = p.orders.phase === 'engage' || p.orders.phase === 'retreat' || p.orders.phase === 'pull';
     const we = where ? `we're ${fight ? 'fighting ' : ''}${where}` : 'we are all dead';
     if (ask === 'where') return where ? `${we}, come to us` : `${we}, release and meet at our PK`;
-    if (picking) return where && /^at our PK$/.test(where) ? `${we}, come to us` : 'ok, coming to our PK for you, wait there';
+    if (picking) return nearOurPk(where) ? `wait there, ${we}` : 'ok, coming to our PK for you, wait there';
     if (!where) return `${we}, release and meet at our PK`;
     return fight ? `${we}, come to us or ask again after the fight` : `${we} on a call, come to us or ask again in a bit`;
 }

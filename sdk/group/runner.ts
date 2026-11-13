@@ -27,7 +27,7 @@ import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
 import { Coordinator, mergeSettings, type GroupStrategy } from './strategy';
 import type { GroupDefinition } from './types';
-import { groupAnswer, GroupVoice, pickupFree, readGroupAsk } from './voice';
+import { groupAnswer, GroupVoice, pickupFree, readGroupAsk, whereWeAre } from './voice';
 import { homeOf } from './keeps';
 import { regionInbox, voiceOn } from './voice-io';
 import { isLoggedEvent, type ControlRequest, type RunMeta, type RunResultView } from './wire';
@@ -249,7 +249,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
                 answered.set(`${from}:${ask}`, now);
                 const pic = board.picture(now);
                 const regionId = voice.state.regionId ?? players[0]!.regionId;
-                const home = ask === 'pickup' && pickupFree(pic.orders) ? homeOf(regionId, realm)?.arrival : undefined;
+                const home = ask === 'pickup' && pickupFree(pic.orders, whereWeAre(pic, voice.state)) ? homeOf(regionId, realm)?.arrival : undefined;
                 const picking = !!home && board.askPickup(from, { regionId, x: home.x, y: home.y, z: home.z }, now, now + 180_000);
                 log(`heard: ${from}: ${text} (${ask}${picking ? ', picked up at our PK for 3 min unless seen' : ''})`);
                 speak(groupAnswer(ask, pic, voice.state, picking), false);

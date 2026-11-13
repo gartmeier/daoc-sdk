@@ -224,6 +224,23 @@ describe('a human asks in group chat', () => {
         const dead = picture(team.map(m => ({ ...m, isDead: !m.observed })), [], { phase: 'recover' });
         expect(groupAnswer('where', dead, st, false)).toBe('we are all dead, release and meet at our PK');
     });
+    test('a pickup at or near our PK is never refused for a call, nor in the wait for everyone there', async () => {
+        const { groupAnswer, pickupFree } = await import('./voice');
+        const { homeOf } = await import('./keeps');
+        const st = { realm: 'hibernia' as const, regionId: 252 };
+        const pk = homeOf(252, 'hibernia')!.arrival;
+        const at = (dx: number) => [report('Fergus', { regionId: 252, x: pk.x + dx, y: pk.y }), report('Lugh', { regionId: 252, x: pk.x + dx, y: pk.y + 100 }), report('Niamh', { observed: true, regionId: -1 })];
+        const call = (team: ReturnType<typeof at>) => picture(team, [], { phase: 'travel', reason: 'call hibernia-4: help hibernia-2, 3000 away' });
+        // On a call at our PK, and near it: taken, and "wait there".
+        expect(pickupFree(call(at(200)).orders, "at our PK")).toBe(true);
+        expect(groupAnswer('pickup', call(at(200)), st, true)).toBe("wait there, we're at our PK");
+        expect(groupAnswer('pickup', call(at(8000)), st, true)).toBe("wait there, we're near our PK");
+        // The wait for everyone at our PK before the raid.
+        const wait = picture(at(200), [], { phase: 'recover', reason: 'full force first: waiting at our portal keep for Niamh, 90 s at most', objective: 'wait for everyone at our portal keep before the raid' });
+        expect(pickupFree(wait.orders)).toBe(true);
+        // Far out on a call: still refused.
+        expect(pickupFree(call(at(30_000)).orders, 'north of the Faste')).toBe(false);
+    });
 });
 describe('/region', () => {
     const base = (over: Partial<RegionInput> = {}): RegionInput => ({ realm: 'hibernia', enabled: true, calls: [], foes: [], events: [], running: ['hib-1', 'hib-2'], ...over });
