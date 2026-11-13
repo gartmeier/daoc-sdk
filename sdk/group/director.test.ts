@@ -318,6 +318,13 @@ describe('muster', () => {
         d.update(f('raid assault: rank 3: walls; 4 left'), 1_170_000, []);
         expect(d.update(f('raid assault: rank 3: walls; 6 left'), 1_300_000, []).calls).toHaveLength(1);
         expect(d.update(f('raid assault: rank 3: walls; 6 left'), 1_351_000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'timeout' });
+        // Melee on a door: progress every tick it lasts, up to 30 min in all (the user, 17:51: the inner door at 40 % when it timed out).
+        const d2 = director({ settings: { sight: false } });
+        d2.startMuster(plan);
+        d2.update(f(''), 0, []);
+        expect(d2.update(f('raid assault: rank 4: melee: keep-door; melee on the keep-door; 1 left'), 1_500_000, []).calls).toHaveLength(1);
+        expect(d2.update(f('raid assault: rank 4: melee: keep-door; melee on the keep-door; 1 left'), 1_790_000, []).calls).toHaveLength(1);
+        expect(d2.update(f('raid assault: rank 4: melee: keep-door; melee on the keep-door; 1 left'), 1_801_000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'timeout' });
     });
 
     test('the defence hold: the rally does not go while more defenders were seen near the target than the raid has living', () => {

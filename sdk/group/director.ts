@@ -319,6 +319,9 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     picket: true, picketFrom: 3200, picketMs: 1_200_000,
 };
 
+/** A unit's orders reason while its melee beat on a keep door (tactics/raid.ts: "...; melee on the <door>"). */
+const DOOR_WORK = /\bmelee on the [\w-]+/;
+
 /** A unit's orders reason in siege.ts's lord phase (tactics/raid.ts writes `raid <phase>: ...`). */
 const LORD_PHASE = /\braid lord\b/;
 
@@ -909,6 +912,9 @@ export class RealmDirector {
                 return p;
             }));
             if (best > (o.raid.furthest ?? 0)) { o.raid.furthest = best; o.raid.furthestAt = now; }
+            // A door being beaten on is progress too: it takes damage though no rank changes until it breaks (the user, 17:51: "the inner
+            // was at about 40 %" when hibernia-4 timed out on the keep door). The 30 min cap ends a door that never goes.
+            if (raid.some(u => DOOR_WORK.test(u.reason))) o.raid.furthestAt = now;
             const gone = now - o.raid.stagedAt;
             const onLord = o.raid.lordAt !== undefined && now - o.raid.lordAt <= s.lordGraceMs;
             const late = gone > s.goMaxMs;
