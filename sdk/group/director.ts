@@ -55,6 +55,12 @@ export interface RealmCall {
     /** Muster only: gather at `at` ('rally'), then go for `target` ('go': `at` is then the target too). */
     stage?: 'rally' | 'go';
     target?: Point3;
+    /**
+     * Muster only, at go: the rush, everyone up to the lord now (the user, 22:5x: "In real raids we decide: now is the time, everyone
+     * up, and kill the lord"). Set once a raid unit reads the lord phase or stands within rushReach of the target; it stays set.
+     * Units read it in raidStep (RaidView.rush for siege.ts's raidOrders).
+     */
+    rush?: boolean;
     /** Enemy players near `at` as our realm sees them, and ours alive there. */
     foes: number;
     ours: number;
@@ -111,7 +117,7 @@ export interface RaidMember {
 /** Raid members' places are rounded to this. */
 export const RAID_ROUND = 50;
 
-export type MusterHold = 'defenders' | 'winner' | 'lord' | 'progress' | 'unseen';
+export type MusterHold = 'defenders' | 'winner' | 'lord' | 'progress' | 'unseen' | 'inside';
 
 /**
  * How far a raid unit got, from its orders' reason (tactics/raid.ts `raid <phase>: rank N: ...; M left`): phase × 10 + rank, and
@@ -257,6 +263,14 @@ export interface DirectorSettings {
     progressGraceMs: number;
     progressMaxMs: number;
     /**
+     * The inside hold: past goMaxMs the clock waits while a raid unit's living stand within insideReach of the target (past the
+     * gate) or a raid unit fights within insideFight of it, up to progressMaxMs in all (S1, 22:5x: every Hibernia raid tonight
+     * ended 'timeout' at 964-1574 s, the raid inside). rushReach: one of ours this near the target calls the rush.
+     */
+    insideReach: number;
+    insideFight: number;
+    rushReach: number;
+    /**
      * The defence hold: the rally doesn't go while more enemy players than defenceShare × the raid's living were seen
      * within defenceRadius of the target in the last defenceMemoryMs. Held that long without a break: the muster ends
      * 'defended'. Our realm sees only what its units see, so defenders nobody looked at don't count.
@@ -335,7 +349,7 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     clearMs: 15_000, maxMs: 180_000,
     campRadius: 5000, campFoes: 2, campMs: 15_000,
     quorum: 0.7, rallyMaxMs: 240_000, goMin: 8, goFloor: 5, goShare: 0.7, fewMaxMs: 600_000, goMaxMs: 900_000, raidBreak: 0.3, raidEveryMs: 0,
-    lordGraceMs: 30_000, lordMaxMs: 600_000, progressGraceMs: 180_000, progressMaxMs: 1_800_000,
+    lordGraceMs: 30_000, lordMaxMs: 600_000, progressGraceMs: 180_000, progressMaxMs: 1_800_000, insideReach: 1800, insideFight: 3000, rushReach: 900,
     defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000, lookFreshMs: 120_000, lookFrom: 4000, lookRadius: 5800,
     fewShare: 0.5, fewMin: 2, ownersAwayMin: 3, ownersAwayFrom: 8000, ownersAwayPair: 2500,
     onWayMs: 120_000, onWayMin: 1000,
@@ -444,6 +458,8 @@ export type DirectorEvent =
     | { kind: 'stage'; call: string; stage: 'rally' | 'go'; atRally: number; of: number; defenders?: number; third?: number; ownersAway?: number; owner?: string | null; lookedAgo?: number | null }
     /** A muster's hold began (on) or ended: the go waits for the defenders or the winner, or the clock for the lord. */
     | { kind: 'hold'; call: string; why: MusterHold; on: boolean; defenders: number; living: number; third?: number; ownersAway?: number }
+    /** The muster's rush (RealmCall.rush): everyone up to the lord; `by` the unit that set it off. */
+    | { kind: 'rush'; call: string; by: string }
     | { kind: 'close'; call: string; from: string; why: CallWhy | 'raid'; ms: number; end: string; lost: number; wiped: boolean; asked: string[]; coming: string[]; arrived: string[]; kills: number | null; foesMax: number; oursMax: number };
 
 export type LoggedEvent = DirectorEvent & { t: number; realm: PlayerRealm; shadow: boolean };
@@ -961,6 +977,11 @@ export class RealmDirector {
             }
         } else {
             if (raid.some(u => LORD_PHASE.test(u.reason))) o.raid.lordAt = now;
+            // The rush: a raid unit at the lord phase, or one of ours by the lord's room (rushReach of the target). Once.
+            const byLord = raid.find(u => LORD_PHASE.test(u.reason) || u.members.some(m => !m.isDead && dist2(m, o.raid!.target) <= s.rushReach));
+            if (byLord && !call.rush) { call.rush = true; events.push({ kind: 'rush', call: call.id, by: byLord.unit }); }
+            // Inside: past the gate (insideReach of the target) or fighting by the keep (insideFight).
+            const inside = raid.some(u => u.members.some(m => !m.isDead && dist2(m, o.raid!.target) <= s.insideReach) || (u.inFight && !!u.centre && dist2(u.centre, o.raid!.target) <= s.insideFight));
             // Progress: the furthest any raid unit got (phase, then rank, from tactics/raid.ts's `raid <phase>: rank N: ...`).
             // A target down within the rank counts too (S2: rank 3, the wall casters, is the long one); a respawn (more left) doesn't.
             const lefts = o.raid.lefts ??= new Map();
@@ -982,9 +1003,10 @@ export class RealmDirector {
             // waits while the raid got further within progressGraceMs, up to progressMaxMs in all.
             const progressing = o.raid.furthestAt !== undefined && now - o.raid.furthestAt <= s.progressGraceMs && gone <= s.progressMaxMs;
             if (call.hold !== 'lord') hold('progress', late && progressing);
+            if (call.hold !== 'lord' && call.hold !== 'progress') hold('inside', late && inside && gone <= s.progressMaxMs);
             const end = owner === this.realm ? 'captured'
                 : living < s.raidBreak * (o.raid.livingAtGo ?? living) ? 'broken'
-                : late && call.hold !== 'lord' && call.hold !== 'progress' ? 'timeout' : null;
+                : late && call.hold !== 'lord' && call.hold !== 'progress' && call.hold !== 'inside' ? 'timeout' : null;
             if (end) {
                 if (call.hold) hold(call.hold, false);
                 events.push(this.close(o, end, board, now));

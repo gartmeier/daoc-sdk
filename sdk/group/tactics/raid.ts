@@ -236,7 +236,7 @@ const at = (p: { x: number; y: number }) => `(${Math.round(p.x)}, ${Math.round(p
  * The raid's orders for this tick (pure but for memory.raid). `members` are the unit's in the raid's region, dead ones too;
  * `guards` the board's keep guards there (fresh ones). The caller adds calm's empty fields.
  */
-export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members: readonly MemberReport[]; guards: readonly Contact[]; call?: Pick<RealmCall, 'raid'> | null; unit?: string }): { update: OrdersUpdate; orders: RaidOrders } {
+export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members: readonly MemberReport[]; guards: readonly Contact[]; call?: Pick<RealmCall, 'raid' | 'rush'> | null; unit?: string }): { update: OrdersUpdate; orders: RaidOrders } {
     const { plan } = o;
     const r: RaidMemory = o.mem.raid;
     for (const m of o.members) for (const id of m.doorsBroken ?? []) if (!r.broken.includes(id)) r.broken.push(id);
@@ -252,6 +252,8 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     for (const id of passedDoors(plan, view.members)) if (!r.broken.includes(id)) r.broken.push(id);
     const whole = raidMembers(o.call, o.unit ?? '', o.members, plan.stage);
     if (whole) view.raid = whole;
+    // The director's rush (RealmCall.rush: a raid unit at the lord or by his room): for siege.ts's raidOrders, everyone up now.
+    if (o.call?.rush) (view as RaidView & { rush?: boolean }).rush = true;
     // Doors the whole raid passed (another unit's living members behind them) are broken for our walks too (S2: hibernia-s1 joined
     // late at 21:53 and started at rank 1, its walks blocked by "a shut door at (34333, 38275)" while hibernia stood at the lord).
     for (const id of passedDoors(plan, whole ?? [])) if (!r.broken.includes(id)) r.broken.push(id);

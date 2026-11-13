@@ -308,6 +308,28 @@ describe('muster', () => {
         expect(d2.update(at6(1), 2000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'broken' });
     });
 
+    test('inside the keep the clock waits (inside hold), and one of ours by the lord calls the rush (S1, 22:5x: every raid timed out inside)', () => {
+        const plan = { rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } };
+        const d = director({ settings: { progressGraceMs: -1 } });
+        d.startMuster(plan);
+        const rally = { camelot: frame({ id: 'camelot', members: at(33000, 44000, 6, 'G') }) };
+        expect(d.update(rally, 0, []).calls[0]!.stage).toBe('go');
+        // Past the gate (1500 from the target), past goMaxMs: held, not timed out.
+        const inside = { camelot: frame({ id: 'camelot', members: at(33089, 39771, 6, 'G') }) };
+        let out = d.update(inside, 950_000, []);
+        expect(out.calls).toHaveLength(1);
+        expect(out.events.find(e => e.kind === 'hold')).toMatchObject({ why: 'inside', on: true });
+        expect(out.calls[0]!.rush).toBeUndefined();
+        // One of ours within 900 of the lord: the rush, once.
+        const byLord = { camelot: frame({ id: 'camelot', members: at(33089, 38671, 6, 'G') }) };
+        out = d.update(byLord, 960_000, []);
+        expect(out.calls[0]!.rush).toBe(true);
+        expect(out.events.filter(e => e.kind === 'rush')).toHaveLength(1);
+        expect(d.update(byLord, 970_000, []).events.filter(e => e.kind === 'rush')).toHaveLength(0);
+        // Back out at the rally: the clock runs out.
+        expect(d.update(rally, 980_000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'timeout' });
+    });
+
     test('the lord hold: past goMaxMs the clock waits while a unit reads the lord phase, up to lordMaxMs more', () => {
         const plan = { rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } };
         const f = (reason: string) => ({ camelot: frame({ id: 'camelot', phase: 'engage', reason, members: at(33000, 44000, 6, 'G') }) });
