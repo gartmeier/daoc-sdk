@@ -429,6 +429,8 @@ const AT_POST = 400, AT_POST_Z = 200;
 const SEEN_FROM = 2500;
 /** With no guard seen at all, a post this near one of us counts as gone (once staged). Rank 1's posts lie 200-1500 from its stand. */
 const POST_NEAR = 1600;
+/** A guard off its post this near a fighter's post still holds it open (a fighter chases 1000 out from its post and comes back). */
+const OFF_POST_NEAR = 1500;
 /** A guard this far above or below the raid's centre stands on another level (a floor, the wall-walk): reached only by a route. */
 const LEVEL_DZ = 150;
 /** The raid is at a spot when its centre is this near. */
@@ -568,6 +570,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         if (done.has(t.label) || t.optional || t.rank < passed) return true;
         if (t.kind === 'door') return t.doorId !== undefined && broken.has(t.doorId);
         if (atPost(plan, t, foes)) return false;
+        // A fighter off its post near it (it came out after us) is still its guard: the rank stays open until it dies, rather than
+        // flipping open and done as it walks out and back (live 19:05, albion-1: rank 1 and rank 2 tick by tick with outer-se left).
+        if (t.kind === 'fighter' && offPost.some(s => Math.hypot(s.x - t.at.x, s.y - t.at.y) <= OFF_POST_NEAR)) return false;
         // Nothing at the post: gone, if one of us is near enough to see it; else assume it still stands. Seeing no guard
         // at all is no news (a picture without them, live 02:39: a unit walked to the gate past five outer fighters).
         // Once staged, a post one of us stands near shows its guard if one is there (a client sees NPCs much farther): none

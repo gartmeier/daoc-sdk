@@ -385,3 +385,17 @@ describe.skipIf(!meshReady)('meleeReach from a raid spread over the levels', () 
         expect(meleeReach(252, { x: 33300, y: 38500, z: 3850 }, lord, { broken: [252000301], ours: false })).toBe(false);
     });
 });
+
+describe('raidOrders: an outer fighter off its post keeps rank 1 open', () => {
+    test('outer-se chasing 600 off its post: rank 1 stays, not the gate', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('albion')!;
+        const post = FASTE.targets.find(t => t.label === 'outer-se')!.at;
+        const fighter = { id: 3, name: 'Huscarl', realm: 'midgard', kind: 'npc' as const, x: post.x + 600, y: post.y, z: post.z };
+        const gate = { id: 900, name: 'Keep Door', realm: 'midgard', kind: 'object' as const, x: 34333, y: 38275, z: 3720, doorId: 252000301 };
+        const members = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, x: 34650, y: 38200 + i * 20, z: 3722, alive: true }));
+        const o = raidOrders(raid, { members, seen: [fighter, gate], owner: 'midgard', staged: true });
+        expect(o.ranged.focus?.id).toBe(3);
+        expect(o.melee.step?.label).not.toBe('gate');
+    });
+});
