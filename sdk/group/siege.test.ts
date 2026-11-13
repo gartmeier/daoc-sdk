@@ -271,6 +271,16 @@ describe('raidOrders', () => {
         expect(raidOrders(plan, view({ members, seen, staged: true })).ranged.focus!.name).toBe('yard-2');
     });
 
+    test('one of us by the lord keeps the raid on him, whatever respawned behind (live 03:01)', () => {
+        const roof = [...at(plan.roof, 3), ...at({ x: 33100, y: 38250, z: 3722 }, 5).map(m => ({ ...m, id: m.id + 100 }))];
+        // Everything back at its post but the doors: still the lord.
+        const o = raidOrders(plan, view({ members: roof, seen: garrison(), staged: true }));
+        expect(o.phase).toBe('lord');
+        expect(o.ranged.focus!.name).toBe('Lady Thidranki');
+        // Nobody up there: the ranks again.
+        expect(raidOrders(plan, view({ members: at({ x: 33100, y: 38250, z: 3722 }, 8), seen: garrison(), staged: true })).phase).toBe('assault');
+    });
+
     test('a fighter off its post (it came out after us) goes first', () => {
         const members = at(plan.stage, 10);
         const seen = garrison('albion', ['outer-s']);

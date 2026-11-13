@@ -424,7 +424,10 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
         if (!foes.length) return false;
         return view.members.some(m => m.alive && Math.hypot(m.x - t.at.x, m.y - t.at.y) <= SEEN_FROM);
     };
-    const open = plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
+    // One of us by the lord (within his reach): the lord it is, whatever came back behind us. Guards respawn 5-25 min after
+    // they die (guard_respawn 15 ± 10): live 03:01 an outer fighter back at its post took the raid off the roof, the lord at 46 %.
+    const atLord = view.members.some(m => m.alive && inLordReach(plan, m));
+    const open = atLord ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
     const rank = open.length ? Math.min(...open.map(t => t.rank)) : null;
     const inRank = open.filter(t => t.rank === rank);
     const rangedStep = inRank.find(t => t.who !== 'melee') ?? null;
