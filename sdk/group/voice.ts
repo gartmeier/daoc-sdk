@@ -320,10 +320,28 @@ export interface RegionInput {
 const near = (a: Point, b: Point, r: number) => Math.hypot(a.x - b.x, a.y - b.y) <= r;
 
 /**
+ * "6 mids", "4 mids and 2 albs": the call's own count (the director's, steadier than a look at the board now), in the
+ * realms seen there; the realms' split only when it adds up to that count.
+ */
+function callCount(c: { foes: number; at: Point }, foes: RegionInput['foes'], r: number): string {
+    const by: Record<string, number> = {};
+    for (const f of foes) if (near(f, c.at, r)) by[f.realm] = (by[f.realm] ?? 0) + 1;
+    const realms = Object.keys(by).filter(k => k in REALM_WORD) as PlayerRealm[];
+    const total = Object.values(by).reduce((t, n) => t + (n ?? 0), 0);
+    if (total === c.foes && total > 0) return countWords(by);
+    if (realms.length === 1 && c.foes > 0) return countWords({ [realms[0]!]: c.foes });
+    return `${Math.max(c.foes, total)}`;
+}
+
+/** What /region already said of a help call: say it again only when it got worse or grew by 3 since. */
+export type HelpSaid = ReadonlyMap<string, { foes: number; why: string }>;
+const WHY_RANK: Record<string, number> = { sighted: 0, outnumbered: 1, camped: 2, caught: 3 };
+
+/**
  * What the realm says in `/region` now: help with place and count (by the caller), "omw" (by a unit coming), the
  * muster (gather, waiting, go), how a raid ended. Every claim names a running unit to say it, or none is made.
  */
-export function regionClaims(u: RegionInput, nearFoe = 2500, only?: 'calls' | 'events'): Claim[] {
+export function regionClaims(u: RegionInput, nearFoe = 2500, only?: 'calls' | 'events', said: HelpSaid = new Map()): Claim[] {
     if (!u.enabled) return [];
     const out: Claim[] = [];
     const regionId = u.regionId ?? THIDRANKI;
@@ -331,9 +349,9 @@ export function regionClaims(u: RegionInput, nearFoe = 2500, only?: 'calls' | 'e
     const anyone = u.running[0];
     for (const c of only === 'events' ? [] : u.calls) {
         if (c.kind === 'help') {
-            const by: Record<string, number> = {};
-            for (const f of u.foes) if (near(f, c.at, nearFoe)) by[f.realm] = (by[f.realm] ?? 0) + 1;
-            const count = countWords(by) || `${c.foes}`;
+            const before = said.get(c.id);
+            if (before && (WHY_RANK[c.why] ?? 0) <= (WHY_RANK[before.why] ?? 0) && c.foes < before.foes + 3) continue;
+            const count = callCount(c, u.foes, nearFoe);
             const where = placeName(c.at, u.realm, regionId);
             const speaker = running.has(c.from) ? c.from : anyone;
             if (!speaker) continue;
@@ -342,12 +360,10 @@ export function regionClaims(u: RegionInput, nearFoe = 2500, only?: 'calls' | 'e
                 : c.why === 'sighted' ? `${count} coming ${where}, need help`
                 : `${count} ${where}, need help`;
             // Said again only if it grew a lot (a new bucket of 3) or got worse (sighted → outnumbered → caught).
-            out.push({ key: `help:${c.id}:${c.why}:${Math.floor(c.foes / 3)}`, text, prio: c.why === 'outnumbered' ? 60 : 70, settleMs: 0, cooldownMs: Infinity, by: speaker, urgent: c.why !== 'outnumbered' });
+            out.push({ key: `help:${c.id}:${c.why}:${c.foes}`, text, prio: c.why === 'outnumbered' ? 60 : 70, settleMs: 0, cooldownMs: Infinity, by: speaker, urgent: c.why !== 'outnumbered' });
         } else if (c.kind === 'defend') {
             // Our keep is attacked: everyone hears it, the units asked go.
-            const by: Record<string, number> = {};
-            for (const f of u.foes) if (near(f, c.at, 4500)) by[f.realm] = (by[f.realm] ?? 0) + 1;
-            const count = countWords(by) || `${c.foes}`;
+            const count = callCount(c, u.foes, 4500);
             const speaker = [...c.asked].sort().find(a => running.has(a)) ?? anyone;
             if (!speaker) continue;
             out.push({ key: `defend:${c.id}:${Math.floor(c.foes / 4)}`, text: `Faste under attack, ${count} there, defend!`, prio: 80, settleMs: 0, cooldownMs: Infinity, by: speaker, urgent: true });
@@ -367,7 +383,8 @@ export function regionClaims(u: RegionInput, nearFoe = 2500, only?: 'calls' | 'e
     for (const e of only === 'calls' ? [] : u.events) {
         if (e.kind === 'answer' && e.state === 'coming' && e.unit && running.has(e.unit)) {
             const call = u.calls.find(c => c.id === e.call);
-            if (call && call.kind !== 'muster') out.push({ key: `omw:${e.call}:${e.unit}`, text: 'omw', prio: 30, settleMs: 0, cooldownMs: Infinity, by: e.unit });
+            // Never the caller itself (an answer can outlive its call: ids start over when the director restarts).
+            if (call && call.kind !== 'muster' && call.from !== e.unit) out.push({ key: `omw:${e.call}:${e.unit}`, text: 'omw', prio: 30, settleMs: 0, cooldownMs: Infinity, by: e.unit });
         } else if (e.kind === 'stage' && e.stage === 'go') {
             // The go, with why now: the same key as the call's plain go, so only one of them is said.
             const call = u.calls.find(c => c.id === e.call);
@@ -415,12 +432,18 @@ export const REGION_EVENT_HOLD_MS = 20_000;
 export class RegionVoice {
     readonly voice: Voice;
     private held: { claim: Claim; until: number }[] = [];
+    private helpSaid = new Map<string, { foes: number; why: string }>();
     constructor(limits: VoiceLimits = REGION_LIMITS) { this.voice = new Voice(limits); }
     hear(u: RegionInput, now: number, nearFoe?: number): Line | null {
         const fromEvents = regionClaims(u, nearFoe, 'events');
         for (const c of fromEvents) if (!this.held.some(h => h.claim.key === c.key)) this.held.push({ claim: c, until: now + REGION_EVENT_HOLD_MS });
         this.held = this.held.filter(h => h.until > now && this.voice.saidAt(h.claim.key) === undefined);
-        const fromCalls = regionClaims(u, nearFoe, 'calls');
-        return this.voice.offer([...fromCalls, ...this.held.map(h => h.claim)], now);
+        const open = new Set(u.calls.map(c => c.id));
+        for (const id of this.helpSaid.keys()) if (!open.has(id)) this.helpSaid.delete(id);
+        const fromCalls = regionClaims(u, nearFoe, 'calls', this.helpSaid);
+        const line = this.voice.offer([...fromCalls, ...this.held.map(h => h.claim)], now);
+        const help = line && /^help:(.+):([a-z]+):(\d+)$/.exec(line.key);
+        if (help) this.helpSaid.set(help[1]!, { why: help[2]!, foes: Number(help[3]) });
+        return line;
     }
 }

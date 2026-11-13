@@ -194,8 +194,23 @@ describe('/region', () => {
         const k = (why: string) => regionClaims(base({ calls: [help({ why })] }))[0]?.key;
         expect(k('sighted')).not.toBe(k('outnumbered'));
     });
+    test('one fight, one call: again only when it got worse or grew by 3', () => {
+        const v = new RegionVoice();
+        const at = { x: 33000, y: 25000 };
+        const mids = (n: number) => Array.from({ length: n }, () => ({ ...at, realm: 'midgard' }));
+        const said: string[] = [];
+        const step = (t: number, foes: number, why = 'caught', seen = foes) => { const l = v.hear(base({ calls: [help({ why, foes, at })], foes: mids(seen) }), t); if (l) said.push(l.text); };
+        step(0, 5);
+        step(6000, 2);
+        step(12_000, 6, 'caught', 2);
+        step(18_000, 8);
+        expect(said).toEqual(['5 mids on us north of the Faste, help!', '8 mids on us north of the Faste, help!']);
+    });
     test('omw from a unit coming', () => {
         const c = regionClaims(base({ calls: [help()], events: [{ kind: 'answer', call: 'hibernia-7', unit: 'hib-2', state: 'coming' }] }));
         expect(c.find(x => x.text === 'omw')?.by).toBe('hib-2');
+        // Never the caller (a stale answer after a director restart).
+        const own = regionClaims(base({ calls: [help()], events: [{ kind: 'answer', call: 'hibernia-7', unit: 'hib-1', state: 'coming' }] }));
+        expect(own.some(x => x.text === 'omw')).toBe(false);
     });
 });
