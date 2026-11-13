@@ -13,7 +13,7 @@
 
 import type { Realm } from '../../types';
 import type { Behavior } from '../member';
-import { planKeep, raidOrders, raidPlan, routeFrom, type RaidMember, type RaidOrders, type RaidPlan, type RaidView, type SiegeSeen } from '../siege';
+import { meleeReach, planKeep, raidOrders, raidPlan, routeFrom, type RaidMember, type RaidOrders, type RaidPlan, type RaidView, type SiegeSeen } from '../siege';
 import type { PlayerRealm } from '../keeps';
 import type { GroupStrategy } from '../strategy';
 import type { Contact, MemberReport, OrdersUpdate, Point3, Role } from '../types';
@@ -125,6 +125,11 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     };
     const whole = raidMembers(o.call, o.unit ?? '', o.members);
     if (whole) view.raid = whole;
+    const alive = o.members.filter(m => !m.isDead);
+    const centre = alive.length ? { x: alive.reduce((a, m) => a + m.x, 0) / alive.length, y: alive.reduce((a, m) => a + m.y, 0) / alive.length, z: alive.reduce((a, m) => a + m.z, 0) / alive.length } : null;
+    // Melee take a caster on a wall or the roof only by a found route from where we stand, the shut doors as walls (R5's
+    // meleeReach): live 08:36 a Wizard on us on wall-se drew midgard-2's melee straight up the wall.
+    if (centre) view.reach = to => meleeReach(plan.regionId, centre, to, { broken: r.broken, ours: view.owner === plan.realm });
     const ro = raidOrders(plan, view);
     if (ro.phase === 'assault' || ro.phase === 'lord') r.staged = true;
     const settings = raidPatch(r, plan.keep, ro) as unknown as Record<string, unknown>;
@@ -133,9 +138,7 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     const reason = `raid ${ro.phase}: ${ro.why}${door}`;
     if (ro.phase === 'approach' || ro.phase === 'stage') {
         // Each leg of our own bridge in turn: the body's next waypoint (routeFrom); at the stage, the stage.
-        const alive = o.members.filter(m => !m.isDead);
-        const centre = alive.length ? { x: alive.reduce((a, m) => a + m.x, 0) / alive.length, y: alive.reduce((a, m) => a + m.y, 0) / alive.length } : plan.rally;
-        const next = ro.phase === 'stage' ? plan.stage : routeFrom(plan, centre)[0] ?? plan.stage;
+        const next = ro.phase === 'stage' ? plan.stage : routeFrom(plan, centre ?? plan.rally)[0] ?? plan.stage;
         return { orders: ro, update: { phase: 'travel', focus: null, anchor: { x: next.x, y: next.y, z: next.z }, facing: { x: plan.stage.x, y: plan.stage.y }, settings, objective, reason: `${reason}, next ${at(next)}` } };
     }
     if (ro.phase === 'taken') return { orders: ro, update: { phase: 'recover', focus: null, anchor: ro.stand, settings, objective, reason } };

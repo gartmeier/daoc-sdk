@@ -11,6 +11,7 @@ import type { Contact, GroupPicture, MemberReport, Orders, Point3 } from '../typ
 import type { RealmCall } from './help';
 import { breakDoor, RAID_FOE_REACH, raidMembers, raidStep, withBreakDoor, withRaid, type RaidDoor } from './raid';
 import { decidePack, rvrPack } from '../pack';
+import { getNavmeshStore } from '../../navmesh';
 
 const TH = FASTE.regionId;
 const plan = raidPlan('midgard')!;
@@ -116,6 +117,21 @@ describe('raid: the orders, step by step', () => {
         expect(c.update.reason).toContain('melee hold');
         // Travelling: no meleeFocus named, so the board drops it.
         expect('meleeFocus' in step(five(plan.rally)).update).toBe(false);
+    });
+
+    const store = getNavmeshStore();
+    const meshReady = store.available() && store.at(TH, 33_089, 38_271) !== null;
+    test.skipIf(!meshReady)('a wall Wizard on us at the shut gate: the casters take it, the melee hold (R5 meleeReach, live 08:36 the climb); through the broken gate they may', () => {
+        const wallSe = FASTE.targets.find(t => t.label === 'wall-se')!;
+        const gateOut = { x: 34_650, y: 38_250, z: 3722 };
+        const wizard = guard(303, wallSe.at, { name: 'Wizard', target: 'M0', targetId: 10 });
+        const shut = step(five(gateOut), [wizard], { raid: { callId: 'x', staged: true, broken: [] as number[] } });
+        expect(shut.orders.why).toBe('Wizard is on us');
+        expect(shut.orders.ranged.focus?.id).toBe(303);
+        expect(shut.update).toMatchObject({ phase: 'engage', focus: 303, meleeFocus: null });
+        const open = step(five(gateOut), [wizard], { raid: { callId: 'x', staged: true, broken: [252000301] } });
+        expect(open.update).toMatchObject({ phase: 'engage', focus: 303 });
+        expect(open.update.meleeFocus).toBeUndefined();
     });
 });
 
