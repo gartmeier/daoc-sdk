@@ -1224,12 +1224,17 @@ describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('decideRvr with stayDry: 
     const decide = (contacts: Contact[], o: { stayDry?: boolean; memory?: Record<string, any>; now?: number } = {}) =>
         decideRvr(ctx(picture(team({}, bank, T), contacts), { memory: o.memory ?? { realm: 'hibernia' }, now: o.now, settings: { patrol: null, stayDry: o.stayDry ?? true } }));
 
-    test('no fight and no hunt into the water: the roam goes on along its dry legs; with stayDry off, it fights', () => {
+    test('nobody walks into the water: the group goes to the dry bank by them and faces them (the user at 20:48: "my group just walked by"); with stayDry off, it fights', () => {
         const u = decide(swim(40_900));
         expect(u.phase).toBe('travel');
-        expect(u.reason).toMatch(/^roam: /);
+        expect(u.reason).toMatch(/^(to|by) the fight: 3 enemies in sight \(swimming: from the bank\)/);
         expect(isDry(T, u.anchor!)).toBe(true);
+        expect(u.facing!.x).toBeGreaterThan(40_000);
         expect(decide(swim(40_900), { stayDry: false }).reason).toMatch(/^(fight|hunt)/);
+    });
+
+    test('a swimmer within BANK_REACH is fought from the bank', () => {
+        expect(decide(swim(39_400)).phase).toBe('engage');
     });
 
     test('those swimming still count against us: eight of them and the group falls back instead of waiting', () => {
@@ -1243,16 +1248,20 @@ describe.skipIf(!isWet(252, { x: 41_069, y: 26_768 }))('decideRvr with stayDry: 
         expect(decide(swim(39_400)).phase).toBe('engage');
     });
 
-    test('swimmers in and out of sight every other second: the roam all along, one place, no flips (20:54: "they are flipping again")', () => {
-        // 25 s: the group here never moves, and a place not reached in 30 s plus its walk is given up.
+    test('swimmers in and out of sight every other second: by them all along, never the roam in between (20:54: "they are flipping again")', () => {
         const memory: Record<string, any> = { realm: 'hibernia' };
-        const keys = new Set<string>();
         for (let t = 1000; t < 26_000; t += 1000) {
             const d = decide(t % 2000 ? swim(40_900) : [], { memory, now: t });
-            expect(d.reason).toMatch(/^roam: /);
-            keys.add(memory.roam.place.key);
+            expect(d.reason).toMatch(/^((to|by|after) the fight)/);
         }
-        expect(keys.size).toBe(1);
+    });
+
+    test('after an engage with nobody left in sight: a 10 s hold, then the roam (20:48: the roam took over 1 s after an engage)', () => {
+        const memory: Record<string, any> = { realm: 'hibernia' };
+        const at = (now: number, phase: 'engage' | 'travel') => decideRvr(ctx(picture(team({}, bank, T), []), { memory, now, orders: { phase }, settings: { patrol: null } }));
+        expect(at(1000, 'engage').reason).toMatch(/^after the fight: holding 10 s/);
+        expect(at(6000, 'travel').reason).toMatch(/^after the fight: holding 5 s/);
+        expect(at(12_000, 'travel').reason).toMatch(/^roam: /);
     });
 });
 

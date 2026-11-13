@@ -29,7 +29,7 @@ import { offRoadsOut, roadsOut } from './tactics/roads';
 import { withHasten } from './tactics/hasten';
 import { RAID_FOE_REACH, raidNow, underRaidKeep } from './tactics/raid';
 import { planBuffs } from './buffs';
-import { campFree, decideRvr, focusHealed, groupRegion, HUNT_KEEP, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
+import { campFree, decideRvr, focusHealed, groupRegion, BANK_REACH, HUNT_KEEP, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf } from './keeps';
 import { countFor, groupSize, type Count } from './size';
@@ -320,7 +320,8 @@ export function decidePack(ctx: CoordinatorContext<PackSettings>): OrdersUpdate 
     noticePhantom(mem, p.contacts, o.phase === 'engage' ? o.focus : null, now, k);
     // With stayDry, one swimming that isn't fighting us waits until it is ashore. User, live 2026-11-09: with the pair spot on
     // Hibernia's bank, Midgard swam across and the pack hunted it in the river (us 10-43 % of fight time wet, them 60-100 %).
-    const swimming = (c: Contact) => dry && !onUs(c) && isWet(regionId, c);
+    // Within BANK_REACH it is fought from the bank (rvr.ts): only farther out is it left in the water.
+    const swimming = (c: Contact) => dry && !onUs(c) && isWet(regionId, c) && dist(c, centre) > BANK_REACH;
     const foes = p.contacts.filter(c => players(c) && !mem.phantoms[c.objectId] && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !underGuards(c)) && !swimming(c));
     // Where each enemy player was seen, over time: a lost prey's trail and way in (tactics/ambush.ts; decideRvr follows it).
     if (s.ambush) noteTracks((mem.ambushTracks ??= {}) as Tracks, p.contacts.filter(c => players(c) && !c.stale && c.regionId === regionId), now);

@@ -611,6 +611,12 @@ export function guardOnUs(c: Contact): boolean {
 
 /** An enemy in sight (within huntRadius) stays in sight this much farther, so the edge doesn't flip the decision each tick. */
 export const HUNT_KEEP = 1000;
+/** A swimmer this near the main body is fought from the bank: casters and healers reach it, and members' moves stop at the water (water.ts dryMoveGuard). */
+export const BANK_REACH = 1500;
+/** After our last engage the unit holds this long before it roams on (no turning away mid-fight, the user at 20:48). */
+export const FIGHT_HOLD_MS = 10_000;
+/** A member fighting enemy players this near the main body is gone to before the roam. */
+export const FIGHT_JOIN_MAX = 9000;
 
 /** Within this of our portal keep's arrival a group is home, and buffs up before it leaves. */
 export const HOME_BUFF_RADIUS = 3000;
@@ -839,9 +845,9 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // ── Fighting: enemy players near us or on us; monsters only when they attack us and no player is about ──
     const candidates = contacts.filter(inFight);
     const players = candidates.filter(c => c.kind === 'player');
-    // With stayDry, a player swimming that isn't on us is no focus, mezz or reason to fight until it is ashore, as in the pack;
-    // it still counts against us (retreat, outnumbered). The hunt leaves it in the water (no hunt, the roam goes on).
-    const ashore = candidates.filter(c => !(c.kind === 'player' && swimming(c) && !onUs(c)));
+    // With stayDry, a player swimming that isn't on us is no focus, mezz or reason to fight until it is within BANK_REACH (fought
+    // from the bank) or ashore, as in the pack; it still counts against us (retreat, outnumbered). Nobody walks into the water for it.
+    const ashore = candidates.filter(c => !(c.kind === 'player' && swimming(c) && !onUs(c) && dist(c, centre) > BANK_REACH));
     const fighters = ashore.filter(c => c.kind === 'player');
     // Players first, while one is free: with all of them crowd-controlled, a pet on us is what's left to hit (pickRvrFocus takes the free first).
     const pool = fighters.some(c => !c.cc) ? fighters : ashore;
@@ -1194,6 +1200,36 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
                 return { ...calm, phase: 'travel', anchor: { x: q.spot.x, y: q.spot.y, z: zAt(q.spot) }, facing: mark, objective: `lie in wait for ${enemiesText(q.ids.length)} (lost ${q.losses}×)${gone}`, reason: `lie in wait beside its way in, ${hidden}, ${Math.round((AMBUSH_WAIT_MS - age) / 1000)} s more` };
             }
         }
+    }
+
+    // ── A fight near us comes before the roam (the user, playing Niamh at 20:48: "I was alone with a full Mid group. My group just
+    // walked by": the Mids were in the river by her, and the roam took over a second after an engage). A member fighting enemy
+    // players (the human first), enemy players in sight (swimming too), or our last engage under FIGHT_HOLD_MS ago: to them, on
+    // the nearest dry ground, or hold. The roam is what's left when none of that is so. ──
+    if (o.phase === 'engage') { mem.engagedAt = now; mem.fightSpot = undefined; }
+    const foesBy = (q: Point, r: number) => enemies.filter(c => isAlive(c) && c.realm !== realm && !inKeep(c) && dist(c, q) <= r);
+    const inAFight = raid ? [] : p.members
+        .filter(m => m.regionId === regionId && !m.isDead && dist(m, centre) <= FIGHT_JOIN_MAX && (attacked.has(m.name) || m.inCombat) && foesBy(m, s.engageRadius).length > 0)
+        .sort((a, b) => Number(!!b.observed) - Number(!!a.observed) || dist(a, centre) - dist(b, centre));
+    const fightAt: { at: Point; why: string } | null = inAFight.length
+        ? { at: inAFight[0]!, why: `${inAFight[0]!.name} is fighting ${enemiesText(foesBy(inAFight[0]!, s.engageRadius).length)}` }
+        : seen.length ? { at: centroid(seen), why: `${enemiesText(seen.length)} in sight${seen.some(swimming) ? ' (swimming: from the bank)' : ''}` } : null;
+    if (fightAt) {
+        const spot = dry ? drySpot(regionId, fightAt.at, { toward: centre, ok: c => clearOf(c, keeps) }) : fightAt.at;
+        const there = { x: Math.round(spot.x), y: Math.round(spot.y) };
+        const facing = { x: Math.round(fightAt.at.x), y: Math.round(fightAt.at.y) };
+        const d = Math.round(dist(centre, fightAt.at));
+        // Going to a fight holds as an engage does (a swimmer flickering out of view is no reason to turn round).
+        mem.engagedAt = now;
+        mem.fightSpot = { ...there, z: zAt(there) };
+        if (dist(centre, there) > LEG_REACHED) {
+            stepLeg(trip, 'join', there, { from: centre, movers: main, replan: 800 });
+            return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing, objective: `to the fight${gone}`, reason: `to the fight: ${fightAt.why}, ${d} away` };
+        }
+        return { ...calm, phase: 'travel', anchor: { x: there.x, y: there.y, z: zAt(there) }, facing, objective: `by the fight${gone}`, reason: `by the fight: ${fightAt.why}, ${d} away` };
+    }
+    if (now - (mem.engagedAt ?? -Infinity) < FIGHT_HOLD_MS) {
+        return { ...calm, phase: 'travel', anchor: mem.fightSpot ?? stay, objective: `after the fight${gone}`, reason: `after the fight: holding ${Math.ceil((FIGHT_HOLD_MS - (now - mem.engagedAt)) / 1000)} s before roaming on` };
     }
 
     // ── The roam, or a patrol of one's own (settings.patrol) or a pair round's ring ──
