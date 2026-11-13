@@ -18,6 +18,8 @@ docker compose -f server/docker/docker-compose.yml exec -T db mariadb -uroot -pd
 
 Then restart the gameserver, or wait for the next restart. New `mob` rows load only at start. Eithne in Druim Ligen needs her own `INSERT`, given below.
 
+Checked live on 2026-11-14 after the 00:30 restart, with the GM bot. In all three keeps the healer stands at the centre, the potion merchant sells the 4 Draughts and the poison merchant sells 32 poisons, and no dummies are left. Eithne sells the 4 Draughts.
+
 ## What the potion merchants sell
 
 Each realm gets its own version of the same four level-20 Draughts (`Draught_of_...`, with suffix `''` for Albion, `2` for Midgard, `3` for Hibernia). Lists: `ThidPotionsAlb`, `ThidPotionsMid`, `ThidPotionsHib`.
