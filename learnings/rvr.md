@@ -478,6 +478,10 @@ The ranks follow line of sight with the walls (`sdk/vision.ts` `lineOfSight` ove
   - A merlon gap works both ways. Four wall casters have a spot outside that sees them within 1250 (3D), seen by no other static guard, reachable with the gate shut (`SiegeTarget.outside`): wall-e-n (35000, 37150), wall-e-s (35000, 39400), wall-n (33200, 36900) and wall-nw (32300, 37050). wall-se and wall-sw have none.
   - The ranged half works the nearest live one from its spot while the melee break the gate and climb.
   - **Our sight model is stricter than the real client here:** from the user's own spot it sees none of them either way, yet the game let them nuke. So the measured spots are safe picks, not the only ones.
+  - **Checked against the real client** (the user's packet capture of the courtyard raid, 2348 answers, `bun client/dev/los-compare.ts <pcap> <client port>`):
+    - The wall Runemasters checking the user agreed with ours 733 times of 739, the roof Hunters 262 of 266.
+    - The 10 misses go both ways, almost all in the gateway while the user moved (positions lag a step). So the battlements need no loosening on this evidence.
+    - The kills from outside the north-west wall were on a later connection nobody captured, so that spot is still unexplained.
 - **The climb and its traps (live 18:00-18:45):** with the gate broken, the melee take the courtyard-side wall casters up the wall-walk stair, one each (`melee.split`, S3's `meleeSplit`), while the ranged work from outside or hold out of sight.
   - A roof archer, or the building's Huscarl on us, is reachable only through posterns the Faste never opens to raiders. Chasing them gave "no way there … a shut door at (32323, 37845)" every second.
   - Now such a guard doesn't break the hold, and a fighter on another level is a focus only by a found route.
