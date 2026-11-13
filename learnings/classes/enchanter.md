@@ -98,3 +98,10 @@ Hibernia won 51 of the 85 arena rounds it played (Midgard 20, Camelot 14); round
 - Still idle in some Albion fights and dived (rounds 103, 105). **Probably not `STEP_CLEAR`** (shared code, read 2026-11-10): a step it refuses has a free enemy player within 500 of its end, so at most 1400 from him, inside `offFocus`'s reach (1450), and he nukes that one instead of idling. It idles him only when that enemy is one `offFocus` skips: assigned or claimed for cc, not a threat, or not in his own view. In the 36 Hibernia reports with Albion fights (2026-11-09 20:20 to 11-10 09:40) his top idle reason was "focus out of reach, holding ground" (1-47 turns, 1-30 % idle, once 58 %), or in 5 of them "focus not in view, holding ground" (14-32 turns), where no step is tried at all: round 101's 19 turns were those. The step's two refusals printed the same line, so since this note assist says "focus out of reach, enemies by the step" for `STEP_CLEAR` and keeps "holding ground" for a focus beyond 1500 + `standStep` (900). The next Albion round shows which; the second is the group's placement, as it was against Midgard.
 - The pet's value isn't measured per round beyond `petAttack` counts.
 - Power runs out in long fights (rounds 47, 117).
+
+## The bomb (stint 2026-11-13, S5)
+
+**`pbae`** (`sdk/classes/pbae.ts`), in the kit's `urgent`: in a fight, the top point-blank rank he can cast (range 0, radius above 0, at least 100 damage) when two or more enemy players or their pets stand within 240 of him in 3D (the radius less 60), nothing under our crowd control within 380 (the bomb would wake it), and no melee swinging at him (a swing ends the 2.5 s cast half way). Result kind `pbae`.
+- **Mana build (Mana 24 at 24):** Disenchanting Emission, 133, radius 300, 12 power. For the keep's defence (milestone 5): Emer is to be respecced from Light to Mana for it; Ciaran stays Light.
+- **Light build:** his only rank is Minor Disenchanting Emanation (52), under the 100 floor, so `pbae` never fires: his 140 nuke from 1500 is better.
+- **Not seen live yet.** To look for: `pbae (n)` in his Actions and `pbae:interrupted` among the failures.

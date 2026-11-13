@@ -10,6 +10,7 @@ import type { Behavior } from '../group/member';
 import type { SpellPick } from '../group/spells';
 import { quickcastUnderFire } from './cabalist';
 import { slowTarget } from './healer';
+import { pbae } from './pbae';
 import { casterFight, noteTooFar, quickFlash, tooFarOf, viewDistance } from './mentalist';
 
 /** Below this % power the debuffs wait: his power is for nukes. */
@@ -73,5 +74,7 @@ export interface EnchanterOptions {
 
 /** Arena round 10 (2026-11-09): wiped by Albion in 79 s, Ciaran 2 nukes, moving 73 % with the focus on their back line out of reach. */
 export function enchanter({ heatAllies = 0, offFocus = true }: EnchanterOptions = {}): Character {
-    return { role: 'nuker', instant: [quickFlash(), dazzle(), quickcastUnderFire()], react: [resistDebuff({ allies: heatAllies })], fight: casterFight(offFocus) };
+    // pbae (pbae.ts): a Mana build's Disenchanting Emission on two or more enemies around him (the keep's gate and stair);
+    // a Light build's Minor Emanation (52) is under its floor, so it does nothing there.
+    return { role: 'nuker', instant: [quickFlash(), dazzle(), quickcastUnderFire()], urgent: [pbae()], react: [resistDebuff({ allies: heatAllies })], fight: casterFight(offFocus) };
 }

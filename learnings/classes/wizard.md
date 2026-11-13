@@ -61,3 +61,7 @@ export default wizard();
 - **Steaming Blast under a dive:** in melee 30 % of fight time and 43 nukes interrupted. Quickcast and Steaming Blast (133 each around her, 24 power) when two or more enemy players are on her, away from anything under crowd control, is a kit option still to try.
 - **Searing Gust on the focus every 20 s:** the 10 % on the next Ice Blasts is worth about 40 damage per 20 s, and whether a recast refreshes it is unchecked.
 - **Roots against nukes:** 26 roots over the night (0.7 a round, 4 resisted), each an Ice Blast lost. Camelot's tactics keep its Cabalist on damage against two healers; nobody has measured whether that pays for her too.
+
+## The bomb (stint 2026-11-13, S5)
+
+**`pbae`** (`sdk/classes/pbae.ts`, shared with the Enchanter kit), in `urgent`: Steaming Blast (Cold 24: 133, radius 300, 2.5 s, 12 power) when two or more enemy players or their pets stand within 240 of her in 3D, nothing under our crowd control within 380, and no melee swinging at her. Blaise and Vivien (Ice, Cold 24) know it. Meant for the keep's gate and stair (milestone 5), and fires in the field when a dive reaches her. Not seen live yet: look for `pbae (n)` in her Actions.

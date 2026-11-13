@@ -9,6 +9,7 @@ import type { Character } from '../group/character';
 import type { Behavior, MemberContext } from '../group/member';
 import type { SpellPick } from '../group/spells';
 import { nukerFight, quickcastUnderFire } from './cabalist';
+import { pbae } from './pbae';
 import { giveGround } from './theurgist';
 
 /**
@@ -49,6 +50,8 @@ export function wizard({ saveBelow = 0, offFocus: off = true, giveGround: give =
         role: 'nuker',
         // No meleeDebuff: she has no instant spell.
         instant: [nukes(quickcastUnderFire())],
+        // Steaming Blast (Cold 24: 133, radius 300) on two or more enemies around her (pbae.ts): the keep's gate and stair.
+        urgent: [pbae()],
         ...(give ? { react: [giveGround()] } : {}),
         fight: nukerFight(saveBelow, off).map(nukes),
     };
