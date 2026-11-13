@@ -43,11 +43,18 @@ describe('defenceSeats', () => {
         expect(seats.get(1)!.label).toMatch(/^bomb-gate/);
     });
 
-    test('the dead take no seat; last tick\'s seat is kept', () => {
-        const prev = new Map([[2, 'wall-sw']]);
-        const seats = defenceSeats(plan, [d(1, ['wall', 'yard'], undefined, false), d(2, ['wall', 'yard'])], prev);
+    test("the dead take no seat; last tick's seat is kept while its job still fills it", () => {
+        const prev = new Map([[2, 'wall-e'], [3, 'wall-se']]);
+        const seats = defenceSeats(plan, [d(1, ['wall', 'yard'], undefined, false), d(2, ['wall', 'yard']), d(3, ['wall', 'yard']), d(4, ['wall', 'yard'])], prev);
         expect(seats.has(1)).toBe(false);
-        expect(seats.get(2)!.label).toBe('wall-sw');
+        expect(seats.get(2)!.label).toBe('wall-e');
+        // One wall member alone fills only the first wall stand: an old seat farther down the list is given up.
+        expect(defenceSeats(plan, [d(5, ['wall', 'yard'])], new Map([[5, 'wall-sw']])).get(5)!.label).toBe('wall-se');
+    });
+
+    test('a lone bomber on the roof still takes the gate: stands fill in order of need', () => {
+        const seats = defenceSeats(plan, [d(1, ['bomb', 'yard'], stand('bomb-roof').at)], new Map([[1, 'bomb-roof']]));
+        expect(seats.get(1)!.label).toMatch(/^bomb-gate/);
     });
 
     test('everyone gets a seat for a full group of eight', () => {

@@ -810,30 +810,41 @@ const INSIDE = 1000;
 const insideOf = (centre: Point, p: Point) => Math.hypot(p.x - centre.x, p.y - centre.y) <= INSIDE;
 
 /**
- * Seats: each living defender's first job with a free seat, the nearest such stand; last tick's seat kept while its job fits; a
- * job whose stands are full hands the member to its next. Defenders in id order, so the same picture gives the same seats.
+ * Seats: each living defender's first job with a free seat. Within a job the stands fill in the layout's order of need (the gate's
+ * bombers before the roof's), the nearest member first. Last tick's seat is kept while it is among the stands its job fills now
+ * (so a death elsewhere doesn't shuffle everyone); a job whose stands are full hands the member to its next. Defenders in id order.
+ * Rehearsal 13:45: by nearest stand alone, a lone bomber who had stood on the roof took the roof's seat and the gate had none.
  */
 export function defenceSeats(plan: Pick<DefencePlan, 'stands'>, defenders: readonly Defender[], prev?: ReadonlyMap<number, string>): Map<number, DefenceStand> {
     const free = new Map(plan.stands.map(s => [s.label, s.seats]));
     const out = new Map<number, DefenceStand>();
     const take = (id: number, s: DefenceStand) => { out.set(id, s); free.set(s.label, free.get(s.label)! - 1); };
     const alive = defenders.filter(d => d.alive).slice().sort((a, b) => a.id - b.id);
+    // The stands each job fills now: in order of need, as many seats as members put that job first.
+    const wanted = new Map<DefenceJob, number>();
+    for (const d of alive) if (d.jobs[0]) wanted.set(d.jobs[0], (wanted.get(d.jobs[0]) ?? 0) + 1);
+    const filled = new Set<string>();
+    for (const [job, n] of wanted) {
+        let left = n;
+        for (const s of plan.stands) if (s.job === job && left > 0) { filled.add(s.label); left -= s.seats; }
+    }
     for (const d of alive) {
         const label = prev?.get(d.id);
         const s = label ? plan.stands.find(x => x.label === label) : undefined;
-        if (s && d.jobs[0] === s.job && (free.get(s.label) ?? 0) > 0) take(d.id, s);
+        if (s && d.jobs[0] === s.job && filled.has(s.label) && (free.get(s.label) ?? 0) > 0) take(d.id, s);
     }
     const maxJobs = Math.max(0, ...alive.map(d => d.jobs.length));
     for (let k = 0; k < maxJobs; k++) {
-        for (const d of alive) {
-            if (out.has(d.id)) continue;
-            const job = d.jobs[k];
-            if (!job) continue;
-            const kept = prev?.get(d.id);
-            const open = plan.stands.filter(s => s.job === job && (free.get(s.label) ?? 0) > 0);
-            if (!open.length) continue;
-            const mine = open.find(s => s.label === kept);
-            take(d.id, mine ?? open.slice().sort((a, b) => Math.hypot(a.at.x - d.x, a.at.y - d.y) - Math.hypot(b.at.x - d.x, b.at.y - d.y))[0]!);
+        for (const job of new Set(alive.map(d => d.jobs[k]).filter((j): j is DefenceJob => !!j))) {
+            const takers = alive.filter(d => !out.has(d.id) && d.jobs[k] === job);
+            for (const s of plan.stands) {
+                if (s.job !== job) continue;
+                while ((free.get(s.label) ?? 0) > 0 && takers.length) {
+                    const i = takers.reduce((best, d, j) => Math.hypot(s.at.x - d.x, s.at.y - d.y) < Math.hypot(s.at.x - takers[best]!.x, s.at.y - takers[best]!.y) ? j : best, 0);
+                    take(takers[i]!.id, s);
+                    takers.splice(i, 1);
+                }
+            }
         }
     }
     return out;
