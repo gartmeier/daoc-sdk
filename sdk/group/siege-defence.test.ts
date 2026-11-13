@@ -271,3 +271,16 @@ describe('raidOrders: a roof archer on us keeps the hold for the walls', () => {
         expect(o.melee.focus?.id).toBe(7);
     });
 });
+
+describe('raidOrders: a fighter behind a door shut to us is no focus', () => {
+    test('the building\'s Huscarl on us, on the next floor with no route: not the focus; with a route: the focus', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('hibernia')!;
+        const members = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, x: 33200, y: 38700 + i * 10, z: 3722, alive: true }));
+        const hus = { id: 5, name: 'Huscarl', realm: 'midgard', kind: 'npc' as const, x: 32300, y: 38600, z: 3944, targetObjectId: 101 };
+        const yard = { id: 6, name: 'Huscarl', realm: 'midgard', kind: 'npc' as const, x: 33353, y: 38186, z: 3720 };
+        const base = { members, owner: 'midgard' as const, staged: true, broken: [252000301] };
+        expect(raidOrders(raid, { ...base, seen: [hus, yard], reach: () => false }).ranged.focus?.id).not.toBe(5);
+        expect(raidOrders(raid, { ...base, seen: [hus, yard], reach: () => true }).ranged.focus?.id).toBe(5);
+    });
+});

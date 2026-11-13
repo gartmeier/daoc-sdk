@@ -401,6 +401,8 @@ const AT_POST = 400, AT_POST_Z = 200;
 const SEEN_FROM = 2500;
 /** With no guard seen at all, a post this near one of us counts as gone (once staged). Rank 1's posts lie 200-1500 from its stand. */
 const POST_NEAR = 1600;
+/** A guard this far above or below the raid's centre stands on another level (a floor, the wall-walk): reached only by a route. */
+const LEVEL_DZ = 150;
 /** The raid is at a spot when its centre is this near. */
 const AT_SPOT = 600;
 /** The raid goes in from the stage once this share of the living stand there. */
@@ -568,13 +570,18 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // On the lord (rank null: every rank done, or the hold): only a fighter on us takes the focus from him. Roof archers
     // stand 290-320 from him, and while they were the focus he regenerated (06:32 in the frozen window: 98 % after 7 min).
     const onLord = rank === null;
-    const reachable = (s: SiegeSeen) => { const t = postOf(plan, s); return !t || t.kind === 'fighter' || (!onLord && Math.hypot(s.x - stepStand.x, s.y - stepStand.y) <= FOCUS_REACH); };
-    const first = near(onUs.filter(reachable)) ?? near(offPost);
+    // A fighter on another floor behind a door shut to us (the building's floor-3 fighter, a postern) can't come to us, and no
+    // melee can go to it: live 18:36, albion-1's melee 'Huscarl is on another level with no way there (... a shut door at
+    // (32311, 38669))' over and over. On another level it is a focus only by a found route (view.reach).
+    const upOrDown = (s: SiegeSeen) => Math.abs(s.z - centre.z) > LEVEL_DZ;
+    const fighterOk = (s: SiegeSeen) => !view.reach || !upOrDown(s) || view.reach(s);
+    const reachable = (s: SiegeSeen) => { const t = postOf(plan, s); return !t || t.kind === 'fighter' ? fighterOk(s) : !onLord && Math.hypot(s.x - stepStand.x, s.y - stepStand.y) <= FOCUS_REACH; };
+    const first = near(onUs.filter(reachable)) ?? near(offPost.filter(fighterOk));
     // Melee take a static guard (caster, archer, lord) only where they can walk to it (view.reach); a fighter comes to them.
     const meleeOk = (x: SiegeSeen | null): boolean => {
         if (!x || x.kind !== 'npc' || !view.reach) return true;
         const t = postOf(plan, x);
-        return !t || t.kind === 'fighter' || view.reach(x);
+        return !t || t.kind === 'fighter' ? fighterOk(x) : view.reach(x);
     };
     // The ranged half holds out of the walls' sight while the melee's step is a caster on the walls they can reach (a found route:
     // the gate broken). Not on the lord, nor without a layout spot for it.
