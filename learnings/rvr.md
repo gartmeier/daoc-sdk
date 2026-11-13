@@ -484,6 +484,10 @@ The ranks follow line of sight with the walls (`sdk/vision.ts` `lineOfSight` ove
     - The wall Runemasters checking the user agreed with ours 733 times of 739, the roof Hunters 262 of 266.
     - The 10 misses go both ways, almost all in the gateway while the user moved (positions lag a step). So the battlements need no loosening on this evidence.
     - The kills from outside the north-west wall were on a later connection nobody captured, so that spot is still unexplained.
+    - The second capture (19:28-22:06 UTC, 6925 answers, the evening's raids): at the Faste the Hunters, Runemasters and the lord agreed about 870 times of 890.
+      - The one steady miss: from the courtyard's east side (33742, 38218) the real client saw the roof Hunter over the gate (32526, 38271, 4592), the user's bolt shot, where ours says blocked.
+      - The low agreement elsewhere is pets and mobs with positions seconds stale (45 lines with the two more than 2500 apart).
+- **The sight step and walls (2026-11-13 21:52):** `sightStep` sampled the straight line toward the target with the terrain's height and checked doors but not walls. Toward the lord on the roof, hibernia's casters stepped through the keep building's east wall into its ground floor, a floor walled off from the corridor to the stair (no route out on the mesh). They stood 870 under the lord for the rest of the raid, and the user said "they can't get up to the throne room". Now every step checks the fixtures' walls up to 50 past its end (`wallTo`), since a step that ends inside a wall's thickness is behind its face for the next.
 - **The climb and its traps (live 18:00-18:45):** with the gate broken, the melee take the courtyard-side wall casters up the wall-walk stair, one each (`melee.split`, S3's `meleeSplit`), while the ranged work from outside or hold out of sight.
   - A roof archer, or the building's Huscarl on us, is reachable only through posterns the Faste never opens to raiders. Chasing them gave "no way there … a shut door at (32323, 37845)" every second.
   - Now such a guard doesn't break the hold, and a fighter on another level is a focus only by a found route.

@@ -191,6 +191,16 @@ const SIGHT_RINGS = [150, 300, 450, 600];
 /** A ring spot's height: the ground there when it is this near our own, else ours (a wall-walk or a floor over the terrain). */
 const SIGHT_RING_Z = 150;
 
+/** How far past a step's end the wall check looks: a spot inside a wall's thickness is behind its face for the next step. */
+const SIGHT_WALL_MARGIN = 50;
+/** A wall (a fixture's collision mesh, 50 up) between `from` and `to`, or within SIGHT_WALL_MARGIN past `to` on the same line. */
+function wallTo(regionId: number, from: Vec3, to: Vec3): boolean {
+    const d = Math.hypot(to.x - from.x, to.y - from.y);
+    const k = d > 0 ? (d + SIGHT_WALL_MARGIN) / d : 1;
+    const end = { x: from.x + (to.x - from.x) * k, y: from.y + (to.y - from.y) * k, z: to.z + 50 };
+    return fixtureSolid(regionId, { ...from, z: from.z + 50 }, end);
+}
+
 /**
  * Where to step after a cast refused for sight: the first point every SIGHT_STEP_SAMPLE units along the straight line
  * toward `to` (up to `max`, staying SIGHT_STEP_KEEP off it) from which `to` is in sight over the terrain and past the walls, else the
@@ -206,6 +216,10 @@ export function sightStep(regionId: number, from: Vec3, to: Vec3, ground: (regio
         // Never through a keep door, ours or a shut one (doors.ts): live 15:25 two Midgard casters on their wall stands stepped out
         // through their own gate (walkTo uses it) to see the raid, and were rooted outside.
         if (doorBetween(regionId, from, next, realm)) break;
+        // Nor through a wall: the ground there is the terrain under a building, a floor walled off from the way in. Live 21:52, the
+        // Faste: hibernia's casters stepped toward the lord on the roof through the keep building's east wall into its ground floor
+        // (no route out on the mesh) and stood 870 under him for the rest of the raid.
+        if (ground === terrainGround && wallTo(regionId, from, next)) break;
         spot = next;
         if (lineOfSight(regionId, spot, to, ground)) return spot;
     }
@@ -222,7 +236,7 @@ export function sightStep(regionId: number, from: Vec3, to: Vec3, ground: (regio
                 const g = ground(regionId, x, y);
                 const at = { x, y, z: g !== null && Math.abs(g - from.z) <= SIGHT_RING_Z ? g : from.z };
                 if (doorBetween(regionId, from, at, realm)) continue;
-                if (ground === terrainGround && fixtureSolid(regionId, { ...from, z: from.z + 50 }, { ...at, z: at.z + 50 })) continue;
+                if (ground === terrainGround && wallTo(regionId, from, at)) continue;
                 if (lineOfSight(regionId, at, to, ground)) return at;
             }
         }
