@@ -938,6 +938,9 @@ export function ccSpellFor(ctx: MemberContext<TacticsSettings>, c: Contact) {
  * for its length, 15-25 s in a roam (selectFree), and cast at a target whose assignment had lapsed on the way, onto the new focus or a passive mob.
  * With none, nothing waits behind that turn, and castSpell walks and casts in one as ever. Either way a cast the server runs on (castHeldLeftMs) is waited out before anything here is read for the cast.
  */
+/** A mezz target refused for sight is left this long for the next one. */
+const CC_UNSEEN_MS = 8000;
+
 export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<TacticsSettings> => ({
     name: 'crowdControl',
     interruptible: false,
@@ -1043,6 +1046,8 @@ export const crowdControl = (opts: { assignedOnly?: boolean } = {}): Behavior<Ta
         }
         // castSpell knows without a send that this can't land (a peace flag, our realm, ourselves): the next add gets the turn.
         else if (c.reason === 'invalid_target' || c.reason === 'not_attackable' || c.reason === 'no_target') cantLand.set(ckey(target), Date.now() + CC_IMMUNE_MS);
+        // Out of our sight after castSpell's step (or with none to take): the next we can see gets the turn, this one later (Fiacra 31 times at one, 16:34).
+        else if (c.reason === 'not_visible') cantLand.set(ckey(target), Date.now() + CC_UNSEEN_MS);
         // Its approach stopped at the bank (dry move guard): the next add gets the turn.
         else if (c.reason === 'water') noteWet(ctx, target.objectId, c);
         else if (await waitOutSelfCc(c)) return true;
@@ -2405,7 +2410,10 @@ export const buff = (): Behavior<TacticsSettings> => ({
         ctx.memory.set('buffHeld', held);
         ctx.memory.set('buffLost', lost);
         const stripped = strippedMembers(planned, held, lost, Date.now());
-        const quiet = QUIET_PHASES.has(ctx.orders().phase) && !ctx.threats().length;
+        // A threat on none of us beyond a door (two boars past our own portal keep's door, 16:44: "14 buffs to go", none cast) holds nothing up.
+        const names = new Set(ctx.members().map(m => m.name));
+        const blocking = ctx.threats().filter(t => (!!t.target && names.has(t.target)) || !doorBetween(me.regionId, me, t, me.realm));
+        const quiet = QUIET_PHASES.has(ctx.orders().phase) && !blocking.length;
         // Out of the quiet phases: only the concentration buffs of a member stripped of ours (rezzed, say), with no melee on us and no cast of ours running.
         if (!quiet && (!stripped.size || hammeredBy(ctx) || castRunning(ctx) || me.attacking)) return false;
         const tasks = quiet ? planned : planned.map(t => (!t.pet && t.spell.concentration > 0 && stripped.has(t.target) ? t : { ...t, covered: true }));

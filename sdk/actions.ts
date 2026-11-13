@@ -97,7 +97,7 @@ import { EquipmentSlot, isWeapon, ObjectType } from './types';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
 import { DOOR_REACH, doorApproach, doorBetween, doorOnRoute, doorSide, dropOwnDoor, ownDoors, type OwnDoor } from './doors';
 import { groundTargetSnap } from './ground';
-import { lineOfSight, terrainGround } from './vision';
+import { fixtureSolid, lineOfSight, terrainGround } from './vision';
 import { isDelveOf, parseDelve } from './delve';
 import { botFolder, loadBuild } from './build';
 import { findNpcSpawns, getClass, getSpecialization, getSpell, getSpellLine, getSpells, getZonePoint, realmId, specKey, type NpcSpawnMatch, type SpellInfo, type ZonePoint } from '../data/index';
@@ -186,6 +186,10 @@ export const SIGHT_STEP_MAX = 800;
 export const SIGHT_STEP_SHORT = 300;
 const SIGHT_STEP_SAMPLE = 100;
 const SIGHT_STEP_KEEP = 150;
+/** The rings round us sightStep looks on when the line toward the target has no spot (a keep wall across it): within its `max`. */
+const SIGHT_RINGS = [150, 300, 450, 600];
+/** A ring spot's height: the ground there when it is this near our own, else ours (a wall-walk or a floor over the terrain). */
+const SIGHT_RING_Z = 150;
 
 /**
  * Where to step after a cast refused for sight: the first point every SIGHT_STEP_SAMPLE units along the straight line
@@ -204,6 +208,24 @@ export function sightStep(regionId: number, from: Vec3, to: Vec3, ground: (regio
         if (doorBetween(regionId, from, next, realm)) break;
         spot = next;
         if (lineOfSight(regionId, spot, to, ground)) return spot;
+    }
+    // Nothing on the line (a keep wall or a building across it): the rings round us, nearest first and the side toward the
+    // target first, for a spot that sees it, with no wall between us and it and no door. Live 16:34 (the Faste raid): Fiacra's
+    // mezz 31 times and Lugh's nuke 21 refused for sight from the same spots, the straight line all behind the wall.
+    if (reach >= SIGHT_STEP_SAMPLE) {
+        const bearing = Math.atan2(to.y - from.y, to.x - from.x);
+        const turns = Array.from({ length: 16 }, (_, k) => (k % 2 ? 1 : -1) * Math.ceil(k / 2) * (Math.PI / 8));
+        for (const r of SIGHT_RINGS.filter(r => r <= max)) {
+            for (const turn of turns) {
+                const x = from.x + Math.cos(bearing + turn) * r, y = from.y + Math.sin(bearing + turn) * r;
+                if (Math.hypot(to.x - x, to.y - y) < SIGHT_STEP_KEEP) continue;
+                const g = ground(regionId, x, y);
+                const at = { x, y, z: g !== null && Math.abs(g - from.z) <= SIGHT_RING_Z ? g : from.z };
+                if (doorBetween(regionId, from, at, realm)) continue;
+                if (ground === terrainGround && fixtureSolid(regionId, { ...from, z: from.z + 50 }, { ...at, z: at.z + 50 })) continue;
+                if (lineOfSight(regionId, at, to, ground)) return at;
+            }
+        }
     }
     return clearOnly ? null : spot;
 }

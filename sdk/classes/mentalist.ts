@@ -43,9 +43,10 @@ export function viewDistance(log: TooFar, id: number, d: number, now: number): n
     return Infinity;
 }
 
-/** Record a cast's "too far" at a target, at our view's distance then. */
+/** Record a cast's "too far" at a target, at our view's distance then. "You can't see your target" the same: castSpell
+ * already looked for a step into sight, and the next try from here would be refused again (Lugh's stun 13 times, 16:34). */
 export function noteTooFar(log: TooFar, id: number, reason: string | undefined, d: number, now: number): void {
-    if (reason === 'out_of_range') log.set(id, { at: now, d });
+    if (reason === 'out_of_range' || reason === 'not_visible') log.set(id, { at: now, d });
 }
 
 /** The member's own TooFar, shared by its kit's behaviours (the server's range is the same truth for each). */
