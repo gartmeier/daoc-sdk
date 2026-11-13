@@ -214,6 +214,11 @@ export function groupClaims(p: GroupPicture, st: GroupVoiceState, now = p.at): C
         out.push({ key: 'wipe', text: 'wiped, release and meet at our PK', prio: 100, settleMs: 1500, cooldownMs: 120_000, urgent: true });
         return out;
     }
+    // Half of us down and no rezzer coming: our dead release at once (behaviors.ts HALF_DOWN, the release's detail; matched by its
+    // words so voice.ts stays free of behaviors.ts). Tell the humans the same, once per wipe: the key is the wipe's, so the
+    // full wipe after it is not said again within its cooldown. The user, playing Niamh at 17:0x: "should release and regroup at the PK."
+    const halfDown = team.some(m => m.isDead && m.activity?.kind === 'release' && /^half the group down\b/.test(m.activity.detail ?? ''));
+    if (halfDown) out.push({ key: 'wipe', text: 'half of us down and no rez coming, release and meet at our PK', prio: 100, settleMs: 0, cooldownMs: 120_000, urgent: true });
 
     // Enemy players in sight: "inc".
     const seen = enemyPlayers(p, st.realm);
@@ -285,7 +290,7 @@ export function groupClaims(p: GroupPicture, st: GroupVoiceState, now = p.at): C
     }
 
     // Rez: once the fight is over, the dead and who brings them back.
-    if (o.phase !== 'engage' && o.phase !== 'retreat') {
+    if (o.phase !== 'engage' && o.phase !== 'retreat' && !halfDown) {
         const rezzer = living.find(m => m.capabilities.rez);
         for (const m of p.members) {
             if (!m.isDead || !m.observed) continue;

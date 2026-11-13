@@ -178,6 +178,22 @@ describe('group chat', () => {
         const near = ticks(gv(), t => picture([...team().map(at), { ...niamh, x: 37800, y: 50362 }], [], out, t), 6000);
         expect(near).toContain("Niamh, don't release, rez coming");
     });
+    test('half of us down and no rez coming: release and meet at our PK, once per wipe', () => {
+        const v = gv();
+        const out = { phase: 'travel' as const, reason: 'wave: out toward where our realm last saw enemies' };
+        const half = 'half the group down, no rezzer coming: release, meet at our portal keep';
+        const released = (m: ReturnType<typeof report>) => ({ ...m, isDead: true, activity: { kind: 'release', targetId: null, detail: half, since: 0 } });
+        const niamh = report('Niamh', { observed: true, isDead: true, regionId: 252, x: 37400, y: 50362 });
+        const [g, t, m] = team();
+        const said = ticks(v, s => picture([g!, released(t!), released(m!), niamh], [], out, s), 6000);
+        expect(said.filter(l => !l.startsWith('hi '))).toEqual(['half of us down and no rez coming, release and meet at our PK']);
+        // The whole group dead a little later: the same wipe, not said again.
+        const dead = team().map(x => ({ ...x, isDead: true }));
+        for (let s = 7000; s <= 12_000; s += 500) expect(v.hear(picture([...dead, niamh], [], out, s))).toBeNull();
+        // A plain release (not half down) says nothing of the sort.
+        const plain = ticks(gv(), s => picture([g!, { ...released(t!), activity: { kind: 'release', targetId: null, detail: '', since: 0 } }, m!], [], out, s), 6000);
+        expect(plain.some(l => l.includes('half of us'))).toBe(false);
+    });
     test('the wipe', () => {
         const v = gv();
         const dead = team().map(m => ({ ...m, isDead: true }));
