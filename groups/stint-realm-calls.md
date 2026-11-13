@@ -531,7 +531,12 @@ There is no door to break. `keeps.ts` lifts the Faste's keep circle only for a u
 - **`raidStep`:** the unit's focus is the ranged half's. `meleeFocus` is `RaidOrders.melee.focus` when that's an NPC, otherwise null:
   - At the gate (rank 2), that's breakDoor's job.
   - On a rank with only wall or roof casters (rank 2 once the gate is broken, ranks 4-5), the melee hold ("; melee hold" in the reason).
-- **Not covered yet: the case at 08:36.** It was "Wizard is on us", and `raidOrders` gives that to the melee too. It waits for R5's `meleeReach(regionId, from, to, { broken, ours })`; I fill `RaidView.reach` from the unit's centre once that lands. That's a one-line change in `raidStep`.
+- **The case at 08:36, landed 10:50 (2baafeb, on R5's d7bc5af):** "Wizard is on us", which `raidOrders` used to give the melee too.
+  - `raidStep` now fills `RaidView.reach` from the living members' centre with R5's `meleeReach`. The shut doors count as walls: those not in the raid's broken list, unless the keep is ours.
+  - Tested on the Faste's real navmesh: a wall-se Wizard on a member at the gate.
+    - Gate shut: the casters take it and the melee hold (`meleeFocus` null).
+    - Gate broken: the stair is a route, and the melee share the focus.
+  - `bun test sdk/group` plus `navmesh-doors`: 2319 pass, 0 fail. All 23 guarded `rvr.ts` files import cleanly. Not seen live: field mode stopped at 10:30, so it goes live at the next stint.
 - Tests: `melee-focus.test.ts` (4), `tactics/raid.test.ts` +1. `bun test sdk/group`: 2302 pass. The one failure was `siege.test.ts` while R5 was editing it, and it is green after 48fa6a4. All 23 guarded `rvr.ts` files import cleanly. Live from each unit's next sortie.
 - **My mistake, 10:01:30-10:03:** my first import check also imported `groups/field.ts`, which has no `import.meta.main` guard. It started a second field mode, which pre-empted D3's camelot, midgard and hibernia sorties (10:01:43-10:02:23). I stopped it at about 10:03, and no stray process is left. camelot and midgard were back at 10:07:34, and hibernia's 5-minute wait ended at about 10:10. From now on I import-check guarded files only.
 
@@ -1155,3 +1160,24 @@ Raids as they come. Each row gives the go, the end and the time from the ledger,
   - static guards not taking the focus from the lord (R5);
   - casters up on the roof (R3);
   - a go that weighs the defenders (R2).
+
+### R5: landed after 10:00 (commits only in my paths; nothing pushed)
+
+- **48fa6a4 `siege.ts`:** on the lord (rank null, every rank done or the lord hold) only a fighter on us takes the focus from him. Roof archers no longer pull the raid off a regenerating lord.
+- **8e0a8d7 `sdk/navmesh.ts`, `sdk/pathfinding.ts`, `sdk/test/navmesh-doors.test.ts`:** doors as the server keeps them.
+  - `NavMesh.doorPolys(at)` and `setDoorBlocking(at, blocking)` swap a door's polys Door ↔ BlockingDoor through our Detour.dll's `GetPolysInBox` and `UpdateFlags`. Every query leaves BlockingDoor out, so nothing changes until a door is shut.
+  - A route that comes up partial while a shut door is on the way fails with `reason: 'door'` (walkTo gives `no_path`, "a shut door at (x, y) is in the way") instead of walking straight through.
+  - Tested on the Faste's real mesh. A shut gate leaves no way into the courtyard. The building's door alone doesn't seal the roof: the way goes up the wall-walk and in by a postern, and **the Faste has four posterns** (door table 252000303-306, `IsPostern`; never attackable, open only to the owner).
+- **d7bc5af `siege.ts`:** the keep's doors and the melee reach.
+  - `FASTE.doors` holds all six. `shutDoors` and `applyDoors` shut posterns always, the gate and building door until broken, none when the keep is ours.
+  - `meleeReach(regionId, from, to, { broken, ours })`, as agreed with R3, who fills `RaidView.reach` in raidStep with Orders.meleeFocus (R3's e80c2bf).
+  - With `reach`, a caster, archer or lord melee can't walk to is no melee focus.
+- **Tests:** siege, raid, squad, keeps and the navmesh doors (154 pass); navmesh, pathfinding and FFI (24 pass, 1 skip). Typecheck clean, and all 23 `groups/*/rvr.ts` import.
+  - `sdk/test/actions.test.ts` (1314 tests) did not finish in 20 min here, so it is **unverified**. It sets the straight-line provider and mocks the navmesh store (lines 22-23), so these changes don't reach it.
+- **Restart:** units only (field.ts) at the next stint. No client or swarm restart.
+- **Carry-overs, not landed:**
+  1. **R5 with R3, `sdk/actions.ts`:** `walkToObject`'s "step onto the target ourselves" (around line 1505) and the melee chase (around line 2297) move straight to the target's z. Step onto another layer only on a found navmesh route no longer than 1.5 × the 3D distance + 100, else `out_of_reach`. Not landed, because its test file doesn't finish here. Shut doors and R3's split melee focus already take away the climb's trigger.
+  2. **R5, after the keep-walls-block-line-of branch merges:** the new ranks (gate first, the east wall from the courtyard, the west wall by its stair, the roof Scouts from the roof), checked by a test against their `lineOfSight`.
+  3. **R5, own doors:** `sendInteract` at our own keep's doors on the way (the 100-150 jump). Unneeded until a unit walks inside a keep we hold.
+  4. **The client reading 0x99 door state:** a client change and a swarm restart.
+  5. **R2:** the muster's clock should hold while a unit is on the lord, and the go should weigh the defenders.
