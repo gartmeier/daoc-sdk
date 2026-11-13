@@ -1461,11 +1461,11 @@ describe('decideRvr: roaming by a main group first (S3, live 13:24)', () => {
     });
 });
 
-describe('decideRvr: a lone keep guard on one of us is an add (S3, the user at 17:08: a Huscarl on Niamh, the group moved off)', () => {
+describe('decideRvr: a keep guard on one of us is fought (S3, the user at 17:08: a Huscarl on Niamh, the group moved off)', () => {
     const guard = (id: number, x: number, target: string | null) => contact(id, { kind: 'npc', name: 'Huscarl', realm: 'midgard', level: 28, regionId: R, x, y: 10_000, z: 0, hp: 46, keepGuard: true, target, inCombat: true } as any);
-    test('one on us is fought; two together, or one on nobody, are not', () => {
+    test('one on us is fought, alone or not (the user: no running from a guard once it has aggro); one on nobody is not', () => {
         expect(decideRvr(ctx(picture(team(), [guard(700, 9_900, 'Menta')]))).focus).toBe(700);
-        expect(decideRvr(ctx(picture(team(), [guard(700, 9_900, 'Menta'), guard(701, 10_500, 'Tank')]))).focus ?? null).toBeNull();
+        expect([700, 701]).toContain(decideRvr(ctx(picture(team(), [guard(700, 9_900, 'Menta'), guard(701, 10_500, 'Tank')]))).focus ?? -1);
         expect(decideRvr(ctx(picture(team(), [guard(700, 9_900, null)]))).focus ?? null).toBeNull();
         // Raiding, the guards stay the raid's (raidStep).
         expect(decideRvr(ctx(picture(team(), [guard(700, 9_900, 'Menta')]), { memory: { raid: { callId: 'x' } } })).focus ?? null).toBeNull();
