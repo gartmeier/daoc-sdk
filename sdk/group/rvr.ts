@@ -52,7 +52,7 @@ import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { planBuffs } from './buffs';
 import { FRIEND_NEAR, STAY_FRIEND_FAR, meetingPlaces, placeOk, roamStep, sightingPlaces, type RoamPlace } from './tactics/roam';
-import { loiter, waveOrder, waveWatch, type RealmWave } from './waves';
+import { FIELD_REST_MS, fieldRestSpot, loiter, waveOrder, waveWatch, type RealmWave } from './waves';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
 export { BATTLEGROUND_LAYOUTS, homeOf, keepDangers, KEEP_CLEARANCE, THIDRANKI, type BattlegroundLayout, type Keep, type KeepSettings, type PlayerRealm } from './keeps';
@@ -1064,14 +1064,20 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // enemies. Free as for a call (no fight, nobody seen, dead, away or low: all above); never in a pair round. No wave file: patrol. ──
     const wave = !s.opponent && !seen.length && realm !== 'none' ? waveOrder((mem.realmWave ?? null) as RealmWave | null, { unit: mem.realmUnit ?? '', realm, regionId, centre, reached: mem.waveReached, resting: mem.waveRest?.key ?? null, human: p.members.some(m => m.observed), now }) : null;
     if (wave?.kind === 'reached') mem.waveReached = wave.key;
-    else if (wave?.kind === 'rest') {
-        // A rest where we are (as a player group out roaming): off the roads out of the portal keeps, clear of keeps, dry; picked once a wave.
+    else if (wave?.kind === 'rest' && !(mem.waveRest?.key === wave.key && mem.waveRest.done)) {
+        // A short rest in the field (bot-only, far from the portal keep): out of sight off the roads and away from the meeting
+        // places, everyone sitting (loiter), FIELD_REST_MS once there; then it roams on. Picked once a wave.
         if (mem.waveRest?.key !== wave.key) {
-            const r = restAt();
-            const spot = drySpot(regionId, r.at, { toward: r.at, ok: c => clearOf(c, keeps) });
-            mem.waveRest = { key: wave.key, at: { x: Math.round(spot.x), y: Math.round(spot.y), z: zAt(spot) } };
+            const ok = (q: Point) => clearOf(q, keeps) && !onRoadOut(q, roads) && isDry(regionId, q);
+            const avoid = ((mem.roamMeet ?? []) as Point[]);
+            const found = fieldRestSpot(regionId, centre, { avoid, ok, zAt });
+            const spot = found ?? (() => { const r = restAt(); const d = drySpot(regionId, r.at, { toward: r.at, ok: c => clearOf(c, keeps) }); return { x: Math.round(d.x), y: Math.round(d.y), z: zAt(d) }; })();
+            mem.waveRest = { key: wave.key, at: spot, arrivedAt: null, done: false };
         }
-        return { ...calm, phase: 'recover', anchor: mem.waveRest.at, objective: `a rest in the field${gone}`, reason: wave.why };
+        const wr = mem.waveRest;
+        if (!wr.arrivedAt && dist(centre, wr.at) <= 350) wr.arrivedAt = now;
+        if (wr.arrivedAt && now - wr.arrivedAt >= FIELD_REST_MS) wr.done = true;
+        else return { ...calm, phase: 'recover', anchor: wr.at, objective: `a short rest in the field${gone}`, reason: wave.why };
     }
     else if (wave?.kind === 'home' || wave?.kind === 'toward') {
         stepLeg(trip, wave.kind === 'home' ? 'break' : 'wave', wave.at, { from: centre, movers: main, replan: 1500 });

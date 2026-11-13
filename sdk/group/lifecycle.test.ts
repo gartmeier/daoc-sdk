@@ -3,7 +3,7 @@ import {
     curveAt, CURVE, groupNeeds, initialLives, LIFECYCLE_SETTINGS, logOutUnsafe, mixFor, newWave, openNeeds, readBalance, see, stepBalance,
     stepRealm, stepWave, waveFile, wantsMuster, wearOf, type BalanceState, type Life, type LifeBot, type RealmStep, type Sightings,
 } from './lifecycle';
-import { quietSpot, waveOrder, nextIdle, QUIET_DOOR_CLEAR, QUIET_REASON, type RealmWave } from './waves';
+import { fieldRestSpot, quietSpot, waveOrder, nextIdle, QUIET_DOOR_CLEAR, QUIET_REASON, REST_REASON, type RealmWave } from './waves';
 import { doorSide, PORTAL_DOORS } from '../doors';
 import { homeOf } from './keeps';
 import type { RealmBoardView, UnitView } from './realm-board';
@@ -499,6 +499,23 @@ describe('waves', () => {
         expect(east).toEqual(expect.objectContaining({ kind: 'toward', at: { x: 45000, y: 40000, z: 3000 } }));
         const old = waveOrder({ ...out, towards: undefined }, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: { x: 18000, y: 18000 }, now: 0 });
         expect(old).toEqual(expect.objectContaining({ kind: 'toward', at: { x: 30000, y: 30000, z: 3000 } }));
+    });
+    test('a field rest: its reason sits everyone; its spot is off limits where not ok, away from meeting places, near', () => {
+        const quiet: RealmWave = { v: 1, realm: 'hibernia', at: 0, id: 9, phase: 'quiet', since: 0, until: 5 * MIN, toward: null, why: 'after a fight' };
+        const spot = quietSpot(252, 'hibernia', 'hibernia-2')!;
+        const rest = waveOrder(quiet, { unit: 'hibernia-2', realm: 'hibernia', regionId: 252, centre: { x: spot.x + 20000, y: spot.y + 10000 }, now: 0 }) as { why: string };
+        expect(rest.why.startsWith(REST_REASON)).toBe(true);
+        const flat = () => 0;
+        const centre = { x: 30000, y: 30000 };
+        // Nothing to avoid, everything ok: where the group stands.
+        expect(fieldRestSpot(252, centre, { avoid: [], ok: () => true, zAt: () => 0, ground: flat })).toEqual({ x: 30000, y: 30000, z: 0 });
+        // A meeting place right here: the spot steps away from it, at least 2500 if it can (1400 + 1000 > 2500 east of one 1000 west).
+        const away = fieldRestSpot(252, centre, { avoid: [{ x: 29000, y: 30000 }], ok: () => true, zAt: () => 0, ground: flat })!;
+        expect(Math.hypot(away.x - 29000, away.y - 30000)).toBeGreaterThanOrEqual(2400);
+        // Not ok anywhere east of the centre: only west spots.
+        const west = fieldRestSpot(252, centre, { avoid: [], ok: p => p.x < 30000, zAt: () => 0, ground: flat })!;
+        expect(west.x).toBeLessThan(30000);
+        expect(fieldRestSpot(252, centre, { avoid: [], ok: () => false, zAt: () => 0, ground: flat })).toBeNull();
     });
     test('idle acts: mostly sit and turn', () => {
         const r = seeded(11);

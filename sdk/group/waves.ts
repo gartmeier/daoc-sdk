@@ -10,6 +10,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { doorBetween, doorSide, PORTAL_DOORS } from '../doors';
+import { lineOfSight, terrainGround, type GroundAt } from '../vision';
 import { formationSlot, type TacticsSettings } from './behaviors';
 import { homeOf, type PlayerRealm } from './keeps';
 import type { Behavior } from './member';
@@ -55,6 +56,18 @@ export const QUIET_NEAR = 900;
 export const TOWARD_NEAR = 2500;
 /** The orders' reason of a quiet unit at its keep starts with this; loiter() acts only on it. */
 export const QUIET_REASON = 'quiet:';
+/** A rest in the field (far from the portal keep) starts with this: everyone sits (loiter), for FIELD_REST_MS once there. */
+export const REST_REASON = `${QUIET_REASON} a short rest`;
+/**
+ * A bot-only group's rest in the field lasts this long once it stands at its spot, then it roams on (the realm's break may
+ * run longer): a group standing still in the open looks frozen (the user at 20:51: "another group there, just doing nothing").
+ */
+export const FIELD_REST_MS = 75_000;
+/** A field rest spot: within these of the group, at least AVOID_FAR from the meeting places where it can be. */
+const REST_RINGS = [0, 600, 1000, 1400];
+const AVOID_FAR = 2500;
+/** Meeting places farther than this don't count for hiding. */
+const AVOID_SIGHT = 6000;
 
 export function wavePath(realm: string, dir = WAVE_DIR): string {
     return join(dir, `${realm}-wave.json`);
@@ -150,7 +163,7 @@ export function waveOrder(wave: RealmWave | null, o: { unit: string; realm: Play
         // A player with us takes no wave break at all: it roams on and rests only when it needs to (the user, playing Niamh,
         // 2026-11-13 19:00: "why are we doing these rests? I want to play, not wait five minutes").
         if (o.human) return null;
-        if (o.resting === key || d > HOME_NEAR) return { kind: 'rest', key, why: `${QUIET_REASON} a rest where we are, ${Math.round(d)} from the portal keep${again} (${wave.why})` };
+        if (o.resting === key || d > HOME_NEAR) return { kind: 'rest', key, why: `${REST_REASON} out of sight, ${Math.round(d)} from the portal keep (${wave.why})` };
         if (d > QUIET_NEAR) return { kind: 'home', at, why: `${QUIET_REASON} back to the portal keep for a break (${wave.why}), ${Math.round(d)} away` };
         return { kind: 'quiet', at, why: `${QUIET_REASON} a break at the portal keep${again} (${wave.why})` };
     }
@@ -159,6 +172,28 @@ export function waveOrder(wave: RealmWave | null, o: { unit: string; realm: Play
     const to = targets.reduce((a, b) => (d2(o.centre, b) < d2(o.centre, a) ? b : a));
     if (d2(o.centre, to) <= TOWARD_NEAR) return { kind: 'reached', key };
     return { kind: 'toward', at: to, key, why: `wave: out toward the nearest place our realm saw enemies (${Math.round(to.x)}, ${Math.round(to.y)}), ${Math.round(d2(o.centre, to))} away` };
+}
+
+/**
+ * Where a group rests in the field: near it (REST_RINGS), where `ok` allows (off the roads, clear of keeps, dry), as far
+ * as AVOID_FAR from the meeting places where it can be, then hidden from the most of those within AVOID_SIGHT by the
+ * terrain (lineOfSight), then the nearest. Null when nothing near is ok.
+ */
+export function fieldRestSpot(regionId: number, centre: Point, o: { avoid: readonly Point[]; ok: (p: Point) => boolean; zAt: (p: Point) => number; ground?: GroundAt }): Point3 | null {
+    const ground = o.ground ?? terrainGround;
+    let best: { p: Point; far: number; hid: number; d: number } | null = null;
+    for (const r of REST_RINGS) for (let k = 0; k < (r ? 12 : 1); k++) {
+        const a = k * Math.PI / 6;
+        const p = { x: Math.round(centre.x + Math.cos(a) * r), y: Math.round(centre.y + Math.sin(a) * r) };
+        if (!o.ok(p)) continue;
+        const far = o.avoid.length ? Math.min(1, Math.min(...o.avoid.map(v => d2(v, p))) / AVOID_FAR) : 1;
+        const seers = o.avoid.filter(v => d2(v, p) <= AVOID_SIGHT);
+        const pz = o.zAt(p);
+        const hid = seers.length ? seers.filter(v => !lineOfSight(regionId, { x: v.x, y: v.y, z: o.zAt(v) }, { x: p.x, y: p.y, z: pz }, ground)).length / seers.length : 1;
+        const better = !best || far > best.far + 0.05 || (Math.abs(far - best.far) <= 0.05 && (hid > best.hid + 0.05 || (Math.abs(hid - best.hid) <= 0.05 && r < best.d)));
+        if (better) best = { p, far, hid, d: r };
+    }
+    return best ? { x: best.p.x, y: best.p.y, z: o.zAt(best.p) } : null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────── idling like players
@@ -189,6 +224,13 @@ export const loiter = (rand: () => number = Math.random): Behavior<TacticsSettin
         if (o.phase !== 'recover' || !o.reason.startsWith(QUIET_REASON) || !o.anchor || ctx.threats().length) return false;
         const me = ctx.me();
         if (me.isDead) return false;
+        // A short rest in the field: a group at rest sits, all of it, no turning or stepping about.
+        if (o.reason.startsWith(REST_REASON)) {
+            if (!me.isSitting) await ctx.sdk.sendSit(true);
+            ctx.doing('idle', null, 'resting in the field: sitting');
+            await Bun.sleep(1000);
+            return true;
+        }
         const now = Date.now();
         const was: Idle | undefined = ctx.memory.get('loiter');
         if (was && now < was.next) {
