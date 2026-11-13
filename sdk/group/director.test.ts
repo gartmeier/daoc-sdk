@@ -12,8 +12,9 @@ const foes = (x: number, y: number, n: number, from = 1, over: Partial<FoeSpec> 
     Array.from({ length: n }, (_, i) => ({ id: from + i, x: x + i * 50, y, ...over }));
 
 const UNITS = ['camelot', 'camelot-2', 'camelot-s1', 'camelot-s2'];
-// The fresh look (lookFreshMs) is off here but where a test turns it on: most tests' raids never stand within sight of the target.
-const director = (over: Partial<ConstructorParameters<typeof RealmDirector>[0]> = {}) => new RealmDirector({ realm: 'albion', units: UNITS, write: false, ...over, settings: { lookFreshMs: 0, ...over.settings } });
+// The fresh look (lookFreshMs) and the go's floor (goMin) are off here but where a test turns them on: most tests' raids never stand
+// within sight of the target, and many are smaller than 8.
+const director = (over: Partial<ConstructorParameters<typeof RealmDirector>[0]> = {}) => new RealmDirector({ realm: 'albion', units: UNITS, write: false, ...over, settings: { lookFreshMs: 0, goMin: 0, ...over.settings } });
 /** A middle-of-the-map spot, far from every keep. */
 const MID = { x: 30000, y: 30000 };
 
@@ -241,6 +242,19 @@ describe('muster', () => {
         d.update(atLook, 60_000, []);
         out = d.update(atLook, 61_000, []);
         expect(out.calls[0]!.stage).toBe('go');
+    });
+
+    test('no go short of goMin at the rally, whatever the share; closed too few after fewMaxMs (S2, 21:45: "2 of 2 at the rally")', () => {
+        const d = director({ settings: { goMin: 8 } });
+        const plan = { rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 3720 } };
+        d.startMuster(plan);
+        const two = { 'camelot-s1': frame({ id: 'camelot-s1', members: at(33000, 44000, 2, 'S') }) };
+        let out = d.update(two, 0, []);
+        out = d.update(two, 300_000, []);
+        expect(out.calls[0]!.stage).toBe('rally');
+        out = d.update(two, 600_000, []);
+        expect(out.calls).toHaveLength(0);
+        expect(out.events.find(e => e.kind === 'close')).toMatchObject({ end: 'too few' });
     });
 
     test('the muster call carries the raid: every member of each running unit asked, places rounded', () => {
