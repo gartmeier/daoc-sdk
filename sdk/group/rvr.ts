@@ -1155,8 +1155,10 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         }).catch(() => { src = null; });
     };
     let asked = false;
-    // The realm's wave (waves.ts, the life cycle): read like the calls, once our realm is known.
+    // The realm's wave (waves.ts, the life cycle): read like the calls, once our realm is known. Only with the live
+    // director (no source given): a test that passes its own source (or null) sees no live wave file.
     let waves: { wave(now?: number): RealmWave | null } | null = null;
+    const liveWaves = source === undefined;
     const decide = (ctx: CoordinatorContext<S>): OrdersUpdate => {
         const mem = ctx.memory;
         mem.realmUnit = unit;
@@ -1164,7 +1166,7 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
             const realm = realmOfGroup(ctx.picture.members);
             if (realm !== 'none') { asked = true; start(realm); }
         }
-        if (!waves) {
+        if (!waves && liveWaves) {
             const realm = realmOfGroup(ctx.picture.members);
             if (realm !== 'none') waves = waveWatch(realm);
         }
