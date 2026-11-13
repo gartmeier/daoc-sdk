@@ -9,7 +9,7 @@ import { mergeSettings, type CoordinatorContext } from '../strategy';
 import type { Behavior } from '../member';
 import type { Contact, GroupPicture, MemberReport, Orders, Point3 } from '../types';
 import type { RealmCall } from './help';
-import { breakDoor, RAID_FOE_REACH, raidMembers, raidPatch, raidRez, raidStep, squadHold, squadWait, withBreakDoor, withRaid, type RaidDoor } from './raid';
+import { breakDoor, lordUnready, RAID_FOE_REACH, raidMembers, raidPatch, raidRez, raidStep, squadHold, squadWait, withBreakDoor, withRaid, type RaidDoor } from './raid';
 import { raidCorpses, raidRezzerNear } from '../behaviors';
 import { decidePack, rvrPack } from '../pack';
 import { getNavmeshStore } from '../../navmesh';
@@ -425,5 +425,16 @@ describe('raid: a member behind the gate proves it broken (S2 d1b5821; the user:
         const members = five({ x: 33_700, y: 38_275, z: 3720 });
         raidStep({ plan, mem, members, guards: [], call: null, unit: 'midgard' });
         expect(mem.raid.broken).toContain(252000301);
+    });
+});
+
+describe('the rush up to the lord: everyone OK first (S2, the user: "if the second door is open and everyone is OK, rush up")', () => {
+    test("lordUnready: a dead one with a rezzer up, low health or a caster's power, one away; else ready", () => {
+        const at = { x: 1000, y: 1000, z: 0 };
+        const fit = five(at).map(m => ({ ...m, hp: 100, mana: 100, capabilities: { ...m.capabilities, rez: true } }));
+        expect(lordUnready(fit, at)).toBeNull();
+        expect(lordUnready(fit.map((m, i) => (i === 4 ? { ...m, isDead: true } : m)), at)).toMatch(/dead, a rez first/);
+        expect(lordUnready(fit.map((m, i) => (i === 1 ? { ...m, hp: 50 } : m)), at)).toMatch(/at 50 % health/);
+        expect(lordUnready(fit.map((m, i) => (i === 2 ? { ...m, x: at.x + 900 } : m)), at)).toMatch(/not with us/);
     });
 });

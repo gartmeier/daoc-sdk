@@ -56,6 +56,34 @@ export interface RaidMemory {
     broken: number[];
     patch?: RaidPatch;
     patchKey?: string;
+    /** When the raid first turned to the lord phase (the rush up waits for a fit, gathered unit from then: LORD_READY_MAX_MS). */
+    lordSince?: number;
+}
+
+/**
+ * The rush up to the lord (siege.ts: once every breakable door is broken) waits, from the first lord tick, at most this long for the
+ * unit to be fit and together: the dead rezzed while a rezzer lives, everyone at LORD_READY_HP % health or more, the healers and
+ * casters at LORD_READY_MANA % power, every living one within LORD_READY_SPREAD of the body. The user, in hibernia's raid: "if the
+ * second door is open and everyone is OK, rush up" (S2).
+ */
+export const LORD_READY_MAX_MS = 90_000;
+export const LORD_READY_HP = 70;
+export const LORD_READY_MANA = 70;
+export const LORD_READY_SPREAD = 600;
+
+/** Why the unit isn't fit to rush the lord, or null when it is (LORD_READY_*). */
+export function lordUnready(members: readonly MemberReport[], centre: Point): string | null {
+    const alive = members.filter(m => !m.isDead);
+    const dead = members.filter(m => m.isDead);
+    const why: string[] = [];
+    if (dead.length && alive.some(m => m.capabilities.rez)) why.push(`${dead.map(m => m.name).join(', ')} dead, a rez first`);
+    for (const m of alive) {
+        if (m.hp < LORD_READY_HP) why.push(`${m.name} at ${Math.round(m.hp)} % health`);
+        else if (m.role !== 'tank' && m.role !== 'melee' && m.mana < LORD_READY_MANA) why.push(`${m.name} at ${Math.round(m.mana)} % power`);
+    }
+    const out = alive.filter(m => Math.hypot(m.x - centre.x, m.y - centre.y) > LORD_READY_SPREAD);
+    if (out.length) why.push(`${out.map(m => m.name).join(', ')} not with us`);
+    return why.length ? why.slice(0, 3).join(', ') : null;
 }
 
 /** The muster call we answer, once it says go; null otherwise. */
@@ -230,6 +258,15 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     const wait = (ro.phase === 'approach' || ro.phase === 'stage') && !r.staged && o.members.length <= SQUAD_MAX ? squadWait(plan, o.call, o.unit ?? '') : null;
     if (wait && centre && Math.hypot(centre.x - plan.stage.x, centre.y - plan.stage.y) <= Math.hypot(wait.hold.x - plan.stage.x, wait.hold.y - plan.stage.y) + 600) {
         return { orders: ro, update: { phase: 'recover', focus: null, anchor: { x: wait.hold.x, y: wait.hold.y, z: wait.hold.z }, facing: { x: plan.stage.x, y: plan.stage.y }, settings, objective, reason: `raid ${ro.phase}: ${wait.why}, at ${at(wait.hold)}` } };
+    }
+    // The rush up to the lord: from the first lord tick, everyone fit and together first (lordUnready), LORD_READY_MAX_MS at most.
+    if (ro.phase === 'lord') r.lordSince ??= Date.now();
+    if (ro.phase === 'lord' && centre && Date.now() - r.lordSince! < LORD_READY_MAX_MS) {
+        const unready = lordUnready(o.members, centre);
+        if (unready) {
+            const left = Math.ceil((LORD_READY_MAX_MS - (Date.now() - r.lordSince!)) / 1000);
+            return { orders: ro, update: { phase: 'recover', focus: null, anchor: { x: Math.round(centre.x), y: Math.round(centre.y), z: Math.round(centre.z) }, settings, objective, reason: `raid lord: everyone OK before the rush up: ${unready}, ${left} s at most` } };
+        }
     }
     if (ro.phase === 'approach' || ro.phase === 'stage') {
         // Each leg of our own bridge in turn: the body's next waypoint (routeFrom); at the stage, the stage.
