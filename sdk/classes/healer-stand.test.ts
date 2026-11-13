@@ -5,7 +5,7 @@ import { withCharacter } from '../group/character';
 import { cleric } from './cleric';
 import { druid } from './druid';
 import { healer } from './healer';
-import { seenBy, standSpot, STAND_REACH, type Foe } from './healer-stand';
+import { atKeep, seenBy, standSpot, STAND_REACH, type Foe } from './healer-stand';
 
 // A wall along x = 200 from y = -1000 to 1000: it hides what is on the other side of it from a foe east of it.
 const wallX = 200;
@@ -16,7 +16,7 @@ const crosses = (a: { x: number; y: number }, b: { x: number; y: number }) => {
     return y >= -1000 && y <= 1000;
 };
 const los = (_r: number, from: { x: number; y: number }, to: { x: number; y: number }) => !crosses(from, to);
-const flat = { los, ground: () => 0, wet: () => false, blocked: (a: { x: number; y: number }, b: { x: number; y: number }) => crosses(a, b) };
+const flat = { los, floor: () => 0, wet: () => false, walk: (a: { x: number; y: number }, b: { x: number; y: number }) => !crosses(a, b) };
 const foe = (x: number, y: number, id = 1): Foe => ({ id, x, y, z: 0 });
 
 describe('healer stand: out of sight', () => {
@@ -57,7 +57,7 @@ describe('healer stand: out of sight', () => {
     });
 
     test('in the open with nothing to hide behind: none', () => {
-        const open = { ...flat, los: () => true, blocked: () => false };
+        const open = { ...flat, los: () => true, walk: () => true };
         expect(standSpot(1, { x: 0, y: 0, z: 0 }, [], [foe(1500, 0)], open)).toBeNull();
     });
 });
@@ -78,5 +78,35 @@ describe('the healer kits carry the group heal, the stand and the clock', () => 
 
     test('the stand can be left out', () => {
         expect(withCharacter(packBehaviors().healer as any[], cleric({ stand: false })).map(b => b.name)).not.toContain('stand');
+    });
+});
+
+describe('healer stand: only in keep fights', () => {
+    test('in the Faste area or on a defence seat; not in the open field, nor at a portal keep', () => {
+        expect(atKeep(252, { x: 33089, y: 38271 }, false)).toBe(true);
+        expect(atKeep(252, { x: 33089 + 2500, y: 38271 }, false)).toBe(true);
+        expect(atKeep(252, { x: 26000, y: 30000 }, false)).toBe(false);
+        expect(atKeep(252, { x: 26000, y: 30000 }, true)).toBe(true);
+        expect(atKeep(1, { x: 33089, y: 38271 }, false)).toBe(false);
+    });
+
+    test('within a defence seat\'s leash only', () => {
+        const me = { x: 0, y: 1400, z: 0 };
+        const seat = { x: 0, y: 1400, z: 0 };
+        // Hidden spots are west of her (past the wall's end): a leash of 100 leaves none, one of 300 some.
+        expect(standSpot(1, me, [], [foe(1500, -500)], { ...flat, within: p => Math.hypot(p.x - seat.x, p.y - seat.y) <= 100 })).toBeNull();
+        expect(standSpot(1, me, [], [foe(1500, -500)], { ...flat, within: p => Math.hypot(p.x - seat.x, p.y - seat.y) <= 300 })).not.toBeNull();
+    });
+
+    test('a spot on another floor or off the floor is none; members on other floors count in 3D', () => {
+        const me = { x: 0, y: 1400, z: 0 };
+        expect(standSpot(1, me, [], [foe(1500, -500)], { ...flat, floor: () => null })).toBeNull();
+        // A member straight above, 1795 up: in reach from here, not from any spot 150 or more to the side.
+        const above = { x: 0, y: 1400, z: STAND_REACH - 5 };
+        expect(standSpot(1, me, [above], [foe(1500, -500)], flat)).toBeNull();
+    });
+
+    test('a spot without a short walk to it is none', () => {
+        expect(standSpot(1, { x: 0, y: 1400, z: 0 }, [], [foe(1500, -500)], { ...flat, walk: () => false })).toBeNull();
     });
 });
