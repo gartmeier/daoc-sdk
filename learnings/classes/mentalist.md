@@ -145,3 +145,18 @@ Hibernia won 51 of the 85 arena rounds it played (Midgard 20, Camelot 14); round
 - Dived first in many Albion losses; Quickcast is once per 30 s and she has no other instant.
 - Emergency heals still take her turns in long fights (role list).
 - `steppingAssist` was tried and reverted (rounds 64-66): a borrowed step shorter than the group's standStep.
+
+## The user's Mentalist (2026-11-13, play/niamh-1113-findings.md)
+
+52 min of the user's own Niamh, from a capture of the connection:
+- **Casts:** two in three were Glittering Visions on the assist target, recast at once. Then Prismatic Flash 12, Cripple Mind 11, Somatic heals on others 8, and 6 charms with Imaginary Enemy (a bwca, mature boars) to tank the adds.
+- **Self buffs:** Barrier of Negation recast each time it popped (11) and Powershield kept up (8).
+- **Other:** she sat 4 times, and 47 of ~180 casts were interrupted.
+
+What the kit took from it:
+- **`bladeturnUp` (chores):** Barrier of Negation back up as soon as it pops, in a fight too, when no enemy aims at her and no melee is on her. `buff()` keeps it, and Powershield, only in the quiet phases.
+- **Already the kit's:** the nuke on the assist target (the role's assist), the Flash on a melee (`quickFlash`), the emergency heal.
+
+Not yet:
+- **The charm:** Imaginary Enemy on a mob near the fight as a pet when there is none, released before it turns. `bot.charmPet` exists; the kit needs a choice of mob within the charm's level cap and a live test on a throwaway server.
+- **Cripple Mind on the focus.**

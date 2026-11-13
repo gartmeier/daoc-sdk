@@ -7,6 +7,7 @@ import { withCharacter } from '../group/character';
 import { packBehaviors } from '../group/pack';
 import type { Contact } from '../group/types';
 import { mentalist, noteTooFar, petOnMe, stunTarget, viewDistance, type TooFar } from './mentalist';
+import { selfBuffDue } from './paladin';
 import { reachOfBuild } from './reach';
 
 const BUDGET_AT_50 = earnedSpecPoints(10, 50);
@@ -137,3 +138,16 @@ describe('bestStun', () => {
     });
 });
 
+describe('the bladeturn kept up (the user, playing Niamh: recast each time it pops)', () => {
+    const barrier = { spell: { name: 'Barrier of Negation', level: 19 }, type: 'Bladeturn', target: 'Self' } as unknown as Parameters<typeof selfBuffDue>[0][number];
+    const shield = { spell: { name: 'Powershield', level: 24 }, type: 'BaseArmorFactorBuff', target: 'Self' } as unknown as Parameters<typeof selfBuffDue>[0][number];
+    test('due when it is not on her, not while it is; in the kit below the fight', () => {
+        expect(selfBuffDue([barrier, shield], [], ['Bladeturn'])?.spell.name).toBe('Barrier of Negation');
+        expect(selfBuffDue([barrier, shield], ['Barrier of Negation'], ['Bladeturn'])).toBeNull();
+        expect(mentalist().character.chores!.map(b => b.name)).toEqual(['bladeturnUp']);
+    });
+    test('not on the side tick, and a fight leaves her a turn for it when there is nothing to nuke', () => {
+        const list = withCharacter(packBehaviors().nuker as any, mentalist().character).map(b => b.name);
+        expect(list).toContain('bladeturnUp');
+    });
+});

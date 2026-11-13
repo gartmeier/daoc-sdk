@@ -11,6 +11,8 @@ import type { Behavior } from '../group/member';
 import type { SpellPick } from '../group/spells';
 import type { Contact, MemberReport, Role } from '../group/types';
 import { wallStep } from './healer-stand';
+import { unlessAimedAt } from './druid';
+import { selfBuffDue } from './paladin';
 
 export interface MentalistKit {
     character: Character;
@@ -172,6 +174,33 @@ export function casterFight(withOffFocus = true): Behavior<TacticsSettings>[] {
     return nukerFight(0, withOffFocus);
 }
 
+/** A failed bladeturn cast is left this long. */
+const BLADETURN_RETRY_MS = 20_000;
+
+/**
+ * Barrier of Negation (Mind 19, a self bladeturn: the next blow does nothing) back up as soon as it pops, in a fight too, as the
+ * user kept it playing Niamh (11 recasts in 52 min, 2026-11-13; play/niamh-1113-findings.md). buff() keeps it only in the quiet
+ * phases. In a fight below the fight's own work (chores), never with a melee on her (the 4 s cast would only be interrupted),
+ * and only while no enemy aims at her (unlessAimedAt).
+ */
+export const bladeturnUp = (): Behavior<TacticsSettings> => unlessAimedAt({
+    name: 'bladeturnUp',
+    interruptible: false,
+    async run(ctx) {
+        if (ctx.bot.isDead() || ctx.orders().phase === 'retreat' || hammeredBy(ctx)) return false;
+        if (Date.now() < (ctx.memory.get('bladeturnRetryAt') ?? 0)) return false;
+        const effects = (ctx.sdk.getState()?.effects ?? []).map(e => e.name);
+        const due = selfBuffDue(ctx.spells.all(), effects, ['Bladeturn']);
+        const pick = due && ctx.spells.all().find(s => s.spell.name === due.spell.name);
+        if (!pick || pick.spell.cooldownRemaining > 0 || ctx.me().mana < ctx.spells.powerOf(pick)) return false;
+        ctx.doing('buff', null, pick.spell.name);
+        const c = await ctx.bot.castSpell(pick.spell);
+        ctx.result('bladeturn', c);
+        if (!c.success) ctx.memory.set('bladeturnRetryAt', Date.now() + BLADETURN_RETRY_MS);
+        return true;
+    },
+});
+
 export function mentalist({ offFocus = true }: { offFocus?: boolean } = {}): MentalistKit {
-    return { character: { role: 'nuker', instant: [quickFlash(), quickcastUnderFire()], urgent: [stunCaster(), wallStep()], fight: casterFight(offFocus) } };
+    return { character: { role: 'nuker', instant: [quickFlash(), quickcastUnderFire()], urgent: [stunCaster(), wallStep()], fight: casterFight(offFocus), chores: [bladeturnUp()] } };
 }
