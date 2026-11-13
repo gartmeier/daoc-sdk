@@ -49,6 +49,7 @@ import { withHasten, withHastener } from './tactics/hasten';
 import { RAID_FOE_REACH, raidCall, raidNow, raidStep, withRaid } from './tactics/raid';
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
+import { loiter, waveOrder, waveWatch, type RealmWave } from './waves';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
 export { BATTLEGROUND_LAYOUTS, homeOf, keepDangers, KEEP_CLEARANCE, THIDRANKI, type BattlegroundLayout, type Keep, type KeepSettings, type PlayerRealm } from './keeps';
@@ -937,6 +938,17 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const rest = restAt();
         return { ...calm, phase: 'recover', anchor: rest.at, waiting: low, reason: `waiting for ${low.map(w => `${w.name}'s ${w.why}`).join(', ')} (ready at ${s.ready.hp}% health, ${s.ready.mana}% power)${rest.why}` };
     }
+    // ── The realm's wave (waves.ts, the life cycle S4): a break at the portal keep, or out toward where our realm last saw
+    // enemies. Free as for a call (no fight, nobody seen, dead, away or low: all above); never in a pair round. No wave file: patrol. ──
+    const wave = !s.opponent && !seen.length && realm !== 'none' ? waveOrder((mem.realmWave ?? null) as RealmWave | null, { unit: mem.realmUnit ?? '', realm, regionId, centre, reached: mem.waveReached, now }) : null;
+    if (wave?.kind === 'reached') mem.waveReached = wave.key;
+    else if (wave?.kind === 'home' || wave?.kind === 'toward') {
+        stepLeg(trip, wave.kind === 'home' ? 'break' : 'wave', wave.at, { from: centre, movers: main, replan: 1500 });
+        return { ...calm, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: `${wave.kind === 'home' ? 'a break at the portal keep' : 'out toward the enemies our realm saw'}${gone}`, reason: wave.why };
+    } else if (wave?.kind === 'quiet') {
+        const spot = dry ? drySpot(regionId, wave.at, { toward: wave.at, ok: c => clearOf(c, keeps) }) : wave.at;
+        return { ...calm, phase: 'recover', anchor: { x: Math.round(spot.x), y: Math.round(spot.y), z: zAt(spot) }, objective: `a break at the portal keep${gone}`, reason: wave.why };
+    }
 
     // ── The quarry: a squad a hunt lost. Lost once: follow where its walk leads, never into a keep. Lost again: it walks a way
     // in; wait beside it, off its line and hidden from it where the terrain allows (tactics/ambush.ts) ──
@@ -1012,11 +1024,11 @@ export function decideRvr(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
 export function rvrBehaviors(): Record<Role, Behavior<TacticsSettings>[]> {
     // hasten (tactics/hasten.ts): Speed of the Realm from a hastener in reach before going out, in every list.
     const lists: Record<Role, Behavior<TacticsSettings>[]> = {
-        tank: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest()],
-        healer: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), spareNuke(), shedLoad(), holdFormation(), buff(), fightSit(), rest()],
-        support: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), fightSit(), rest()],
-        nuker: [release(), sprint(), retreat(), rejoinFight(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), fightSit(), rest()],
-        melee: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest()],
+        tank: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), tank(), guard(), shedLoad(), holdFormation(), buff(), rest(), loiter()],
+        healer: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), heal(), crowdControl({ assignedOnly: true }), position(), spareNuke(), shedLoad(), holdFormation(), buff(), fightSit(), rest(), loiter()],
+        support: [release(), sprint(), retreat(), rejoinFight(), heal({ emergencyOnly: true }), flee(), rez(), crowdControl(), heal(), song(), position(), shedLoad(), holdFormation(), buff(), fightSit(), rest(), loiter()],
+        nuker: [release(), sprint(), retreat(), rejoinFight(), flee(), rez(), crowdControl({ assignedOnly: true }), heal({ emergencyOnly: true }), position(), assist(), shedLoad(), holdFormation(), buff(), fightSit(), rest(), loiter()],
+        melee: [release(), hand(), sprint(), retreat(), rejoinFight(), rez(), song(), meleeFight(), shedLoad(), holdFormation(), buff(), rest(), loiter()],
     };
     return Object.fromEntries(Object.entries(lists).map(([role, list]) => [role, withHasten(list)])) as Record<Role, Behavior<TacticsSettings>[]>;
 }
@@ -1120,6 +1132,8 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
         }).catch(() => { src = null; });
     };
     let asked = false;
+    // The realm's wave (waves.ts, the life cycle): read like the calls, once our realm is known.
+    let waves: { wave(now?: number): RealmWave | null } | null = null;
     const decide = (ctx: CoordinatorContext<S>): OrdersUpdate => {
         const mem = ctx.memory;
         mem.realmUnit = unit;
@@ -1127,6 +1141,11 @@ export function realmCalls<S>(strategy: GroupStrategy<S>, unit: string, source?:
             const realm = realmOfGroup(ctx.picture.members);
             if (realm !== 'none') { asked = true; start(realm); }
         }
+        if (!waves) {
+            const realm = realmOfGroup(ctx.picture.members);
+            if (realm !== 'none') waves = waveWatch(realm);
+        }
+        try { mem.realmWave = waves?.wave() ?? null; } catch { mem.realmWave = null; }
         let calls: readonly RealmCall[] = [];
         try { calls = src?.calls() ?? []; } catch { calls = []; }
         mem.realmCalls = calls;
