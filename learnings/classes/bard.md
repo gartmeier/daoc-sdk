@@ -54,7 +54,7 @@ A song needs an instrument out (`SpellHandler.cs` `CheckInstrument`), and `bot.t
 
 ## The opening mezz
 
-The user, playing Niamh (2026-11-13, 19:52): "the Bard should have rushed forward and AE mezzed the mids". It took 10 s from the inc to our engage, and Fiacra's first mezz came 21 s after the inc. In that fight the coordinator's `mezzMelee` (`tactics/peel.ts`) moved her assignment between two Norsemen every second. A Hibernian Bard has no area mezz at 24: Mesmerizing Hymn, Facinating Melody and Entrancing Hymn have radius 0 and range 1500, and Lullaby is Amnesia.
+The user, playing Niamh (2026-11-13, 19:52): "the Bard should have rushed forward and AE mezzed the mids". It took 10 s from the inc to our engage, and Fiacra's first mezz came 21 s after the inc. In that fight the coordinator's `mezzMelee` (`tactics/peel.ts`) moved her assignment between two Norsemen every second (since 1be1d19 the mezzer keeps its target while it ranks the same). A Hibernian Bard has no area mezz at 24: Mesmerizing Hymn, Facinating Melody and Entrancing Hymn have radius 0 and range 1500, and Lullaby is Amnesia.
 
 Since this commit, `crowdControl` opens before the engage (`behaviors.ts` `openingMezz`):
 - **When:** the orders are travel with a stalk, a stand-off or a hunt of stragglers. Never in a refusal, an ambush or a leave.
