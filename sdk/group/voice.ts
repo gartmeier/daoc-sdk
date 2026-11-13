@@ -239,6 +239,24 @@ export function groupClaims(p: GroupPicture, st: GroupVoiceState, now = p.at): C
         out.push({ key: 'call', text: 'friends need help, heading over', prio: 45, settleMs: 2000, cooldownMs: 90_000 });
     } else if (o.phase === 'travel' && /^raid approach\b/.test(reason)) {
         out.push({ key: 'raid', text: 'on to the Faste, keep together', prio: 45, settleMs: 2000, cooldownMs: 180_000 });
+    } else if (o.phase === 'travel' && /^(ambush:|lie in wait\b)/.test(reason)) {
+        // An ambush (tactics/ambush.ts, pack.ts): a human sees the group stand still, so say what for (live 15:28, Niamh:
+        // "what are they waiting for?"). Whom: the count from the objective, the realm from the players we know of.
+        const n = Number(/lie in wait for (\d+)/.exec(o.objective ?? '')?.[1] ?? 0);
+        const realms = [...new Set(p.contacts.filter(c => c.kind === 'player' && !c.isPet && c.realm !== st.realm && c.realm in REALM_WORD).map(c => c.realm as PlayerRealm))];
+        const word = realms.length === 1 ? REALM_WORD[realms[0]!] : null;
+        const who = n === 1 && word ? `the ${word[0]}` : n > 1 && word ? `the ${n} ${word[1]}` : n > 1 ? `the ${n} of them` : 'them';
+        if (/^ambush:/.test(reason)) out.push({ key: 'ambush:set', text: `setting an ambush for ${who}, follow me`, prio: 45, settleMs: 2000, cooldownMs: 120_000 });
+        else out.push({ key: 'ambush:wait', text: `waiting here in ambush for ${who}, hold still`, prio: 45, settleMs: 2000, cooldownMs: 120_000 });
+    } else if (o.phase !== 'engage' && /^quiet: back to the portal keep\b/.test(reason)) {
+        // The realm's quiet wave (waves.ts): the walk home, then the break there and when it ends.
+        out.push({ key: 'break', text: 'heading back to our PK for a short break', prio: 40, settleMs: 2000, cooldownMs: 300_000 });
+    } else if (o.phase !== 'engage' && /^quiet: a break\b/.test(reason)) {
+        const left = Number(/out again in (\d+) s/.exec(reason)?.[1] ?? NaN);
+        if (Number.isFinite(left) && left >= 30) {
+            const when = left < 90 ? 'in a minute' : `in about ${Math.round(left / 60)} min`;
+            out.push({ key: 'break:here', text: `short break here, out again ${when}`, prio: 30, settleMs: 4000, cooldownMs: 300_000 });
+        }
     }
 
     // Going in, and the focus.
@@ -309,7 +327,8 @@ export interface RegionInput {
     foes: readonly { x: number; y: number; realm: string }[];
     /** This update's events (director.ts LoggedEvent): closes say how a raid ended, answers who is coming. */
     events: readonly {
-        kind: string; call: string; end?: string; why?: string; unit?: string; state?: string; from?: string;
+        /** Absent on events of no call (director.ts 'picket'). */
+        kind: string; call?: string; end?: string; why?: string; unit?: string | null; state?: string; from?: string;
         /** The stage event at the go: what made it go (director.ts musterHold). */
         stage?: string; defenders?: number; third?: number; ownersAway?: number; owner?: string | null;
     }[];

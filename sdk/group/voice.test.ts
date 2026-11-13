@@ -147,6 +147,22 @@ describe('group chat', () => {
         const a = enemy(1, 'hibernia'), b = enemy(2, 'hibernia');
         expect(ticks(v, t => picture(team(), [a, b], { phase: 'engage', focus: t < 5000 ? 1 : 2 }, t), 8000)).toEqual(['going in, focus the Celt', 'next Celt']);
     });
+    test('an ambush says what for; the break home and how long', () => {
+        const v = gv();
+        // A Troll died, three more of its realm are known (out of sight now): lie in wait for them.
+        const known = [enemy(2, 'midgard', { stale: true }), enemy(3, 'midgard', { stale: true }), enemy(4, 'midgard', { stale: true })];
+        const wait = { phase: 'travel' as const, objective: 'lie in wait for 3 enemies', reason: 'lie in wait beside its way in, 100 % of its way in hidden from it, 150 s more' };
+        expect(ticks(v, t => picture(team(), known, wait, t), 6000)).toEqual(['waiting here in ambush for the 3 mids, hold still']);
+        const set = { phase: 'travel' as const, objective: 'lie in wait for 1 enemy (lost 2×)', reason: 'ambush: to a spot beside its way in, 80 % hidden, 900 away' };
+        expect(ticks(gv(), t => picture(team(), [known[0]!], set, t), 6000)).toEqual(['setting an ambush for the mid, follow me']);
+        const home = { phase: 'travel' as const, reason: 'quiet: back to the portal keep for a break (after a fight), 19922 away' };
+        const w = gv();
+        expect(ticks(w, t => picture(team(), [], home, t), 8000)).toEqual(['heading back to our PK for a short break']);
+        const here = (t: number) => picture(team(), [], { phase: 'idle', reason: `quiet: a break at the portal keep, out again in ${200 - Math.floor(t / 1000)} s (after a fight)` }, 10_000 + t);
+        const said: string[] = [];
+        for (let t = 0; t <= 8000; t += 500) { const l = w.hear(here(t)); if (l) said.push(l.text); }
+        expect(said).toEqual(['short break here, out again in about 3 min']);
+    });
     test('the wipe', () => {
         const v = gv();
         const dead = team().map(m => ({ ...m, isDead: true }));
