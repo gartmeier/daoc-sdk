@@ -61,6 +61,10 @@ export interface RealmCall {
      * the file changes only on real moves. Lets a unit see where the rest of the raid stands (R5's RaidView.raid).
      */
     raid?: RaidMember[];
+    /** Muster only: enemy players our realm saw near the target in the last defenceMemoryMs. */
+    defenders?: number;
+    /** Muster only: what holds it now. 'defenders': the go waits while they outnumber the raid; 'lord': the clock waits. */
+    hold?: 'defenders' | 'lord';
     /** ms epoch. */
     since: number;
     updatedAt: number;
@@ -128,6 +132,21 @@ export interface DirectorSettings {
     rallyMaxMs: number;
     /** The muster ends by itself after this long in 'go'. */
     goMaxMs: number;
+    /**
+     * The lord hold: past goMaxMs the clock waits while a raid unit read `raid lord` (siege.ts's lord phase) within
+     * lordGraceMs, for up to lordMaxMs more.
+     */
+    lordGraceMs: number;
+    lordMaxMs: number;
+    /**
+     * The defence hold: the rally doesn't go while more enemy players than defenceShare × the raid's living were seen
+     * within defenceRadius of the target in the last defenceMemoryMs. Held that long without a break: the muster ends
+     * 'defended'. Our realm sees only what its units see, so defenders nobody looked at don't count.
+     */
+    defenceRadius: number;
+    defenceShare: number;
+    defenceMemoryMs: number;
+    defenceMaxMs: number;
     /** In 'go', the raid broke once its living fell below this share of those it went with. */
     raidBreak: number;
     /** Raids on a rhythm: a new muster this long after the last one ended (or the director started). 0 = only startMuster. */
@@ -141,7 +160,12 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     clearMs: 15_000, maxMs: 180_000,
     campRadius: 5000, campFoes: 2, campMs: 15_000,
     quorum: 0.7, rallyMaxMs: 240_000, goMaxMs: 900_000, raidBreak: 0.3, raidEveryMs: 0,
+    lordGraceMs: 30_000, lordMaxMs: 600_000,
+    defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000,
 };
+
+/** A unit's orders reason in siege.ts's lord phase (tactics/raid.ts writes `raid <phase>: ...`). */
+const LORD_PHASE = /\braid lord\b/;
 
 export interface RaidPlan {
     rally: Point3;
@@ -170,6 +194,8 @@ export type DirectorEvent =
     | { kind: 'answer'; call: string; unit: string; state: AnswerState; why: string }
     | { kind: 'arrive'; call: string; unit: string; ms: number; answered: boolean }
     | { kind: 'stage'; call: string; stage: 'rally' | 'go'; atRally: number; of: number }
+    /** A muster's hold began (on) or ended: the go waits for the defenders, or the clock for the lord. */
+    | { kind: 'hold'; call: string; why: 'defenders' | 'lord'; on: boolean; defenders: number; living: number }
     | { kind: 'close'; call: string; from: string; why: CallWhy | 'raid'; ms: number; end: string; lost: number; wiped: boolean; asked: string[]; coming: string[]; arrived: string[]; kills: number | null; foesMax: number; oursMax: number };
 
 export type LoggedEvent = DirectorEvent & { t: number; realm: PlayerRealm; shadow: boolean };
@@ -187,7 +213,16 @@ interface Open {
     killsAtOpen: Map<string, number>;
     foesMax: number;
     oursMax: number;
-    raid?: RaidPlan & { stagedAt: number; livingAtGo?: number };
+    raid?: RaidPlan & {
+        stagedAt: number;
+        livingAtGo?: number;
+        /** Last time a raid unit read the lord phase. */
+        lordAt?: number;
+        /** Since when the defenders hold the rally. */
+        heldSince?: number;
+        /** Enemy players seen near the target, by key: last seen. */
+        seen: Map<string, number>;
+    };
 }
 
 export interface DirectorOptions {
@@ -365,6 +400,15 @@ export class RealmDirector {
                     if (!o.lossesBefore.has(k)) { o.lossesBefore.add(k); o.lost++; }
                 }
             }
+            // A muster's losses: every unit in the raid.
+            if (call.kind === 'muster') {
+                for (const a of call.asked) {
+                    for (const l of units.get(a)?.losses ?? []) {
+                        const k = `${a}/${l.name}@${l.at}`;
+                        if (!o.lossesBefore.has(k)) { o.lossesBefore.add(k); o.lost++; }
+                    }
+                }
+            }
             for (const u of board.units) {
                 if (u.unit === call.from || o.arrived.has(u.unit) || !u.centre) continue;
                 const there = call.kind === 'muster' && call.stage === 'rally' ? o.raid!.rally : call.at;
@@ -479,7 +523,8 @@ export class RealmDirector {
 
     private close(o: Open, end: string, board: RealmBoardView, now: number): DirectorEvent {
         this.open.delete(o.call.id);
-        const involved = [o.call.from, ...o.arrived.keys()];
+        // A muster counts the whole raid; a help call the caller and those who arrived.
+        const involved = o.call.kind === 'muster' ? [...o.call.asked] : [o.call.from, ...o.arrived.keys()];
         let kills: number | null = null;
         for (const u of board.units) {
             if (!involved.includes(u.unit) || !u.totals) continue;
@@ -518,8 +563,9 @@ export class RealmDirector {
                     id: `${this.realm}-${++this.seq}`, kind: 'muster', from: 'director', why: 'raid', at: { ...p.rally }, stage: 'rally', target: { ...p.target },
                     foes: 0, ours: 0, foeRoles: {}, want: 0, asked: [...(p.units ?? this.units)], coming: [], since: now, updatedAt: now,
                 },
-                heldAt: now, arrived: new Map(), lossesBefore: new Set(), lost: 0, killsAtOpen: new Map(), foesMax: 0, oursMax: 0,
-                raid: { ...p, stagedAt: now },
+                heldAt: now, arrived: new Map(), lost: 0, killsAtOpen: new Map(), foesMax: 0, oursMax: 0,
+                lossesBefore: new Set(board.units.flatMap(u => u.losses.map(l => `${u.unit}/${l.name}@${l.at}`))),
+                raid: { ...p, stagedAt: now, seen: new Map() },
             };
             for (const u of board.units) if (u.totals) o.killsAtOpen.set(u.unit, u.totals.playerKills);
             this.open.set(o.call.id, o);
@@ -539,9 +585,29 @@ export class RealmDirector {
         call.ours = there;
         o.foesMax = Math.max(o.foesMax, call.foes);
         o.oursMax = Math.max(o.oursMax, there);
+        // The defenders: enemy players seen near the target lately (the board holds only those in view now).
+        const seen = o.raid.seen;
+        for (const f of foesNear(board.foes, o.raid.target, s.defenceRadius)) seen.set(f.key, now);
+        for (const [k, at] of seen) if (now - at > s.defenceMemoryMs) seen.delete(k);
+        const defenders = seen.size;
+        call.defenders = defenders;
+        const hold = (why: 'defenders' | 'lord', on: boolean) => {
+            if ((call.hold === why) === on) return;
+            if (on) call.hold = why; else delete call.hold;
+            events.push({ kind: 'hold', call: call.id, why, on, defenders, living });
+        };
         if (call.stage === 'rally') {
             const waited = now - o.raid.stagedAt;
-            if (living > 0 && (there >= s.quorum * living || (waited >= s.rallyMaxMs && there >= 0.5 * living))) {
+            const ready = living > 0 && (there >= s.quorum * living || (waited >= s.rallyMaxMs && there >= 0.5 * living));
+            const outnumbered = living > 0 && defenders > s.defenceShare * living;
+            if (outnumbered) o.raid.heldSince ??= now;
+            else delete o.raid.heldSince;
+            hold('defenders', outnumbered);
+            if (o.raid.heldSince !== undefined && now - o.raid.heldSince >= s.defenceMaxMs) {
+                hold('defenders', false);
+                events.push(this.close(o, 'defended', board, now));
+                this.raidEndedAt = now;
+            } else if (ready && !outnumbered) {
                 call.stage = 'go';
                 call.at = { ...o.raid.target };
                 o.raid.stagedAt = now;
@@ -552,10 +618,16 @@ export class RealmDirector {
         } else {
             let owner: string | null = null;
             try { owner = this.targetOwner?.() ?? null; } catch { /* unknown */ }
+            if (raid.some(u => LORD_PHASE.test(u.reason))) o.raid.lordAt = now;
+            const gone = now - o.raid.stagedAt;
+            const onLord = o.raid.lordAt !== undefined && now - o.raid.lordAt <= s.lordGraceMs;
+            const late = gone > s.goMaxMs;
+            hold('lord', late && onLord && gone <= s.goMaxMs + s.lordMaxMs);
             const end = owner === this.realm ? 'captured'
                 : living < s.raidBreak * (o.raid.livingAtGo ?? living) ? 'broken'
-                : now - o.raid.stagedAt > s.goMaxMs ? 'timeout' : null;
+                : late && call.hold !== 'lord' ? 'timeout' : null;
             if (end) {
+                if (call.hold) hold(call.hold, false);
                 events.push(this.close(o, end, board, now));
                 this.raidEndedAt = now;
             }

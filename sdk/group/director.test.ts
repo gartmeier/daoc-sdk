@@ -223,6 +223,83 @@ describe('muster', () => {
         expect(d2.update(at6(1), 2000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'broken' });
     });
 
+    test('the lord hold: past goMaxMs the clock waits while a unit reads the lord phase, up to lordMaxMs more', () => {
+        const plan = { rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } };
+        const f = (reason: string) => ({ camelot: frame({ id: 'camelot', phase: 'engage', reason, members: at(33000, 44000, 6, 'G') }) });
+        const d = director();
+        d.startMuster(plan);
+        expect(d.update(f(''), 0, []).calls[0]!.stage).toBe('go');
+        d.update(f('raid lord: Lady Thidranki on the roof'), 850_000, []);
+        let out = d.update(f('raid lord: Lady Thidranki on the roof'), 901_000, []);
+        expect(out.calls[0]!.hold).toBe('lord');
+        expect(out.events.find(e => e.kind === 'hold')).toMatchObject({ why: 'lord', on: true });
+        // A read in the last 30 s still holds; after that the clock ends it.
+        expect(d.update(f('raid assault: wall-n is on us'), 920_000, []).calls).toHaveLength(1);
+        out = d.update(f('raid assault: wall-n is on us'), 940_000, []);
+        expect(out.calls).toHaveLength(0);
+        expect(out.events.map(e => e.kind)).toEqual(['hold', 'close']);
+        expect(out.events.find(e => e.kind === 'close')).toMatchObject({ end: 'timeout' });
+
+        // On the lord all along: it ends at goMaxMs + lordMaxMs.
+        const d2 = director();
+        d2.startMuster(plan);
+        d2.update(f(''), 0, []);
+        expect(d2.update(f('raid lord: up to the roof'), 1_499_000, []).calls).toHaveLength(1);
+        expect(d2.update(f('raid lord: up to the roof'), 1_501_000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'timeout' });
+
+        // Without the lord phase the clock ends it as before.
+        const d3 = director();
+        d3.startMuster(plan);
+        d3.update(f(''), 0, []);
+        expect(d3.update(f('raid assault: gate'), 901_000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'timeout' });
+    });
+
+    test('the defence hold: the rally does not go while more defenders were seen near the target than the raid has living', () => {
+        const plan = { rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } };
+        // 6 at the rally and a scout by the keep: 7 living. The scout sees 8 near the target, then loses sight of them.
+        const f = (n: number) => ({
+            camelot: frame({ id: 'camelot', members: at(33000, 44000, 6, 'G') }),
+            'camelot-s1': frame({ id: 'camelot-s1', members: at(33000, 41000, 1, 'S'), foes: foes(33000, 38500, n) }),
+        });
+        const d = director();
+        d.startMuster(plan);
+        let out = d.update(f(8), 0, []);
+        expect(out.calls[0]).toMatchObject({ stage: 'rally', defenders: 8, hold: 'defenders' });
+        expect(out.events.find(e => e.kind === 'hold')).toMatchObject({ why: 'defenders', on: true, defenders: 8, living: 7 });
+        // Out of sight, still remembered for a minute.
+        expect(d.update(f(0), 30_000, []).calls[0]!.stage).toBe('rally');
+        out = d.update(f(0), 61_000, []);
+        expect(out.calls[0]).toMatchObject({ stage: 'go', defenders: 0 });
+        expect(out.calls[0]!.hold).toBeUndefined();
+        expect(out.events.map(e => e.kind)).toEqual(['hold', 'stage']);
+
+        // As many as the raid's living: no hold.
+        const d2 = director();
+        d2.startMuster(plan);
+        expect(d2.update(f(7), 0, []).calls[0]!.stage).toBe('go');
+
+        // Held without a break for defenceMaxMs: the muster ends 'defended'.
+        const d3 = director();
+        d3.startMuster(plan);
+        for (let t = 0; t < 600_000; t += 30_000) expect(d3.update(f(8), t, []).calls).toHaveLength(1);
+        out = d3.update(f(8), 600_000, []);
+        expect(out.calls).toHaveLength(0);
+        expect(out.events.find(e => e.kind === 'close')).toMatchObject({ end: 'defended' });
+    });
+
+    test('a muster counts losses and kills over every unit in the raid', () => {
+        const d = director();
+        d.startMuster({ rally: { x: 33000, y: 44000, z: 0 }, target: { x: 33089, y: 38271, z: 0 } });
+        const f = (dead: boolean, kills: number) => ({
+            camelot: frame({ id: 'camelot', playerKills: kills, members: at(33000, 44000, 6, 'G') }),
+            'camelot-s1': frame({ id: 'camelot-s1', playerKills: 1, members: [{ name: 'S0', x: 33000, y: 44000 }, { name: 'S1', x: 33000, y: 44000, dead }] }),
+        });
+        d.update(f(false, 2), 0, []);
+        d.update(f(true, 5), 1000, []);
+        d.endMuster('stopped');
+        expect(d.update(f(true, 5), 2000, []).events.find(e => e.kind === 'close')).toMatchObject({ end: 'stopped', lost: 1, kills: 3 });
+    });
+
     test('on a rhythm: a muster from the raid plan once raidEveryMs passed since the last ended', () => {
         const plan = { rally: { x: 1, y: 2, z: 0 }, target: { x: 3, y: 4, z: 0 } };
         const d = director({ settings: { raidEveryMs: 60_000 }, raidPlan: () => plan });
