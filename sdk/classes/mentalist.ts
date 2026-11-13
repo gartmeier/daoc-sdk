@@ -13,6 +13,9 @@ import type { Contact, MemberReport, Role } from '../group/types';
 import { wallStep } from './healer-stand';
 import { unlessAimedAt } from './druid';
 import { selfBuffDue } from './paladin';
+import { modifiedSpec } from '../actions';
+import { petControl, petsAllowed } from '../group/pets';
+import type { NearbyNpc } from '../types';
 
 export interface MentalistKit {
     character: Character;
@@ -201,6 +204,143 @@ export const bladeturnUp = (): Behavior<TacticsSettings> => unlessAimedAt({
     },
 });
 
-export function mentalist({ offFocus = true }: { offFocus?: boolean } = {}): MentalistKit {
-    return { character: { role: 'nuker', instant: [quickFlash(), quickcastUnderFire()], urgent: [stunCaster(), wallStep()], fight: casterFight(offFocus), chores: [bladeturnUp()] } };
+/**
+ * A pulsing charm's chance to lose the mob, in % per pulse (CharmSpellHandler.cs ApplyEffectOnTarget): the "sweet spot" is
+ * level x 0.66 + modified spec x 0.33 less the mob's level; at or above 0 it is 10 - 3 x that, at least 1, below 0 it is
+ * (10 + 1.5 x the shortfall) x 3, at most 99. The roll comes at the cast and at every pulse (Imaginary Enemy: 4.8 s).
+ */
+export function charmResist(level: number, spec: number, mobLevel: number): number {
+    const sweet = level * 0.66 + spec * 0.33 - mobLevel;
+    return sweet >= 0 ? Math.max(1, 10 - 3 * sweet) : Math.min(99, (10 - 1.5 * sweet) * 3);
+}
+
+/**
+ * The most a pulse may risk by default: the sweet spot at 0 or above, the server's own "a creature his level or lower" (at 24 with
+ * Light 22, L23 and under). Verified 2026-11-13 on a throwaway stack: a lost pulse alone breaks nothing (the effect runs 10 s, the
+ * pulse comes every 4.8 s), and the server rolls with a pseudo-random dice (GetPseudoDouble) that spreads resists out: a L24 tomte
+ * soldier at 34 % a pulse resisted 14 times in about 5 minutes, never twice running, and stayed hers. The user took L24-30 mobs
+ * (mature boars, a perturbed bwca); `{ maxResist: 35 }` takes her own level.
+ */
+export const CHARM_SAFE_RESIST = 10;
+
+/**
+ * What a pulsing charm can take: `cap` is the server's refusal (above the spell's value or 110 % of the modified spec,
+ * CharmSpellHandler.cs CheckEndCast), `safe` the highest level at or under it that resists at most CHARM_SAFE_RESIST a pulse.
+ * At 24 with Light 22: cap 24, safe 23 (9.7 % a pulse; a L24 34 %, a L21 3.7 %, a L20 and under 1 %).
+ */
+export function charmLimits(level: number, spec: number, value: number, maxResist = CHARM_SAFE_RESIST): { cap: number; safe: number } {
+    const cap = Math.min(value, Math.floor(spec * 1.1));
+    let safe = cap;
+    while (safe > 0 && charmResist(level, spec, safe) > maxResist) safe--;
+    return { cap, safe };
+}
+
+/** Mobs this near her, on the plane, are what the group has about it: she casts from where she stands (approach: false), well inside the charm's 2000. */
+const CHARM_RADIUS = 1500;
+/** A mob below this health % has been fought: some fight of ours or another's, which it would carry with it. */
+const CHARM_FRESH = 90;
+/** After a failed charm, the next try waits this long; the same mob, CHARM_MOB_RETRY_MS. */
+const CHARM_RETRY_MS = 10_000;
+const CHARM_MOB_RETRY_MS = 60_000;
+
+export interface CharmChoice {
+    /** Highest mob level to take (charmLimits().safe). */
+    maxLevel: number;
+    /** Ids no mob of which to take: the group's members, and what the board has as threats or the focus. */
+    busy: ReadonlySet<number>;
+    /** Names that can't be charmed (a body type the spell doesn't take, a named or guard one): the server refuses by template. */
+    skipNames?: ReadonlySet<string>;
+    /** Ids tried lately. */
+    skipIds?: ReadonlySet<number>;
+    radius?: number;
+}
+
+/**
+ * The mob to charm: a monster (realm none, attackable, not a pet, not named: a capital first letter is refused), at most
+ * `maxLevel`, near her, at full health and on nobody (not in combat, no target, not busy). The strongest first, then the nearest.
+ */
+export function charmTarget(npcs: readonly NearbyNpc[], c: CharmChoice): NearbyNpc | null {
+    const radius = c.radius ?? CHARM_RADIUS;
+    return npcs
+        .filter(n => n.realm === 'none' && !n.isPet && !n.isPeaceful && n.isTargetable && !/^\p{Lu}/u.test(n.name)
+            && n.level <= c.maxLevel && n.level > 0 && n.distance <= radius && n.healthPercent >= CHARM_FRESH
+            && !n.inCombat && n.targetObjectId === null && !c.busy.has(n.objectId)
+            && !c.skipNames?.has(n.name) && !c.skipIds?.has(n.objectId))
+        .sort((a, b) => b.level - a.level || a.distance - b.distance)[0] ?? null;
+}
+
+/** Map of name or id to when it may be tried again, kept in the member's memory. */
+const later = <K>(memory: Map<string, any>, key: string): Map<K, number> => { let m = memory.get(key); if (!m) memory.set(key, m = new Map()); return m; };
+const liveKeys = <K>(m: Map<K, number>, now: number): Set<K> => new Set([...m].filter(([, at]) => at > now).map(([k]) => k));
+
+/**
+ * A charmed mob as her pet when she has none, as the user played Niamh (6 charms of Imaginary Enemy in 52 min, a bwca and
+ * mature boars, to tank the adds; play/niamh-1113-findings.md). The group's petControl, on the kit's list, drives it after.
+ * Not in a pull, a travel or a retreat, not with a melee or an enemy aim on her, not with pets off for the run. In a fight only in
+ * the chores' turns, when the fight has nothing for her.
+ *
+ * How it ends (server code, and verified for a release): a Mentalist's charm is a song, pulsing every 4.8 s at 3 power, and each
+ * pulse rolls charmResist; the charm itself runs 10 s, so only two resisted pulses running let it lapse. Any end, that lapse, the
+ * power running out ("You do not have enough power and your spell was canceled."), a release ("You cancel your effect.", "You lose
+ * control of the X!"), puts her on the mob's list at level x 10 and has it attack her, and every mob on the pet turns on her too
+ * (CharmECSEffect.cs OnStopEffect). Live, the released L24 tomte soldier hit her at once for 138 of her 262 and killed her 3 s on.
+ * A release turns it as surely as a break, so the kit never releases: the safety is the pick (charmLimits().safe or under), and
+ * the song, which goes on pulsing over a lapsed charm within 10000 and can take the mob back on its next pulse. A loss that no
+ * release explains is noted for the group, and the mob on her is a threat to the board like any other.
+ */
+export const charmUp = ({ maxResist = CHARM_SAFE_RESIST }: { maxResist?: number } = {}): Behavior<TacticsSettings> => unlessAimedAt({
+    name: 'charmUp',
+    interruptible: false,
+    async run(ctx) {
+        noteCharmBreak(ctx);
+        if (!petsAllowed(ctx.settings) || ctx.bot.isDead() || ctx.sdk.getPetState() || hammeredBy(ctx)) return false;
+        const phase = ctx.orders().phase;
+        if (phase === 'pull' || phase === 'travel' || phase === 'retreat') return false;
+        const now = Date.now();
+        if (now < (ctx.memory.get('charmRetryAt') ?? 0)) return false;
+        const sp = ctx.spells.all().filter(s => s.type === 'Charm' && s.pulse).sort((a, b) => b.spell.level - a.spell.level)[0];
+        if (!sp) return false;
+        const me = ctx.me();
+        const spec = modifiedSpec(sp.spell.lineName, ctx.sdk.getSkills().specializations ?? []);
+        if (spec === null) return false;
+        const { safe } = charmLimits(me.level, spec, sp.value || Infinity, maxResist);
+        const busy = new Set<number>([...ctx.members().map(m => m.objectId), ...ctx.threats().map(t => t.objectId)]);
+        const focus = ctx.orders().focus;
+        if (focus !== null) busy.add(focus);
+        const names = later<string>(ctx.memory, 'charmSkipNames');
+        const ids = later<number>(ctx.memory, 'charmSkipIds');
+        const mob = charmTarget(ctx.sdk.getNearbyNpcs(), { maxLevel: safe, busy, skipNames: liveKeys(names, now), skipIds: liveKeys(ids, now) });
+        if (!mob) return false;
+        const risk = charmResist(me.level, spec, mob.level);
+        ctx.doing('charm', mob.objectId, `${sp.spell.name} on ${mob.name} (L${mob.level}, ${risk.toFixed(1)} % a pulse)`);
+        const c = await ctx.bot.charmPet(mob.objectId, { spell: sp.spell.name, approach: false });
+        ctx.result('charm', c, mob.objectId);
+        if (c.success) {
+            ctx.memory.set('charmed', { objectId: mob.objectId, name: mob.name, at: Date.now() });
+            ctx.note(`charmed ${mob.name} (L${mob.level}, ${risk.toFixed(1)} % a pulse)`);
+            return true;
+        }
+        ctx.memory.set('charmRetryAt', Date.now() + CHARM_RETRY_MS);
+        // By template: a body type the spell doesn't take, or one the server won't charm at all. The rest by this mob.
+        if (c.reason === 'refused' && /does not charm|can't be charmed/.test(c.message)) names.set(mob.name, Infinity);
+        else ids.set(mob.objectId, Date.now() + CHARM_MOB_RETRY_MS);
+        return true;
+    },
+});
+
+/** A pet loss of the charm we cast that no release of ours explains: the mob is on her now (CharmECSEffect.cs OnStopEffect). Once per loss. */
+function noteCharmBreak(ctx: Parameters<Behavior['run']>[0]): void {
+    const charmed = ctx.memory.get('charmed') as { objectId: number; name: string; at: number } | undefined;
+    const loss = ctx.sdk.getState()?.lastPetLoss;
+    if (!charmed || !loss || loss.objectId !== charmed.objectId || loss.at < charmed.at) return;
+    ctx.memory.delete('charmed');
+    if (loss.cause === 'owner_died' || loss.cause === 'region_change') return;
+    ctx.note(`charm on ${charmed.name} ended (${loss.cause}) after ${Math.round((loss.at - charmed.at) / 1000)} s: it turns on ${ctx.name}`);
+}
+
+/** `charm`: false leaves the charm out; `{ maxResist }` takes mobs that resist up to that % a pulse (default CHARM_SAFE_RESIST). */
+export function mentalist({ offFocus = true, charm = true }: { offFocus?: boolean; charm?: boolean | { maxResist?: number } } = {}): MentalistKit {
+    // petControl is a side behaviour: on the list from the start, as a run decides its pet behaviours once, when she has no pet yet (withPets, runner.ts).
+    const chores = charm ? [bladeturnUp(), charmUp(charm === true ? {} : charm), petControl()] : [bladeturnUp()];
+    return { character: { role: 'nuker', instant: [quickFlash(), quickcastUnderFire()], urgent: [stunCaster(), wallStep()], fight: casterFight(offFocus), chores } };
 }

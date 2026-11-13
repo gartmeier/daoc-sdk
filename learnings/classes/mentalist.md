@@ -95,7 +95,7 @@ So choose by what the character will do, and don't expect a respec to change XP 
 
 ## Not supported yet
 
-No group behaviour uses charm or confusion, so neither is reachable through the kit yet. The sources call confusion useful on big pulls (**community, unverified**).
+No group behaviour uses confusion yet; the sources call it useful on big pulls (**community, unverified**). The charm is `charmUp` ([below](#the-charm-charmup-2026-11-13)).
 
 ## Sources
 
@@ -157,6 +157,28 @@ What the kit took from it:
 - **`bladeturnUp` (chores):** Barrier of Negation back up as soon as it pops, in a fight too, when no enemy aims at her and no melee is on her. `buff()` keeps it, and Powershield, only in the quiet phases.
 - **Already the kit's:** the nuke on the assist target (the role's assist), the Flash on a melee (`quickFlash`), the emergency heal.
 
+- **The charm (`charmUp`):** the next section.
+
 Not yet:
-- **The charm:** Imaginary Enemy on a mob near the fight as a pet when there is none, released before it turns. `bot.charmPet` exists; the kit needs a choice of mob within the charm's level cap and a live test on a throwaway server.
 - **Cripple Mind on the focus.**
+
+## The charm: charmUp (2026-11-13)
+
+`charmUp` (chores, with the group's `petControl` on the kit's list from the start, since a run picks its pet behaviours once, when she has no pet yet; tests in `sdk/classes/mentalist.test.ts`). With no window pet, not in a pull, a travel or a retreat, with no melee or enemy aim on her and pets on for the run, she casts her best charm, Imaginary Enemy at Light 22 (Illusory Enemy 4, Fabricated 10, Imaginary 17, Phantom 25; range 2000, 3 s, no power to cast), with `approach: false` at a mob within 1500 of her: a monster, not named, not a pet, at 90 % health or more, on nobody and in no fight, not the focus or a threat, the strongest first, then the nearest. After that `petControl` drives it like any window pet. `mentalist({ charm: false })` leaves it out; `mentalist({ charm: { maxResist: 35 } })` takes riskier mobs.
+
+**Server code** (`CharmSpellHandler.cs`, `CharmECSEffect.cs`, `EffectService.cs`):
+- **Limits:** refused above the spell's value (76) or 110 % of the modified Light spec (`cap`, Light 22: L24). The resist chance per roll goes by the sweet spot `level x 0.66 + spec x 0.33 - mob level`: at 0 or above `10 - 3 x that`, at least 1 %; below 0 `(10 + 1.5 x the shortfall) x 3`, at most 99 % (`charmResist`). At 24 with Light 22: L20 and under 1 %, L21 3.7 %, L23 9.7 %, L24 34 %, L25 52 %. `charmLimits().safe` is the highest level at or under `maxResist`, 10 % by default (L23 here).
+- **A song:** it pulses every 4.8 s at 3 power a pulse, and each pulse rolls the resist again. The charm effect lasts 10 s, so a lost pulse alone breaks nothing. Casting it again stops it (`releasePet` does that). With no power for a pulse: "You do not have enough power and your spell was canceled."
+- **Any end turns the mob on her:** a lapse, the power, a release. It puts her on its list at level x 10 and attacks, and every mob on the pet turns to her too. A release is no way out, so the kit never releases. Over a lapse with the mob alive and within 10000 the song goes on pulsing and can take it back.
+- **Body type** goes by the npctemplate, not the mob row. Imaginary Enemy (AmnesiaChance 5) takes humanoid, animal, insect and reptile; type 0 is "can't be charmed!". The kit keeps such a name off its list for the run.
+
+**Verified** on a throwaway stack, L24 Mentalist with Light 22 / Mentalism 9 (Deirdre's build), Thidranki:
+- **What takes it in Thidranki:** mature boar L24-26 (animal), perturbed bwca L26-30 (its template is humanoid, though its mob row says magical: that is the user's bwca), tomte soldier, visionary and mystic L20-28. Clicking beetles (template 0 though the row says insect), the badgers and most tomte hunters answered "The X can't be charmed!", after the whole 3 s cast. Spawn levels vary: the same beetle camp was L20 in the dump and L22 live.
+- **One charm through the kit's own `charmUp`** (with `maxResist: 40`, nothing safer being within 1500): a L24 tomte soldier at 928, "The tomte soldier is now under your control.", window up at 3.2 s, defensive and on follow.
+- **It held for about 5 minutes at 34 % a pulse:** 14 "The tomte soldier resists the charm! (34.05%)" lines, never two pulses running, the window never closed. The server rolls with a pseudo-random dice (`GetPseudoDouble`, `RandomContextFactory.Resist()`) that spreads resists out. Each pulse cost 3 of her 136 power, which regen gave back at full power.
+- **Its old camp:** a tomte hunter came at the pet a minute in and hit it for 33-39 every 3 s. The defensive pet never answered, as a defensive pet answers hits on its owner only. In a group run `petControl` sends it at the focus.
+- **The release:** "You cancel your effect.", "You lose control of the tomte soldier!", "You release control of your controlled target.", then in the same snapshot "The tomte soldier hits your leg for 138 (-6) damage!" (262 health in cloth), and a second hit killed her 3 s later. So whatever ends a charm of her own level in a fight, the tank has to take that mob at once.
+- **Not seen live:** a lapse (two resisted pulses running), the song taking a lapsed mob back, the power running out under it, and a charm in a real group run. The default 10 % pick wasn't cast live either: no mob at L23 or under was within 1500 of either spot tried.
+
+**The user's own charms** (play/niamh-1113-findings.md): 6 in 52 min, on L24-26 boars and a L26-30 bwca. Above L24 that needs a modified Light of at least 24 (gear or more spec), and those mobs resist 34-52 % a pulse. The kit's default is safer than that; pass `maxResist` to play it as she did.
+

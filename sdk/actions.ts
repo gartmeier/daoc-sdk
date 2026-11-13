@@ -1407,7 +1407,7 @@ function summonHarm(info: SpellInfo): number {
  * Our modified level in the spec a spell line goes by (PacketLib1112.cs:65). The wire names a spec by its Name where the line has its key: Illusions is under Light, which reads "Light Magic" (specialization.sql:77).
  * A hybrid's lineName is the spec's name already. Null when our list doesn't show it.
  */
-function modifiedSpec(lineName: string, specs: readonly Specialization[]): number | null {
+export function modifiedSpec(lineName: string, specs: readonly Specialization[]): number | null {
     try {
         const key = getSpellLine(lineName)?.spec ?? lineName;
         const name = (getSpecialization(key)?.name ?? key).toLowerCase();
