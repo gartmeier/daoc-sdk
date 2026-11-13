@@ -3,7 +3,9 @@ import {
     curveAt, CURVE, groupNeeds, initialLives, LIFECYCLE_SETTINGS, logOutUnsafe, mixFor, newWave, openNeeds, readBalance, see, stepBalance,
     stepRealm, stepWave, wantsMuster, wearOf, type BalanceState, type Life, type LifeBot, type RealmStep, type Sightings,
 } from './lifecycle';
-import { quietSpot, waveOrder, nextIdle, QUIET_REASON, type RealmWave } from './waves';
+import { quietSpot, waveOrder, nextIdle, QUIET_DOOR_CLEAR, QUIET_REASON, type RealmWave } from './waves';
+import { doorSide, PORTAL_DOORS } from '../doors';
+import { homeOf } from './keeps';
 import type { RealmBoardView, UnitView } from './realm-board';
 
 const MIN = 60_000;
@@ -389,6 +391,17 @@ describe('waves', () => {
         expect(near).toEqual({ kind: 'reached', key: '5' });
         expect(waveOrder(out, { unit: 'hibernia-s1', realm: 'hibernia', regionId: 252, centre: spot, reached: '5', now: 0 })).toBeNull();
         expect(waveOrder(null, { unit: 'hibernia-s1', realm: 'hibernia', regionId: 252, centre: spot })).toBeNull();
+    });
+    test('quiet spots stay clear of the portal keep doors, on the arrival side of ours', () => {
+        for (const region of [250, 251, 252, 253]) for (const [realm, g] of [['albion', 'camelot'], ['midgard', 'midgard'], ['hibernia', 'hibernia']] as const) {
+            const home = homeOf(region, realm);
+            if (!home) continue;
+            for (const unit of [g, `${g}-2`, `${g}-s1`, `${g}-s2`, `${g}-s3`, `${g}-s4`]) {
+                const spot = quietSpot(region, realm, unit)!;
+                for (const d of Object.values(PORTAL_DOORS[region]!).flat()) expect(Math.hypot(d.at.x - spot.x, d.at.y - spot.y)).toBeGreaterThanOrEqual(QUIET_DOOR_CLEAR);
+                for (const d of PORTAL_DOORS[region]![realm]) expect(doorSide(d, spot)).toBe(doorSide(d, home.arrival));
+            }
+        }
     });
     test('idle acts: mostly sit and turn', () => {
         const r = seeded(11);

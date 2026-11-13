@@ -9,6 +9,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { doorBetween, doorSide, PORTAL_DOORS } from '../doors';
 import { formationSlot, type TacticsSettings } from './behaviors';
 import { homeOf, type PlayerRealm } from './keeps';
 import type { Behavior } from './member';
@@ -38,6 +39,8 @@ export interface RealmWave {
 export const WAVE_STALE_MS = 3 * 60_000;
 /** Quiet: a unit's spot by its portal keep is this far from where we arrive (by its name, so units don't stack). */
 const QUIET_RING = { min: 500, max: 900 };
+/** Quiet: a spot stays this far from every portal keep door, on the arrival's side of its own keep's (S2's doors, cbf18a1). */
+export const QUIET_DOOR_CLEAR = 600;
 /** Quiet: a unit farther than this from its spot walks there first. */
 export const QUIET_NEAR = 900;
 /** Out: a unit within this of `toward` has reached it, and patrols on from there. */
@@ -88,13 +91,26 @@ function hash01(s: string): number {
     return ((h >>> 0) % 100000) / 100000;
 }
 
-/** A unit's quiet spot by its realm's portal keep: round where we arrive, at an angle and distance of its own. */
+/**
+ * A unit's quiet spot by its realm's portal keep: round where we arrive, at an angle and distance of its own, clear of the
+ * portal keeps' doors and on the arrival's side of ours, so a break never walks or idles through a shut door (turned on
+ * by 30° until it is; in Thidranki every unit's first angle already is, 900+ from the nearest door).
+ */
 export function quietSpot(regionId: number, realm: PlayerRealm, unit: string): Point3 | null {
     const home = homeOf(regionId, realm);
     if (!home) return null;
-    const a = hash01(unit) * 2 * Math.PI;
+    const all = Object.values(PORTAL_DOORS[regionId] ?? {}).flat();
+    const ours = PORTAL_DOORS[regionId]?.[realm] ?? [];
+    const a0 = hash01(unit) * 2 * Math.PI;
     const r = QUIET_RING.min + hash01(`${unit}/r`) * (QUIET_RING.max - QUIET_RING.min);
-    return { x: Math.round(home.arrival.x + Math.cos(a) * r), y: Math.round(home.arrival.y + Math.sin(a) * r), z: home.arrival.z };
+    const at = (a: number): Point3 => ({ x: Math.round(home.arrival.x + Math.cos(a) * r), y: Math.round(home.arrival.y + Math.sin(a) * r), z: home.arrival.z });
+    const clear = (p: Point3) => all.every(d => Math.hypot(d.at.x - p.x, d.at.y - p.y) >= QUIET_DOOR_CLEAR)
+        && ours.every(d => doorSide(d, p) === doorSide(d, home.arrival));
+    for (let i = 0; i < 12; i++) {
+        const p = at(a0 + i * Math.PI / 6);
+        if (clear(p)) return p;
+    }
+    return at(a0);
 }
 
 export type WaveOrder =
@@ -171,7 +187,10 @@ export const loiter = (rand: () => number = Math.random): Behavior<TacticsSettin
         else if (idle.act === 'step') {
             const slot = formationSlot(ctx, o.anchor, o.facing);
             const a = rand() * 2 * Math.PI, r = rand() * STEP_REACH;
-            await ctx.sdk.sendMoveTo(Math.round(slot.x + Math.cos(a) * r), Math.round(slot.y + Math.sin(a) * r), me.z, { tolerance: 40 });
+            const to = { x: Math.round(slot.x + Math.cos(a) * r), y: Math.round(slot.y + Math.sin(a) * r), z: me.z };
+            // A raw move goes through a shut door (S2's doors): a step that would pass one turns instead.
+            if (doorBetween(me.regionId, me, to, me.realm)) { idle.act = 'turn'; await ctx.sdk.sendFace(Math.floor(rand() * 4096)); }
+            else await ctx.sdk.sendMoveTo(to.x, to.y, to.z, { tolerance: 40 });
         }
         ctx.doing('idle', null, `idle at the keep: ${idle.act}`);
         return true;
