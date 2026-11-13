@@ -455,8 +455,9 @@ describe('waves', () => {
         const rest = waveOrder(quiet, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: far, now: 0 })!;
         expect(rest).toEqual(expect.objectContaining({ kind: 'rest', key: '7' }));
         expect((rest as { why: string }).why.startsWith(QUIET_REASON)).toBe(true);
-        // A player with us: no walk home even near it.
-        expect(waveOrder(quiet, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: near, human: true, now: 0 })?.kind).toBe('rest');
+        // A player with us: no wave break at all (the user: "I want to play, not wait five minutes"), near or far; it roams on.
+        expect(waveOrder(quiet, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: near, human: true, now: 0 })).toBeNull();
+        expect(waveOrder(quiet, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: far, human: true, resting: '7', now: 0 })).toBeNull();
         // Once resting this wave, it stays a rest (no walk home as the group drifts nearer).
         expect(waveOrder(quiet, { unit: 'hibernia', realm: 'hibernia', regionId: 252, centre: near, resting: '7', now: 0 })?.kind).toBe('rest');
     });

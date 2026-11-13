@@ -147,10 +147,10 @@ export function waveOrder(wave: RealmWave | null, o: { unit: string; realm: Play
         const left = wave.until ? Math.max(0, Math.round((wave.until - now) / 1000)) : null;
         const again = left !== null ? `, out again in ${left} s` : '';
         const d = d2(o.centre, at);
-        if (o.resting === key || o.human || d > HOME_NEAR) {
-            const where = o.human ? 'a player with us: no walk home' : `${Math.round(d)} from the portal keep`;
-            return { kind: 'rest', key, why: `${QUIET_REASON} a rest where we are, ${where}${again} (${wave.why})` };
-        }
+        // A player with us takes no wave break at all: it roams on and rests only when it needs to (the user, playing Niamh,
+        // 2026-11-13 19:00: "why are we doing these rests? I want to play, not wait five minutes").
+        if (o.human) return null;
+        if (o.resting === key || d > HOME_NEAR) return { kind: 'rest', key, why: `${QUIET_REASON} a rest where we are, ${Math.round(d)} from the portal keep${again} (${wave.why})` };
         if (d > QUIET_NEAR) return { kind: 'home', at, why: `${QUIET_REASON} back to the portal keep for a break (${wave.why}), ${Math.round(d)} away` };
         return { kind: 'quiet', at, why: `${QUIET_REASON} a break at the portal keep${again} (${wave.why})` };
     }
