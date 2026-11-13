@@ -571,7 +571,10 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // raid back (live 14:33, hibernia back to rank 1 with the gate down). One that comes at us is still the focus (onUs, offPost).
     const passed = Math.max(0, ...plan.targets.filter(t => t.kind === 'door' && t.doorId !== undefined && broken.has(t.doorId)).map(t => t.rank));
     const isDone = (t: SiegeTarget): boolean => {
-        if (done.has(t.label) || t.optional || t.rank < passed) return true;
+        // A broken door passes the ranks before it for their fighters (they respawn at their posts behind us), never for a static
+        // guard still at its post: live 22:33, the building's door left broken by an earlier raid counted rank 3's wall casters done,
+        // and albion-149 waited for the rush in the courtyard under them.
+        if (done.has(t.label) || t.optional || (t.rank < passed && t.kind === 'fighter')) return true;
         if (t.kind === 'door') return t.doorId !== undefined && broken.has(t.doorId);
         if (atPost(plan, t, foes)) return false;
         // A fighter off its post near it (it came out after us) is still its guard: the rank stays open until it dies, rather than
@@ -594,7 +597,10 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // is the focus anyway). The user, 2026-11-13 21:25: "if the second door is open and everyone is OK, rush up." Whether everyone
     // is OK (health, power, the dead) is the caller's, who sees the members' reports (S3's raidStep).
     const doorSteps = plan.targets.filter(t => t.kind === 'door');
-    const rush = doorSteps.length > 0 && doorSteps.every(t => t.doorId !== undefined && broken.has(t.doorId));
+    // ... and no wall caster that sees the courtyard left: the wait before the rush (S3's "everyone OK") is where the body stands,
+    // in the courtyard, and live 22:33 albion-149 skipped rank 3 for the rush and lost Elaine there while it waited.
+    const wallsDown = plan.targets.filter(t => t.kind === 'caster' && !t.optional).every(t => isDone(t));
+    const rush = doorSteps.length > 0 && doorSteps.every(t => t.doorId !== undefined && broken.has(t.doorId)) && wallsDown;
     const open = atLord || rush ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
     const rank = open.length ? Math.min(...open.map(t => t.rank)) : null;
     const inRank = open.filter(t => t.rank === rank);

@@ -451,3 +451,14 @@ describe('raidOrders: both doors broken, rush up', () => {
         expect(raidOrders(raid, { members, seen, owner: 'midgard', staged: true, broken: [252000301], reach: () => true }).phase).toBe('assault');
     });
 });
+
+describe('raidOrders: no rush up while a courtyard wall caster stands', () => {
+    test('both doors broken, wall-e-n alive at its post: rank 3, not the lord', async () => {
+        const { raidOrders, raidPlan } = await import('./siege');
+        const raid = raidPlan('albion')!;
+        const wall = FASTE.targets.find(t => t.label === 'wall-e-n')!.at;
+        const members = Array.from({ length: 6 }, (_, i) => ({ id: 100 + i, x: 33300, y: 38250 + i * 10, z: 3722, alive: true }));
+        const o = raidOrders(raid, { members, seen: [{ id: 7, name: 'Runemaster', realm: 'midgard', kind: 'npc' as const, ...wall }], owner: 'midgard', staged: true, broken: [252000301, 252000302], reach: () => true });
+        expect(o.phase).toBe('assault');
+    });
+});

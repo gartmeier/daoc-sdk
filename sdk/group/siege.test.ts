@@ -327,7 +327,8 @@ describe('raidOrders', () => {
         // a shut door as a wall (8e0a8d7), and on the island there is no other way up (passedDoors). Both doors open: rush up (the
         // user, 2026-11-13 21:25: "if the second door is open and everyone is OK, rush up").
         const stray = [...at(plan.roof, 1), ...at({ x: 33100, y: 38250, z: 3722 }, 7).map(m => ({ ...m, id: m.id + 100 }))];
-        expect(raidOrders(plan, view({ members: stray, seen: garrison(), staged: true })).phase).toBe('lord');
+        // ... but with the wall casters all up (the whole garrison here) no rush: the wait for it would be under them (live 22:33).
+        expect(raidOrders(plan, view({ members: stray, seen: garrison(), staged: true })).phase).toBe('assault');
         // Nobody up there: the ranks again.
         expect(raidOrders(plan, view({ members: at({ x: 33100, y: 38250, z: 3722 }, 8), seen: garrison(), staged: true })).phase).toBe('assault');
     });
