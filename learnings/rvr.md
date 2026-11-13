@@ -474,6 +474,13 @@ The ranks follow line of sight with the walls (`sdk/vision.ts` `lineOfSight` ove
   - Live 14:20, before this: members walked alone from 25000 out. Four were rooted on the way, and two died before the gate.
 - **No step through a door for sight.** A cast refused for sight steps toward a spot that sees the target, and it stops at any keep door, ours or a shut one.
   - Live 15:25: two casters on their wall stands walked out through their own gate to see the raid and were rooted outside.
+- **Wall casters from outside (raid, 8787e16).** The user, playing a Mentalist in Hibernia's raid, nuked the wall Runemasters from the ground outside the north-west wall, near (32692, 37101), with no pull.
+  - A merlon gap works both ways. Four wall casters have a spot outside that sees them within 1250 (3D), seen by no other static guard, reachable with the gate shut (`SiegeTarget.outside`): wall-e-n (35000, 37150), wall-e-s (35000, 39400), wall-n (33200, 36900) and wall-nw (32300, 37050). wall-se and wall-sw have none.
+  - The ranged half works the nearest live one from its spot while the melee break the gate and climb.
+  - **Our sight model is stricter than the real client here:** from the user's own spot it sees none of them either way, yet the game let them nuke. So the measured spots are safe picks, not the only ones.
+- **The climb and its traps (live 18:00-18:45):** with the gate broken, the melee take the courtyard-side wall casters up the wall-walk stair, one each (`melee.split`, S3's `meleeSplit`), while the ranged work from outside or hold out of sight.
+  - A roof archer, or the building's Huscarl on us, is reachable only through posterns the Faste never opens to raiders. Chasing them gave "no way there … a shut door at (32323, 37845)" every second.
+  - Now such a guard doesn't break the hold, and a fighter on another level is a focus only by a found route.
 - **First live defence, 2026-11-13 15:22-15:27:** Midgard's two main groups against up to 15 Albion and Hibernia attackers.
   - They entered through their gate by interact and took their seats: melee behind the gate, casters on the south-east wall-walk, the healer at the stair's foot.
   - It held, 3 kills for 1 loss.
