@@ -49,7 +49,9 @@ From [pets.md](../pets.md#turrets): a ground target first; a spot off the mesh i
 
 **After the side-tick fix (5 sorties, 00:43-03:13):** 1 broken mezz in all five, but the turret dealt 0-1178 a sortie, a fifth of what it dealt before. **Why (server code):** passive wipes the turret's list of what it has been fighting (`ControlledMobBrain.Disengage`), and a turret starts `Defensive`, so after each kill it picks its next target off that list. Those picks were most of its damage. An attack order also stops the shot (`Attack`, `StopCurrentSpellcast`) and keeps the list. So `turretOffCc` now sends the turret back at the focus when it reaches it (`offCcMove`), and goes passive only when it doesn't (b2ee129, 04:19).
 
-**Reverted (cea2872):** the first sortie with b2ee129 (hibernia-2, 31 min) had the turret back to 6278 damage, but it broke crowd control 3 times. One was the servant that had been the focus earlier and was mezzed later: it was still on the list, and the turret took it after a kill. The turret's own picks are both its damage and its breaks. The kit stays passive on crowd control. A middle way, such as passive only while a mezzed enemy stands within the turret's reach, isn't tried yet.
+**Reverted (cea2872):** the first sortie with b2ee129 (hibernia-2, 31 min) had the turret back to 6278 damage, but it broke crowd control 3 times. One was the servant that had been the focus earlier and was mezzed later: it was still on the list, and the turret took it after a kill. The kit stays passive on crowd control.
+
+**Correction (the frozen window, 06:04-07:56, with 2125074):** in three long sorties the turret dealt 3881, 3109 and 9133 and broke crowd control 1, 0 and 2 times; the 2 were roots on a PvE mob. So passive does not cost the turret its damage: the 0-1178 sorties after 2125074 were quiet ones, and the reading behind b2ee129 was wrong. Read turret damage against the group's fights before blaming the kit.
 
 ## Not seen live
 
