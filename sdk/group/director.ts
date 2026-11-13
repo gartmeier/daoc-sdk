@@ -325,7 +325,7 @@ export type DirectorEvent =
     | { kind: 'answer'; call: string; unit: string; state: AnswerState; why: string }
     | { kind: 'arrive'; call: string; unit: string; ms: number; answered: boolean }
     /** At the go: defenders and the third realm seen at the target, owners seen busy elsewhere (the moment to raid). */
-    | { kind: 'stage'; call: string; stage: 'rally' | 'go'; atRally: number; of: number; defenders?: number; third?: number; ownersAway?: number; owner?: string | null }
+    | { kind: 'stage'; call: string; stage: 'rally' | 'go'; atRally: number; of: number; defenders?: number; third?: number; ownersAway?: number; owner?: string | null; lookedAgo?: number | null }
     /** A muster's hold began (on) or ended: the go waits for the defenders or the winner, or the clock for the lord. */
     | { kind: 'hold'; call: string; why: MusterHold; on: boolean; defenders: number; living: number; third?: number; ownersAway?: number }
     | { kind: 'close'; call: string; from: string; why: CallWhy | 'raid'; ms: number; end: string; lost: number; wiped: boolean; asked: string[]; coming: string[]; arrived: string[]; kills: number | null; foesMax: number; oursMax: number };
@@ -410,6 +410,13 @@ export class RealmDirector {
     private raidEndedAt = Date.now();
     /** Enemy players seen near our keep, by key: last seen (the defence call). */
     private keepSeen = new Map<string, number>();
+    /**
+     * Enemy players seen near the raid target, by key: last seen and realm, kept from the director's start, not only while a
+     * muster is open (live 13:37-14:00: every go read 0 defenders, since nobody saw the keep from the rally). lookedAt: the
+     * last time one of our living stood within defenceRadius of it, so 0 defenders can tell "none" from "nobody looked".
+     */
+    private targetSeen = new Map<string, { at: number; realm: string }>();
+    private lookedAt: number | null = null;
 
     constructor(opts: DirectorOptions) {
         this.realm = opts.realm;
@@ -533,7 +540,8 @@ export class RealmDirector {
             o.oursMax = Math.max(o.oursMax, o.call.ours);
         }
 
-        // Muster; our keep's defence.
+        // What our realm sees at the raid target, all the time; then the muster and our keep's defence.
+        this.watchTarget(board, now);
         this.stepMuster(board, now, events);
         this.stepDefend(board, now, events);
 
@@ -771,9 +779,7 @@ export class RealmDirector {
         // Who holds the target now (live read), and the realms seen near it lately (the board holds only those in view now).
         let owner: string | null = null;
         try { owner = this.targetOwner?.() ?? null; } catch { /* unknown */ }
-        const seen = o.raid.seen;
-        for (const f of foesNear(board.foes, o.raid.target, s.defenceRadius)) seen.set(f.key, { at: now, realm: f.realm });
-        for (const [k, v] of seen) if (now - v.at > s.defenceMemoryMs) seen.delete(k);
+        const seen = this.targetSeen;
         // Defenders: the owner's realm (all of them while the owner is unknown); the third realm: the others there.
         const knownOwner = owner && owner !== this.realm && owner !== 'none' ? owner : null;
         let defenders = 0, third = 0;
@@ -810,7 +816,7 @@ export class RealmDirector {
                 o.raid.stagedAt = now;
                 o.raid.livingAtGo = living;
                 o.arrived.clear();
-                events.push({ kind: 'stage', call: call.id, stage: 'go', atRally: there, of: living, defenders, third, ownersAway, owner });
+                events.push({ kind: 'stage', call: call.id, stage: 'go', atRally: there, of: living, defenders, third, ownersAway, owner, lookedAgo: this.lookedAt === null ? null : now - this.lookedAt });
             }
         } else {
             if (raid.some(u => LORD_PHASE.test(u.reason))) o.raid.lordAt = now;
@@ -836,6 +842,17 @@ export class RealmDirector {
         if (owner !== this.realm) return null;
         const faste = BATTLEGROUND_LAYOUTS[this.regionId]?.keeps.find(k => !k.portal);
         return faste ? { x: faste.x, y: faste.y, z: faste.z } : null;
+    }
+
+    /** Keep targetSeen and lookedAt (the raid plan's target) up to date from this board. */
+    private watchTarget(board: RealmBoardView, now: number): void {
+        const s = this.settings;
+        let plan: RaidPlan | null = null;
+        try { plan = this.raidPlan?.() ?? defaultRaid(this.realm, this.regionId); } catch { plan = null; }
+        if (!plan) return;
+        for (const f of foesNear(board.foes, plan.target, s.defenceRadius)) this.targetSeen.set(f.key, { at: now, realm: f.realm });
+        for (const [k, v] of this.targetSeen) if (now - v.at > s.defenceMemoryMs) this.targetSeen.delete(k);
+        if (board.units.some(u => u.running && u.members.some(m => !m.isDead && dist2(m, plan!.target) <= s.defenceRadius))) this.lookedAt = now;
     }
 
     private stepDefend(board: RealmBoardView, now: number, events: DirectorEvent[]): void {
