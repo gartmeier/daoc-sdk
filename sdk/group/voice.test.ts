@@ -222,6 +222,23 @@ describe('/region', () => {
         step(24_000, [help({ id: 'h-2', from: 'hib-2', why: 'caught', foes: 8, at: b }), help({ id: 'h-3', from: 'hib-1', why: 'sighted', foes: 3, at: far })]);
         expect(said).toEqual(['hib-1: 8 mids coming north of the Faste, need help', 'hib-2: 8 mids on us north of the Faste, help!', 'hib-1: 3 coming north-east of the Faste, need help']);
     });
+    test('a call that closes and opens again there is the same fight for a minute', () => {
+        const v = new RegionVoice();
+        const at = { x: 38347, y: 25873 };
+        const said: string[] = [];
+        const step = (t: number, calls: object[]) => { const l = v.hear(base({ calls: calls as RegionInput['calls'], foes: [] }), t); if (l) said.push(l.text); };
+        step(0, [help({ id: 'h-1', from: 'hib-1', why: 'sighted', foes: 7, at })]);
+        // Sighted to outnumbered: the same news.
+        step(12_000, [help({ id: 'h-1', from: 'hib-1', why: 'outnumbered', foes: 7, at })]);
+        step(28_000, []);
+        step(34_000, [help({ id: 'h-2', from: 'hib-1', why: 'sighted', foes: 7, at: { x: 38313, y: 25755 } })]);
+        step(56_000, [help({ id: 'h-3', from: 'hib-1', why: 'outnumbered', foes: 8, at: { x: 39524, y: 25491 } })]);
+        step(74_000, [help({ id: 'h-3', from: 'hib-1', why: 'caught', foes: 8, at: { x: 39524, y: 25491 } })]);
+        // Long after the last call there closed: a new fight.
+        step(80_000, []);
+        step(150_000, [help({ id: 'h-4', from: 'hib-1', why: 'sighted', foes: 4, at })]);
+        expect(said).toEqual(['7 coming north-east of the Faste, need help', '8 on us north-east of the Faste, help!', '4 coming north-east of the Faste, need help']);
+    });
     test('omw from a unit coming', () => {
         const c = regionClaims(base({ calls: [help()], events: [{ kind: 'answer', call: 'hibernia-7', unit: 'hib-2', state: 'coming' }] }));
         expect(c.find(x => x.text === 'omw')?.by).toBe('hib-2');

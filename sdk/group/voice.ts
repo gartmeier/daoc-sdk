@@ -346,16 +346,29 @@ export const SAME_FIGHT_RANGE = 3000;
  * A help call not said yet takes what was said of an open call of the same fight, so the realm hears that fight once
  * (and again only when it got worse or grew by 3). Returns the map with those entries added.
  */
-export function inheritHelpSaid(calls: RegionInput['calls'], said: Map<string, { foes: number; why: string; at?: Point }>): typeof said {
+export function inheritHelpSaid(
+    calls: RegionInput['calls'], said: Map<string, { foes: number; why: string; at?: Point }>,
+    recent: readonly { foes: number; why: string; at?: Point }[] = [],
+): typeof said {
     const help = calls.filter(c => c.kind === 'help');
     for (const c of help) {
         if (said.has(c.id)) continue;
         const sib = help.find(h => h.id !== c.id && said.has(h.id) && (near(h.at, c.at, SAME_FIGHT_RANGE) || near(said.get(h.id)!.at ?? h.at, c.at, SAME_FIGHT_RANGE)));
-        if (sib) said.set(c.id, { ...said.get(sib.id)!, at: c.at });
+        // Else a call of this place that closed lately: the worst said there.
+        const old = sib ? said.get(sib.id)! : recent.filter(r => r.at && near(r.at, c.at, SAME_FIGHT_RANGE))
+            .sort((a, b) => (WHY_RANK[b.why] ?? 0) - (WHY_RANK[a.why] ?? 0) || b.foes - a.foes)[0];
+        if (old) said.set(c.id, { ...old, at: c.at });
     }
     return said;
 }
-const WHY_RANK: Record<string, number> = { sighted: 0, outnumbered: 1, camped: 2, caught: 3 };
+// "8 mids coming X" and "8 mids X": the same news, so sighted and outnumbered rank alike (live 14:52).
+const WHY_RANK: Record<string, number> = { sighted: 0, outnumbered: 0, camped: 1, caught: 2 };
+
+/**
+ * A fight said in /region stays known this long after its call closed: the director closes a call that lapses and
+ * opens a new one there seconds later (live 14:51-14:53: one fight, four calls, "7 mids … north-east" four times).
+ */
+export const HELP_MEMORY_MS = 60_000;
 
 /**
  * What the realm says in `/region` now: help with place and count (by the caller), "omw" (by a unit coming), the
@@ -453,14 +466,17 @@ export class RegionVoice {
     readonly voice: Voice;
     private held: { claim: Claim; until: number }[] = [];
     private helpSaid = new Map<string, { foes: number; why: string; at?: Point }>();
+    /** What was said of help calls that closed, kept HELP_MEMORY_MS. */
+    private helpRecent: { foes: number; why: string; at?: Point; until: number }[] = [];
     constructor(limits: VoiceLimits = REGION_LIMITS) { this.voice = new Voice(limits); }
     hear(u: RegionInput, now: number, nearFoe?: number): Line | null {
         const fromEvents = regionClaims(u, nearFoe, 'events');
         for (const c of fromEvents) if (!this.held.some(h => h.claim.key === c.key)) this.held.push({ claim: c, until: now + REGION_EVENT_HOLD_MS });
         this.held = this.held.filter(h => h.until > now && this.voice.saidAt(h.claim.key) === undefined);
         const open = new Set(u.calls.map(c => c.id));
-        for (const id of this.helpSaid.keys()) if (!open.has(id)) this.helpSaid.delete(id);
-        inheritHelpSaid(u.calls, this.helpSaid);
+        for (const [id, s] of this.helpSaid) if (!open.has(id)) { this.helpSaid.delete(id); this.helpRecent.push({ ...s, until: now + HELP_MEMORY_MS }); }
+        this.helpRecent = this.helpRecent.filter(r => r.until > now);
+        inheritHelpSaid(u.calls, this.helpSaid, this.helpRecent);
         const fromCalls = regionClaims(u, nearFoe, 'calls', this.helpSaid);
         const line = this.voice.offer([...fromCalls, ...this.held.map(h => h.claim)], now);
         const help = line && /^help:(.+):([a-z]+):(\d+)$/.exec(line.key);
