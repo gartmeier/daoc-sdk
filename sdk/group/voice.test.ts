@@ -187,6 +187,13 @@ describe('/region', () => {
         expect(regionClaims(base({ calls: [defend], foes }))[0]).toMatchObject({ text: 'Faste under attack, 5 albs there, defend!', by: 'hib-2', urgent: true });
         expect(regionClaims(base({ events: [{ kind: 'close', call: 'hibernia-12', why: 'keep', end: 'quiet' }] }))[0]?.text).toBe('Faste holds, nice');
     });
+    test('the go says why now; a call that got worse is said again', () => {
+        const ev = (over: object) => regionClaims(base({ events: [{ kind: 'stage', call: 'hibernia-9', stage: 'go', ...over }] }))[0]?.text;
+        expect(ev({ ownersAway: 4, owner: 'midgard', defenders: 6 })).toBe('go go, Faste! mids are busy elsewhere');
+        expect(ev({ defenders: 2 })).toBe('go go, Faste! only 2 on it');
+        const k = (why: string) => regionClaims(base({ calls: [help({ why })] }))[0]?.key;
+        expect(k('sighted')).not.toBe(k('outnumbered'));
+    });
     test('omw from a unit coming', () => {
         const c = regionClaims(base({ calls: [help()], events: [{ kind: 'answer', call: 'hibernia-7', unit: 'hib-2', state: 'coming' }] }));
         expect(c.find(x => x.text === 'omw')?.by).toBe('hib-2');

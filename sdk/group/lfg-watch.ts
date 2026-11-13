@@ -24,6 +24,8 @@ import { findBotEnv, parseEnvFile } from '../index';
 import type { GameMessage } from '../types';
 import { LFG_SAY, placeHuman, readLfg, type LfgUnit } from './lfg';
 import { roleForClass } from './strategy';
+import { enterAlone } from './lifecycle';
+import { THIDRANKI } from './keeps';
 import type { GroupDefinition, Role } from './types';
 
 export const ASK_CLASS_MS = 120_000;
@@ -61,7 +63,17 @@ export function heardLine(m: Pick<GameMessage, 'type' | 'text' | 'sender'>): { f
     return { from: m.sender ?? w[1]!, text: w[2]! };
 }
 
-export interface LfgState { v: 1; records: LfgRecord[]; held: string[] }
+export interface LfgState {
+    v: 1;
+    records: LfgRecord[];
+    held: string[];
+    /** Bots logged back in by the watcher (--presence=swarm) until they stand in Thidranki: a login near an enemy keep lands at the bind, outside. */
+    entering?: { bot: string; since: number; tries: number; at?: number }[];
+}
+
+/** A returning bot not back in Thidranki by then is left to the life cycle and the supervisor. */
+export const ENTER_MAX_MS = 20 * 60_000;
+const ENTER_RETRY_MS = 4 * 60_000;
 
 interface Options {
     groups: string[];
@@ -89,7 +101,7 @@ export function startLfgWatch(o: Options) {
     try { st = { ...st, ...JSON.parse(readFileSync(statePath, 'utf8')) }; } catch { /* first start */ }
     const save = () => {
         st.records = st.records.filter(r => r.stage !== 'done' || Date.now() - (r.lastInGroup ?? r.asked) < 3600_000).slice(-50);
-        st.held = st.records.filter(r => r.stage === 'invited' || r.stage === 'joined').flatMap(r => (r.stepOut ? [r.stepOut] : []));
+        st.held = [...st.records.filter(r => r.stage === 'invited' || r.stage === 'joined').flatMap(r => (r.stepOut ? [r.stepOut] : [])), ...(st.entering ?? []).map(e => e.bot)];
         const tmp = `${statePath}.${process.pid}.tmp`;
         writeFileSync(tmp, JSON.stringify(st, null, 2));
         renameSync(tmp, statePath);
@@ -204,7 +216,10 @@ export function startLfgWatch(o: Options) {
 
     const release = (r: LfgRecord, end: string) => {
         if (r.unit) editGroup(r.unit, def => { def.observed = (def.observed ?? []).filter(x => x.name.toLowerCase() !== r.name.toLowerCase()); });
-        if (r.stepOut && !o.dry && o.presence === 'swarm') requestControl('login', r.stepOut, o.control);
+        if (r.stepOut && !o.dry && o.presence === 'swarm') {
+            requestControl('login', r.stepOut, o.control);
+            st.entering = [...(st.entering ?? []).filter(e => e.bot !== r.stepOut), { bot: r.stepOut, since: Date.now(), tries: 0 }];
+        }
         r.stage = 'done';
         r.end = end;
         note('released', { name: r.name, unit: r.unit, stepOut: r.stepOut, end, minutes: r.joinedAt ? Math.round((Date.now() - r.joinedAt) / 60_000) : 0 });
@@ -271,8 +286,27 @@ export function startLfgWatch(o: Options) {
                 else if (r.stage === 'joined' && state && now - (r.lastInGroup ?? now) > LEFT_MS) release(r, 'left');
             }
         }
+        // Bots we logged back in: walk them into Thidranki if they landed outside (enterAlone, its own control connection;
+        // no unit holds them: field.ts picks only bots in Thidranki).
+        for (const e of [...(st.entering ?? [])]) {
+            const p = (await get(`/status/${user(e.bot)}`))?.player;
+            const done = (why: string) => { st.entering = (st.entering ?? []).filter(x => x !== e); note('entered', { bot: e.bot, why }); };
+            if (p?.regionId === THIDRANKI) done('in Thidranki');
+            else if (now - e.since > ENTER_MAX_MS) done('not back in after 20 min: left to the life cycle');
+            else if (p && !entering.has(e.bot) && now - (e.at ?? 0) >= ENTER_RETRY_MS) {
+                e.at = now;
+                e.tries++;
+                entering.add(e.bot);
+                note('entering', { bot: e.bot, regionId: p.regionId, tries: e.tries });
+                void enterAlone(e.bot, env(e.bot).CLASS ?? '', line => o.log(`lfg enter ${e.bot}: ${line}`))
+                    .then(r => note('enter', { bot: e.bot, success: r.success, message: r.message }))
+                    .catch(err => note('enter', { bot: e.bot, success: false, message: (err as Error).message }))
+                    .finally(() => entering.delete(e.bot));
+            }
+        }
         save();
     };
+    const entering = new Set<string>();
 
     let busy = false;
     let stopped = false;

@@ -308,7 +308,11 @@ export interface RegionInput {
     /** Enemy players our realm sees, with their realm and place. */
     foes: readonly { x: number; y: number; realm: string }[];
     /** This update's events (director.ts LoggedEvent): closes say how a raid ended, answers who is coming. */
-    events: readonly { kind: string; call: string; end?: string; why?: string; unit?: string; state?: string; from?: string }[];
+    events: readonly {
+        kind: string; call: string; end?: string; why?: string; unit?: string; state?: string; from?: string;
+        /** The stage event at the go: what made it go (director.ts musterHold). */
+        stage?: string; defenders?: number; third?: number; ownersAway?: number; owner?: string | null;
+    }[];
     /** Units whose run is up now: the speakers. */
     running: readonly string[];
 }
@@ -337,8 +341,8 @@ export function regionClaims(u: RegionInput, nearFoe = 2500, only?: 'calls' | 'e
                 : c.why === 'caught' ? `${count} on us ${where}, help!`
                 : c.why === 'sighted' ? `${count} coming ${where}, need help`
                 : `${count} ${where}, need help`;
-            // Said again only if it grew a lot (a new bucket of 3).
-            out.push({ key: `help:${c.id}:${Math.floor(c.foes / 3)}`, text, prio: c.why === 'outnumbered' ? 60 : 70, settleMs: 0, cooldownMs: Infinity, by: speaker, urgent: c.why !== 'outnumbered' });
+            // Said again only if it grew a lot (a new bucket of 3) or got worse (sighted → outnumbered → caught).
+            out.push({ key: `help:${c.id}:${c.why}:${Math.floor(c.foes / 3)}`, text, prio: c.why === 'outnumbered' ? 60 : 70, settleMs: 0, cooldownMs: Infinity, by: speaker, urgent: c.why !== 'outnumbered' });
         } else if (c.kind === 'defend') {
             // Our keep is attacked: everyone hears it, the units asked go.
             const by: Record<string, number> = {};
@@ -364,6 +368,15 @@ export function regionClaims(u: RegionInput, nearFoe = 2500, only?: 'calls' | 'e
         if (e.kind === 'answer' && e.state === 'coming' && e.unit && running.has(e.unit)) {
             const call = u.calls.find(c => c.id === e.call);
             if (call && call.kind !== 'muster') out.push({ key: `omw:${e.call}:${e.unit}`, text: 'omw', prio: 30, settleMs: 0, cooldownMs: Infinity, by: e.unit });
+        } else if (e.kind === 'stage' && e.stage === 'go') {
+            // The go, with why now: the same key as the call's plain go, so only one of them is said.
+            const call = u.calls.find(c => c.id === e.call);
+            const speaker = (call ? [...call.asked].sort().find(a => running.has(a)) : undefined) ?? anyone;
+            const owner = e.owner && e.owner in REALM_WORD ? REALM_WORD[e.owner as PlayerRealm][1] : 'they';
+            const why = (e.ownersAway ?? 0) > 0 ? ` ${owner} are busy elsewhere`
+                : e.defenders === 0 ? ' nobody on it'
+                : e.defenders !== undefined && e.defenders <= 3 ? ` only ${e.defenders} on it` : '';
+            if (speaker) out.push({ key: `muster:${e.call}:go`, text: `go go, Faste!${why}`, prio: 76, settleMs: 0, cooldownMs: Infinity, by: speaker, urgent: true });
         } else if (e.kind === 'close' && e.why === 'keep' && anyone) {
             const text = e.end === 'quiet' ? 'Faste holds, nice' : e.end === 'lost' ? 'Faste lost' : null;
             if (text) out.push({ key: `end:${e.call}`, text, prio: 65, settleMs: 0, cooldownMs: Infinity, by: anyone });
