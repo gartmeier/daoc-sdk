@@ -862,6 +862,18 @@ export function defenceOrders(plan: DefencePlan, view: DefenceView): DefenceOrde
 }
 
 /**
+ * How far from the keep's centre (2D) a defence fights: the walls (900-1100 out) and the gate's outside, where the melee break it
+ * (34420, 1330 out). Rehearsal 2026-11-13 13:39: with no limit the defenders engaged two attackers at the stage, 3200 out, and
+ * walked out to them; the keep's defence fights what comes to the keep.
+ */
+export const DEFENCE_REACH = 1450;
+
+/** Whether a foe is the defence's to fight: within DEFENCE_REACH of the keep, or by the lord (any height). */
+export function inDefenceReach(plan: Pick<DefencePlan, 'lord'>, foe: Point): boolean {
+    return Math.hypot(foe.x - plan.lord.x, foe.y - plan.lord.y) <= DEFENCE_REACH;
+}
+
+/**
  * The rest of the way in from `at`: the realm's bank and bridge to the stage (as routeFrom), then the entry outside the gate.
  * Empty inside the walls or at the entry: from there walk to the stand itself, through our own doors.
  */

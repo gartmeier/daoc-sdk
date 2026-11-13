@@ -4,7 +4,7 @@ import { getOccluderStore } from '../occluders';
 import { lineOfSight } from '../vision';
 import { clearOwnDoors, ownDoors } from '../doors';
 import {
-    defenceJobs, defenceOrders, defencePlan, defenceRouteFrom, defenceSeats, FASTE, openOwnDoors, ROOF_THREAT,
+    defenceJobs, defenceOrders, defencePlan, defenceRouteFrom, defenceSeats, FASTE, inDefenceReach, openOwnDoors, ROOF_THREAT,
     type Defender, type DefenceSpell } from './siege';
 import type { Point3 } from './types';
 
@@ -88,6 +88,14 @@ describe('defenceOrders', () => {
         expect(o.seats.get(3)!.job).toBe('wall');
         expect(o.threat).toEqual({ outside: 1, inside: 0, roof: 1 });
         expect(ROOF_THREAT).toBeGreaterThan(400);
+    });
+});
+
+describe('inDefenceReach', () => {
+    test('the gate-breakers outside the gate and the courtyard, not the stage', () => {
+        expect(inDefenceReach(plan, { x: 34435, y: 38275 })).toBe(true);
+        expect(inDefenceReach(plan, { x: 33100, y: 38250 })).toBe(true);
+        expect(inDefenceReach(plan, FASTE.stage)).toBe(false);
     });
 });
 
