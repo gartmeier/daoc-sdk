@@ -134,6 +134,8 @@ export interface WaveSettings {
     quietMaxMs: number;
     /** A sighting older than this is no place to go. */
     sightingMs: number;
+    /** Enemies within this of each other are one sighting (one group of them); a later one within it replaces it. */
+    clusterRange: number;
     /** Sightings within this of an enemy portal keep are its spawn: no wave goes there. */
     portalClear: number;
 }
@@ -157,7 +159,7 @@ export const LIFECYCLE_SETTINGS: LifecycleSettings = {
     earlyAfterMs: 30 * 60_000,
     balance: { ratio: 1.5, windowMs: 20 * 60_000, near: 4000, holdMs: 10 * 60_000, decayMs: 20 * 60_000, maxShift: 3, minCount: 4 },
     raid: { onlineSlack: 1, outShare: 0.7, minOut: 5, gapMs: 25 * 60_000 },
-    wave: { outMinMs: 12 * 60_000, afterFightMs: 90_000, outMaxMs: 30 * 60_000, quietMinMs: 4 * 60_000, quietMaxMs: 7 * 60_000, sightingMs: 15 * 60_000, portalClear: 6000 },
+    wave: { outMinMs: 12 * 60_000, afterFightMs: 90_000, outMaxMs: 30 * 60_000, quietMinMs: 4 * 60_000, quietMaxMs: 7 * 60_000, sightingMs: 15 * 60_000, clusterRange: 3000, portalClear: 6000 },
 };
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────── the curve
@@ -516,6 +518,10 @@ export interface WaveState {
     foughtAt: number;
     /** The realm's last sighting outside enemy spawns. */
     lastSeen: (Point3 & { at: number }) | null;
+    /** Recent sightings, one per group of enemies (clusterRange), newest first: a wave out lists them, each unit goes to its nearest. */
+    seen?: (Point3 & { at: number })[];
+    /** Out: the sightings this wave goes toward (each unit its nearest); null or empty: patrol. */
+    towards?: Point3[] | null;
     why: string;
 }
 
@@ -541,10 +547,19 @@ export function stepWave(w: WaveState, board: RealmBoardView | null, o: { realm:
         const z = foes.reduce((a, f) => a + f.z, 0) / foes.length;
         out.lastSeen = { x: Math.round(x), y: Math.round(y), z: Math.round(z), at: now };
     }
+    // Groups of enemies, each its own sighting: the realm's average of two fights far apart is a place nobody is.
+    const seen = (w.seen ?? []).filter(p => now - p.at <= s.sightingMs);
+    for (const g of clusterFoes(foes, s.clusterRange)) {
+        const i = seen.findIndex(p => Math.hypot(p.x - g.x, p.y - g.y) <= s.clusterRange);
+        if (i >= 0) seen.splice(i, 1);
+        seen.unshift({ ...g, at: now });
+    }
+    out.seen = seen.slice(0, 8);
     const fighting = (board?.units ?? []).some(u => u.running && u.inFight);
     const goOut = (why: string) => {
         out.id = w.id + 1; out.phase = 'out'; out.since = now; out.until = null; out.fought = false; out.foughtAt = 0; out.why = why;
         out.toward = out.lastSeen && now - out.lastSeen.at <= s.sightingMs ? { x: out.lastSeen.x, y: out.lastSeen.y, z: out.lastSeen.z } : null;
+        out.towards = (out.seen ?? []).map(p => ({ x: p.x, y: p.y, z: p.z }));
     };
     if (w.phase === 'quiet') {
         if (o.musterOpen) goOut('a muster');
@@ -555,15 +570,26 @@ export function stepWave(w: WaveState, board: RealmBoardView | null, o: { realm:
     if (o.musterOpen) return out;
     const over = out.fought && now - out.foughtAt >= s.afterFightMs && now - w.since >= s.outMinMs;
     if (over || now - w.since >= s.outMaxMs) {
-        out.id = w.id + 1; out.phase = 'quiet'; out.since = now; out.toward = null;
+        out.id = w.id + 1; out.phase = 'quiet'; out.since = now; out.toward = null; out.towards = null;
         out.until = now + s.quietMinMs + rand() * (s.quietMaxMs - s.quietMinMs);
         out.why = over ? 'after a fight' : `out ${Math.round((now - w.since) / 60_000)} min`;
     }
     return out;
 }
 
-export function waveFile(realm: PlayerRealm, w: WaveState, now: number): RealmWave {
-    return { v: 1, realm, at: now, id: w.id, phase: w.phase, since: w.since, until: w.until, toward: w.toward, why: w.why };
+export function waveFile(realm: PlayerRealm, w: WaveState, now: number): RealmWave & { towards: Point3[] | null } {
+    return { v: 1, realm, at: now, id: w.id, phase: w.phase, since: w.since, until: w.until, toward: w.toward, towards: w.towards ?? null, why: w.why };
+}
+
+/** Enemies in groups: each joins the first group whose first member is within `range`; the groups' centres. */
+export function clusterFoes(foes: readonly { x: number; y: number; z: number }[], range: number): Point3[] {
+    const groups: { x: number; y: number; z: number }[][] = [];
+    for (const f of foes) {
+        const g = groups.find(g => Math.hypot(g[0]!.x - f.x, g[0]!.y - f.y) <= range);
+        if (g) g.push(f); else groups.push([f]);
+    }
+    const mean = (g: { x: number; y: number; z: number }[], k: 'x' | 'y' | 'z') => Math.round(g.reduce((a, f) => a + f[k], 0) / g.length);
+    return groups.map(g => ({ x: mean(g, 'x'), y: mean(g, 'y'), z: mean(g, 'z') }));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────────── gear wear

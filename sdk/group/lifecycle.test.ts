@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
     curveAt, CURVE, groupNeeds, initialLives, LIFECYCLE_SETTINGS, logOutUnsafe, mixFor, newWave, openNeeds, readBalance, see, stepBalance,
-    stepRealm, stepWave, wantsMuster, wearOf, type BalanceState, type Life, type LifeBot, type RealmStep, type Sightings,
+    stepRealm, stepWave, waveFile, wantsMuster, wearOf, type BalanceState, type Life, type LifeBot, type RealmStep, type Sightings,
 } from './lifecycle';
 import { quietSpot, waveOrder, nextIdle, QUIET_DOOR_CLEAR, QUIET_REASON, type RealmWave } from './waves';
 import { doorSide, PORTAL_DOORS } from '../doors';
@@ -383,6 +383,22 @@ describe('waves', () => {
         w = stepWave(w, board(false), o(until + 1), seeded());
         expect(w.phase).toBe('out');
         expect(w.toward).toEqual({ x: 30000, y: 30000, z: 3000 });
+    });
+    test('each group of enemies its own sighting: a wave out lists them, newest first, not their average', () => {
+        let w = newWave(0);
+        w = stepWave(w, board(true, [{ x: 20000, y: 20000 }, { x: 20500, y: 20200 }, { x: 45000, y: 40000 }]), o(5 * MIN), seeded());
+        expect(w.seen!.map(p => [p.x, p.y])).toEqual([[45000, 40000], [20250, 20100]]);
+        // The same group seen again a little further on: it replaces its sighting.
+        w = stepWave(w, board(true, [{ x: 21000, y: 20500 }]), o(6 * MIN), seeded());
+        expect(w.seen!.map(p => [p.x, p.y])).toEqual([[21000, 20500], [45000, 40000]]);
+        w = stepWave(w, board(false), o(13 * MIN), seeded());
+        expect(w.phase).toBe('quiet');
+        expect(waveFile('hibernia', w, 13 * MIN).towards).toBeNull();
+        w = stepWave(w, board(false), o(w.until! + 1), seeded());
+        expect(w.towards!.map(p => [p.x, p.y])).toEqual([[21000, 20500], [45000, 40000]]);
+        // Older than sightingMs (15 min): gone.
+        w = stepWave(w, board(false), o(40 * MIN), seeded());
+        expect(w.seen).toEqual([]);
     });
     test('quiet after outMax without a fight; a muster brings them out', () => {
         let w = newWave(0);
