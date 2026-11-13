@@ -294,7 +294,7 @@ export interface RegionInput {
     enabled: boolean;
     calls: readonly {
         id: string; kind: string; from: string; why: string; at: Point; stage?: 'rally' | 'go'; target?: Point;
-        foes: number; asked: readonly string[]; coming: readonly string[]; defenders?: number; hold?: 'defenders' | 'lord';
+        foes: number; asked: readonly string[]; coming: readonly string[]; defenders?: number; hold?: string;
     }[];
     /** Enemy players our realm sees, with their realm and place. */
     foes: readonly { x: number; y: number; realm: string }[];
@@ -326,9 +326,18 @@ export function regionClaims(u: RegionInput, nearFoe = 2500, only?: 'calls' | 'e
             if (!speaker) continue;
             const text = c.why === 'camped' ? `${count} camping ${where.replace(/^(at|near) /, '')}, need help`
                 : c.why === 'caught' ? `${count} on us ${where}, help!`
+                : c.why === 'sighted' ? `${count} coming ${where}, need help`
                 : `${count} ${where}, need help`;
             // Said again only if it grew a lot (a new bucket of 3).
             out.push({ key: `help:${c.id}:${Math.floor(c.foes / 3)}`, text, prio: c.why === 'outnumbered' ? 60 : 70, settleMs: 0, cooldownMs: Infinity, by: speaker, urgent: c.why !== 'outnumbered' });
+        } else if (c.kind === 'defend') {
+            // Our keep is attacked: everyone hears it, the units asked go.
+            const by: Record<string, number> = {};
+            for (const f of u.foes) if (near(f, c.at, 4500)) by[f.realm] = (by[f.realm] ?? 0) + 1;
+            const count = countWords(by) || `${c.foes}`;
+            const speaker = [...c.asked].sort().find(a => running.has(a)) ?? anyone;
+            if (!speaker) continue;
+            out.push({ key: `defend:${c.id}:${Math.floor(c.foes / 4)}`, text: `Faste under attack, ${count} there, defend!`, prio: 80, settleMs: 0, cooldownMs: Infinity, by: speaker, urgent: true });
         } else if (c.kind === 'muster') {
             const speaker = [...c.asked].sort().find(a => running.has(a)) ?? anyone;
             if (!speaker) continue;
@@ -336,6 +345,7 @@ export function regionClaims(u: RegionInput, nearFoe = 2500, only?: 'calls' | 'e
                 const where = placeName(c.at, u.realm, regionId).replace(/^at /, '');
                 out.push({ key: `muster:${c.id}:rally`, text: `Faste raid, gather ${/^(near|our|the)/.test(where) ? `at ${where}` : where}`, prio: 50, settleMs: 0, cooldownMs: Infinity, by: speaker });
                 if (c.hold === 'defenders' && c.defenders) out.push({ key: `muster:${c.id}:held`, text: `${c.defenders} on the Faste, wait at the rally`, prio: 45, settleMs: 0, cooldownMs: Infinity, by: speaker });
+                if (c.hold === 'winner') out.push({ key: `muster:${c.id}:winner`, text: 'they are fighting at the Faste, wait for the winner', prio: 45, settleMs: 0, cooldownMs: Infinity, by: speaker });
             } else if (c.stage === 'go') {
                 out.push({ key: `muster:${c.id}:go`, text: 'go go, Faste!', prio: 75, settleMs: 0, cooldownMs: Infinity, by: speaker, urgent: true });
             }
@@ -344,7 +354,10 @@ export function regionClaims(u: RegionInput, nearFoe = 2500, only?: 'calls' | 'e
     for (const e of only === 'calls' ? [] : u.events) {
         if (e.kind === 'answer' && e.state === 'coming' && e.unit && running.has(e.unit)) {
             const call = u.calls.find(c => c.id === e.call);
-            if (call?.kind === 'help') out.push({ key: `omw:${e.call}:${e.unit}`, text: 'omw', prio: 30, settleMs: 0, cooldownMs: Infinity, by: e.unit });
+            if (call && call.kind !== 'muster') out.push({ key: `omw:${e.call}:${e.unit}`, text: 'omw', prio: 30, settleMs: 0, cooldownMs: Infinity, by: e.unit });
+        } else if (e.kind === 'close' && e.why === 'keep' && anyone) {
+            const text = e.end === 'quiet' ? 'Faste holds, nice' : e.end === 'lost' ? 'Faste lost' : null;
+            if (text) out.push({ key: `end:${e.call}`, text, prio: 65, settleMs: 0, cooldownMs: Infinity, by: anyone });
         } else if (e.kind === 'close' && e.why === 'raid' && anyone) {
             const text = e.end === 'captured' ? 'Faste is ours!'
                 : e.end === 'broken' ? 'raid broke, back to our PK'

@@ -91,6 +91,9 @@ const CLASS_ROLES: Record<string, Role> = {
     Mentalist: 'nuker', Enchanter: 'nuker', Eldritch: 'nuker', Animist: 'nuker', Magician: 'nuker', Forester: 'nuker', Bainshee: 'nuker',
 };
 
+/** Every class name roleForClass knows (lfg.ts reads a class from a human's words). */
+export const CLASS_NAMES: readonly string[] = Object.keys(CLASS_ROLES);
+
 export function roleForClass(className: string): Role {
     return CLASS_ROLES[className] ?? 'melee';
 }

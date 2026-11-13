@@ -160,6 +160,13 @@ describe('/region', () => {
         expect(v.hear(base({ events: [{ kind: 'close', call: 'hibernia-9', why: 'raid', end: 'captured' }] }), 1000)).toBeNull();
         expect(v.hear(base(), 5100)?.text).toBe('Faste is ours!');
     });
+    test('sighted, and the defence of our keep', () => {
+        const foes = Array.from({ length: 5 }, () => ({ x: 33089, y: 38271, realm: 'albion' }));
+        expect(regionClaims(base({ calls: [help({ why: 'sighted', at: { x: 33000, y: 25000 } })], foes: [] }))[0]?.text).toBe('6 coming north of the Faste, need help');
+        const defend = { id: 'hibernia-12', kind: 'defend', from: 'director', why: 'keep', at: { x: 33089, y: 38271 }, foes: 5, asked: ['hib-2'], coming: [] };
+        expect(regionClaims(base({ calls: [defend], foes }))[0]).toMatchObject({ text: 'Faste under attack, 5 albs there, defend!', by: 'hib-2', urgent: true });
+        expect(regionClaims(base({ events: [{ kind: 'close', call: 'hibernia-12', why: 'keep', end: 'quiet' }] }))[0]?.text).toBe('Faste holds, nice');
+    });
     test('omw from a unit coming', () => {
         const c = regionClaims(base({ calls: [help()], events: [{ kind: 'answer', call: 'hibernia-7', unit: 'hib-2', state: 'coming' }] }));
         expect(c.find(x => x.text === 'omw')?.by).toBe('hib-2');
