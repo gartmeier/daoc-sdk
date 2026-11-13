@@ -21,6 +21,7 @@
 
 import type { Realm } from '../types';
 import { getNavmeshStore, type NavMesh, type NavmeshStore } from '../navmesh';
+import { setOwnDoors } from '../doors';
 import { BATTLEGROUND_LAYOUTS, keepAt, THIDRANKI, type Keep, type PlayerRealm } from './keeps';
 import type { Point, Point3 } from './types';
 
@@ -89,6 +90,8 @@ export interface SiegeDoor {
     id: number;
     at: Point3;
     kind: 'gate' | 'door' | 'postern';
+    /** The door table's heading: its front, where the heading points, is the inside (sdk/doors.ts doorFront). */
+    heading: number;
 }
 
 export const LORD_REACH = 400;
@@ -169,12 +172,12 @@ export const FASTE: SiegeLayout = {
     lordName: /\bThidranki$/,
     // The door table (2026-11-13): 301 the gate, 302 the building's door, 303-306 the building's posterns at wall-walk height.
     doors: [
-        { id: 252000301, at: { x: 34333, y: 38275, z: 3720 }, kind: 'gate' },
-        { id: 252000302, at: { x: 32654, y: 38180, z: 3720 }, kind: 'door' },
-        { id: 252000303, at: { x: 32323, y: 37845, z: 3975 }, kind: 'postern' },
-        { id: 252000304, at: { x: 32311, y: 38669, z: 3976 }, kind: 'postern' },
-        { id: 252000305, at: { x: 32315, y: 37950, z: 3952 }, kind: 'postern' },
-        { id: 252000306, at: { x: 32311, y: 38669, z: 3952 }, kind: 'postern' },
+        { id: 252000301, at: { x: 34333, y: 38275, z: 3720 }, kind: 'gate', heading: 1024 },
+        { id: 252000302, at: { x: 32654, y: 38180, z: 3720 }, kind: 'door', heading: 1030 },
+        { id: 252000303, at: { x: 32323, y: 37845, z: 3975 }, kind: 'postern', heading: 4079 },
+        { id: 252000304, at: { x: 32311, y: 38669, z: 3976 }, kind: 'postern', heading: 2058 },
+        { id: 252000305, at: { x: 32315, y: 37950, z: 3952 }, kind: 'postern', heading: 2058 },
+        { id: 252000306, at: { x: 32311, y: 38669, z: 3952 }, kind: 'postern', heading: 2058 },
     ],
     // Each checked on the navmesh without swimming (bridges are the only wet stretches) and against every post's aggro:
     // at least 100 clear on the way to the stage (Hibernia's leaves its bridge 350 off a wall caster's circle, and
@@ -560,8 +563,13 @@ export function shutDoors(layout: Pick<SiegeLayout, 'doors'>, doors: DoorState):
 /** What each mesh was last told per door (applyDoors), so the flags change only when the state does. */
 const applied = new WeakMap<NavMesh, Map<number, boolean>>();
 
-/** Shut and open the keep's doors on `mesh` (NavMesh.setDoorBlocking) as `doors` says: every later walk in this process obeys them. */
-export function applyDoors(layout: Pick<SiegeLayout, 'doors'>, doors: DoorState, mesh: NavMesh): void {
+/**
+ * Shut and open the keep's doors on `mesh` (NavMesh.setDoorBlocking) as `doors` says: every later walk in this process obeys them.
+ * In our own keep its unbroken doors are also ours to use (sdk/doors.ts setOwnDoors): walkTo stops at each on its way, interacts and
+ * goes through as a player does. Out of it (or with no keep named), they are no longer.
+ */
+export function applyDoors(layout: Pick<SiegeLayout, 'doors'> & Partial<Pick<SiegeLayout, 'keep' | 'regionId'>>, doors: DoorState, mesh: NavMesh): void {
+    if (layout.keep !== undefined && layout.regionId !== undefined) useOwnDoors(layout as Pick<SiegeLayout, 'doors' | 'keep' | 'regionId'>, doors);
     const shut = new Set(shutDoors(layout, doors).map(d => d.id));
     let known = applied.get(mesh);
     if (!known) applied.set(mesh, known = new Map());
@@ -570,6 +578,13 @@ export function applyDoors(layout: Pick<SiegeLayout, 'doors'>, doors: DoorState,
         if (known.get(d.id) === blocking) continue;
         if (mesh.setDoorBlocking(d.at, blocking)) known.set(d.id, blocking);
     }
+}
+
+/** Register (or, when the keep isn't ours, forget) the keep's doors we go through by interacting: every unbroken one of ours. */
+export function useOwnDoors(layout: Pick<SiegeLayout, 'doors' | 'keep' | 'regionId'>, doors: DoorState): void {
+    setOwnDoors(layout.regionId, layout.keep, doors.ours
+        ? layout.doors.filter(d => !doors.broken.includes(d.id)).map(d => ({ doorId: d.id, at: d.at, heading: d.heading }))
+        : []);
 }
 
 /** A target this far (3D) off the mesh at its spot stands where no walk ends (a merlon, a ledge): not reachable on foot. */

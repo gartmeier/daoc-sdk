@@ -95,6 +95,7 @@ import {
 import { castRoom, mobRunInMs } from './mob-speed';
 import { EquipmentSlot, isWeapon, ObjectType } from './types';
 import { getDefaultPathProvider, type PathProvider } from './pathfinding';
+import { DOOR_REACH, doorApproach, doorOnRoute, doorSide, dropOwnDoor, ownDoors, type OwnDoor } from './doors';
 import { groundTargetSnap } from './ground';
 import { lineOfSight, terrainGround } from './vision';
 import { isDelveOf, parseDelve } from './delve';
@@ -330,6 +331,12 @@ const MOVE_REFUSALS = [/you can't|you cannot|you are not|you must|can't go there
 const GROUP_INVITE_DIALOG = 0x05;
 /** Bound on one route plan when walkTo has no explicit timeout (its deadline follows the plan). */
 const PLAN_TIMEOUT_MS = 15_000;
+/** Doors one walk goes through at most (a keep's gate, its building's door, a postern, and back out). */
+const MAX_DOOR_HOPS = 4;
+/** How long the jump through our own door may take: 47 ms live (2026-11-13). */
+const DOOR_JUMP_WAIT_MS = 1500;
+/** What the server says when a door doesn't take us through (GameObject.Interact's TooFarAway, GameKeepDoor.Interact). */
+const DOOR_REFUSALS = /too far away|You are mesmerized|You are stunned/i;
 
 // ── Result / option types ───────────────────────────────────────────────────
 
@@ -6061,7 +6068,85 @@ export class BotActions {
     }
 
     /** Shared walk loop for walkTo / followPath / walkToObject. */
+    /**
+     * A walk that uses our own keep's doors as a player does (sdk/doors.ts): where the planned route passes a door registered as
+     * ours (siege.ts applyDoors), walk to it, interact, watch for the jump through, and plan the rest from the other side. With no
+     * such door in the region it is routeOnce as before. A door that doesn't let us through is no longer taken for ours: reason 'door'.
+     */
     private async route(dest: Point, via: Point[], options: Omit<WalkOptions, 'z'> & { z?: number }): Promise<WalkResult> {
+        const p0 = this.helpers.player();
+        if (!p0 || ownDoors(p0.regionId).length === 0) return this.routeOnce(dest, via, options);
+        const started = Date.now();
+        const left = () => options.timeout === undefined ? undefined : Math.max(1, options.timeout - (Date.now() - started));
+        const tolerance = options.tolerance ?? 64;
+        const provider = options.pathProvider ?? getDefaultPathProvider();
+        let vias = via.slice();
+        for (let hop = 0; ; hop++) {
+            const p = this.helpers.player();
+            const doors = p ? ownDoors(p.regionId) : [];
+            if (!p || p.isDead || doors.length === 0 || hop >= MAX_DOOR_HOPS || Math.hypot(dest.x - p.x, dest.y - p.y) <= tolerance && vias.length === 0) {
+                return this.routeOnce(dest, vias, { ...options, timeout: left() });
+            }
+            // The route as routeOnce will plan it, for the doors on it; any trouble planning is routeOnce's to report.
+            const pts: Vec3[] = [];
+            const viaEnds: number[] = [];
+            let cur: Vec3 = { x: p.x, y: p.y, z: p.z };
+            let planned = true;
+            for (const leg of [...vias, dest]) {
+                const path = await provider.findPath({ regionId: p.regionId, from: cur, to: leg });
+                if (!path.success || path.waypoints.length === 0) { planned = false; break; }
+                pts.push(...path.waypoints);
+                viaEnds.push(pts.length - 1);
+                cur = pts[pts.length - 1]!;
+            }
+            const hit = planned ? doorOnRoute({ x: p.x, y: p.y, z: p.z }, pts, doors) : null;
+            if (!hit) return this.routeOnce(dest, vias, { ...options, timeout: left() });
+            const near = doorApproach(hit.door, hit.side);
+            // The vias before the door are walked on the way to it.
+            const before = vias.filter((_, i) => viaEnds[i]! < hit.index);
+            const after = vias.filter((_, i) => viaEnds[i]! >= hit.index);
+            const toDoor = await this.routeOnce(near, before, { ...options, z: near.z, tolerance: Math.min(tolerance, 30), timeout: left() });
+            if (!toDoor.success) return { ...toDoor, message: `To our door ${hit.door.doorId}: ${toDoor.message}` };
+            // Close enough already: the destination is this side of the door within tolerance.
+            if (after.length === 0 && Math.hypot(dest.x - near.x, dest.y - near.y) <= tolerance) return this.routeOnce(dest, [], { ...options, timeout: left() });
+            const through = await this.passOwnDoor(hit.door, hit.side, left());
+            if (!through.success) return { ...toDoor, ...through, distance: Math.round(Math.hypot(dest.x - (through.position?.x ?? near.x), dest.y - (through.position?.y ?? near.y))) };
+            vias = after;
+        }
+    }
+
+    /** Interact with our own door from `side` and watch for the server's jump to its other side (GameKeepDoor.Interact). */
+    private async passOwnDoor(door: OwnDoor, side: 1 | -1, timeoutMs?: number): Promise<WalkResult> {
+        const result = (success: boolean, message: string, reason?: string): WalkResult => {
+            const p = this.helpers.player();
+            return { success, message, ...(reason ? { reason } : {}), position: p ? { x: p.x, y: p.y, z: p.z } : null, distance: 0, reissues: 0 };
+        };
+        const obj = this.helpers.state()?.nearbyObjects.find(o => o.doorId === door.doorId);
+        if (!obj) return result(false, `Our door ${door.doorId} is not in view`, 'not_found');
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const p = this.helpers.player();
+            if (!p) return result(false, 'Not in game', 'not_in_game');
+            if (Math.hypot(p.x - door.at.x, p.y - door.at.y, p.z - door.at.z) > DOOR_REACH - 12) return result(false, `Too far from our door ${door.doorId} to use it`, 'out_of_range');
+            const baseline = this.helpers.state()?.gameMessages.at(-1)?.id ?? 0;
+            const r = await this.sdk.sendInteract(obj.objectId);
+            if (!r.success) return result(false, `Interact refused: ${r.message}`, r.reason ?? 'dispatch_failed');
+            const wait = Math.min(DOOR_JUMP_WAIT_MS, timeoutMs ?? DOOR_JUMP_WAIT_MS);
+            const seen = await this.helpers.waitFor(s => {
+                const me = s.player;
+                if (me && doorSide(door, me) !== side && Math.hypot(me.x - p.x, me.y - p.y) > 60) return 'through';
+                const said = s.gameMessages.find(m => m.id > baseline && DOOR_REFUSALS.test(m.text));
+                return said ? said.text : null;
+            }, wait);
+            if (seen === 'through') return result(true, `Through our door ${door.doorId}`);
+            if (seen) return result(false, `Our door ${door.doorId}: ${seen}`, /mesmeri|stunned/i.test(seen) ? 'crowd_controlled' : 'out_of_range');
+        }
+        // No jump: the door isn't ours (any more). A real client can't walk through it, so neither do we.
+        const p = this.helpers.player();
+        if (p) dropOwnDoor(p.regionId, door.doorId);
+        return result(false, `Door ${door.doorId} did not let us through: not our realm's`, 'door');
+    }
+
+    private async routeOnce(dest: Point, via: Point[], options: Omit<WalkOptions, 'z'> & { z?: number }): Promise<WalkResult> {
         const tolerance = options.tolerance ?? 64;
         const s0 = this.helpers.state();
         const p0 = s0?.player;
