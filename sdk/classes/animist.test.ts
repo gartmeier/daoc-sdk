@@ -5,7 +5,7 @@ import { withCharacter } from '../group/character';
 import type { Behavior } from '../group/member';
 import { packBehaviors } from '../group/pack';
 import { rvrBehaviors } from '../group/rvr';
-import { animist, bomberPick, fnfPick, LEFT_BEHIND_MS, REACH_MARGIN, SUMMON_MARGIN, TURRET_REACH, turretPick, turretSpot, turretState } from './animist';
+import { animist, bomberPick, fnfPick, LEFT_BEHIND_MS, REACH_MARGIN, SUMMON_MARGIN, TURRET_REACH, turretPick, turretOffCc, turretSpot, turretState } from './animist';
 import { knownThrough } from './summoner-fixtures';
 
 describe('animist kit', () => {
@@ -17,6 +17,8 @@ describe('animist kit', () => {
             expect(list.indexOf('fnfTurret')).toBeLessThan(list.indexOf('bomb'));
             expect(list.indexOf('bomb')).toBeLessThan(list.indexOf('assist'));
         }
+        expect(turretOffCc().side).toBe(true);
+        expect(withCharacter(rvrBehaviors().nuker, animist()).map(b => b.name)).toContain('turretOffCc');
         const bare = withCharacter(rvrBehaviors().nuker, animist({ fnf: false, bombers: false })).map(b => b.name);
         expect(bare).not.toContain('fnfTurret');
         expect(bare).not.toContain('bomb');

@@ -9,7 +9,8 @@
 // The rest is the nuker's: assist's lifedrain, giving ground under a melee (theurgist.ts), Quickcast under fire.
 // learnings/classes/animist.md has the runs.
 
-import { ccHolds, foeInView, hammeredBy, stopSwinging, type TacticsSettings } from '../group/behaviors';
+import { ccHolds, claimedBy, foeInView, hammeredBy, stopSwinging, type TacticsSettings } from '../group/behaviors';
+import type { Contact } from '../group/types';
 import { dist } from '../group/battleground';
 import type { Character } from '../group/character';
 import type { Behavior, MemberContext } from '../group/member';
@@ -107,15 +108,8 @@ export const plantTurret = (): Behavior<TacticsSettings> => ({
     interruptible: false,
     async run(ctx) {
         const petState = ctx.sdk.getPetState();
-        // Off whatever it shoots once that is mezzed or about to be, the focus or not: a turret takes its own next target when one dies,
-        // and broke crowd control 5 and 2 times in hibernia's first field sorties (run B) with only the focus checked.
-        const onIt = ctx.contact(petState?.targetObjectId);
-        if (petState && onIt && petState.aggression !== 'passive' && (ccHolds(ctx, onIt) || ctx.orders().cc.some(a => a.targetId === onIt.objectId))) {
-            await ctx.sdk.sendPetCommand('passive');
-            return false;
-        }
         const go = focusToHit(ctx);
-        if (!go) return false;
+        if (!go || ccOnIt(ctx, go.mob)) return false;
         const now = Date.now();
         const turret = petState ? ctx.sdk.getPet() : null;
         const state = turretLeftBehind(ctx, turret ?? null, go.seen, now);
@@ -148,6 +142,35 @@ export const plantTurret = (): Behavior<TacticsSettings> => ({
             if (!r.success) ctx.result('petAttack', r, go.mob.objectId);
         }
         return true;
+    },
+});
+
+/** A mezz cast at it by another member this recently still counts as on its way. */
+const CC_CLAIM_MS = 4000;
+/** No second passive within this. */
+const OFF_CC_MS = 1000;
+
+/** Crowd control on it that holds, assigned to it, or being cast at it by another member: a turret shot would break it. */
+export function ccOnIt(ctx: MemberContext, c: Contact): boolean {
+    return ccHolds(ctx, c) || ctx.orders().cc.some(a => a.targetId === c.objectId) || claimedBy(ctx, 'cc', c.objectId, CC_CLAIM_MS).length > 0;
+}
+
+/**
+ * On the side tick: the turret off whatever it shoots once that is under crowd control or about to be, the focus or not (a turret takes its
+ * own next target when one dies). In plantTurret's turn this missed most: Etain's 2.5 s casts held the turn, and the turret broke crowd
+ * control 5, 2 and 6 times in hibernia's field sorties (run B). Passive stops a turret within a shot (learnings/pets.md "Commanding").
+ */
+export const turretOffCc = (): Behavior<TacticsSettings> => ({
+    name: 'turretOffCc',
+    side: true,
+    interruptible: false,
+    async run(ctx) {
+        const petState = ctx.sdk.getPetState();
+        const onIt = ctx.contact(petState?.targetObjectId);
+        if (!petState || !onIt || petState.aggression === 'passive' || !ccOnIt(ctx, onIt) || waiting(ctx.memory, 'turretOffAt', Date.now() - OFF_CC_MS)) return false;
+        ctx.memory.set('turretOffAt', Date.now());
+        await ctx.sdk.sendPetCommand('passive');
+        return false;
     },
 });
 
@@ -201,6 +224,7 @@ export function animist({ saveBelow = 0, fnf = true, bombers = true }: AnimistOp
     return {
         role: 'nuker',
         instant: [quickcastUnderFire()],
+        urgent: [turretOffCc()],
         react: [giveGround()],
         fight: [plantTurret(), ...(fnf ? [fnfTurret(saveBelow)] : []), ...(bombers ? [bomb(saveBelow)] : []), ...nukerFight(saveBelow, true)],
     };
