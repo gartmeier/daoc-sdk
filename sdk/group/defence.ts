@@ -35,7 +35,14 @@ export function defenceSettings(plan: Pick<DefencePlan, 'keep'>, orders: Defence
 
 /** Within this of the keep's centre a member walks to its own stand (the entry outside the gate is 1560 out, the stage 3200). */
 export const DEFENCE_APPROACH = 2200;
-const nearKeep = (plan: Pick<DefencePlan, 'centre'>, p: { x: number; y: number }) => Math.hypot(p.x - plan.centre.x, p.y - plan.centre.y) <= DEFENCE_APPROACH;
+/**
+ * A member this near the keep (the island: the stage is 3200 out, the bridges' ends 4600-6000) walks to its own stand, in a fight
+ * too; farther out the unit travels in as a body (tactics/defend.ts, within DEFENCE_APPROACH of the centre it holds). Rehearsal
+ * 15:03-15:16: with 2200 per member, three casters 2700 out stood behind a rise for minutes, every cast at the gate's attackers
+ * `not_visible`, while the unit's fight there kept it from travelling.
+ */
+export const DEFENCE_GATHER = 4500;
+const nearKeep = (plan: Pick<DefencePlan, 'centre'>, p: { x: number; y: number }) => Math.hypot(p.x - plan.centre.x, p.y - plan.centre.y) <= DEFENCE_GATHER;
 const insideWalls = (plan: Pick<DefencePlan, 'centre'>, p: { x: number; y: number }) => Math.hypot(p.x - plan.centre.x, p.y - plan.centre.y) <= 1000;
 
 /** A leg of the walk in: short enough that a change of orders is heard between legs. */
@@ -60,7 +67,7 @@ export function onStand(me: { x: number; y: number; z: number }, stand: DefenceS
 
 /**
  * Walk to our stand and keep to it, our own doors opened to the walk. Falls through (the kit acts) while we stand on it, or within
- * its leash in a fight; farther than DEFENCE_APPROACH from the keep (the unit travels in as a body: the defence call's own legs);
+ * its leash in a fight; farther than DEFENCE_GATHER from the keep (the unit travels in as a body: the defence call's own legs);
  * and outside the walls while an enemy attacks us (fight back first).
  */
 export const holdDefenceStand: Behavior = {
