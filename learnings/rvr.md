@@ -470,6 +470,14 @@ The ranks follow line of sight with the walls (`sdk/vision.ts` `lineOfSight` ove
 - **A point-blank bomb has no line-of-sight check** (`SpellHandler.SelectTargets`, ENEMY with a radius: `GetPlayersInRadius`). A bomber 120 inside the gate hits the melee breaking it from outside (34420, 210 away). Rehearsal: an Ice Wizard's Steaming Blast hit them through the shut gate for 118-127, and one died in 10 s.
 - **Fight what comes to the keep:** `inDefenceReach`, within 1450 of the keep's centre. Unlimited, the rehearsal's defenders engaged attackers at the stage, 3200 out, and walked out to them.
 - **Measure "inside" from the keep's centre** (33089, 38271), not the lord's spot, which is 800 west on the building.
+- **Walk in as one body.** Far out, the unit travels as a group to the entry outside the gate, over its own bridge (`tactics/defend.ts`). On the island (`DEFENCE_GATHER`, 4500 from the keep) each member walks to its own stand, and fights back first when attacked outside the walls.
+  - Live 14:20, before this: members walked alone from 25000 out. Four were rooted on the way, and two died before the gate.
+- **No step through a door for sight.** A cast refused for sight steps toward a spot that sees the target, and it stops at any keep door, ours or a shut one.
+  - Live 15:25: two casters on their wall stands walked out through their own gate to see the raid and were rooted outside.
+- **First live defence, 2026-11-13 15:22-15:27:** Midgard's two main groups against up to 15 Albion and Hibernia attackers.
+  - They entered through their gate by interact and took their seats: melee behind the gate, casters on the south-east wall-walk, the healer at the stair's foot.
+  - It held, 3 kills for 1 loss.
+  - The calls close 45 s after the last attacker is seen. While two raids fought each other on the approach, the defenders patrolled out between waves.
 
 ## The wolf pack (`sdk/group/pack.ts`, `rvrPack`)
 
