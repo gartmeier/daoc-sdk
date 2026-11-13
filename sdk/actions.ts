@@ -198,7 +198,11 @@ export function sightStep(regionId: number, from: Vec3, to: Vec3, ground: (regio
     let spot: Vec3 | null = null;
     for (let s = SIGHT_STEP_SAMPLE; s <= reach; s += SIGHT_STEP_SAMPLE) {
         const x = from.x + ((to.x - from.x) * s) / d, y = from.y + ((to.y - from.y) * s) / d;
-        spot = { x, y, z: ground(regionId, x, y) ?? from.z + ((to.z - from.z) * s) / d };
+        const next = { x, y, z: ground(regionId, x, y) ?? from.z + ((to.z - from.z) * s) / d };
+        // Never through a keep door, ours or a shut one (doors.ts): live 15:25 two Midgard casters on their wall stands stepped out
+        // through their own gate (walkTo uses it) to see the raid, and were rooted outside.
+        if (doorBetween(regionId, from, next)) break;
+        spot = next;
         if (lineOfSight(regionId, spot, to, ground)) return spot;
     }
     return clearOnly ? null : spot;

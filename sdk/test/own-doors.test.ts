@@ -174,3 +174,16 @@ describe('walkTo through our own door', () => {
         expect(w.player.x).toBeGreaterThan(34333);
     });
 });
+
+describe('sightStep never goes through a keep door', () => {
+    afterEach(() => clearOwnDoors());
+    test('from inside our gate toward a foe outside: no step out through it', async () => {
+        const { sightStep } = await import('../actions');
+        const flat = () => 3720;
+        const from = p(34150, 38275), foe = p(35200, 38275);
+        expect(sightStep(252, from, foe, flat)).not.toBeNull();
+        useOwnDoors(FASTE, { ours: true, broken: [] });
+        const spot = sightStep(252, from, foe, flat);
+        expect(spot === null || spot.x < 34333).toBe(true);
+    });
+});
