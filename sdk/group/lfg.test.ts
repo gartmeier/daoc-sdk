@@ -54,6 +54,16 @@ describe('placing a human', () => {
 });
 
 describe('what the watcher hears', () => {
+    test("a sortie change is no leaving: absence counts only in a live, formed run", async () => {
+        const { absenceCounts, FORMING_MS } = await import('./lfg-watch');
+        const now = 1_000_000;
+        expect(absenceCounts(null, now)).toBe(false);
+        expect(absenceCounts({ state: 'ending', firstAt: 0 }, now)).toBe(false);
+        expect(absenceCounts({ state: 'starting', firstAt: now - 1000 }, now)).toBe(false);
+        expect(absenceCounts({ state: 'live', firstAt: now - 2000 }, now)).toBe(false);
+        expect(absenceCounts({ state: 'live', firstAt: 0, timing: { windingDown: true } }, now)).toBe(false);
+        expect(absenceCounts({ state: 'live', firstAt: now - FORMING_MS, timing: { windingDown: false } }, now)).toBe(true);
+    });
     test('a whisper and a /region line, never our own', async () => {
         const { heardLine } = await import('./lfg-watch');
         expect(heardLine({ type: 'send', text: 'Eimearx sends, "lfg"', sender: 'Eimearx' })).toEqual({ from: 'Eimearx', text: 'lfg' });

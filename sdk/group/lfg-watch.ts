@@ -33,6 +33,19 @@ export const ASK_CLASS_MS = 120_000;
 export const INVITE_MS = 8 * 60_000;
 /** Joined, then out of the leader's group window this long: left. */
 export const LEFT_MS = 45_000;
+/** A run this young is still forming its group (invites out, the human answering one). */
+export const FORMING_MS = 2 * 60_000;
+
+/**
+ * Does a joined human's absence from the leader's group window count toward LEFT_MS? Only while the unit's run is live,
+ * formed (FORMING_MS old) and not winding down. A sortie change (the run ending, a wind-down, a new one forming, a field
+ * restart) disbands and forms the group again: live 18:11, a field restart, and Niamh was released 2 s into the new
+ * sortie ("left", out of the window 45 s while the old run ended), though she never left.
+ */
+export function absenceCounts(run: { state: string; firstAt: number; timing?: { windingDown?: boolean } | null } | null | undefined, now: number): boolean {
+    if (!run || run.state !== 'live' || run.timing?.windingDown) return false;
+    return now - run.firstAt >= FORMING_MS;
+}
 
 const REALM_OF: Record<string, string> = { camelot: 'albion', midgard: 'midgard', hibernia: 'hibernia' };
 
@@ -283,7 +296,12 @@ export function startLfgWatch(o: Options) {
                     r.lastInGroup = now;
                     if (r.stage === 'invited') { r.stage = 'joined'; r.joinedAt = now; note('joined', { name: r.name, unit: r.unit, ms: now - r.asked }); }
                 } else if (r.stage === 'invited' && now - (r.placedAt ?? r.asked) > INVITE_MS) release(r, 'never joined');
-                else if (r.stage === 'joined' && state && now - (r.lastInGroup ?? now) > LEFT_MS) release(r, 'left');
+                else if (r.stage === 'joined' && state) {
+                    // Out of the window during a sortie change is no leaving: the clock starts once the run is live and formed.
+                    const run = (await get(`/groups/${r.unit}/live`, auth(leader!)))?.run;
+                    if (!absenceCounts(run, now)) r.lastInGroup = now;
+                    else if (now - (r.lastInGroup ?? now) > LEFT_MS) release(r, 'left');
+                }
             }
         }
         // Bots we logged back in: walk them into Thidranki if they landed outside (enterAlone, its own control connection;
