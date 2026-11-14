@@ -106,7 +106,7 @@ Items 1-3 don't exist as measures yet. Building them is the first work under thi
    - rank 3's wall Runemasters;
    - the lord fight.
    - Night raids are off since 68dee41 (no muster below a target of 12).
-2. **A failing test:** `sdk/group/member-turns.test.ts` (the melee chase stand-in) fails on main since tonight's commits.
+2. **Flaky tests under load:** two pet tests in `sdk/test/actions.test.ts` fail now and then in a full run with 60 bots on the machine and pass alone (member-turns fixed in 1171006).
 3. **pack.ts:** the melee chases players behind the shut gate.
 4. **Supervisor:** a pause for deliberate offline windows.
 5. **Realm rank cap 255:** unproven until a bot reaches RealmLevel 10.
