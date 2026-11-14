@@ -29,8 +29,8 @@ export const OPEN_WAIT_MS = 10_000;
 export const OPEN_WALK_MS = 5000;
 /** A melee member this far from it is none to wait for. */
 const OPENER_REACH = 2500;
-/** How long the opener watches for its swing. */
-const SWING_WATCH_MS = 3500;
+/** How long the opener watches for its swing: a slow two-hander's round is about 4.5 s. */
+const SWING_WATCH_MS = 5000;
 
 export type ProcKind = 'stun' | 'snare' | null;
 
@@ -204,20 +204,41 @@ export async function openOnCc(ctx: MemberContext, c: Contact): Promise<'acted' 
     if (me.targetObjectId !== c.objectId) await ctx.sdk.sendSetTarget(c.objectId);
     await ctx.sdk.sendFaceObject(c.objectId);
     const before = state.combatEvents.findLast(e => e.kind === 'melee' && e.attackerObjectId === me.objectId)?.id ?? null;
-    const styles = ctx.sdk.getSkills().styles ?? [];
-    for (const name of queue) {
-        const s = styles.find(x => x.name === name);
-        if (s) await ctx.sdk.sendUseSkill(s.skillIndex);
-    }
+    const sendQueue = async () => {
+        const styles = ctx.sdk.getSkills().styles ?? [];
+        for (const name of queue) {
+            const s = styles.find(x => x.name === name);
+            if (s) await ctx.sdk.sendUseSkill(s.skillIndex);
+        }
+    };
+    const watchSwing = async (from: number | null, msgFrom: number) => {
+        const swing = await ctx.sdk.waitForCondition(st => {
+            const e = st.combatEvents.findLast(x => x.kind === 'melee' && x.attackerObjectId === me.objectId);
+            return !!e && e.id !== from && e.targetObjectId === c.objectId;
+        }, SWING_WATCH_MS).catch((e: unknown) => { if (/timed out/.test(String((e as Error)?.message))) return null; throw e; });
+        const fresh = (ctx.sdk.getState()?.gameMessages ?? []).filter(m => m.id > msgFrom);
+        const performed = fresh.filter(m => /^You perform your /.test(m.text)).at(-1)?.text;
+        const landed = performed && queue.some(n => performed.includes(`your ${n} perfectly`)) ? /your (.+?) perfectly/.exec(performed)![1]! : null;
+        const absorbed = fresh.some(m => BLADETURN.test(m.text));
+        const id = swing?.combatEvents.findLast(x => x.kind === 'melee' && x.attackerObjectId === me.objectId)?.id ?? from;
+        return { swing: !!swing, landed, absorbed, id, msgTop: Math.max(msgFrom, ...fresh.map(m => m.id)) };
+    };
+    const msg0 = Math.max(0, ...state.gameMessages.map(m => m.id));
+    await sendQueue();
     done.set(key, now);
     ctx.memory.delete(`ccOpenWalk:${key}`);
-    const swing = await ctx.sdk.waitForCondition(st => {
-        const e = st.combatEvents.findLast(x => x.kind === 'melee' && x.attackerObjectId === me.objectId);
-        return !!e && e.id !== before && e.targetObjectId === c.objectId;
-    }, SWING_WATCH_MS).catch((e: unknown) => { if (/timed out/.test(String((e as Error)?.message))) return null; throw e; });
-    const after = ctx.sdk.getState();
-    const performed = after?.gameMessages.filter(m => /^You perform your /.test(m.text)).at(-1)?.text;
-    const landed = performed && queue.some(n => performed.includes(`your ${n} perfectly`)) ? /your (.+?) perfectly/.exec(performed)![1] : null;
-    ctx.note(`opener on ${c.name}: ${landed ? `${landed} landed` : swing ? 'swung, no style' : 'no swing seen'} (${queue.join(' / ')})`);
+    let r = await watchSwing(before, msg0);
+    let how = r.landed ? `${r.landed} landed` : r.absorbed ? 'absorbed by a bladeturn' : r.swing ? 'swung, no style' : 'no swing seen';
+    // A bladeturn took the blow, and the mezz with it (live 11:15:41, Cathbad on Enid). The swing emptied the server's
+    // queue: the same opener again at once, so the next swing stuns the target that just woke, if it is still in reach.
+    if (r.absorbed && r.swing) {
+        await sendQueue();
+        r = await watchSwing(r.id, r.msgTop);
+        how += r.landed ? `, then ${r.landed} landed` : r.swing ? ', then swung, no style' : ', no second swing';
+    }
+    ctx.note(`opener on ${c.name}: ${how} (${queue.join(' / ')})`);
     return 'acted';
 }
+
+/** Our swing taken by the target's bladeturn (live, Cathbad's Stunning Blade on a Cleric, 2026-11-14 11:15:41). */
+const BLADETURN = /^Your strike was absorbed by a magical barrier/;

@@ -96,6 +96,24 @@ describe('a mezzed focus to break', () => {
         expect(m.board.picture().members[0]?.activity.kind).toBe('open');
     });
 
+    // Live 11:15:41: Cathbad's Stunning Blade on Enid, "Your strike was absorbed by a magical barrier! You miss!", the mezz gone.
+    test('a bladeturn takes the opener: the same queue again at once, for the next swing', async () => {
+        const m = member({ list: [assist({ melee: true, holdMs: 0 })], world: { nearbyPlayers: [foe(400)] } });
+        let sends = 0;
+        m.w.handlers.useSkill = (_a, world) => {
+            sends++;
+            const me = world.player.objectId;
+            world.player.attacking = true;
+            if (sends === 2) setTimeout(() => { world.message('Your strike was absorbed by a magical barrier!'); world.combat({ kind: 'melee', attackerObjectId: me, targetObjectId: BRITON, result: 'miss' }); }, 30);
+            if (sends === 4) setTimeout(() => { world.message('You perform your Ice Storm perfectly!'); world.combat({ kind: 'melee', attackerObjectId: me, targetObjectId: BRITON, result: 'styledHit' }); }, 30);
+        };
+        await seen(m);
+        mezz(m);
+        await until(() => m.board.events().some(e => e.kind === 'note' && e.text.startsWith('opener on Briton')), 4000);
+        expect(m.w.sentOf('useSkill').map(a => a.skillIndex)).toEqual([ICE_STORM.skillIndex, HURRICANE.skillIndex, ICE_STORM.skillIndex, HURRICANE.skillIndex]);
+        expect(m.board.events().find(e => e.kind === 'note')?.text).toBe('opener on Briton: absorbed by a bladeturn, then Ice Storm landed (Ice Storm / Hurricane)');
+    });
+
     test('the tank (Cuchulainn, a Hero) opens the same way', async () => {
         const m = member({ role: 'tank', list: [tank()], world: { nearbyPlayers: [foe(400)] } });
         await seen(m);
