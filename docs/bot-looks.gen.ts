@@ -25,33 +25,42 @@ const C = {
 } as const;
 
 // Guild emblem = (logo << 9) | (pattern << 7) | (primary << 3) | secondary (EmblemDialogReponseHandler).
-// primary: the client's dark set (patterns.csv set 1, 16), secondary: its light set (set 2, 8). logo: insignia/<b|n|h>_emblem_NNN.dds.
+// primary: the client's dark set (patterns.csv set 1, 16), secondary: its light set (set 2, 8).
+// logo: an id 1..255 from the client's gamedata.mpk/insignia.csv, which numbers the three realms' insignia/<b|n|h>_emblem_NNN.dds
+// in blocks (checked in the client on 2026-11-14: logo 77 drew N_emblem_037, a crow). logo() turns a realm's file number into that id.
 const DK = { red: 0, darkRed: 1, violet: 2, purple: 3, royalBlue: 4, blue: 5, teal: 6, ltBlue: 7, green: 8, dkGreen: 9, olive: 10, tan: 11, brown: 12, rust: 13, gray: 14, maroon: 15 };
 const LT = { ivory: 0, darkKhaki: 1, gray: 2, yellow: 3, orange: 4, green: 5, blue: 6, purple: 7 };
-const emblem = (logo: number, pattern: number, primary: number, secondary: number) => (logo << 9) | (pattern << 7) | (primary << 3) | secondary;
+const LOGO_BLOCKS: Record<'b' | 'n' | 'h', [number, number, number]> = { b: [1, 124, 199], n: [41, 174, 218], h: [81, 149, 237] }; // ids of files 1, 41, 66
+const logo = (realm: 'b' | 'n' | 'h', file: number) => {
+    if (file < 1 || file > 84) throw new Error(`no insignia file ${realm} ${file}`);
+    const [a, b, c] = LOGO_BLOCKS[realm];
+    return file <= 40 ? a + file - 1 : file <= 65 ? b + file - 41 : c + file - 66;
+};
+const emblem = (realm: 'b' | 'n' | 'h', file: number, pattern: number, primary: number, secondary: number) =>
+    (logo(realm, file) << 9) | (pattern << 7) | (primary << 3) | secondary;
 
 type Scheme = { body: number; arms: number; hands: number; helm: number };
 type GuildDef = { name: string; realm: number; emblem: number; scheme: Scheme; groups: string[] };
 // The names from the "Server and guild naming" session: its pick per realm for the first unit, its alternatives for the rest.
 // The schemes follow that session's two-tone idea: a dark main colour, lighter sleeves, gloves to match one of them.
 const GUILDS: GuildDef[] = [
-    { name: 'The Copper Knights', realm: 1, emblem: emblem(58, 1, DK.rust, LT.orange), groups: ['camelot'],
+    { name: 'The Copper Knights', realm: 1, emblem: emblem('b', 58, 1, DK.rust, LT.orange), groups: ['camelot'],
         scheme: { body: C.darkBrown, arms: C.rust, hands: C.darkBrown, helm: C.rust } }, // knight's helm, weathered copper
-    { name: 'Knights of the Ninth Hour', realm: 1, emblem: emblem(29, 2, DK.darkRed, LT.yellow), groups: ['camelot-2'],
+    { name: 'Knights of the Ninth Hour', realm: 1, emblem: emblem('b', 29, 2, DK.darkRed, LT.yellow), groups: ['camelot-2'],
         scheme: { body: C.black, arms: C.crimson, hands: C.black, helm: C.black } }, // crossed torches
-    { name: 'Order of the Brass Lion', realm: 1, emblem: emblem(74, 0, DK.red, LT.yellow), groups: ['camelot-s1', 'camelot-s2', 'camelot-s3', 'camelot-s4'],
+    { name: 'Order of the Brass Lion', realm: 1, emblem: emblem('b', 74, 0, DK.red, LT.yellow), groups: ['camelot-s1', 'camelot-s2', 'camelot-s3', 'camelot-s4'],
         scheme: { body: C.crimson, arms: C.darkGold, hands: C.darkGold, helm: C.crimson } }, // lion rampant
-    { name: 'Einherjar', realm: 2, emblem: emblem(61, 1, DK.blue, LT.gray), groups: ['midgard'],
+    { name: 'Einherjar', realm: 2, emblem: emblem('n', 61, 1, DK.blue, LT.gray), groups: ['midgard'],
         scheme: { body: C.charcoal, arms: C.grayBlue, hands: C.charcoal, helm: C.charcoal } }, // horned helm
-    { name: 'Iron Ravens', realm: 2, emblem: emblem(36, 2, DK.gray, LT.ivory), groups: ['midgard-2'],
+    { name: 'Iron Ravens', realm: 2, emblem: emblem('n', 36, 2, DK.gray, LT.ivory), groups: ['midgard-2'],
         scheme: { body: C.black, arms: C.lightGray, hands: C.black, helm: C.lightGray } }, // raven's head
-    { name: 'Mimirs Well', realm: 2, emblem: emblem(27, 0, DK.teal, LT.blue), groups: ['midgard-s1', 'midgard-s2', 'midgard-s3', 'midgard-s4'],
+    { name: 'Mimirs Well', realm: 2, emblem: emblem('n', 27, 0, DK.teal, LT.blue), groups: ['midgard-s1', 'midgard-s2', 'midgard-s3', 'midgard-s4'],
         scheme: { body: C.darkTeal, arms: C.grayBlue, hands: C.darkTeal, helm: C.darkTeal } }, // Odin's eye
-    { name: 'Silver Hand', realm: 3, emblem: emblem(77, 1, DK.dkGreen, LT.ivory), groups: ['hibernia'],
+    { name: 'Silver Hand', realm: 3, emblem: emblem('h', 77, 1, DK.dkGreen, LT.ivory), groups: ['hibernia'],
         scheme: { body: C.forestGreen, arms: C.lightGray, hands: C.lightGray, helm: C.forestGreen } }, // hands and heart; silver gloves
-    { name: 'Fianna', realm: 3, emblem: emblem(39, 2, DK.olive, LT.darkKhaki), groups: ['hibernia-2'],
+    { name: 'Fianna', realm: 3, emblem: emblem('h', 39, 2, DK.olive, LT.darkKhaki), groups: ['hibernia-2'],
         scheme: { body: C.oliveGreen, arms: C.tan, hands: C.darkBrown, helm: C.oliveGreen } }, // stag
-    { name: 'The Cauldron', realm: 3, emblem: emblem(45, 0, DK.purple, LT.orange), groups: ['hibernia-s1', 'hibernia-s2', 'hibernia-s3', 'hibernia-s4'],
+    { name: 'The Cauldron', realm: 3, emblem: emblem('h', 45, 0, DK.purple, LT.orange), groups: ['hibernia-s1', 'hibernia-s2', 'hibernia-s3', 'hibernia-s4'],
         scheme: { body: C.black, arms: C.darkPurple, hands: C.black, helm: C.darkPurple } }, // cauldron
 ];
 const NIAMH = 'Niamh'; // the user's Mentalist: Silver Hand, all black, light gray gloves, a black wizard hat

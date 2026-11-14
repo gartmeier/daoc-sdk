@@ -8,7 +8,7 @@
 
 Nine guilds, three per realm, named from the "Server and guild naming" session (2026-11-10). Each main unit has its own guild, the squads (`-s1..s4`) share a small third one, and the realm's bench is split between the two main guilds in turns. The first group's leader is rank 0 and everyone else rank 9. The ranks are copied from Crimson Order's.
 
-| Guild | Unit | Emblem (logo, pattern, colours) | Body / sleeves / gloves / helm |
+| Guild | Unit | Emblem (file, pattern, colours) | Body / sleeves / gloves / helm |
 |---|---|---|---|
 | The Copper Knights | camelot | knight's helm (58), 1, rust + orange | dark brown / rust / dark brown / rust |
 | Knights of the Ninth Hour | camelot-2 | crossed torches (29), 2, dark red + yellow | black / crimson / black / black |
@@ -20,8 +20,11 @@ Nine guilds, three per realm, named from the "Server and guild naming" session (
 | Fianna | hibernia-2 | stag (39), 2, olive + dark khaki | olive green / tan / dark brown / olive green |
 | The Cauldron | hibernia squads | cauldron (45), 0, purple + orange | black / dark purple / black / dark purple |
 
-- **Emblem:** the value is `(logo << 9) | (pattern << 7) | (primary << 3) | secondary`, from `EmblemDialogReponseHandler`. Primary is one of 16 dark colours and secondary one of 8 light ones, from the client's `gamedata.mpk/patterns.csv` (sets 1 and 2; the bit widths match). The logos are `insignia/<b|n|h>_emblem_NNN.dds`: b Albion, n Midgard, h Hibernia, 84 each. I picked them from contact sheets of those textures.
-  - Not yet checked in a real client: whether logo N is file N rather than N+1, and which colour goes on the background and which on the symbol.
+- **Emblem:** the value is `(logo << 9) | (pattern << 7) | (primary << 3) | secondary`, from `EmblemDialogReponseHandler`. Primary is one of 16 dark colours and secondary one of 8 light ones, from the client's `gamedata.mpk/patterns.csv` (sets 1 and 2; the bit widths match). The symbols are `insignia/<b|n|h>_emblem_NNN.dds` (b Albion, n Midgard, h Hibernia, 84 each), and I picked them from contact sheets of those textures.
+- **Logo ids:** the logo is not the file number. It is an id from 1 to 255 in the client's `gamedata.mpk/insignia.csv`, which numbers the three realms' files in blocks. Files 1-40 are ids 1-40 (b), 41-80 (n) and 81-120 (h). 121-123 are the guard emblems. Files 41-65 are 124-148 (b), 149-173 (h) and 174-198 (n). Files 66-84 are 199-217 (b), 218-236 (n) and 237-255 (h). `logo()` in the generator does this.
+  - This was seen in the client on 2026-11-14: the first `bot-looks.sql` set logo 77 for Silver Hand, meaning H_emblem_077, and Niamh's cloak showed N_emblem_037's crow. [bot-looks-emblems.sql](bot-looks-emblems.sql) (undo: [bot-looks-emblems-undo.sql](bot-looks-emblems-undo.sql)) moves the 9 guilds and their 86 cloaks and shields to the right ids and leaves pattern and colours as they are. Run it with the gameserver stopped, after `bot-looks.sql`. That file still holds the old ids.
+  - Ids from 128 up set bit 16 of the emblem, which the server sends as the "new emblem" flag on cloak and shield (`PacketLib1124`).
+  - Pattern 1 splits the cloak down the middle: Silver Hand's showed ivory on the left and green on the right. Which colour the symbol takes is not yet checked.
 - **Where it shows:** members' cloaks and shields carry the emblem. The packet sends the emblem in place of the cloak's dye (`PacketLib1104`), so the dye pair goes on the rest of the armour.
 - **Not perfectly matched:** about 20 % of members leave the helm undyed and about 15 % the boots.
 - **Old guilds:** the three guilds `groups/signature.ts` formed on 2026-11-04 (Crimson Order, Ravens of Jordheim, Wolves of Tir na Nog) are left in the DB with no members. The starter guilds keep their test characters.
