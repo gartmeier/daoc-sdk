@@ -261,6 +261,25 @@ describe('a human asks in group chat', () => {
         expect(buffFree(fight.orders)).toBe(false);
         expect(groupAnswer('buff', fight, st, false, true)).toBe('after this fight');
     });
+    test('the speaker holds the called focus for those who /assist it, unless on something of its own', async () => {
+        const { assistTarget } = await import('./voice');
+        const foe = enemy(425, 'midgard');
+        const engage = { phase: 'engage' as const, focus: 425 };
+        const me = { targetObjectId: null, isDead: false };
+        // On the way in, no target yet: take the focus.
+        expect(assistTarget(engage, [foe], me, { kind: 'move', targetId: null })).toBe(425);
+        expect(assistTarget(engage, [foe], me, undefined)).toBe(425);
+        // Already on it, dead, no fight, a monster, or out of sight: nothing.
+        expect(assistTarget(engage, [foe], { ...me, targetObjectId: 425 }, undefined)).toBeNull();
+        expect(assistTarget(engage, [foe], { ...me, isDead: true }, undefined)).toBeNull();
+        expect(assistTarget({ phase: 'travel', focus: 425 }, [foe], me, undefined)).toBeNull();
+        expect(assistTarget(engage, [{ ...foe, kind: 'npc' }], me, undefined)).toBeNull();
+        expect(assistTarget(engage, [{ ...foe, stale: true }], me, undefined)).toBeNull();
+        // A heal, a buff, a mezz or a peel onto another foe: left alone; back to the focus after.
+        for (const kind of ['heal', 'buff', 'cc', 'song']) expect(assistTarget(engage, [foe], me, { kind, targetId: 7 })).toBeNull();
+        expect(assistTarget(engage, [foe], me, { kind: 'melee', targetId: 9 })).toBeNull();
+        expect(assistTarget(engage, [foe], { ...me, targetObjectId: 9 }, { kind: 'melee', targetId: 425 })).toBe(425);
+    });
 });
 describe('/region', () => {
     const base = (over: Partial<RegionInput> = {}): RegionInput => ({ realm: 'hibernia', enabled: true, calls: [], foes: [], events: [], running: ['hib-1', 'hib-2'], ...over });

@@ -375,6 +375,27 @@ export function pickupFree(o: Pick<GroupPicture['orders'], 'phase' | 'reason' | 
     return !/^(call|raid|defen|muster|help)/i.test(o.reason ?? '') && !/\b(raid|defen[cd]e?|muster|help)\b/i.test(o.objective ?? '');
 }
 
+/** What a member does that targets something of its own (a friend to heal or buff, a mob to mezz): the speaker's target is left alone. */
+const OWN_TARGET = new Set(['heal', 'buff', 'cure', 'rez', 'rez_prep', 'cc', 'confuse', 'interrupt', 'song', 'guard', 'pull', 'nuke', 'accept_rez', 'release', 'drop']);
+
+/**
+ * The target the speaker (the one a human /assists, "hi …, /assist <speaker>") should take now, or null to leave it. The
+ * orders' focus on an enemy player, unless the speaker is on something of its own: the user, playing Niamh 2026-11-14:
+ * "a lot of time when I assist Laoghaire, he has no target. Only at the last moment does he target the enemy he wants
+ * to hit." A melee speaker selects the focus only once it reaches it; a caster assisting wants it on the way in.
+ */
+export function assistTarget(
+    o: Pick<GroupPicture['orders'], 'phase' | 'focus'>, contacts: readonly Contact[],
+    me: { targetObjectId: number | null; isDead: boolean } | null | undefined, activity: { kind: string; targetId: number | null } | undefined,
+): number | null {
+    if (o.phase !== 'engage' || o.focus === null || !me || me.isDead || me.targetObjectId === o.focus) return null;
+    const f = contacts.find(c => c.objectId === o.focus);
+    if (!f || f.kind !== 'player' || f.stale) return null;
+    // On something of its own (a heal, a buff, a mezz, a peel onto another foe): back to the focus once that is done.
+    if (activity && (OWN_TARGET.has(activity.kind) || (activity.kind === 'melee' && activity.targetId !== null && activity.targetId !== o.focus))) return null;
+    return o.focus;
+}
+
 /** whereWeAre's "at our PK" (within 6000) or "near our PK" (within 10000). */
 export const nearOurPk = (where: string | null | undefined): boolean => !!where && /^(at|near) our PK$/.test(where);
 

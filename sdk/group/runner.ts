@@ -27,7 +27,7 @@ import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
 import { Coordinator, mergeSettings, type GroupStrategy } from './strategy';
 import type { GroupDefinition } from './types';
-import { buffFree, groupAnswer, GroupVoice, pickupFree, readGroupAsk, whereWeAre } from './voice';
+import { assistTarget, buffFree, groupAnswer, GroupVoice, pickupFree, readGroupAsk, whereWeAre } from './voice';
 import { homeOf } from './keeps';
 import { regionInbox, voiceOn } from './voice-io';
 import { isLoggedEvent, type ControlRequest, type RunMeta, type RunResultView } from './wire';
@@ -236,6 +236,17 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         const humans = new Set((def.observed ?? []).map(o => o.name.toLowerCase()));
         let heardId = humans.size ? Math.max(0, ...speaker.sdk.getChat({ types: ['group'], limit: 0 }).map(m => m.id)) : 0;
         const answered = new Map<string, number>();
+        /** With a human in the group, the speaker (whom they /assist) holds the called focus as its target, at most once in 1.5 s (voice.ts assistTarget). */
+        let assistAt = 0;
+        const holdAssist = (now: number) => {
+            if (!voice || !humans.size || now - assistAt < 1500 || !speaker.sdk.isConnected()) return;
+            const pic = board.picture(now);
+            const me = speaker.sdk.getPlayer();
+            const id = assistTarget(pic.orders, pic.contacts, me, pic.members.find(m => m.name === me?.name)?.activity);
+            if (id === null) return;
+            assistAt = now;
+            void speaker.sdk.sendSetTarget(id).catch(() => {});
+        };
         /** Buff asks heard in a fight ("after this fight"): asked of the board once the fight is over, until then at most 5 min. */
         const buffLater = new Map<string, number>();
         const hearHumans = (now: number) => {
@@ -281,6 +292,7 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
                 if (line) speak(line.text, false);
                 else hearHumans(now);
                 for (const text of inbox?.take(now) ?? []) speak(text, true);
+                holdAssist(now);
             } catch (e) { log(`voice: ${errorText(e)}`); }
             if (now >= deadline && !coordinator.windingDown) { coordinator.windingDown = true; log('time is up: finishing the current fight'); }
             const phase = board.getOrders().phase;
