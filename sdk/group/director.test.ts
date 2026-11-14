@@ -45,7 +45,9 @@ describe('help calls', () => {
         const one = (members: number, f: ReturnType<typeof foes>, phase = 'travel') => director().update({ camelot: frame({ id: 'camelot', phase, members: at(MID.x, MID.y, members, 'G'), foes: f }) }, 0, []).calls;
         expect(one(1, foes(MID.x + 4000, MID.y, 3))[0]).toMatchObject({ why: 'sighted', foes: 3, ours: 1 });
         expect(one(1, foes(MID.x + 4000, MID.y, 3), 'engage')[0]).toMatchObject({ why: 'sighted' });
-        expect(one(4, foes(MID.x + 4000, MID.y, 5))[0]).toMatchObject({ why: 'sighted', foes: 5 });
+        expect(one(4, foes(MID.x + 4000, MID.y, 6))[0]).toMatchObject({ why: 'sighted', foes: 6 });
+        // Near even (5 vs 4, under callRatio 1.5): no call (the user, 11-14: "If it's a fair fight, not sure I'd call for help").
+        expect(one(4, foes(MID.x + 4000, MID.y, 5))).toHaveLength(0);
         expect(one(1, foes(MID.x + 4000, MID.y, 2))).toHaveLength(0);
         expect(one(5, foes(MID.x + 4000, MID.y, 5))).toHaveLength(0);
         expect(one(1, foes(MID.x + 6000, MID.y, 6))).toHaveLength(0);
@@ -169,13 +171,13 @@ describe('help calls', () => {
     test('a call closes 15 s after its fight went quiet, with what the caller lost and who arrived', () => {
         const d = director();
         const members = at(MID.x, MID.y, 3, 'S');
-        d.update({ 'camelot-s1': frame({ id: 'camelot-s1', phase: 'engage', members, foes: foes(MID.x + 300, MID.y, 4), playerKills: 1 }) }, 0, []);
-        d.update({ 'camelot-s1': frame({ id: 'camelot-s1', phase: 'engage', members: [members[0]!, members[1]!, { ...members[2]!, dead: true }], foes: foes(MID.x + 300, MID.y, 4) }) }, 5000, []);
+        d.update({ 'camelot-s1': frame({ id: 'camelot-s1', phase: 'engage', members, foes: foes(MID.x + 300, MID.y, 5), playerKills: 1 }) }, 0, []);
+        d.update({ 'camelot-s1': frame({ id: 'camelot-s1', phase: 'engage', members: [members[0]!, members[1]!, { ...members[2]!, dead: true }], foes: foes(MID.x + 300, MID.y, 5) }) }, 5000, []);
         const quiet = frame({ id: 'camelot-s1', phase: 'travel', members: [members[0]!, members[1]!, { ...members[2]!, dead: true }], playerKills: 3 });
         expect(d.update({ 'camelot-s1': quiet }, 15_000, []).calls).toHaveLength(1);
         const out = d.update({ 'camelot-s1': quiet }, 21_000, []);
         expect(out.calls).toHaveLength(0);
-        expect(out.events.find(e => e.kind === 'close')).toMatchObject({ end: 'quiet', lost: 1, wiped: false, kills: 2, foesMax: 4, ms: 21_000 });
+        expect(out.events.find(e => e.kind === 'close')).toMatchObject({ end: 'quiet', lost: 1, wiped: false, kills: 2, foesMax: 5, ms: 21_000 });
     });
 
     test('a wiped caller closes its call at once', () => {

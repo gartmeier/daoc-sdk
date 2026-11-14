@@ -226,6 +226,12 @@ export interface DirectorSettings {
     sightRadius: number;
     sightMin: number;
     sightReach: number;
+    /**
+     * Outnumbered and sighted call only when the enemies are at least callRatio times ours: the user, playing Niamh on 11-14: "If
+     * it's a fair fight, not sure I'd call for help" and "I wouldn't turn a 6-person group for 2 albs incoming" (hibernia-66 opened
+     * at 4 vs 3). Caught (losing, members down) calls at any odds. An even sighting is still reported as "inc" by the voice.
+     */
+    callRatio: number;
     /** Help is not asked of a unit whose living are below this mean health, or fewer than this share of its size. */
     helperHp: number;
     helperAlive: number;
@@ -348,7 +354,7 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     enabled: true, help: true, muster: true,
     nearFoe: 2500, nearFriend: 2000, lossShare: 1 / 3, lossMs: 30_000,
     reach: 7000, helperHp: 60, helperAlive: 0.5, arrive: 1500,
-    sight: true, sightRadius: 5000, sightMin: 3, sightReach: 9000,
+    sight: true, sightRadius: 5000, sightMin: 3, sightReach: 9000, callRatio: 1.5,
     clearMs: 15_000, maxMs: 180_000,
     campRadius: 5000, campFoes: 2, campMs: 15_000,
     quorum: 0.7, rallyMaxMs: 240_000, goMin: 8, goFloor: 5, goShare: 0.7, fewMaxMs: 600_000, goMaxMs: 900_000, raidBreak: 0.3, raidEveryMs: 0,
@@ -748,7 +754,7 @@ export class RealmDirector {
             if (near.length) {
                 const recent = u.losses.filter(l => now - l.at <= s.lossMs).length;
                 const caught = u.caught || u.fleeing || recent >= Math.max(1, Math.ceil(u.size * s.lossShare));
-                const why: CallWhy | null = caught ? 'caught' : near.length > ours ? 'outnumbered' : null;
+                const why: CallWhy | null = caught ? 'caught' : near.length > ours && near.length >= s.callRatio * ours ? 'outnumbered' : null;
                 if (why) return { why, at, foes: near, ours };
             }
         }
@@ -758,7 +764,7 @@ export class RealmDirector {
         if (raid && dist2(u.centre, raid.target) <= s.defenceRadius + 1000) return null;
         // First sight: the biggest realm in view, so two other realms fighting each other aren't one group.
         const big = biggestRealm(foesNear(board.foes, u.centre, s.sightRadius));
-        return big.length >= s.sightMin && big.length > ours ? { why: 'sighted', at, foes: big, ours } : null;
+        return big.length >= s.sightMin && big.length > ours && big.length >= s.callRatio * ours ? { why: 'sighted', at, foes: big, ours } : null;
     }
 
     /** Living members of other units within nearFriend of `p`. */
