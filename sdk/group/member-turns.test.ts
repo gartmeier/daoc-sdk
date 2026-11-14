@@ -375,7 +375,9 @@ describe('a melee member\'s chase ends where the tank\'s does', () => {
         const toward = m.w.sentOf('moveTo').at(-1)!;
         expect(toward.x).toBeLessThan(ME.x + 2000);
         m.w.state.nearbyPlayers.find(p => p.objectId === CELT)!.x = ME.x + 500;
-        await until(() => m.w.player.targetObjectId === CELT, 1000);
+        // The walk's check (MELEE_WALK_CHECK_MS) lets the stand-in go, then the next turn selects the focus: 1044-1110 ms
+        // measured on 2026-11-14 with 60 bots running on the machine, so 1000 failed every run there. 1500 keeps it "about a second".
+        await until(() => m.w.player.targetObjectId === CELT, 1500);
         clearInterval(hits);
         expect(m.w.player.targetObjectId).toBe(CELT);
     });
