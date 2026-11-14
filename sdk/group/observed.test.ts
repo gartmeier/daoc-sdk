@@ -185,6 +185,20 @@ describe('Blackboard: the observed member on the picture', () => {
         expect(m.reports(now)[0]!.effects).toEqual(['Holy Armor']);
     });
 
+    test('a buff ask: on the report for BUFF_ASK_MS, the newest open one by buffAsk', async () => {
+        const { BUFF_ASK_MS, buffAsk } = await import('./observed');
+        const m = new ObservedMembers([{ name: 'Vue' }]);
+        const t0 = Date.now();
+        m.merge('Tank', [mate({})], t0);
+        expect(m.reports(t0)[0]!.buffAskedAt).toBeUndefined();
+        expect(m.askBuff('vue', t0 + 1000)).toBe(true);
+        expect(m.askBuff('Nobody', t0 + 1000)).toBe(false);
+        expect(m.reports(t0 + 2000)[0]!.buffAskedAt).toBe(t0 + 1000);
+        expect(buffAsk(m.reports(t0 + 2000), t0 + 2000)).toBe(t0 + 1000);
+        expect(buffAsk([report('Tank')], t0)).toBeNull();
+        expect(m.reports(t0 + 1000 + BUFF_ASK_MS)[0]!.buffAskedAt).toBeUndefined();
+    });
+
     test('a pickup: unseen, it reads at the place until seen after the ask or its time is up', () => {
         const m = new ObservedMembers([{ name: 'Vue' }]);
         const t0 = Date.now();

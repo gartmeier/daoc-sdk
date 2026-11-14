@@ -650,6 +650,11 @@ export class Blackboard {
         return this.observed.pickupsOpen(now);
     }
 
+    /** An observed member asked for buffs: its report carries buffAskedAt for BUFF_ASK_MS (ObservedMembers.askBuff). */
+    askBuff(name: string, now: number): boolean {
+        return this.observed.askBuff(name, now);
+    }
+
     /** Every member's report: the bots', then the observed members' (observed.ts). Just the bots' without observed members. */
     private everyone(now: number): MemberReport[] {
         const bots = [...this.reports.values()];

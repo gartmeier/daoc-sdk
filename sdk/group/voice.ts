@@ -334,16 +334,28 @@ export function groupSaid(line: Line, st: GroupVoiceState): void {
  * What a human (observed member) asks in group chat that the group answers: to be picked up, or where we are.
  * Live 2026-11-13, Niamh: "how can I ask the group to come pick me up?"; the bots read nothing of her group chat.
  */
-export type GroupAsk = 'pickup' | 'where';
+export type GroupAsk = 'pickup' | 'where' | 'buff';
 
 const PICKUP_ASK = /\b(pick\s?(me\s?)?up|pickup|come (get|for|pick) me|get me|wait (for|4) me|wait up|hold up|i'?m at (the |our )?(pk|portal ?keep))\b/i;
 const WHERE_ASK = /\b(where(?: (?:are|r|is)|'?s) (?:you|u|ya|we|every(?:one|body)|the gr(?:ou)?p)(?: guys)?|where (?:you|u) at|location)\b|^\s*(where|loc)\s*\??\s*$/i;
 
-/** The ask in a human's group line ("pick me up", "wait for me", "where are you?"), or null. */
+/**
+ * "buff", "buffs pls", "buff me", "need buffs", "rebuff", "no buffs": a line about wanting buffs, not one that mentions
+ * them ("ty for the buffs", "nice buffs").
+ */
+const BUFF_ASK = /^\s*(re-?)?buffs?\s*(me|us|pl[sz]e?|please|pls|now|again|\?|!|\.)*\s*$|\b(re-?buff(s|ing)?\s*(me|us|pl[sz]e?|please|\?)|buff me|buff us|buffs? (pl[sz]e?|please)|(need|want|no|missing|any|can (i|we) (get|have)|got no|have no)\s+(some\s+|my\s+)?(re-?)?buffs?)\b/i;
+
+/** The ask in a human's group line ("pick me up", "wait for me", "where are you?", "buffs pls"), or null. */
 export function readGroupAsk(text: string): GroupAsk | null {
     if (PICKUP_ASK.test(text)) return 'pickup';
     if (WHERE_ASK.test(text)) return 'where';
+    if (BUFF_ASK.test(text)) return 'buff';
     return null;
+}
+
+/** The group can stop for a buff stop now: no fight, pull or pull back (after one, the runner asks again). */
+export function buffFree(o: Pick<GroupPicture['orders'], 'phase'>): boolean {
+    return o.phase !== 'engage' && o.phase !== 'retreat' && o.phase !== 'pull';
 }
 
 /** The group can go and fetch someone: no fight, no pull back, no realm call, raid or defence. */
@@ -368,11 +380,13 @@ export function whereWeAre(p: GroupPicture, st: Pick<GroupVoiceState, 'realm' | 
     return placeName(at, st.realm, st.regionId ?? THIDRANKI);
 }
 
-/** The leader's answer to a human's ask. `picking`: a pickup was taken (the group comes to our PK). */
+/** The leader's answer to a human's ask. `picking`: a pickup or a buff stop was taken (the group comes to our PK, or buffs here). */
 export function groupAnswer(ask: GroupAsk, p: GroupPicture, st: Pick<GroupVoiceState, 'realm' | 'regionId'>, picking: boolean): string {
     const where = whereWeAre(p, st);
     const fight = p.orders.phase === 'engage' || p.orders.phase === 'retreat' || p.orders.phase === 'pull';
     const we = where ? `we're ${fight ? 'fighting ' : ''}${where}` : 'we are all dead';
+    // A buff ask: a buff stop here now (`picking`: it was taken), or after the fight.
+    if (ask === 'buff') return !where ? `${we}, release and meet at our PK` : picking ? 'ok, buffing here, stay close' : 'after this fight';
     if (ask === 'where') return where ? `${we}, come to us` : `${we}, release and meet at our PK`;
     if (picking) return nearOurPk(where) ? `wait there, ${we}` : 'ok, coming to our PK for you, wait there';
     if (!where) return `${we}, release and meet at our PK`;

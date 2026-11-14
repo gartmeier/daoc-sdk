@@ -241,6 +241,19 @@ describe('a human asks in group chat', () => {
         // Far out on a call: still refused.
         expect(pickupFree(call(at(30_000)).orders, 'north of the Faste')).toBe(false);
     });
+    test('a buff ask: the words, and a buff stop now or after the fight', async () => {
+        const { buffFree, groupAnswer, readGroupAsk } = await import('./voice');
+        for (const t of ['buff', 'buffs', 'buff me', 'buffs pls', 'need buffs', 'rebuff', 'no buffs', 'rebuff pls', 'can i get buffs?', 'BUFFS!']) expect(readGroupAsk(t)).toBe('buff');
+        for (const t of ['ty for the buffs', 'nice buffs', 'buffed?']) expect(readGroupAsk(t)).toBeNull();
+        const st = { realm: 'hibernia' as const, regionId: 252 };
+        const team = [report('Fergus', { regionId: 252, x: 33000, y: 25000 }), report('Niamh', { observed: true, regionId: 252, x: 33100, y: 25000 })];
+        const out = picture(team, [], { phase: 'travel', reason: 'wave: out toward where our realm last saw enemies' });
+        expect(buffFree(out.orders)).toBe(true);
+        expect(groupAnswer('buff', out, st, true)).toBe('ok, buffing here, stay close');
+        const fight = picture(team, [], { phase: 'engage' });
+        expect(buffFree(fight.orders)).toBe(false);
+        expect(groupAnswer('buff', fight, st, false)).toBe('after this fight');
+    });
 });
 describe('/region', () => {
     const base = (over: Partial<RegionInput> = {}): RegionInput => ({ realm: 'hibernia', enabled: true, calls: [], foes: [], events: [], running: ['hib-1', 'hib-2'], ...over });

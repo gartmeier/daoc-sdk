@@ -27,7 +27,7 @@ import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
 import { Coordinator, mergeSettings, type GroupStrategy } from './strategy';
 import type { GroupDefinition } from './types';
-import { groupAnswer, GroupVoice, pickupFree, readGroupAsk, whereWeAre } from './voice';
+import { buffFree, groupAnswer, GroupVoice, pickupFree, readGroupAsk, whereWeAre } from './voice';
 import { homeOf } from './keeps';
 import { regionInbox, voiceOn } from './voice-io';
 import { isLoggedEvent, type ControlRequest, type RunMeta, type RunResultView } from './wire';
@@ -236,8 +236,17 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
         const humans = new Set((def.observed ?? []).map(o => o.name.toLowerCase()));
         let heardId = humans.size ? Math.max(0, ...speaker.sdk.getChat({ types: ['group'], limit: 0 }).map(m => m.id)) : 0;
         const answered = new Map<string, number>();
+        /** Buff asks heard in a fight ("after this fight"): asked of the board once the fight is over, until then at most 5 min. */
+        const buffLater = new Map<string, number>();
         const hearHumans = (now: number) => {
             if (!voice || !humans.size) return;
+            for (const [name, until] of buffLater) {
+                if (until <= now) buffLater.delete(name);
+                else if (buffFree(board.picture(now).orders)) {
+                    buffLater.delete(name);
+                    if (board.askBuff(name, now)) log(`buff stop for ${name}: asked during the fight`);
+                }
+            }
             for (const m of speaker.sdk.getChat({ types: ['group'], limit: 50 })) {
                 if (m.id <= heardId) continue;
                 heardId = m.id;
@@ -250,8 +259,13 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
                 const pic = board.picture(now);
                 const regionId = voice.state.regionId ?? players[0]!.regionId;
                 const home = ask === 'pickup' && pickupFree(pic.orders, whereWeAre(pic, voice.state)) ? homeOf(regionId, realm)?.arrival : undefined;
-                const picking = !!home && board.askPickup(from, { regionId, x: home.x, y: home.y, z: home.z }, now, now + 180_000);
-                log(`heard: ${from}: ${text} (${ask}${picking ? ', picked up at our PK for 3 min unless seen' : ''})`);
+                let picking = !!home && board.askPickup(from, { regionId, x: home.x, y: home.y, z: home.z }, now, now + 180_000);
+                if (ask === 'buff') {
+                    picking = buffFree(pic.orders) && board.askBuff(from, now);
+                    if (!picking) buffLater.set(from, now + 300_000);
+                }
+                const how = ask === 'buff' ? (picking ? ', a buff stop asked' : ', a buff stop after the fight') : picking ? ', picked up at our PK for 3 min unless seen' : '';
+                log(`heard: ${from}: ${text} (${ask}${how})`);
                 speak(groupAnswer(ask, pic, voice.state, picking), false);
                 return; // one line a tick (the server drops group lines 500 ms apart)
             }

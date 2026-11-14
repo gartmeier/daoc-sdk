@@ -53,6 +53,25 @@ const NONE: Capabilities = { heal: false, cc: false, nuke: false, rez: false, bu
 
 /** A position nobody has refreshed for this long is no longer where it is: regionId reads OUT_OF_SIGHT. */
 export const OBSERVED_STALE_MS = 5000;
+
+/**
+ * A human's "buff" ask in /group stays open this long (MemberReport.buffAskedAt). The user, playing Niamh on 2026-11-14:
+ * "what's the buff message?"; picked up unbuffed at 09:49, the group roamed on into a fight.
+ */
+export const BUFF_ASK_MS = 60_000;
+
+/**
+ * The newest open buff ask among `members` (its time, the key a decide remembers so it stops once per ask), or null.
+ * A decide's trigger: `const ask = buffAsk(here, now); if (ask && ask !== mem.buffAskServed) { mem.buffAskServed = ask; <buff stop> }`.
+ */
+export function buffAsk(members: readonly Pick<MemberReport, 'observed' | 'isDead' | 'buffAskedAt'>[], now: number): number | null {
+    let best: number | null = null;
+    for (const m of members) {
+        const t = m.observed && !m.isDead ? m.buffAskedAt : undefined;
+        if (t !== undefined && now - t < BUFF_ASK_MS && (best === null || t > best)) best = t;
+    }
+    return best;
+}
 /** The region of an observed member no member has in view: no region-scoped rule (heal reach, rez, formation counts) takes it. */
 export const OUT_OF_SIGHT = -1;
 /** An observed member hitting something this recently is fighting it (attacking, targetId). */
@@ -147,6 +166,16 @@ export class ObservedMembers {
         return [...this.pickups].filter(([, p]) => p.until > now).map(([n]) => this.kept.get(n)?.entry.name ?? n);
     }
 
+    /** A human asked for buffs (voice.ts readGroupAsk 'buff'): their report carries buffAskedAt for BUFF_ASK_MS. */
+    private readonly buffAsks = new Map<string, number>();
+
+    /** `name` asked for buffs at `at`; false when no such observed member. */
+    askBuff(name: string, at: number): boolean {
+        if (!this.kept.has(lower(name))) return false;
+        this.buffAsks.set(lower(name), at);
+        return true;
+    }
+
     constructor(entries: readonly ObservedEntry[] = []) {
         for (const e of entries) this.kept.set(lower(e.name), { entry: e, window: null, windowAt: 0, seen: null, aim: null, pet: null, buffsBy: new Map(), since: 0 });
     }
@@ -193,6 +222,9 @@ export class ObservedMembers {
             const pk = this.pickups.get(key);
             if (pk && (pk.until <= now || (k.seen && k.seen.at > pk.asked))) this.pickups.delete(key);
             const pick = !seen && !w.isDead ? this.pickups.get(key)?.place ?? null : null;
+            const asked = this.buffAsks.get(key);
+            if (asked !== undefined && (now - asked >= BUFF_ASK_MS || w.isDead)) this.buffAsks.delete(key);
+            const buffAskedAt = this.buffAsks.get(key);
             out.push({
                 name: w.name, bot: '', role: observedRole(w.className, k.entry.role), className: w.className, level: w.level, experience: 0,
                 objectId: w.objectId, regionId: pick?.regionId ?? seen?.regionId ?? OUT_OF_SIGHT,
@@ -204,6 +236,7 @@ export class ObservedMembers {
                 activity: { kind: 'observed', targetId: aim?.targetId ?? null, detail: '', since: k.since },
                 at: k.windowAt, observed: true,
                 ...(pet ? { observedPet: { objectId: pet.objectId, name: pet.name, x: pet.x, y: pet.y, z: pet.z } } : {}),
+                ...(buffAskedAt !== undefined ? { buffAskedAt } : {}),
             });
         }
         return out;

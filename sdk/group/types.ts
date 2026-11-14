@@ -156,6 +156,8 @@ export interface MemberReport {
     observed?: true;
     /** An observed member's own pet (a Mentalist's charmed mob, say): the friendly pet nearest it in a member's view, no member's window pet (observed.ts). For the buff plan's leftover pass only. Absent without one. */
     observedPet?: { objectId: number; name: string; x: number; y: number; z: number };
+    /** An observed member asked in /group for buffs at this time (observed.ts buffAsk, BUFF_ASK_MS): a decide may stop for a buff stop. Absent otherwise. */
+    buffAskedAt?: number;
     /**
      * Keep doors (DbDoor ids) this client knows broken: the server's door state says open (0x99, sdk.getDoorState), or it read "The
      * Keep Door is broken!" lately by the door nearest it then (observeState). Absent without any.
