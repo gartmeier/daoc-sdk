@@ -353,6 +353,13 @@ export function readGroupAsk(text: string): GroupAsk | null {
     return null;
 }
 
+/**
+ * Does a decide stop for a human's buff ask (observed.ts buffAsk)? Until one does, the leader promises no buffs: no answer to
+ * "buff", and a pickup says nothing of buffs (the user, via the player-feedback session: a promise the group doesn't keep
+ * is worse than none, as with the rez, 63188db). The roaming session sets it true in the commit that lands the stop (pack.ts).
+ */
+export const BUFF_STOP_ON: boolean = false;
+
 /** The group can stop for a buff stop now: no fight, pull or pull back (after one, the runner asks again). */
 export function buffFree(o: Pick<GroupPicture['orders'], 'phase'>): boolean {
     return o.phase !== 'engage' && o.phase !== 'retreat' && o.phase !== 'pull';
@@ -381,14 +388,15 @@ export function whereWeAre(p: GroupPicture, st: Pick<GroupVoiceState, 'realm' | 
 }
 
 /** The leader's answer to a human's ask. `picking`: a pickup or a buff stop was taken (the group comes to our PK, or buffs here). */
-export function groupAnswer(ask: GroupAsk, p: GroupPicture, st: Pick<GroupVoiceState, 'realm' | 'regionId'>, picking: boolean): string {
+export function groupAnswer(ask: GroupAsk, p: GroupPicture, st: Pick<GroupVoiceState, 'realm' | 'regionId'>, picking: boolean, buffStop = BUFF_STOP_ON): string | null {
     const where = whereWeAre(p, st);
     const fight = p.orders.phase === 'engage' || p.orders.phase === 'retreat' || p.orders.phase === 'pull';
     const we = where ? `we're ${fight ? 'fighting ' : ''}${where}` : 'we are all dead';
-    // A buff ask: a buff stop here now (`picking`: it was taken), or after the fight.
-    if (ask === 'buff') return !where ? `${we}, release and meet at our PK` : picking ? 'ok, buffing here, stay close' : 'after this fight';
+    // A buff ask: a buff stop here now (`picking`: it was taken), or after the fight; nothing while no decide stops for it.
+    if (ask === 'buff') return !where ? `${we}, release and meet at our PK` : !buffStop ? null : picking ? 'ok, buffing here, stay close' : 'after this fight';
     if (ask === 'where') return where ? `${we}, come to us` : `${we}, release and meet at our PK`;
-    if (picking) return nearOurPk(where) ? `wait there, ${we}` : 'ok, coming to our PK for you, wait there';
+    // A pickup ends in a buff stop where we meet (observed.ts pickup `buff`).
+    if (picking) return nearOurPk(where) ? `wait there, ${we}${buffStop ? `, we'll buff you here` : ''}` : `ok, coming to our PK for you, ${buffStop ? `we'll buff there` : 'wait there'}`;
     if (!where) return `${we}, release and meet at our PK`;
     return fight ? `${we}, come to us or ask again after the fight` : `${we} on a call, come to us or ask again in a bit`;
 }

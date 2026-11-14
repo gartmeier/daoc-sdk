@@ -641,8 +641,8 @@ export class Blackboard {
     }
 
     /** An observed member asked to be picked up: read at `place` while nobody sees them, until `until` (ObservedMembers.pickup). */
-    askPickup(name: string, place: { regionId: number; x: number; y: number; z: number }, now: number, until: number): boolean {
-        return this.observed.pickup(name, place, now, until);
+    askPickup(name: string, place: { regionId: number; x: number; y: number; z: number }, now: number, until: number, buff = false): boolean {
+        return this.observed.pickup(name, place, now, until, buff);
     }
 
     /** Observed members with a pickup still open. */

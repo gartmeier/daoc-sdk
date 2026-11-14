@@ -197,6 +197,16 @@ describe('Blackboard: the observed member on the picture', () => {
         expect(buffAsk(m.reports(t0 + 2000), t0 + 2000)).toBe(t0 + 1000);
         expect(buffAsk([report('Tank')], t0)).toBeNull();
         expect(m.reports(t0 + 1000 + BUFF_ASK_MS)[0]!.buffAskedAt).toBeUndefined();
+        // A pickup that ends in buffs: met (seen after the ask), the buff ask starts then; one that times out asks nothing.
+        const pk = { regionId: R, x: 50_000, y: 50_000, z: 300 };
+        const t1 = t0 + 2 * BUFF_ASK_MS;
+        const seenAt = (t: number) => ({ regionId: R, x: 49_000, y: 50_000, z: 0, inCombat: false, isSitting: false, at: t });
+        m.pickup('Vue', pk, t1, t1 + 180_000, true);
+        expect(m.reports(t1 + 1000)[0]!.buffAskedAt).toBeUndefined();
+        m.merge('Tank', [mate({ seen: seenAt(t1 + 30_000) })], t1 + 30_000);
+        expect(m.reports(t1 + 30_000)[0]!.buffAskedAt).toBe(t1 + 30_000);
+        m.pickup('Vue', pk, t1 + 100_000, t1 + 110_000, true);
+        expect(m.reports(t1 + 120_000)[0]!.buffAskedAt).toBeUndefined();
     });
 
     test('a pickup: unseen, it reads at the place until seen after the ask or its time is up', () => {

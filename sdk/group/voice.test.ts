@@ -234,6 +234,7 @@ describe('a human asks in group chat', () => {
         // On a call at our PK, and near it: taken, and "wait there".
         expect(pickupFree(call(at(200)).orders, "at our PK")).toBe(true);
         expect(groupAnswer('pickup', call(at(200)), st, true)).toBe("wait there, we're at our PK");
+        expect(groupAnswer('pickup', call(at(200)), st, true, true)).toBe("wait there, we're at our PK, we'll buff you here");
         expect(groupAnswer('pickup', call(at(8000)), st, true)).toBe("wait there, we're near our PK");
         // The wait for everyone at our PK before the raid.
         const wait = picture(at(200), [], { phase: 'recover', reason: 'full force first: waiting at our portal keep for Niamh, 90 s at most', objective: 'wait for everyone at our portal keep before the raid' });
@@ -248,11 +249,17 @@ describe('a human asks in group chat', () => {
         const st = { realm: 'hibernia' as const, regionId: 252 };
         const team = [report('Fergus', { regionId: 252, x: 33000, y: 25000 }), report('Niamh', { observed: true, regionId: 252, x: 33100, y: 25000 })];
         const out = picture(team, [], { phase: 'travel', reason: 'wave: out toward where our realm last saw enemies' });
+        const fight0 = () => picture(team, [], { phase: 'engage' });
         expect(buffFree(out.orders)).toBe(true);
-        expect(groupAnswer('buff', out, st, true)).toBe('ok, buffing here, stay close');
+        // No promise while no decide stops for it (BUFF_STOP_ON).
+        expect(groupAnswer('buff', out, st, true, false)).toBeNull();
+        expect(groupAnswer('buff', fight0(), st, false, false)).toBeNull();
+        expect(groupAnswer('buff', out, st, true, true)).toBe('ok, buffing here, stay close');
+        // A pickup ends in a buff stop, said once the stop is on.
+        expect(groupAnswer('pickup', out, st, true, true)).toBe("ok, coming to our PK for you, we'll buff there");
         const fight = picture(team, [], { phase: 'engage' });
         expect(buffFree(fight.orders)).toBe(false);
-        expect(groupAnswer('buff', fight, st, false)).toBe('after this fight');
+        expect(groupAnswer('buff', fight, st, false, true)).toBe('after this fight');
     });
 });
 describe('/region', () => {

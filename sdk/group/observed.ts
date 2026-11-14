@@ -152,12 +152,16 @@ export class ObservedMembers {
      * observed member nobody sees reads at `place` (our portal keep's arrival), so the group's regroup walks there
      * (rvr.ts holdObservedFar). Live 2026-11-13, Niamh: released to the PK, out of every bot's sight, never picked up.
      */
-    private readonly pickups = new Map<string, { place: { regionId: number; x: number; y: number; z: number }; asked: number; until: number }>();
+    private readonly pickups = new Map<string, { place: { regionId: number; x: number; y: number; z: number }; asked: number; until: number; buff: boolean }>();
 
-    /** Read `name`, while nobody sees them, at `place` until `until` (or until a member sees them after `asked`). */
-    pickup(name: string, place: { regionId: number; x: number; y: number; z: number }, asked: number, until: number): boolean {
+    /**
+     * Read `name`, while nobody sees them, at `place` until `until` (or until a member sees them after `asked`). `buff`: the
+     * pickup ends in a buff stop. Met (seen after the ask), they ask for buffs then (askBuff). The user, 2026-11-14: "we can
+     * make it part of pick me up. they come. they buff. speed song. we go."
+     */
+    pickup(name: string, place: { regionId: number; x: number; y: number; z: number }, asked: number, until: number, buff = false): boolean {
         if (!this.kept.has(lower(name))) return false;
-        this.pickups.set(lower(name), { place: { ...place }, asked, until });
+        this.pickups.set(lower(name), { place: { ...place }, asked, until, buff });
         return true;
     }
 
@@ -220,7 +224,10 @@ export class ObservedMembers {
             // A pickup: ends once seen after the ask (then out of sight again reads as ever) or at its time.
             const key = lower(w.name);
             const pk = this.pickups.get(key);
-            if (pk && (pk.until <= now || (k.seen && k.seen.at > pk.asked))) this.pickups.delete(key);
+            if (pk && (pk.until <= now || (k.seen && k.seen.at > pk.asked))) {
+                this.pickups.delete(key);
+                if (pk.buff && pk.until > now && !w.isDead) this.buffAsks.set(key, now);
+            }
             const pick = !seen && !w.isDead ? this.pickups.get(key)?.place ?? null : null;
             const asked = this.buffAsks.get(key);
             if (asked !== undefined && (now - asked >= BUFF_ASK_MS || w.isDead)) this.buffAsks.delete(key);
