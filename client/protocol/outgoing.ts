@@ -61,6 +61,11 @@ export interface CharacterCreateData {
     stats: [number, number, number, number, number, number, number, number];
     /** 1 = create, 2 = customize, 3 = delete. */
     operation?: number;
+    /**
+     * In a customize: what changes, 1 face (default), 2 attributes (`stats`, which must spend the 30 points over race
+     * base plus the level gains: CharacterStatValidator.cs), 3 both (CharacterCreateRequestHandler.cs:681-790).
+     */
+    customizeType?: 1 | 2 | 3;
     /** Sets the face fields and takes over from `model`. Without it the face stays at zeros. */
     look?: Look;
 }
@@ -78,14 +83,15 @@ export function encodeCharacterCreateRequest(d: CharacterCreateData): Uint8Array
     const customize = d.operation === 2;
     // CustomMode: 0 keeps the zeros, 1 applies the face at creation, 2 in a customize, which also
     // ends the configuration (CustomisationStep 2, CharacterCreateRequestHandler.cs:814).
-    w.u8(!d.look ? 0 : customize ? 2 : 1);
+    // An attributes-only customize sends 1: the server reads nothing for CustomMode 0, and 2 also checks the model's size.
+    w.u8(customize && d.customizeType === 2 ? 1 : !d.look ? 0 : customize ? 2 : 1);
     const k = d.look;
     for (const v of [k?.eyeSize, k?.lipSize, k?.eyeColor, k?.hairColor, k?.faceType, k?.hairStyle]) w.u8(v ?? 0);
     w.fill(0, 3);
     w.u8(0); // mood
     w.fill(0, 9);
     w.u8(d.operation ?? 1);
-    w.u8(customize ? 1 : 0); // customize type: 1 = face only, the stats stay
+    w.u8(customize ? d.customizeType ?? 1 : 0); // customize type: 1 face, 2 attributes, 3 both
     w.fill(0, 2);
     for (let i = 0; i < 3; i++) w.u32le(1).u8(0); // location/class/race strings: Skip(5) each
     w.u8(d.classId);

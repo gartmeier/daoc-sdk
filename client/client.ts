@@ -26,6 +26,8 @@ export interface DaocClientOptions {
     raceName?: string;
     gender?: number;
     createIfMissing?: boolean;
+    /** SessionOptions.respecStats. */
+    respecStats?: boolean;
     log?: (msg: string) => void;
     trace?: boolean;
     /** Minimum ms between published snapshots (default 250). */
@@ -120,6 +122,7 @@ export class DaocClient {
             raceName: this.opts.raceName,
             gender: this.opts.gender,
             createIfMissing: this.opts.createIfMissing ?? true,
+            respecStats: this.opts.respecStats,
             log: this.log,
             trace: this.opts.trace,
             ground: this.opts.ground,

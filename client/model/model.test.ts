@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { encodeCp1252, PacketWriter } from '../protocol/buffer';
 import { ServerOp } from '../protocol/opcodes';
-import { getRacesForClass, getStartingClasses } from '../../data/index';
-import { creationPoints, planCharacter, RACE_MODELS } from './classes';
+import { getRacesForClass, getStartingClasses, getStartingStats } from '../../data/index';
+import { creationPoints, levelStatGains, planCharacter, planStatRespec, RACE_MODELS } from './classes';
 import { coinDrops, guessNpcRole, MAX_COMBAT_EVENTS, WorldModel } from './world-model';
 
 const W = () => new PacketWriter();
@@ -78,6 +78,43 @@ describe('classes / character creation', () => {
         expect(planCharacter('hibernia', 'Mentalist', 'Lurikeen', 1).stats).toEqual([40, 95, 40, 80, 70, 60, 60, 60]);
         // Elf base DEX 75, QUI 75, INT 70.
         expect(planCharacter('hibernia', 'Mentalist', 'Elf').stats).toEqual([40, 90, 40, 75, 80, 60, 60, 60]);
+    });
+
+    test('planStatRespec: an existing character moves to the Optimize split and keeps its level gains', () => {
+        // Mentalist L24: INT +19, DEX +10, QUI +7 from levels 6-24.
+        expect(levelStatGains(42, 24)).toEqual([0, 10, 0, 7, 19, 0, 0, 0]);
+        // Deirdre-like: Lurikeen Mentalist made with INT/DEX/QUI +10 each, now L24 (0xFF order STR DEX CON QUI INT PIE EMP CHR).
+        const old = [40, 100, 40, 97, 89, 60, 60, 60];
+        expect(planStatRespec(42, 12, 24, old)).toEqual({ kind: 'respec', stats: [40, 105, 40, 87, 89, 60, 60, 60], from: 'DEX+10 QUI+10 INT+10', to: 'DEX+15 INT+10' });
+        // Niamh after her re-spend: nothing to do.
+        expect(planStatRespec(42, 12, 24, [40, 105, 40, 87, 89, 60, 60, 60])).toEqual({ kind: 'same' });
+        // A level 1 gets no gains: the new stats are just planCharacter's.
+        const l1 = planStatRespec(42, 12, 1, [40, 90, 40, 90, 70, 60, 60, 60]);
+        expect(l1.kind === 'respec' && l1.stats).toEqual(planCharacter('hibernia', 'Mentalist', 'Lurikeen').stats);
+        // Points that don't come to 30 (changed by a GM or SQL) are left alone.
+        expect(planStatRespec(42, 12, 24, [40, 110, 40, 97, 89, 60, 60, 60]).kind).toBe('skip');
+        expect(planStatRespec(42, 12, 24, [30, 100, 40, 97, 89, 60, 60, 60]).kind).toBe('skip');
+    });
+
+    test('planStatRespec: what it sends always passes the server check, for every class, race and level', () => {
+        for (const realm of [1, 2, 3]) {
+            for (const c of getStartingClasses(realm)) {
+                for (const race of getRacesForClass(c.id)) {
+                    for (const level of [1, 5, 6, 20, 24, 50]) {
+                        const gains = levelStatGains(c.id, level);
+                        // An old-style character: +10 each to three stats it was created with, plus its gains.
+                        const made = planCharacter(realm, c.key, race.name).stats.map((v, i) => v + gains[i]!);
+                        const r = planStatRespec(c.id, race.id, level, made);
+                        expect(r.kind, `${c.name} ${race.name} L${level}`).toBe('same');
+                        const base = getStartingStats(race.id)!;
+                        const old = (['STR', 'DEX', 'CON', 'QUI', 'INT', 'PIE', 'EMP', 'CHR'] as const).map((s, i) => base[s] + (i < 3 ? 10 : 0) + gains[i]!);
+                        const r2 = planStatRespec(c.id, race.id, level, old);
+                        if (r2.kind === 'respec') expect(creationPoints(race.id, r2.stats.map((v, i) => v - gains[i]!))).toBe(30);
+                        else expect(r2.kind).toBe('same');
+                    }
+                }
+            }
+        }
     });
 
     test('Albion and Midgard "Rogue" resolve to different class ids', () => {

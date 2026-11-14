@@ -23,7 +23,7 @@ import { decodeStatusUpdate } from './protocol/incoming/player';
 import { getZone } from '../data/zones';
 import { VISIBILITY_DISTANCE, WorldModel } from './model/world-model';
 import { Mover, type MoverDeps } from './movement';
-import { className as classNameById, planCharacter, raceNameById, realmNumber } from './model/classes';
+import { className as classNameById, planCharacter, planStatRespec, raceNameById, realmNumber } from './model/classes';
 
 export type SessionEndReason =
     | 'quit'
@@ -64,6 +64,11 @@ export interface SessionOptions {
     raceName?: string;
     gender?: number;
     createIfMissing?: boolean;
+    /**
+     * On the character screen, re-spend the starting stat points the way the client's Optimize button does when they
+     * differ (planStatRespec), as a player would with the customize screen. bot.env `STAT_RESPEC=optimize`.
+     */
+    respecStats?: boolean;
     log?: (msg: string) => void;
     /** Log every packet in and out. */
     trace?: boolean;
@@ -254,6 +259,7 @@ export class DaocSession {
         } else if (hasNoLook(ch)) {
             ch = await this.giveLook(ch, realm, findChar) ?? ch;
         }
+        if (o.respecStats && !this.createdCharacter) ch = await this.respecStats(ch, realm, findChar) ?? ch;
         this.character = ch;
         this.charSlot = ch.slot;
         this.model.self.name = ch.name;
@@ -288,6 +294,29 @@ export class DaocSession {
         }));
         const after = findChar(await this.requestOverview(realm));
         this.log(after && !hasNoLook(after) ? `gave ${ch.name} a look (model ${look.model & 0x7FF})` : `WARNING: ${ch.name} kept the blank look`);
+        return after;
+    }
+
+    /**
+     * Re-spend the starting points to the client's Optimize split (0xFF customize, attributes). The server answers
+     * nothing when it takes them and LoginGranted when it refuses (CharacterCreateRequestHandler.cs:58-96), so the
+     * new overview shows which.
+     */
+    private async respecStats(ch: OverviewCharacter, realm: number, findChar: (ov: CharacterOverview) => OverviewCharacter | undefined): Promise<OverviewCharacter | undefined> {
+        const plan = planStatRespec(ch.classId, ch.raceId, ch.level, ch.stats);
+        if (plan.kind === 'same') return undefined;
+        if (plan.kind === 'skip') {
+            this.log(`stat respec: ${ch.name} left alone, ${plan.why}`);
+            return undefined;
+        }
+        this.send(ClientOp.CharacterCreateRequest, out.encodeCharacterCreateRequest({
+            slot: ch.slot, name: ch.name, realm: ch.realm, classId: ch.classId, raceId: ch.raceId, gender: ch.gender, model: ch.model,
+            stats: plan.stats, operation: 2, customizeType: 2,
+        }));
+        const after = findChar(await this.requestOverview(realm));
+        const took = !!after && plan.stats.every((v, i) => after.stats[i] === v);
+        this.log(took ? `stat respec: ${ch.name} starting points ${plan.from} -> ${plan.to} (stats ${plan.stats.join('/')})`
+            : `WARNING: stat respec refused for ${ch.name} (${plan.from} -> ${plan.to}), stats stay ${(after ?? ch).stats.join('/')}`);
         return after;
     }
 

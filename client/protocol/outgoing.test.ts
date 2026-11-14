@@ -57,6 +57,15 @@ describe('login / character screen encoders', () => {
         expect(faceBytes(o.encodeCharacterCreateRequest({ ...DALTA, operation: 2, look: LOOK }))).toEqual({ mode: 2, face: '12 34 56 07 20 30', operation: 2, type: 1, model: 0x914A });
     });
 
+    test('0xFF customize attributes: CustomMode 1, type 2, the stats and NewConstitution', () => {
+        const b = o.encodeCharacterCreateRequest({ ...DALTA, operation: 2, customizeType: 2, stats: [40, 105, 41, 87, 89, 60, 60, 60] });
+        expect(faceBytes(b)).toMatchObject({ mode: 1, face: '00 00 00 00 00 00', operation: 2, type: 2 });
+        const r = new PacketReader(b.subarray(b.length - 52));
+        expect([...r.bytes(8)]).toEqual([40, 105, 41, 87, 89, 60, 60, 60]);
+        r.skip(43);
+        expect(r.u8()).toBe(41); // NewConstitution, what the server sets CON from
+    });
+
     test('0xFF CharacterCreateRequest layout matches CreationCharacterData (1.126+)', () => {
         const b = o.encodeCharacterCreateRequest({
             slot: 2, name: 'Smoke', realm: 2, classId: 35, raceId: 6, gender: 1, model: 145,

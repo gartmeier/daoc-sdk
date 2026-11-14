@@ -24,6 +24,8 @@ export interface BotConfig {
     port: number;
     gatewayUrl: string;
     showChat: boolean;
+    /** STAT_RESPEC=optimize: re-spend the starting stats to the client's Optimize split at login (SessionOptions.respecStats). */
+    respecStats: boolean;
     warnings: string[];
 }
 
@@ -70,6 +72,8 @@ export function botConfigFromEnv(botName: string, env: Record<string, string>): 
     else if (g) throw new BotConfigError(`GENDER '${env.GENDER}' must be male or female`);
     const v = validateCharacter({ realm, class: className, race: raceName, gender });
     if (!v.valid) throw new BotConfigError(`invalid character in bot.env: ${v.errors.join('; ')}`);
+    const respec = (env.STAT_RESPEC ?? '').trim().toLowerCase();
+    if (respec && respec !== 'optimize' && respec !== 'off') throw new BotConfigError(`STAT_RESPEC '${env.STAT_RESPEC}' must be optimize or off`);
     const { host, port } = parseServer(env.SERVER);
     return {
         botName, username, password, charName,
@@ -80,6 +84,7 @@ export function botConfigFromEnv(botName: string, env: Record<string, string>): 
         host, port,
         gatewayUrl: deriveGatewayUrl(env.GATEWAY_URL),
         showChat: (env.SHOW_CHAT ?? 'true').toLowerCase() !== 'false',
+        respecStats: respec === 'optimize',
         warnings: v.warnings,
     };
 }
@@ -113,6 +118,7 @@ export function createBotBridge(config: BotConfig, opts: Partial<BridgeOptions> 
         raceName: config.raceName,
         gender: config.gender,
         createIfMissing: true,
+        respecStats: config.respecStats,
         log: msg => log(`[client] ${msg}`),
         trace: opts.trace,
         ground: moverGround(),

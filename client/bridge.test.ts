@@ -371,4 +371,11 @@ describe('bot.env config', () => {
         expect(() => botConfigFromEnv('b', {})).toThrow(/PASSWORD/);
         expect(parseServer('[::1]:10300')).toEqual({ host: '::1', port: 10300 });
     });
+
+    test('STAT_RESPEC=optimize turns the starting-stat re-spend on; off by default', () => {
+        expect(botConfigFromEnv('r', { PASSWORD: 'x' }).respecStats).toBe(false);
+        expect(botConfigFromEnv('r', { PASSWORD: 'x', STAT_RESPEC: 'optimize' }).respecStats).toBe(true);
+        expect(botConfigFromEnv('r', { PASSWORD: 'x', STAT_RESPEC: 'off' }).respecStats).toBe(false);
+        expect(() => botConfigFromEnv('r', { PASSWORD: 'x', STAT_RESPEC: 'yes' })).toThrow(/STAT_RESPEC/);
+    });
 });

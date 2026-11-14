@@ -6,8 +6,8 @@
 
 import type { Realm } from '../../sdk/types';
 import {
-    defaultStats, getClass, getRace, getStartingClasses, realmId, realmName as dataRealmName, STAT_ORDER,
-    statPointCost, validateCharacter,
+    defaultStats, getClass, getRace, getStartingClasses, getStartingStats, optimizedStatPoints, realmId, realmName as dataRealmName,
+    STAT_ORDER, statPointCost, validateCharacter,
 } from '../../data/index';
 
 /** eLivingModel male / female per eRace id (Enums/eLivingModel.cs; gameobjects/PlayerRace.cs:42-64). */
@@ -58,6 +58,47 @@ export function planCharacter(realmIn: Realm | string | number, className: strin
     const s = defaultStats(v.classInfo.id, v.raceInfo.id, realm);
     const stats = STAT_ORDER.map(k => s[k]) as CreationPlan['stats'];
     return { classId: v.classInfo.id, raceId: v.raceInfo.id, realm, gender: g, model: models[g], stats, warnings: v.warnings };
+}
+
+/** Points a level adds to each stat: from level 6, the class's primary every level, secondary every 2nd, tertiary every 3rd (GamePlayer.cs OnLevelUp, CharacterStatValidator.cs). */
+export function levelStatGains(classId: number, level: number): number[] {
+    const c = getClass(classId);
+    return STAT_ORDER.map(s => {
+        let gain = 0;
+        for (let l = level; l > 5; l--) {
+            if (c?.primaryStat === s) gain++;
+            if (c?.secondaryStat === s && (l - 6) % 2 === 0) gain++;
+            if (c?.tertiaryStat === s && (l - 6) % 3 === 0) gain++;
+        }
+        return gain;
+    });
+}
+
+export type StatRespec =
+    | { kind: 'same' }
+    | { kind: 'skip'; why: string }
+    | { kind: 'respec'; stats: CreationPlan['stats']; from: string; to: string };
+
+const pointsText = (above: number[]) => STAT_ORDER.map((s, i) => above[i] ? `${s}+${above[i]}` : '').filter(Boolean).join(' ') || 'none';
+
+/**
+ * An existing character's starting points against the client's Optimize split (data/index.ts optimizedStatPoints).
+ * `stats` are its base stats in the 0xFF order, as the character overview shows them. The new stats keep the level
+ * gains, as the server's check takes them off again (CharacterStatValidator.cs). A character whose points don't
+ * come to 30 has been changed some other way and is left alone.
+ */
+export function planStatRespec(classId: number, raceId: number, level: number, stats: number[]): StatRespec {
+    const base = getStartingStats(raceId);
+    const want = getClass(classId) ? optimizedStatPoints(classId) : null;
+    if (!base || !want) return { kind: 'skip', why: `no Optimize split for class ${classId} race ${raceId}` };
+    const gains = levelStatGains(classId, level);
+    const above = STAT_ORDER.map((s, i) => (stats[i] ?? 0) - gains[i]! - base[s]);
+    const cost = above.reduce((t, a) => t + a + Math.max(0, a - 10) + Math.max(0, a - 15), 0);
+    if (above.some(a => a < 0) || cost !== 30) return { kind: 'skip', why: `starting points ${pointsText(above)} don't come to 30` };
+    const to = STAT_ORDER.map(s => want[s] ?? 0);
+    if (to.every((a, i) => a === above[i])) return { kind: 'same' };
+    const next = STAT_ORDER.map((s, i) => base[s] + to[i]! + gains[i]!) as CreationPlan['stats'];
+    return { kind: 'respec', stats: next, from: pointsText(above), to: pointsText(to) };
 }
 
 /** Sum of creation costs (CharacterStatValidator.cs); must equal 30. */
