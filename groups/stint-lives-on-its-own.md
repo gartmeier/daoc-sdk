@@ -37,7 +37,7 @@
   - In 5 of the 16, no unit arrived at the stage at all (`arrived -`); in 6, only one unit was "coming", most often a small squad (camelot-s1, hibernia-s1).
   - Seven times a raiding unit stalled on its way, 5000-10000 short of the stage, for 5 minutes (`raid approach: … to the stage`).
   - **Proposal:** no raid muster below a realm's daytime numbers (say 12 online, or 2 full units coming). At night, raids give way to small fights, which the alive numbers need anyway.
-- **What still stops a full raid** is S2's handover above (the S2 section, "Open for the morning"): rank 3's wall Runemasters kill the climbing melee; the outside-ray half for raidStep (`groups/notes/s2-outside-ray-raidstep.patch`) is untested and not applied; the lord fight has never been reached with the body together.
+- **What still stops a full raid** is S2's handover above (the S2 section, "Open for the morning"): rank 3's wall Runemasters kill the climbing melee, and the lord fight has never been reached with the body together. The outside ray is in raidStep (S3, a17b8cf, 01:19, unit side), so every night raid ran with it, without a kill to show for it yet. S3's rush-height fix (725b996, director side) wasn't live overnight; it went live with the field mode restart at 09:47.
 - The best raid of the day was albion-12 (01:26-01:51): no early rush, worked rank 3 from outside, timed out with the wall casters up.
 
 **Help.** 405 help calls in `/region` overnight ("4 coming near our PK, need help", "6 hibs on us east of the Faste, help!"). Time from call to arrival isn't in the log yet; it belongs in the scoreboard's "back in action" item.
@@ -59,12 +59,13 @@
 - No other throwaway runs.
 
 **Open, in order:**
-1. **Night raids:** no muster below daytime numbers (above). This is the cheapest cut in the night's deaths.
-2. **S2's raid list:** the outside ray in raidStep with a test, then rank 3.
-3. **pack.ts:** the melee chases players behind the shut gate.
-4. **Supervisor:** a pause for deliberate offline windows (the 00:36 restart).
-5. **Realm rank cap:** unproven until a bot reaches RealmLevel 10 (the highest is 9).
-6. **Emblems and dyes:** never seen in a real client. Whether the logo is off by one and which emblem colour is the background is the user's look at Niamh's cloak.
+1. **Night raids:** done after the report, 68dee41: no raid musters while a realm's target is below 12. Live since field mode's restart at 09:47.
+2. **S2's raid list:** rank 3, and whether the outside ray (a17b8cf) kills wall casters in a daytime raid.
+3. **A failing test:** `sdk/group/member-turns.test.ts` (a melee chase stand-in) fails on main. It came in after S5's green run at 7190d8e, with tonight's raid and door commits.
+4. **pack.ts:** the melee chases players behind the shut gate.
+5. **Supervisor:** a pause for deliberate offline windows (the 00:36 restart).
+6. **Realm rank cap:** unproven until a bot reaches RealmLevel 10 (the highest is 9).
+7. **Emblems and dyes:** never seen in a real client. Whether the logo is off by one and which emblem colour is the background is the user's look at Niamh's cloak.
 
 The standing brief that replaces stints from today is [groups/standing-brief.md](standing-brief.md).
 

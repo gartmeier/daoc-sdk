@@ -101,11 +101,12 @@ Items 1-3 don't exist as measures yet. Building them is the first work under thi
 
 ## Open now (from the 2026-11-14 morning report)
 
-1. **Night raids:** no muster below daytime numbers. 16 night raids cost 290 dead, and 5 never had a unit arrive.
-2. **The raid funnel measure** (scoreboard item 1), then S2's raid list:
-   - the outside ray in raidStep (`groups/notes/s2-outside-ray-raidstep.patch`, untested);
+1. **The raid funnel measure** (scoreboard item 1), then S2's raid list:
+   - does the outside ray (a17b8cf) kill wall casters in a daytime raid;
    - rank 3's wall Runemasters;
    - the lord fight.
+   - Night raids are off since 68dee41 (no muster below a target of 12).
+2. **A failing test:** `sdk/group/member-turns.test.ts` (the melee chase stand-in) fails on main since tonight's commits.
 3. **pack.ts:** the melee chases players behind the shut gate.
 4. **Supervisor:** a pause for deliberate offline windows.
 5. **Realm rank cap 255:** unproven until a bot reaches RealmLevel 10.
