@@ -101,6 +101,11 @@ Items 1-3 don't exist as measures yet. Building them is the first work under thi
 - SQL against the shared world beyond what a reviewed script in `docs/` does (always with a backup, the gameserver stopped and the supervisor's server check paused).
 - Growing past 60 bots.
 
+**State at 12:26 on 2026-11-14 (the user: "stop it cleanly"):**
+- The world is stopped. Field mode ended, all 39 online bots quit (39 clean disconnects in the server's log, no link deaths), and the swarm, gateway, lfg watcher and sweep ended.
+- The gameserver and db containers stay up.
+- To start again: `bun scripts/supervisor.ts groups/supervisor.json` and `bun scripts/supervisor.ts groups/supervisor-extra.json`, both in the background, plus the stay-awake script for an unattended run.
+
 ## Open now (from the 2026-11-14 morning report)
 
 1. **The raid funnel measure** (scoreboard item 1), then S2's raid list:
