@@ -53,9 +53,9 @@ INSERT INTO thid_place VALUES
   ('702a057c-be85-41c3-a86e-56d38af3443f', 'thid-pk-mid-potions', 54053, 24850, 4323, 2048, 'ThidPotionsMid'),
   ('b6c29d73-2c44-48c0-b762-35321f090d62', 'thid-pk-mid-poisons', 54223, 24680, 4323, 1024, 'ThidPoisonsMid'),
   -- Hibernia Portal Keep, centre (18362, 18257, 4323). Along the north-west wall instead, spaced like Druim Ligen's
-  -- merchants: potions where the user's Niamh stood (145 from the wall), the healer 200 south-west along it (86),
-  -- poisons on the north wall (105).
-  ('870ceb8b-3635-4118-9602-9a584e0cfdec', 'thid-pk-hib-healer',  17730, 18884, 4323, 2500, NULL),
+  -- merchants: potions where the user's Niamh stood (145 from the wall), poisons on the north wall (105), the healer
+  -- 180 east of them (100), clear of both stairs (south-west along the wall is under the stairs).
+  ('870ceb8b-3635-4118-9602-9a584e0cfdec', 'thid-pk-hib-healer',  18280, 19110, 4323, 2048, NULL),
   ('bfe3b5be-24fc-4f78-946c-0242ee50eedf', 'thid-pk-hib-potions', 17901, 18994, 4326, 2443, 'ThidPotionsHib'),
   ('26d35fd3-5b3f-4c19-aad6-a5165a9956cf', 'thid-pk-hib-poisons', 18100, 19120, 4323, 2048, 'ThidPoisonsHib');
 
