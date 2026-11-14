@@ -64,7 +64,7 @@ const GUILDS: GuildDef[] = [
         scheme: { body: C.black, arms: C.darkPurple, hands: C.black, helm: C.darkPurple } }, // cauldron
 ];
 const NIAMH = 'Niamh'; // the user's Mentalist: Silver Hand, all black, light gray gloves, a tiara
-const NIAMH_TIARA = 538; // client items.csv 'Tiarra - Celt/Elf' (hce_hat06), undyed; Niamh is an Elf. Asked for on 2026-11-14 in place of the black wizard hat.
+const NIAMH_TIARA = 539; // client items.csv 'Tiarra - Firb/Keen' (hfl_hat06), undyed; Niamh is a Lurikeen. Asked for on 2026-11-14 in place of the black wizard hat.
 
 // Two colours that go together, for characters in no bot guild.
 const PAIRS: [number, number][] = [
