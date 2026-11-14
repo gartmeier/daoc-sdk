@@ -43,7 +43,9 @@ The helm and torso models come from the item template, so the file adds per-clas
 
 ## Niamh
 
-Niamh is in Silver Hand. She wears all black, with the robe she already had (378), a black steeple hat (1279), light gray gloves (the guild's silver hand) and the guild emblem on the cloak: hands and heart, dark green and ivory.
+Niamh is in Silver Hand. She wears all black, with the robe she already had (378), a tiara, light gray gloves (the guild's silver hand) and the guild emblem on the cloak: hands and heart, dark green and ivory.
+
+On 2026-11-14 the user asked for a tiara in place of the hat. [bot-looks-tiara.sql](bot-looks-tiara.sql) (undo: [bot-looks-tiara-undo.sql](bot-looks-tiara-undo.sql)) gives her helm the template `t24_mentalist_21_tiara`, model 538, undyed. That is the client's "Tiarra - Celt/Elf" (`gamedata.mpk/items.csv`, `hce_hat06`), made for her race. No server item uses that model yet, so how it renders is still to be seen in the client. The generator now gives her the tiara as well.
 
 ## Later gear stays plain
 

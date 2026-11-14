@@ -63,7 +63,8 @@ const GUILDS: GuildDef[] = [
     { name: 'The Cauldron', realm: 3, emblem: emblem('h', 45, 0, DK.purple, LT.orange), groups: ['hibernia-s1', 'hibernia-s2', 'hibernia-s3', 'hibernia-s4'],
         scheme: { body: C.black, arms: C.darkPurple, hands: C.black, helm: C.darkPurple } }, // cauldron
 ];
-const NIAMH = 'Niamh'; // the user's Mentalist: Silver Hand, all black, light gray gloves, a black wizard hat
+const NIAMH = 'Niamh'; // the user's Mentalist: Silver Hand, all black, light gray gloves, a tiara
+const NIAMH_TIARA = 538; // client items.csv 'Tiarra - Celt/Elf' (hce_hat06), undyed; Niamh is an Elf. Asked for on 2026-11-14 in place of the black wizard hat.
 
 // Two colours that go together, for characters in no bot guild.
 const PAIRS: [number, number][] = [
@@ -133,7 +134,7 @@ const items = sql(`select c.Name, i.Inventory_ID, i.SlotPosition, i.ITemplate_Id
 const existing = new Set(sql(`select GuildName from guild`).map(([n]) => n!));
 for (const g of GUILDS) if (existing.has(g.name)) throw new Error(`guild ${g.name} exists already`);
 const [rankSource] = sql(`select GuildID from guild where GuildName = 'Crimson Order'`)[0]!;
-const variantsExisting = new Set(sql(`select Id_nb from itemtemplate where Id_nb like 't24\\_%\\_hat' or Id_nb like 't24\\_%\\_crown' or Id_nb like 't24\\_%\\_robe'`).map(([n]) => n!));
+const variantsExisting = new Set(sql(`select Id_nb from itemtemplate where Id_nb like 't24\\_%\\_hat' or Id_nb like 't24\\_%\\_crown' or Id_nb like 't24\\_%\\_tiara' or Id_nb like 't24\\_%\\_robe'`).map(([n]) => n!));
 
 // --- decide -------------------------------------------------------------------------------------------
 const out: string[] = [];
@@ -168,13 +169,13 @@ for (const [name, g] of guildOf) {
 
 // Variant templates: one per class and kind, made on demand.
 const variants = new Map<string, number>(); // new Id_nb -> model
-function variant(base: string, kind: 'hat' | 'crown' | 'robe', model: number): string {
+function variant(base: string, kind: 'hat' | 'crown' | 'tiara' | 'robe', model: number): string {
     const id = `${base}_${kind}`;
     if (!variantsExisting.has(id)) variants.set(id, model);
     return id;
 }
 
-type Look = { cloak: number; body: number; arms: number; hands: number; helm: number; boots: number; emblem: number; head?: 'hat' | 'crown'; robe?: boolean; guild?: string };
+type Look = { cloak: number; body: number; arms: number; hands: number; helm: number; boots: number; emblem: number; head?: 'hat' | 'crown' | 'tiara'; robe?: boolean; guild?: string };
 const looks = new Map<string, Look>();
 function lookFor(name: string, realm: number, cls: string | undefined): Look {
     const done = looks.get(name);
@@ -182,7 +183,7 @@ function lookFor(name: string, realm: number, cls: string | undefined): Look {
     const g = guildOf.get(name);
     let l: Look;
     if (name === NIAMH) {
-        l = { cloak: C.black, body: C.black, arms: C.black, hands: C.lightGray, helm: C.black, boots: C.black, emblem: g!.emblem, head: 'hat', robe: true, guild: g!.name };
+        l = { cloak: C.black, body: C.black, arms: C.black, hands: C.lightGray, helm: 0, boots: C.black, emblem: g!.emblem, head: 'tiara', robe: true, guild: g!.name };
     } else if (g && g.realm === realm) {
         const s = g.scheme;
         // not everyone in a guild is perfectly matched: an undyed helm or boots now and then
@@ -225,7 +226,7 @@ for (const [name, id, slotS, tpl, colorS, emblemS, objS] of items) {
         case 21: color = l.helm; emb = 0; break;
     }
     const m = tpl!.match(/^(t24_[a-z]+_(21|25))$/);
-    if (m && slot === 21 && l.head) template = variant(m[1]!, l.head, (l.head === 'hat' ? WIZARD_HAT : CROWN)[row.realm]!);
+    if (m && slot === 21 && l.head) template = variant(m[1]!, l.head, l.head === 'tiara' ? NIAMH_TIARA : (l.head === 'hat' ? WIZARD_HAT : CROWN)[row.realm]!);
     if (m && slot === 25 && l.robe && row.realm === 2) template = variant(m[1]!, 'robe', MID_ROBE);
     if (color === Number(colorS) && emb === Number(emblemS) && template === tpl) continue;
     out.push(`UPDATE inventory SET Color = ${color}, Emblem = ${emb}${template !== tpl ? `, ITemplate_Id = ${q(template)}` : ''} WHERE Inventory_ID = ${q(id!)};`);
@@ -234,7 +235,7 @@ for (const [name, id, slotS, tpl, colorS, emblemS, objS] of items) {
 }
 const tplOut: string[] = [`-- Variant templates (before the items that point at them): a copy of the class's t24 template with another model.`];
 for (const [vid, model] of variants) {
-    const base = vid.replace(/_(hat|crown|robe)$/, '');
+    const base = vid.replace(/_(hat|crown|tiara|robe)$/, '');
     tplOut.push(`DROP TEMPORARY TABLE IF EXISTS tt; CREATE TEMPORARY TABLE tt AS SELECT * FROM itemtemplate WHERE Id_nb = ${q(base)};`);
     tplOut.push(`UPDATE tt SET Id_nb = ${q(vid)}, ItemTemplate_ID = UUID(), Model = ${model};`);
     tplOut.push(`INSERT INTO itemtemplate SELECT * FROM tt;`);
