@@ -66,6 +66,16 @@ bun groups/<group>/train.ts [--respec] [--radius=<n>]  # anywhere: each member s
 
 The loop is the session loop at group scale: run, read the report (findings name the setting to change), change one thing in `strategy.ts`, run again and compare, note it in the group's `lab_log.md`. A group run controls every member, so don't drive a member separately meanwhile: taking control of one member aborts the whole run. To stop a hunt early, wind it down (`--wind-down`, or the button on the group page). The browser view is `http://localhost:7780/viewer/group/<group>`: every member on one map, orders, base plan, enemies, events, deaths and recent runs.
 
+## The living world (Thidranki, many bots at once)
+
+The long-running world is many units across all three realms in Thidranki. Bots log in and out by a daily curve (the life cycle, `sdk/group/lifecycle.ts`), and a director per realm calls help, defences and raids. It is run by local files: `groups/field.ts` (field mode), `groups/supervisor.json` and `groups/supervisor-extra.json`. **Start from [groups/standing-brief.md](groups/standing-brief.md)**: the goal, the scoreboard, the user's principles, what to decide alone and what to ask, how to start and stop, and what is open.
+
+- Start: `bun scripts/supervisor.ts groups/supervisor.json` and `bun scripts/supervisor.ts groups/supervisor-extra.json`, both in the background. For an unattended run, also a stay-awake script.
+- Stop cleanly: `touch groups/supervisor.stop`. Field mode ends, every bot quits through the swarm's control folder, then the swarm and gateway end. Delete the stop file before the next start. The extra supervisor's stop file ends nothing, so stop its own background task.
+- Restart field mode only (director or field changes): `touch groups/field.stop` between raids. Unit-side `sdk/` changes go live at each unit's next sortie; `client/` changes need a swarm restart.
+- SQL against the shared world needs the gameserver stopped, because it caches guilds, items and inventories. The supervisor restarts a stopped gameserver within 30 s, so run the stop, the SQL and the start in one go, as the morning of 2026-11-14 did.
+- Never take control of a bot that field mode runs, and never kill a client.
+
 ## MCP tools
 
 | Tool | Use |

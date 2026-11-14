@@ -124,7 +124,7 @@ Items 1-3 don't exist as measures yet. Building them is the first work under thi
    - a full group lets a fleeing solo go and skips sightings under 3 (686c77b, 70557fc);
    - the leader holds the called target for `/assist`, and pickups ask for buffs (1caff00, 7b3514b);
    - the life cycle's human guard (3a252e8: it held Niamh at 11:45).
-8. **Starting stats the Optimize way** (7aa8f76) for new characters. 42 bots still carry the old split. Re-spending them needs a client packet and a log-out to the character screen; the user hasn't decided. Uncommitted client work for it sat in the tree at 11:5x, from the stats session.
+8. **Starting stats the Optimize way:** new characters since 7aa8f76. The 42 bots with the old split re-spend at their first login after the next start (ab1ee66, `STAT_RESPEC=optimize` in their bot.env; the user agreed on 11-14). Follow it with `grep "stat respec" groups/stint2-swarm.log` (the swarm's log); a refusal is a WARNING. 18 of them move 10 points out of Constitution.
 9. **Watchers:** `scripts/watch.ts` for any log watch; the sweep (`groups/sweep-orphans.log`) under the extra supervisor. Check that log for counts that climb.
 10. **The keep-awake script was stopped at about 10:30.** While the machine may sleep, the world doesn't count as running on its own.
 

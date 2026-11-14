@@ -9,8 +9,9 @@
 //             small-man at night. field.ts asks sizeOf(unit) at each line-up.
 //   Balance   Each realm compares, from its own board only, how many of ours stood near enemies with how many of each
 //             other realm it saw (20 min window). Outnumbered 1.5 to 1 for 10 min: one more plays; outnumbering: one less.
-//   Raids     A realm with the numbers out (14 online, 10 living out) and no raid for a while wants a muster
-//             (wantsMuster); field.ts starts it, the director (S3) decides when it goes.
+//   Raids     A realm with the numbers out (its target online, 70 % of it living out) and no raid for 25 min wants a
+//             muster (wantsMuster), only while its target is 12 or more: no raids at night (68dee41). field.ts starts
+//             it, the director decides when it goes.
 //   Waves     Out toward where the realm last saw enemies, a fight, then a few minutes of quiet at the portal keep
 //             (stepWave; the units' side is waves.ts).
 //
