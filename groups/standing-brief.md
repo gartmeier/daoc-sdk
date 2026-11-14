@@ -106,6 +106,26 @@ Items 1-3 don't exist as measures yet. Building them is the first work under thi
 - The gameserver and db containers stay up.
 - To start again: `bun scripts/supervisor.ts groups/supervisor.json` and `bun scripts/supervisor.ts groups/supervisor-extra.json`, both in the background, plus the stay-awake script for an unattended run.
 
+## Next step (proposed 2026-11-14 12:40, for a fresh session)
+
+**Build the scoreboard's raid funnel, then start the world again and read it on a live afternoon.**
+
+1. **The raid funnel** (scoreboard item 1).
+   - **What it reads:** only what is already written.
+     - Field mode's log: the director's `call` rows, and the `raid` rows (`muster`, `stage`).
+     - Each unit's field run log (`groups/<unit>/runs/field-*.log`): the raid reasons `raid <phase>: rank N: ...; M left`. `raidProgress` in `sdk/group/director.ts` already turns them into a number.
+   - **Per raid:** the moment of the go, then whether and when it reached each stage: got there, entrance guards, wall guards, the yard, the inside door, up, the lord.
+   - **Per realm and window:** the share reaching each stage and the median time to it. Musters where no unit arrived count as failing the first stage.
+   - **Shape:** a script beside `scripts/alive.ts`, with tests built from the 11-13/14 raids (albion-12, hibernia-26, albion-1, the 16 night raids).
+2. **Start the world** (CLAUDE.md "The living world"): both supervisors, and the stay-awake script.
+3. **Watch the first afternoon:**
+   - the 42 bots' stat re-spend at login;
+   - daytime raids through the funnel (does the outside ray kill wall casters; where raids die);
+   - the fixes not yet seen live (item 7 below).
+4. **Then the other two scoreboard items:**
+   - back in action after a death or wipe;
+   - more human, starting with a movement recording from the user's client.
+
 ## Open now (from the 2026-11-14 morning report)
 
 1. **The raid funnel measure** (scoreboard item 1), then S2's raid list:
