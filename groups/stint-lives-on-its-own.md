@@ -2,6 +2,72 @@
 
 **The goal (plan doc, [Living Thidranki](https://claude.ai/artifact/SehSwg1Qwnin3upWutksXB)):** Thidranki is alive on its own, filled with bots, with a natural life cycle, and a human (for now only the user) can log in and try it.
 
+## Morning report, 2026-11-14 08:00 (S1)
+
+**Verdict on the stint's measure: met.** The world ran from 00:41 to 08:00 with nobody's hand on it:
+- The gameserver, the swarm (start #2 since 00:37), field mode (start #12 since 00:41) and the gateway (start #1) never restarted.
+- No commits after 02:00 and no edit in the working tree. The lfg watcher's supervisor saw nothing either.
+- The world is still running under the supervisor, and the stay-awake script stays on until the user says stop.
+
+**Life cycle.** It followed the curve all night, the same for every realm:
+- Mean online per realm per hour: 13.3 at 00:00, 11 at 01:00, 9 at 02:00, 7.5 at 03:00, 6.7 at 04:00 (the floor), 7.0 at 05:00, 7.5 at 06:00 and 8.3 at 07:00, the morning climb.
+- The realms never differed by more than 0.4.
+
+**"Alive", day against night** (`bun scripts/alive.ts`; one row per hour):
+
+| Measure | Day (14:00-23:00) | Night (02:00-06:00) | 07:00 |
+|---|---|---|---|
+| All sizes fighting in 10-min windows | 5-7 of 7 | 6, 5, 0, 1, 5 of 7 | 5 of 5 |
+| Uneven fights over 1.5:1 (minutes) | 2-22 | 4-12 | 3 |
+| Fights near Albion's PK, within 15k | 45-88 % | 52-75 % | 43 % |
+
+- **The trough is 04:00-05:00.** At about 6 per realm the world goes quiet: one 10-minute window of 14 had a fight. Players at 4 am find quiet too, so that may be fine. If it isn't, raise the floor (S4's curve) to 8 per realm.
+- **Albion fights near its own portal keep** in every hour, day and night (the median is about 13k, against 20k+ for the others). This is the long-standing "Albion's PK is where the fights are" pattern, and it didn't change.
+
+**The keep.** Midgard held the Faste the whole stint; no change of hands. 02:00-08:00, from the field log's director calls:
+
+| | Raids | Kills | Lost | How they ended |
+|---|---|---|---|---|
+| Albion | 8 | 32 | 149 | 4 timeout, 3 broken, 1 too few |
+| Hibernia | 8 | 23 | 141 | 6 timeout, 2 broken |
+
+- **Midgard's defences:** 22 calls, mostly short "quiet" ones, and none lost.
+- **Most of the 290 dead are night raids that should never have been called.**
+  - With 6-8 bots per realm online, the director still mustered raids of 1-2 units against the Faste.
+  - In 5 of the 16, no unit arrived at the stage at all (`arrived -`); in 6, only one unit was "coming", most often a small squad (camelot-s1, hibernia-s1).
+  - Seven times a raiding unit stalled on its way, 5000-10000 short of the stage, for 5 minutes (`raid approach: … to the stage`).
+  - **Proposal:** no raid muster below a realm's daytime numbers (say 12 online, or 2 full units coming). At night, raids give way to small fights, which the alive numbers need anyway.
+- **What still stops a full raid** is S2's handover above (the S2 section, "Open for the morning"): rank 3's wall Runemasters kill the climbing melee; the outside-ray half for raidStep (`groups/notes/s2-outside-ray-raidstep.patch`) is untested and not applied; the lord fight has never been reached with the body together.
+- The best raid of the day was albion-12 (01:26-01:51): no early rush, worked rank 3 from outside, timed out with the wall casters up.
+
+**Help.** 405 help calls in `/region` overnight ("4 coming near our PK, need help", "6 hibs on us east of the Faste, help!"). Time from call to arrival isn't in the log yet; it belongs in the scoreboard's "back in action" item.
+
+**Gear** (`bun groups/gear-wear.ts --label=0800`, 32 bots online):
+- Mean condition is 100.0 %; the lowest item is Taliesin's staff at 97 %. That's the same as the opening readings at 13:19 and 14:51; there was no 02:00 reading.
+- Wear doesn't matter on the scale of days, so no repair trip is needed.
+
+**Load.**
+- The gameserver uses 26 % CPU and 3.9 GB. The swarm holds 290 MB and field mode 280 MB.
+- Logs: swarm 17.4 MB, field 1.7 MB, gateway 0.5 MB, `alive.jsonl` 1.8 MB.
+- 255 GB of disk is free.
+- At this rate the swarm log grows about 15 MB a day, which is fine for a week.
+
+**The user's hour.** Not played overnight. Niamh is in the Silver Hand, in black (`docs/bot-looks.sql`), and `groups/lfg/state.json` holds nobody.
+
+**Teardown.**
+- S2's throwaway `s2keep` is down: its six clients quit cleanly at 07:5x, then `server:throwaway down` removed the stack and its volume, and its gateway on 7823 was stopped.
+- No other throwaway runs.
+
+**Open, in order:**
+1. **Night raids:** no muster below daytime numbers (above). This is the cheapest cut in the night's deaths.
+2. **S2's raid list:** the outside ray in raidStep with a test, then rank 3.
+3. **pack.ts:** the melee chases players behind the shut gate.
+4. **Supervisor:** a pause for deliberate offline windows (the 00:36 restart).
+5. **Realm rank cap:** unproven until a bot reaches RealmLevel 10 (the highest is 9).
+6. **Emblems and dyes:** never seen in a real client. Whether the logo is off by one and which emblem colour is the background is the user's look at Niamh's cloak.
+
+The standing brief that replaces stints from today is [groups/standing-brief.md](standing-brief.md).
+
 **This stint's measure:** at 08:00 the world is still running, nobody has touched it since 02:00, and the "alive" numbers held through the night. The night doesn't end by stopping everything: it ends with the world handed to the supervisor.
 
 **Decided by the user (2026-11-13):**
@@ -497,7 +563,12 @@ Life cycle, playing per realm (mean of its samples):
 - **albion-171 (22:57-23:16 local):** rank 3 at 23:15, rank 4 at 23:19, the lord at 23:21, then back to rank 3 at 23:23 for a respawned wall-e-s caster (the 35c701b case, on an older sortie). Timeout at 1166 s, 19 lost.
 - **hibernia-242 (23:33-23:52 local):** go at 23:37, rank 3 at 23:40. Field mode's rotation then wound down hibernia (22:42:45 UTC), hibernia-s3 and hibernia-2 mid-raid ("wind-down requested from the viewer (field: hibernia rotates)"); the new sorties started 25000 out, and the raid timed out with 41 lost. Asked S1: no rotation for a unit in a raid muster. S1 did it in field.ts (live with the 00:40 field restart).
 - **albion-194 (23:55-00:16 local, the first raid on all of tonight's unit-side fixes, 2 defenders):** straight to rank 3 (the gate still broken), then 10 min on the wall casters with respawns (3, 4, 3 left). The melee died on them: Lancelot and Percival twice each, Agravaine and Gareth (Gareth also chased the roof Hunter 872 up). Rank 4 at 00:09, then the ranged went after floor-3 behind the shut building door until camelot-2 was down to one member. Timeout at 1242 s, 39 lost. **7509972:** no step behind a door still shut to us.
-- **hibernia-295 (00:17- local):** rank 3 by 00:28, then "ranged out of sight" for minutes: a wall caster or roof archer is on one of us nearly all the time, and both "is on us" branches skipped the outside spots. **13a1c77:** they work a wall caster from outside when one has a spot there. Midgard's defence of it (midgard-286): 15 min, 26 kills for 11 lost, up to 11 attackers, and the keep held.
+- **hibernia-295 (00:17- local):** rank 3 by 00:28, then "ranged out of sight" for minutes: a wall caster or roof archer is on one of us nearly all the time, and both "is on us" branches skipped the outside spots. **13a1c77:** they work a wall caster from outside when one has a spot there.
+- **albion-1 (00:43 local, the first raid after S1's 00:37 restart with 0x99 and S3's rush):** 0x99 said both doors broken (correct, left so by earlier raids), which passed every fighter's rank. The wall casters were back and not yet in view, and "not seen within 2500, so gone" emptied the ranks from the stage. camelot read the lord phase there (23:47:57 UTC), the muster's rush followed, and every unit went into the wall casters: 12 dead in 4 min. **a9d9ab9:** an unseen wall caster, or a guard in the building, counts as gone only while one of ours stands in the courtyard (strict for wallsDown and for the ranks all done; steps keep the loose reading).
+- **hibernia-26 (01:04 local, all on a9d9ab9 after S1 wound the old sorties down):** rank 3 at 00:05 UTC, no early rush. "Ranged outside on wall-e-s / wall-e-n" (13a1c77) ran, but their nukes came back not_visible: Emer, Etain and Lugh stood at about (35000, 38000) with the wall-e-n Runemaster as target, 800 off its spot.
+  - **The open item for the morning:** an outside spot sees its wall caster only along one narrow ray through a merlon gap. Our LoS grid round each spot at 150 steps has 2-7 cells of 49 clear, all on a diagonal line. The formation fans the ranged sideways (index 1+ at ±0.4 rad and more, wider with spreadOnSight), off that line.
+  - Proposal: siege.ts gives the outside task points along the ray (caster → spot, 80 apart, from the spot outward), and S3's raidStep hands one to each ranged member as its own anchor (Orders.memberOwn, as the bolt does). The siege.ts half is in: **b2782a7** (`outsideLine`, RaidTask.line, tested), though nothing reads it yet. The raidStep half, one ray point per ranged member through memberOwn with the bolt's shooters kept, is **groups/notes/s2-outside-ray-raidstep.patch**, sent to S3: it applies to main, but it is untested and not applied. Measured, the points that see: wall-e-s from 2 steps in to 1 out, wall-e-n 2 in to 3 out, wall-n and wall-nw from the spot to 7 out (80 apart).
+- **c66cbb2 (00:11:45 UTC, hibernia-26 on a9d9ab9):** hibernia-2 read the lord phase at rank 3 with all four wall casters up. The lord was still hurt from Albion's raid and one of ours was within 600 of him in 3D, which the stair under the roof is from 4000 up. The muster's rush sent the raid in again. "By a hurt lord" now means on the roof by him. hibernia-26 then timed out at 1130 s with 31 lost. Midgard's defence of it (midgard-286): 15 min, 26 kills for 11 lost, up to 11 attackers, and the keep held.
 
 **Portal keep doors (16:40, the user's report via S1: "bots do still walk through the door"):**
 - **cbf18a1:** `PORTAL_DOORS` covers regions 250-253, from the door table. Our realm's two doors are opened by every `walkTo`: inner door then gate going out, the reverse coming home. The other realms' are walls to a chase and a sight step. No registration is needed.
@@ -506,9 +577,27 @@ Life cycle, playing per realm (mean of its samples):
 - Still a raw move: waves.ts loiter's idle step (S4's).
 - **19732cf (the user's charmed boar, 17:44):** an add inside our portal keep, and Conall got `out_of_reach (beyond the door 252041602)` ten times. A melee chase that meets our own door now walks through it (interact, the jump) and fights on. An enemy's shut door stays a wall.
 
+**S2's throwaway, for the 08:00 teardown:** stack `s2keep` (game 10310, gateway 7823 from S2's scratch folder `scratchpad/s2`), with one swarm process for skeepa, skeepb, skeepc, skeepd, skeepm and skeepn. Quit the clients cleanly first, then `bun run server:throwaway down --name=s2keep`. S2 has nothing more running on it.
+
 **0x99 door state:** not needed so far. Broken doors are read from chat as before.
 
-**Next:** rehearse again after S3's filter, then a defence live on the shared server once Midgard's Faste is attacked (the director's `defend` call is live since field mode restarted at about 13:25).
+**S2's handover (01:50, before the 02:00 hands-off):**
+- **Done:** defences from the walls, seen live many times. Midgard held every attack all day: midgard-286 (26 kills for 11 lost, up to 11 attackers), midgard-3, midgard-304 and others.
+- **Not done:** a capture of a defended Faste. No raid took the lord. The raid plan's reasons, fixed tonight:
+  - 35c701b: the lord phase holds over respawns.
+  - 824e02e: the centre, squads, rush and bolt.
+  - 8d5616b: the sight step stops at walls.
+  - f7465d2: 0x99 door state.
+  - 7509972: no step behind a shut door.
+  - 13a1c77: outside work during the climb.
+  - a9d9ab9 and c66cbb2: no early rush.
+  - b2782a7: the outside ray.
+- **Open for the morning, in order:**
+  1. Apply S3's raidStep half of the ray (groups/notes/s2-outside-ray-raidstep.patch) with a test, then watch whether the ranged at the outside spots kill wall casters.
+  2. Rank 3 is where raids die. The Runemasters (L28) kill our climbing melee one by one, and guards respawn 5-25 min after dying, so a raid half an hour after the last finds them back. Ideas: wait at rank 3 until the outside work has thinned them; a raid soon after another's kills.
+  3. pack.ts's player fight sends the melee at players behind the shut gate.
+  4. The lord fight itself is untested: no raid reached him with the body together.
+- albion-12 (01:26-01:51 local, all on a9d9ab9 and c66cbb2): no early rush. It worked rank 3 with "ranged outside on wall-e-s", but the inside hold's extra time ran out at 1462 s with 44 lost, the wall casters still up.
 
 ## S3: Director
 
