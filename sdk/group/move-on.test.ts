@@ -186,11 +186,16 @@ describe('an open call of ours beyond the director\'s reach is the roam\'s headi
     const us = { x: 38_000, y: 32_000 };
     test.skipIf(isWet(THID, us) || isWet(THID, { x: 22_699, y: 38_908 }))('the pack walks toward a call 19000 away that the director did not ask it to', () => {
         const help = { id: 'hibernia-66', kind: 'help', from: 'hibernia-s1', why: 'caught', at: { x: 22_699, y: 38_908, z: 0 }, foes: 5, ours: 3, foeRoles: {}, want: 3, asked: [], coming: [], since: 1_000_000, updatedAt: 1_000_000 };
-        const memory: Record<string, any> = { realm: 'hibernia', pack: 'stalk', realmUnit: 'hibernia', realmCalls: [help] };
+        // Two coming: no turn ("I wouldn't turn a 6-person group for 2 albs incoming"); five: the heading, and it stays at three.
+        const memory: Record<string, any> = { realm: 'hibernia', pack: 'stalk', realmUnit: 'hibernia', realmCalls: [{ ...help, foes: 2 }] };
+        expect(decide(us, [], memory, 999_000).reason).not.toMatch(/call/);
+        memory.realmCalls = [help];
         const u = decide(us, [], memory, 1_000_000);
         expect(u.phase).toBe('travel');
         expect(u.reason).toMatch(/^roam: to hibernia-s1's call \(5 enemies\)/);
+        memory.realmCalls = [{ ...help, foes: 3 }];
         const ahead = decide(us, [], memory, 1_002_000);
+        expect(ahead.reason).toMatch(/^roam: to hibernia-s1's call/);
         expect(Math.hypot(ahead.anchor!.x - help.at.x, ahead.anchor!.y - help.at.y)).toBeLessThan(Math.hypot(us.x - help.at.x, us.y - help.at.y));
     });
 });

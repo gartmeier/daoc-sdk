@@ -625,6 +625,8 @@ export const BANK_REACH = 1500;
 export const FIGHT_HOLD_MS = 10_000;
 /** A member fighting enemy players this near the main body is gone to before the roam. */
 export const FIGHT_JOIN_MAX = 9000;
+/** A realm call beyond help.ts's reach turns the roam only with this many enemies at it (its most so far): a group, not a pair. */
+export const CALL_GROUP_FOES = 5;
 
 /** Within this of our portal keep's arrival a group is home, and buffs up before it leaves. */
 export const HOME_BUFF_RADIUS = 3000;
@@ -1262,9 +1264,13 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         if (mem.roamKey !== key) { mem.roamPlaces = roamPlaces(regionId, realm as PlayerRealm, loop, okPlace); mem.roamKey = key; }
         // Open help calls of another unit of ours beyond help.ts's reach (it takes them nearer): a heading for the roam, first of all
         // (the user, 2026-11-14 10:07: "the group ignored Aine's call"). One closed drops out, and the roam goes on from where we are.
+        // Only a group-sized one (CALL_GROUP_FOES at its most, as we saw it): "I wouldn't turn a 6-person group for 2 albs incoming."
         const left: Record<string, number> = mem.helpLeft ?? {};
-        const callPlaces: RoamPlace[] = ((mem.realmCalls ?? []) as RealmCall[])
-            .filter(c => c.kind === 'help' && c.from !== mem.realmUnit && !(c.id in left) && c.at && okPlace(c.at))
+        const open = ((mem.realmCalls ?? []) as RealmCall[]).filter(c => c.kind === 'help');
+        const most: Record<string, number> = mem.callFoesMax ?? {};
+        mem.callFoesMax = Object.fromEntries(open.map(c => [c.id, Math.max(most[c.id] ?? 0, c.foes)]));
+        const callPlaces: RoamPlace[] = open
+            .filter(c => c.from !== mem.realmUnit && !(c.id in left) && mem.callFoesMax[c.id] >= CALL_GROUP_FOES && c.at && okPlace(c.at))
             .map(c => ({ key: `call:${c.id}`, what: `${c.from}'s call (${enemiesText(c.foes)})`, x: c.at.x, y: c.at.y, at: c.since ?? now, side: sideOf(regionId, c.at) }));
         const r = roamStep(mem, { regionId, centre, places: mem.roamPlaces as RoamPlace[], sightings: mem.realmSeen ?? [], circuit: roamCircuit(realm as PlayerRealm), now, ok: okPlace, blocked: towardFled, spent: spentAreas(mem, now), calls: callPlaces });
         if (r) {
