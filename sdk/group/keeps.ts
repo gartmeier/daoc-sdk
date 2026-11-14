@@ -146,6 +146,20 @@ export function keepDangers(regionId: number, realm: Realm, settings: Partial<Ke
 /** A keep's area: its guards, lord and doors stand inside it and take its realm (KeepArea.cs KEEP_RADIUS, PK_RADIUS). */
 export const KEEP_AREA = { keep: 3000, portal: 4000 } as const;
 
+/**
+ * An enemy portal keep's approach: within this of it, its realm comes out fresh and the rest of that realm follows. No hunt, chase or
+ * roam into it, and an enemy there is no fight unless on us. The user, playing Niamh on 2026-11-14 09:36-09:42: the pack chased a
+ * Midgard trio to 5700 from Midgard's keep, turned to six Midgard at the keep, and died to them and Albion: "being a long time in the
+ * same place causes all sorts of trouble". The roam's approach places stand at 7500 (tactics/roam.ts APPROACH).
+ */
+export const PK_APPROACH = 6500;
+
+/** The enemy portal keep (not `realm`'s) whose approach (`r`) holds `p`, or null. */
+export function enemyPortalKeepAt(regionId: number, realm: Realm, p: { x: number; y: number }, r = PK_APPROACH): Keep | null {
+    const bg = BATTLEGROUND_LAYOUTS[regionId];
+    return bg?.keeps.find(k => k.portal && k.owner !== realm && Math.hypot(k.x - p.x, k.y - p.y) <= r) ?? null;
+}
+
 const REALM_NAMES: Record<string, PlayerRealm> = { Albion: 'albion', Midgard: 'midgard', Hibernia: 'hibernia' };
 
 /**

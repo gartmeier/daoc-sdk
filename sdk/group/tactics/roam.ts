@@ -79,6 +79,35 @@ export interface RoamMemory {
 /** A gap between roam ticks longer than this is a pause, not walking time. */
 export const PAUSE_MS = 5000;
 
+// ── Moving on after fights in one area ──
+// The user, playing Niamh on 2026-11-14 09:36-09:42: "being a long time in the same place causes all sorts of trouble". Fights and
+// the realm calls they bring draw the other realms there; after SPENT_FIGHTS in one area the roam leaves it for SPENT_MS.
+
+/** Fights within this of each other are one area. */
+export const FIGHT_AREA = 3000;
+/** This many fights in one area within SPENT_MS: the roam moves on from it ... */
+export const SPENT_FIGHTS = 2;
+export const SPENT_MS = 300_000;
+/** ... a fight being engages with gaps under this (a hunt or a stalk in between, the roam's 10 s hold after). */
+export const FIGHT_GAP_MS = 12_000;
+
+export interface FightNote extends Point { start: number; last: number }
+
+/** Notes an engage this tick at `at` (memory.fights): the fight going on, or a new one. */
+export function noteFight(mem: Record<string, any>, at: Point, now: number): void {
+    const fights: FightNote[] = Array.isArray(mem.fights) ? mem.fights : [];
+    const last = fights[fights.length - 1];
+    if (last && now - last.last <= FIGHT_GAP_MS && dist(last, at) <= FIGHT_AREA) last.last = now;
+    else fights.push({ x: Math.round(at.x), y: Math.round(at.y), start: now, last: now });
+    mem.fights = fights.filter(f => now - f.last <= SPENT_MS).slice(-20);
+}
+
+/** The areas fought in SPENT_FIGHTS times within SPENT_MS: each such fight's spot, with the count of fights round it. */
+export function spentAreas(mem: Record<string, any>, now: number): (Point & { n: number })[] {
+    const fights = (Array.isArray(mem.fights) ? mem.fights as FightNote[] : []).filter(f => now - f.last <= SPENT_MS);
+    return fights.map(f => ({ x: f.x, y: f.y, n: fights.filter(g => dist(g, f) <= FIGHT_AREA).length })).filter(a => a.n >= SPENT_FIGHTS);
+}
+
 export type RoamStep = { goal: Point; place: RoamPlace; reason: string };
 
 const dist = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -178,7 +207,7 @@ export function shouldLeave(r: RoamMemory, o: { centre: Point; now: number; bett
  * This tick's roam: mark what we pass, keep the place unless the leave rule says go, else pick the next (rule 1). Null with no
  * place at all (the caller patrols). `blocked`: a place not to walk toward now (the group we just ran from).
  */
-export function roamStep(mem: Record<string, any>, o: { regionId: number; centre: Point; places: readonly RoamPlace[]; sightings?: readonly RoamSighting[]; circuit?: readonly PlayerRealm[]; now: number; ok?: (p: Point) => boolean; blocked?: (p: Point) => boolean; settings?: RoamSettings }): RoamStep | null {
+export function roamStep(mem: Record<string, any>, o: { regionId: number; centre: Point; places: readonly RoamPlace[]; sightings?: readonly RoamSighting[]; circuit?: readonly PlayerRealm[]; now: number; ok?: (p: Point) => boolean; blocked?: (p: Point) => boolean; spent?: readonly Point[]; settings?: RoamSettings }): RoamStep | null {
     const s = o.settings ?? ROAM_SETTINGS;
     const r: RoamMemory = Array.isArray(mem.roam?.passed) ? mem.roam : (mem.roam = { place: null, since: o.now, until: o.now, side: 0, done: [], passed: [] });
     const circuit = o.circuit ?? [];
@@ -202,15 +231,18 @@ export function roamStep(mem: Record<string, any>, o: { regionId: number; centre
     if (gaveUp && isSighting(was)) r.passed.push({ x: was!.x, y: was!.y, at: o.now });
     r.passed = r.passed.filter(q => o.now - q.at <= s.sightingMs).slice(-50);
     if (gaveUp && !isSighting(was) && !r.done.includes(was!.key)) r.done.push(was!.key);
-    const pickArgs = { centre: o.centre, places: o.places, sightings, circuit, blocked: o.blocked };
+    // An area fought in SPENT_FIGHTS times (spentAreas) is blocked like the group we ran from: no place or sighting in it.
+    const inSpent = (p: Point) => (o.spent ?? []).some(a => dist(a, p) <= s.area);
+    const blocked = (p: Point) => !!o.blocked?.(p) || inSpent(p);
+    const pickArgs = { centre: o.centre, places: o.places, sightings, circuit, blocked };
     const better = was && !isSighting(was) && o.now - r.since >= s.holdMs ? nextPlace({ ...r, done: [...r.done] }, pickArgs, s) : null;
-    if (!shouldLeave(r, { centre: o.centre, now: o.now, better, blocked: o.blocked }, s)) return step(was!, o.centre, circuit, 'to');
+    if (!shouldLeave(r, { centre: o.centre, now: o.now, better, blocked }, s)) return step(was!, o.centre, circuit, 'to');
     const place = nextPlace(r, pickArgs, s);
     r.place = place;
     if (!place) return null;
     r.since = o.now;
     r.until = o.now + s.giveUpMs + dist(o.centre, place) / s.giveUpSpeed * 1000;
-    const how = !was ? 'to' : reached ? `past ${was.what}, on to` : gaveUp ? `gave up on ${was.what}, on to` : isSighting(place) && !isSighting(was) ? 'turning for' : 'keeping off the group we ran from, to';
+    const how = !was ? 'to' : reached ? `past ${was.what}, on to` : gaveUp ? `gave up on ${was.what}, on to` : isSighting(place) && !isSighting(was) ? 'turning for' : inSpent(was) ? 'moving on from where we fought, to' : 'keeping off the group we ran from, to';
     return step(place, o.centre, circuit, how);
 }
 

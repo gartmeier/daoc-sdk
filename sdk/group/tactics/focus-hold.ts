@@ -14,6 +14,12 @@ import { isNear, type Near } from './focus-role';
 
 const backLine = (c: Contact) => !!c.caster || !!c.healer;
 
+/** One the pack let go: dropped as out-healed, or a runner (pack.ts noteRunners) still in its time. No hold keeps it (live 09:40:07-09: held #480 two s after its let-go). */
+const letGo = (ctx: Ctx, id: number): boolean => {
+    const m = ctx.memory as { dropped?: Record<number, number>; runners?: Record<number, { until: number }> };
+    return !!m.dropped?.[id] || (m.runners?.[id]?.until ?? 0) > ctx.now;
+};
+
 export interface HoldOptions {
     /** The old focus must stand within the pack's reach + this of the living members (in its region). */
     slack: number;
@@ -40,7 +46,7 @@ export function holdFocus(ctx: Ctx, u: OrdersUpdate, o: HoldOptions): OrdersUpda
     const prevId = engagedFocus(ctx);
     if (u.phase !== 'engage' || typeof u.focus !== 'number' || prevId === null || prevId === undefined || u.focus === prevId) return u;
     if (o.skipReason.test(u.reason ?? '')) return u;
-    if ((ctx.memory as { dropped?: Record<number, number> }).dropped?.[prevId]) return u;
+    if (letGo(ctx, prevId)) return u;
     const prev = contactOf(ctx, prevId);
     const next = contactOf(ctx, u.focus);
     if (!prev || !next || prev.kind !== 'player' || prev.stale || prev.cc || (o.dead === 'hp' ? prev.hp <= 0 : !isAlive(prev)) || (o.untouchable && untouchable(prev, ctx.now))) return u;
@@ -67,7 +73,7 @@ export const FINISH_LOW: FinishOptions = { below: 40, slack: 700, skipReason: /^
 /** The focus in force, under `below` %, free, fresh and in reach, stays the focus. Returns `u` itself when it doesn't apply. */
 export function finishLow(ctx: Ctx, u: OrdersUpdate, o: FinishOptions = FINISH_LOW): OrdersUpdate {
     const orders = ctx.orders;
-    if (u.phase !== 'engage' || orders.phase !== 'engage' || orders.focus === null || o.skipReason.test(u.reason ?? '')) return u;
+    if (u.phase !== 'engage' || orders.phase !== 'engage' || orders.focus === null || o.skipReason.test(u.reason ?? '') || letGo(ctx, orders.focus)) return u;
     const prev = contactOf(ctx, orders.focus);
     if (!prev || prev.kind !== 'player' || prev.stale || prev.cc || prev.hp <= 0 || prev.hp >= o.below) return u;
     const alive = living(ctx);
@@ -116,7 +122,7 @@ export function dwellHold(ctx: Ctx, u: OrdersUpdate, o: DwellOptions): OrdersUpd
         heldId = held?.id;
         since = held?.since;
     }
-    if (heldId === null || heldId === undefined || heldId === u.focus) return u;
+    if (heldId === null || heldId === undefined || heldId === u.focus || letGo(ctx, heldId)) return u;
     if (!(ctx.now - (since ?? ctx.now) < o.ms)) return u;
     const c = contactOf(ctx, heldId);
     if (!c || (o.players && c.kind !== 'player') || c.stale || c.cc || (o.dead === 'hp' ? c.hp <= 0 : !isAlive(c)) || (o.untouchable && untouchable(c, ctx.now))) return u;

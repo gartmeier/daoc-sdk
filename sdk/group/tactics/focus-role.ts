@@ -74,13 +74,18 @@ export function focusByRole(ctx: Ctx, u: OrdersUpdate, o: FocusByRoleOptions): O
     const now = ctx.now;
     const centre = centreOf(alive);
     const dropped = (ctx.memory as { dropped?: Record<number, number> }).dropped ?? {};
+    // A runner the pack let go (pack.ts noteRunners) is no pick for its time unless it is on one of us (live 09:40:07-09: the healer
+    // let go, "healer first" on it again 2 s later).
+    const runners = (ctx.memory as { runners?: Record<number, { until: number }> }).runners ?? {};
+    const ours = new Set(ctx.picture.members.map(m => m.name));
+    const letGo = (c: Contact) => (runners[c.objectId]?.until ?? 0) > now && !ours.has(c.target ?? c.targetPet ?? '');
     const nukers = o.nukerReach !== undefined ? alive.filter(m => m.role === 'nuker') : [];
     const rank = (c: Contact) => { const i = o.order.indexOf(roleOf(c, o.roleBy) ?? ''); return i < 0 ? Infinity : i; };
     const standing = (c: Contact) => !c.cc && !(o.skip.meleeing && meleeing(c)) && isNear(ctx, o.near, c, alive, centre)
         && (o.nukerReach === undefined || !nukers.length || nukers.some(m => dist(m, c) <= o.nukerReach!));
     const candidate = (c: Contact) => c.kind === 'player' && !(o.skip.pets && c.isPet) && !c.stale
         && (o.skip.dead === 'hp' ? c.hp > 0 : isAlive(c)) && !(o.skip.untouchable && untouchable(c, now)) && !(o.skip.shades && c.isShade)
-        && !(o.skip.dropped === 'any' && dropped[c.objectId]) && rank(c) < Infinity && standing(c);
+        && !(o.skip.dropped === 'any' && dropped[c.objectId]) && !letGo(c) && rank(c) < Infinity && standing(c);
     const note = (c: Contact) => (o.note ? o.note(c, roleOf(c, o.roleBy)) : undefined);
 
     if (o.pick === 'sticky') {

@@ -31,7 +31,8 @@ import { RAID_FOE_REACH, raidNow, underRaidKeep } from './tactics/raid';
 import { planBuffs } from './buffs';
 import { BUFF_STOP_RADIUS, BUFF_STOP_SETTINGS, campFree, decideRvr, focusHealed, groupRegion, BANK_REACH, HUNT_KEEP, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
-import { clearOf } from './keeps';
+import { clearOf, enemyPortalKeepAt } from './keeps';
+import { noteFight } from './tactics/roam';
 import { countFor, groupSize, type Count } from './size';
 import type { ColumnOrder, Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 import { drySpot, isDry, isWet } from './water';
@@ -307,6 +308,7 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     const inKeep = (c: Point) => !clearOf(c, keeps);
     // Enemy players under the guards of a keep not ours are no fight unless on us, raiding or not: a fight there brings the guards
     // (the user, 20:09, raiding the Faste: "then we got the guards' adds"). The raid's own keep is in this one too.
+    // Nor those in an enemy portal keep's approach (keeps.ts PK_APPROACH): a runner heading there is let go, a group at its keep left alone.
     // The raid's own keep: before the assault, within RAID_KEEP_AREA (tactics/raid.ts underRaidKeep; decideRvr waits outside for them).
     const preAssault = !!raiding && !(mem.raid as { staged?: boolean } | undefined)?.staged;
     const underGuards = (c: Point) => inKeep(c) || (preAssault && underRaidKeep(raiding!.plan, c));
@@ -330,14 +332,15 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     // Hibernia's bank, Midgard swam across and the pack hunted it in the river (us 10-43 % of fight time wet, them 60-100 %).
     // Within BANK_REACH it is fought from the bank (rvr.ts): only farther out is it left in the water.
     const swimming = (c: Contact) => dry && !onUs(c) && isWet(regionId, c) && dist(c, centre) > BANK_REACH;
-    const foes = p.contacts.filter(c => players(c) && !mem.phantoms[c.objectId] && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || !underGuards(c)) && !swimming(c));
+    const foes = p.contacts.filter(c => players(c) && !mem.phantoms[c.objectId] && !untouchable(c, now) && !c.stale && isAlive(c) && c.regionId === regionId && (onUs(c) || (!underGuards(c) && !enemyPortalKeepAt(regionId, realm, c))) && !swimming(c));
     // Where each enemy player was seen, over time: a lost prey's trail and way in (tactics/ambush.ts; decideRvr follows it).
     if (s.ambush) noteTracks((mem.ambushTracks ??= {}) as Tracks, p.contacts.filter(c => players(c) && !c.stale && c.regionId === regionId), now);
     // A runner (an enemy that ran out of reach of our engage RUNNER_OUTS times lately) is let go: no hunt, stalk, raid or focus on it
     // for RUNNER_DROP_MS, unless it comes on us. Live (Midgard, 2026-11-12 19:54-19:55): a healer kiting at 1500-2800 had the pack
     // flip between engage and stalk about 12 times in 50 s.
     const runnerNote = noteRunners(mem, o.phase === 'engage' && o.focus != null ? foes.find(c => c.objectId === o.focus) : undefined, centre, now, k.reach, onUs);
-    const runner = (c: Contact) => (mem.runners?.[c.objectId]?.until ?? 0) > now && !onUs(c) && dist(c, centre) > k.closeIn;
+    // Let go means let go for its RUNNER_DROP_MS, near or not, unless it is on us (live 09:40:07-09: Dwarf#480 let go, engaged again 2 s later).
+    const runner = (c: Contact) => (mem.runners?.[c.objectId]?.until ?? 0) > now && !onUs(c);
     if (runnerNote && mem.hunted?.ids?.includes(runnerNote.id)) mem.hunted = undefined;
     const free = foes.filter(c => !c.cc && !runner(c)).sort((a, b) => dist(a, centre) - dist(b, centre));
     // One in sight last tick stays in sight to HUNT_KEEP beyond huntRadius, as in decideRvr (live 20:44:48-52: a Norseman at
@@ -389,7 +392,7 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     const say = (u: OrdersUpdate): OrdersUpdate => ({ ...u, ...(runnerNote ? { reason: `${u.reason}; ${runnerNote.text}` } : {}), column: column(u), spread: foes.length > 0, waiting: [...(u.waiting ?? []).filter(w => w.why !== 'pickup'), ...pickupWait] });
     // The roam's 10 s hold after a fight (rvr.ts FIGHT_HOLD_MS) counts from the last engage or chase: the pack's own fights and hunts
     // never reach decideRvr, which saw only the tick it was called on. Live 22:11:41-47: engage, hunt, roam 4 s after the hunt.
-    if (o.phase === 'engage') { mem.engagedAt = now; mem.fightSpot = undefined; }
+    if (o.phase === 'engage') { mem.engagedAt = now; mem.fightSpot = undefined; noteFight(mem, centre, now); }
     // A chase's hold goes on to where they were last seen (`at`), not a stand.
     const chase = (u: OrdersUpdate, at: Point): OrdersUpdate => { mem.engagedAt = now; mem.fightSpot = onLand(at, centre); return say(u); };
     const areaRadius = 350;

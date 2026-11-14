@@ -38,7 +38,7 @@ import { isAlive, shadeBodies, untouchable } from './blackboard';
 import { PET_SETTINGS, waitsForPet } from './pets';
 import { assignCc } from './pve';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
-import { BATTLEGROUND_LAYOUTS, clearOf, homeOf, KEEP_CLEARANCE, keepDangers, pairMeet, THIDRANKI, type KeepSettings, type PlayerRealm } from './keeps';
+import { BATTLEGROUND_LAYOUTS, clearOf, enemyPortalKeepAt, homeOf, KEEP_CLEARANCE, keepDangers, pairMeet, THIDRANKI, type KeepSettings, type PlayerRealm } from './keeps';
 import { aggroZones, keepOnMap, safePath, type Danger } from './terrain';
 import { isLevel } from './slope';
 import { drySpot, isDry, isWet, staysDry } from './water';
@@ -52,7 +52,7 @@ import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDef
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { planBuffs } from './buffs';
-import { placeOk, roamCircuit, roamPlaces, roamStep, type RoamPlace } from './tactics/roam';
+import { noteFight, placeOk, roamCircuit, roamPlaces, roamStep, spentAreas, type RoamPlace } from './tactics/roam';
 import { FIELD_REST_MS, fieldRestSpot, loiter, waveOrder, waveWatch, type RealmWave } from './waves';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
@@ -987,7 +987,7 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // One in sight last tick stays in sight to HUNT_KEEP beyond huntRadius: a swimmer at 4880-4994 flipped hibernia between waiting
     // ashore and closing on hibernia-2 every second (19:54, the user: "they are flipping again").
     const huntSeen = new Set<number>(mem.huntSeen ?? []);
-    const seen = (raid && !preAssault) || defendingInside ? [] : enemies.filter(c => !inKeep(c) && !atRaidKeep(c) && dist(c, centre) <= s.huntRadius + (huntSeen.has(c.objectId) ? HUNT_KEEP : 0));
+    const seen = (raid && !preAssault) || defendingInside ? [] : enemies.filter(c => !inKeep(c) && !atRaidKeep(c) && !enemyPortalKeepAt(regionId, realm, c) && dist(c, centre) <= s.huntRadius + (huntSeen.has(c.objectId) ? HUNT_KEEP : 0));
     mem.huntSeen = seen.map(c => c.objectId);
     if (seen.length) {
         // The group we just ran from is sized up whole: those of it we mezzed, and those out of view, still count (FLED_MS).
@@ -1217,7 +1217,7 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // walked by": the Mids were in the river by her, and the roam took over a second after an engage). A member fighting enemy
     // players (the human first), enemy players in sight (swimming too), or our last engage under FIGHT_HOLD_MS ago: to them, on
     // the nearest dry ground, or hold. The roam is what's left when none of that is so. ──
-    if (o.phase === 'engage') { mem.engagedAt = now; mem.fightSpot = undefined; }
+    if (o.phase === 'engage') { mem.engagedAt = now; mem.fightSpot = undefined; noteFight(mem, centre, now); }
     const foesBy = (q: Point, r: number) => enemies.filter(c => isAlive(c) && c.realm !== realm && !inKeep(c) && dist(c, q) <= r);
     const inAFight = raid ? [] : p.members
         .filter(m => m.regionId === regionId && !m.isDead && dist(m, centre) <= FIGHT_JOIN_MAX && (attacked.has(m.name) || m.inCombat) && foesBy(m, s.engageRadius).length > 0)
@@ -1257,9 +1257,10 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
     // a fresh sighting near us before it, passing through each place (the user, 2026-11-13: "look for enemies on Hib's island,
     // then Mid's, then Albion's"). Everything above comes first; the roam picks up where it was.
     if (!s.patrol && !s.opponent && s.roamPlaces !== false && realm !== 'none') {
-        const okPlace = placeOk([...keeps, ...aggroZones(regionId, level)], q => !dry || isDry(regionId, q));
+        // Nothing in an enemy portal keep's approach (keeps.ts PK_APPROACH): no sighting there is one to turn to.
+        const okPlace = placeOk([...keeps, ...aggroZones(regionId, level)], q => (!dry || isDry(regionId, q)) && !enemyPortalKeepAt(regionId, realm, q));
         if (mem.roamKey !== key) { mem.roamPlaces = roamPlaces(regionId, realm as PlayerRealm, loop, okPlace); mem.roamKey = key; }
-        const r = roamStep(mem, { regionId, centre, places: mem.roamPlaces as RoamPlace[], sightings: mem.realmSeen ?? [], circuit: roamCircuit(realm as PlayerRealm), now, ok: okPlace, blocked: towardFled });
+        const r = roamStep(mem, { regionId, centre, places: mem.roamPlaces as RoamPlace[], sightings: mem.realmSeen ?? [], circuit: roamCircuit(realm as PlayerRealm), now, ok: okPlace, blocked: towardFled, spent: spentAreas(mem, now) });
         if (r) {
             stepLeg(trip, 'roam', r.goal, { from: centre, movers: here, replan: 1500 });
             mem.camp = { x: r.place.x, y: r.place.y, z: zAt(r.place), names: r.place.what };
