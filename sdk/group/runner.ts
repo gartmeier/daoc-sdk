@@ -27,7 +27,7 @@ import { GroupPublisher, jsonSafe, windDownClock, type GroupPublishOptions, type
 import { connectBot, connectGroup, formGroup, loadGroup } from './roster';
 import { Coordinator, mergeSettings, type GroupStrategy } from './strategy';
 import type { GroupDefinition } from './types';
-import { assistTarget, buffFree, groupAnswer, GroupVoice, pickupFree, readGroupAsk, whereWeAre } from './voice';
+import { assistTarget, BUFF_STOP_ON, buffFree, groupAnswer, GroupVoice, pickupFree, readGroupAsk, whereWeAre } from './voice';
 import { homeOf } from './keeps';
 import { regionInbox, voiceOn } from './voice-io';
 import { isLoggedEvent, type ControlRequest, type RunMeta, type RunResultView } from './wire';
@@ -277,7 +277,8 @@ export async function runGroup<S>(opts: GroupRunOptions<S>): Promise<GroupRunRes
                 }
                 const how = ask === 'buff' ? (picking ? ', a buff stop asked' : ', a buff stop after the fight') : picking ? ', picked up at our PK for 3 min unless seen, a buff stop when met' : '';
                 log(`heard: ${from}: ${text} (${ask}${how})`);
-                const answer = groupAnswer(ask, pic, voice.state, picking);
+                // Buffs promised only by a strategy that stops for them (pack.ts's buffAsk trigger): "rvr-pack", "hibernia-pack".
+                const answer = groupAnswer(ask, pic, voice.state, picking, BUFF_STOP_ON && /\bpack\b/.test(strategy.name));
                 if (answer) speak(answer, false);
                 return; // one line a tick (the server drops group lines 500 ms apart)
             }

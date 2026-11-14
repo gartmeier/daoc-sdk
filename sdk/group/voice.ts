@@ -356,9 +356,10 @@ export function readGroupAsk(text: string): GroupAsk | null {
 /**
  * Does a decide stop for a human's buff ask (observed.ts buffAsk)? Until one does, the leader promises no buffs: no answer to
  * "buff", and a pickup says nothing of buffs (the user, via the player-feedback session: a promise the group doesn't keep
- * is worse than none, as with the rez, 63188db). The roaming session sets it true in the commit that lands the stop (pack.ts).
+ * is worse than none, as with the rez, 63188db). On since pack.ts stops for it (bd40413's rebuff, the buffAsk trigger); a unit on
+ * another decide (rvr.ts alone) has a buff stop only at our PK or a rest (homeBuffHold).
  */
-export const BUFF_STOP_ON: boolean = false;
+export const BUFF_STOP_ON: boolean = true;
 
 /** The group can stop for a buff stop now: no fight, pull or pull back (after one, the runner asks again). */
 export function buffFree(o: Pick<GroupPicture['orders'], 'phase'>): boolean {

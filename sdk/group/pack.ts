@@ -29,6 +29,7 @@ import { offRoadsOut, roadsOut } from './tactics/roads';
 import { withHasten } from './tactics/hasten';
 import { RAID_FOE_REACH, raidNow, underRaidKeep } from './tactics/raid';
 import { planBuffs } from './buffs';
+import { buffAsk } from './observed';
 import { BUFF_STOP_RADIUS, BUFF_STOP_SETTINGS, campFree, decideRvr, focusHealed, groupRegion, BANK_REACH, HUNT_KEEP, homeOf, keepDangers, LEG_REACHED, legAnchor, mainBody, monsterAdds, onWhom, patrolRing, pickPackFocus, realmOfGroup, runWay, rvrBehaviors, rvrFindings, rvrRoaming, RVR_SETTINGS, spotAlong, staysDry, stepLeg, type RvrSettings, type Trip } from './rvr';
 import type { CoordinatorContext, GroupStrategy } from './strategy';
 import { clearOf, enemyPortalKeepAt } from './keeps';
@@ -644,6 +645,13 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
         mem.joiners = [];
         const owed = owedTo(new Set(joiners));
         if (owed.length) return startRebuff(`${joiners.join(', ')} back with us, ${owed.length} buff${owed.length === 1 ? '' : 's'} to go (${owed.slice(0, 2).join(', ')})`);
+    }
+    // A human asked for buffs in /group ("buffs pls", or a pickup met: observed.ts buffAsk), once per ask, with everyone together and
+    // nobody near. A rebuff begun since (or just before: the joiner stop of the same meeting) answers it already.
+    const ask = buffAsk(here, now);
+    if (ask !== null && ask !== mem.buffAskServed && (mem.rebuffAt ?? 0) < ask - 10_000 && !far.length && !free.some(c => dist(c, centre) <= k.standoff)) {
+        mem.buffAskServed = ask;
+        return startRebuff(`${here.find(m => m.buffAskedAt === ask)?.name ?? 'our human'} asked for buffs`);
     }
     // Rebuffed: the speed song on the road (phase travel) before we go on.
     if (now < (mem.speedUpUntil ?? 0) && !dead.length && !far.length && !free.some(inHunt)) return say({ ...none, phase: 'travel', anchor: stay, objective: 'speed song, then on', reason: `rebuffed: the speed song, then on in ${Math.ceil((mem.speedUpUntil - now) / 1000)} s` });

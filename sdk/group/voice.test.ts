@@ -216,7 +216,7 @@ describe('a human asks in group chat', () => {
         const out = picture(team, [], { phase: 'travel', reason: 'wave: out toward where our realm last saw enemies' });
         expect(groupAnswer('where', out, st, false)).toBe("we're north of the Faste, come to us");
         expect(pickupFree(out.orders)).toBe(true);
-        expect(groupAnswer('pickup', out, st, true)).toBe('ok, coming to our PK for you, wait there');
+        expect(groupAnswer('pickup', out, st, true, false)).toBe('ok, coming to our PK for you, wait there');
         const fight = picture(team, [], { phase: 'engage' });
         expect(pickupFree(fight.orders)).toBe(false);
         expect(groupAnswer('pickup', fight, st, false)).toBe("we're fighting north of the Faste, come to us or ask again after the fight");
@@ -233,9 +233,9 @@ describe('a human asks in group chat', () => {
         const call = (team: ReturnType<typeof at>) => picture(team, [], { phase: 'travel', reason: 'call hibernia-4: help hibernia-2, 3000 away' });
         // On a call at our PK, and near it: taken, and "wait there".
         expect(pickupFree(call(at(200)).orders, "at our PK")).toBe(true);
-        expect(groupAnswer('pickup', call(at(200)), st, true)).toBe("wait there, we're at our PK");
+        expect(groupAnswer('pickup', call(at(200)), st, true, false)).toBe("wait there, we're at our PK");
         expect(groupAnswer('pickup', call(at(200)), st, true, true)).toBe("wait there, we're at our PK, we'll buff you here");
-        expect(groupAnswer('pickup', call(at(8000)), st, true)).toBe("wait there, we're near our PK");
+        expect(groupAnswer('pickup', call(at(8000)), st, true)).toBe("wait there, we're near our PK, we'll buff you here");
         // The wait for everyone at our PK before the raid.
         const wait = picture(at(200), [], { phase: 'recover', reason: 'full force first: waiting at our portal keep for Niamh, 90 s at most', objective: 'wait for everyone at our portal keep before the raid' });
         expect(pickupFree(wait.orders)).toBe(true);

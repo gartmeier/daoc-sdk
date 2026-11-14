@@ -130,6 +130,26 @@ describe('a member back with us owed buffs: the stop at once, the speed song, th
         expect(at(members({}, true), memory, t0 + 43_500).reason).toMatch(/^roam: /);
     });
 
+    test.skipIf(isWet(THID, us))('a human asks for buffs: the stop once per ask; a joiner stop of the same meeting answers it', () => {
+        const memory: Record<string, any> = { realm: 'hibernia', pack: 'stalk' };
+        const t0 = 1_000_000;
+        const human = (over: Partial<MemberReport> = {}, buffed = false) => members({ observed: true, bot: '', ...over }, buffed);
+        expect(at(human(), memory, t0).reason).not.toMatch(/^rebuffing/);
+        const asked = at(human({ buffAskedAt: t0 + 1000 }), memory, t0 + 1500);
+        expect(asked.phase).toBe('recover');
+        expect(asked.reason).toMatch(/^rebuffing: Menta asked for buffs/);
+        // Buffed, the stop over: the same ask brings no second stop.
+        let o = at(human({ buffAskedAt: t0 + 1000 }, true), memory, t0 + 20_000);
+        for (let t = t0 + 24_000; t < t0 + 50_000; t += 2000) o = at(human({ buffAskedAt: t0 + 1000 }, true), memory, t);
+        expect(o.reason).not.toMatch(/^rebuffing/);
+        // Met after a pickup: back with us (the joiner stop) and the ask at once, one stop.
+        const m2: Record<string, any> = { realm: 'hibernia', pack: 'stalk' };
+        at(human({ regionId: -1 }), m2, t0);
+        expect(at(human({ buffAskedAt: t0 + 1000 }), m2, t0 + 1000).reason).toMatch(/^rebuffing: Menta back with us/);
+        for (let t = t0 + 3000; t < t0 + 40_000; t += 2000) at(human({ buffAskedAt: t0 + 1000 }, t > t0 + 10_000), m2, t);
+        expect(at(human({ buffAskedAt: t0 + 1000 }, true), m2, t0 + 45_000).reason).not.toMatch(/^rebuffing/);
+    });
+
     test.skipIf(isWet(THID, us))('back with nothing owed: no stop', () => {
         const memory: Record<string, any> = { realm: 'hibernia', pack: 'stalk' };
         at(members({ x: us.x + 6000 }, true), memory, 1_000_000);
