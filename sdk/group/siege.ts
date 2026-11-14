@@ -409,6 +409,12 @@ export interface RaidTask {
      */
     hold?: string;
     /**
+     * The ranged half's work from outside the walls only: points on the ray from the wall caster through its outside spot that see
+     * it, nearest the spot first (outsideLine). A spot sees its caster through one merlon gap only, along that ray; the formation's
+     * fan put most of the ranged off it (hibernia-26, 2026-11-14 00:06 UTC: not_visible). The caller gives one to each (memberOwn).
+     */
+    line?: Point3[];
+    /**
      * The melee's: every wall caster they can go for now, alive and seen, nearest the stair first (focus is the first). For one
      * melee on each (the user: "tanks go in. up the stairs. one for each runi."): the caller spreads its tanks and melee over them.
      */
@@ -694,7 +700,7 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
             .filter((x): x is { t: SiegeTarget; f: SiegeSeen } => !!x.f)
             .sort((a, b) => Math.hypot(a.t.outside!.x - centre.x, a.t.outside!.y - centre.y) - Math.hypot(b.t.outside!.x - centre.x, b.t.outside!.y - centre.y));
         const w = live[0];
-        return w ? { step: w.t, focus: w.f, stand: w.t.outside! } : null;
+        return w ? { step: w.t, focus: w.f, stand: w.t.outside!, line: outsideLine(plan.regionId, w.t.at, w.t.outside!) } : null;
     };
     // The bolt's work: a live guard with a `bolt` spot, once no wall caster of an earlier or this rank stands (their sight covers
     // those spots) and before the lord.
@@ -1163,6 +1169,29 @@ export function passedDoors(plan: Pick<RaidPlan, 'keep'>, members: readonly Raid
     const layout = SIEGE_LAYOUTS[plan.keep];
     if (!layout) return [];
     return layout.doors.filter(d => d.behind && members.some(m => m.alive && behindDoor(d.behind!, m))).map(d => d.id);
+}
+
+/** outsideLine's points: this far apart on the ray, from this many steps toward the wall to this many away from it. */
+const RAY_STEP = 80, RAY_IN = 3, RAY_OUT = 8;
+const rayCache = new Map<string, Point3[]>();
+
+/**
+ * Points on the ray from a wall caster through its outside spot, RAY_STEP apart, that see it (lineOfSight over the walls), nearest
+ * the spot first; the spot alone when none does (no terrain or walls loaded). Measured: wall-e-s sees from 2 steps in to 1 out,
+ * wall-e-n 2 in to 3 out, wall-n and wall-nw from the spot to 7 out.
+ */
+export function outsideLine(regionId: number, caster: Point3, spot: Point3): Point3[] {
+    const key = `${regionId}|${caster.x},${caster.y}|${spot.x},${spot.y}`;
+    const known = rayCache.get(key);
+    if (known) return known;
+    const d = Math.hypot(spot.x - caster.x, spot.y - caster.y) || 1;
+    const ux = (spot.x - caster.x) / d, uy = (spot.y - caster.y) / d;
+    const ks = Array.from({ length: RAY_IN + RAY_OUT + 1 }, (_, i) => i - RAY_IN).sort((a, b) => Math.abs(a) - Math.abs(b) || b - a);
+    const pts = ks.map(k => ({ x: Math.round(spot.x + ux * RAY_STEP * k), y: Math.round(spot.y + uy * RAY_STEP * k), z: spot.z }))
+        .filter(p => lineOfSight(regionId, p, caster));
+    const out = pts.length ? pts : [spot];
+    rayCache.set(key, out);
+    return out;
 }
 
 /** Whether `p` stands in a door's `behind` area (SiegeDoor.behind). */
