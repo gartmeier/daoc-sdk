@@ -265,11 +265,14 @@ export interface DirectorSettings {
     /**
      * The inside hold: past goMaxMs the clock waits while a raid unit's living stand within insideReach of the target (past the
      * gate) or a raid unit fights within insideFight of it, up to progressMaxMs in all (S1, 22:5x: every Hibernia raid tonight
-     * ended 'timeout' at 964-1574 s, the raid inside). rushReach: one of ours this near the target calls the rush.
+     * ended 'timeout' at 964-1574 s, the raid inside). rushReach: one of ours this near the target calls the rush, when it stands
+     * within rushRise of the lord's height too (his roof, not the courtyard under it: albion-1 and hibernia-26 at 00:47/01:11 rushed
+     * from rank 3 with 4 wall casters left, a member chasing a guard 900 under the roof in 2D, and lost 38).
      */
     insideReach: number;
     insideFight: number;
     rushReach: number;
+    rushRise: number;
     /**
      * The defence hold: the rally doesn't go while more enemy players than defenceShare × the raid's living were seen
      * within defenceRadius of the target in the last defenceMemoryMs. Held that long without a break: the muster ends
@@ -349,7 +352,7 @@ export const DIRECTOR_SETTINGS: DirectorSettings = {
     clearMs: 15_000, maxMs: 180_000,
     campRadius: 5000, campFoes: 2, campMs: 15_000,
     quorum: 0.7, rallyMaxMs: 240_000, goMin: 8, goFloor: 5, goShare: 0.7, fewMaxMs: 600_000, goMaxMs: 900_000, raidBreak: 0.3, raidEveryMs: 0,
-    lordGraceMs: 30_000, lordMaxMs: 600_000, progressGraceMs: 180_000, progressMaxMs: 1_800_000, insideReach: 1800, insideFight: 3000, rushReach: 900,
+    lordGraceMs: 30_000, lordMaxMs: 600_000, progressGraceMs: 180_000, progressMaxMs: 1_800_000, insideReach: 1800, insideFight: 3000, rushReach: 900, rushRise: 300,
     defenceRadius: 4500, defenceShare: 1, defenceMemoryMs: 60_000, defenceMaxMs: 600_000, lookFreshMs: 120_000, lookFrom: 4000, lookRadius: 5800,
     fewShare: 0.5, fewMin: 2, ownersAwayMin: 3, ownersAwayFrom: 8000, ownersAwayPair: 2500,
     onWayMs: 120_000, onWayMin: 1000,
@@ -978,7 +981,8 @@ export class RealmDirector {
         } else {
             if (raid.some(u => LORD_PHASE.test(u.reason))) o.raid.lordAt = now;
             // The rush: a raid unit at the lord phase, or one of ours by the lord's room (rushReach of the target). Once.
-            const byLord = raid.find(u => LORD_PHASE.test(u.reason) || u.members.some(m => !m.isDead && dist2(m, o.raid!.target) <= s.rushReach));
+            const t = o.raid.target;
+            const byLord = raid.find(u => LORD_PHASE.test(u.reason) || u.members.some(m => !m.isDead && dist2(m, t) <= s.rushReach && Math.abs(m.z - t.z) <= s.rushRise));
             if (byLord && !call.rush) { call.rush = true; events.push({ kind: 'rush', call: call.id, by: byLord.unit }); }
             // Inside: past the gate (insideReach of the target) or fighting by the keep (insideFight).
             const inside = raid.some(u => u.members.some(m => !m.isDead && dist2(m, o.raid!.target) <= s.insideReach) || (u.inFight && !!u.centre && dist2(u.centre, o.raid!.target) <= s.insideFight));

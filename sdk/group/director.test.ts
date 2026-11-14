@@ -320,7 +320,10 @@ describe('muster', () => {
         expect(out.calls).toHaveLength(1);
         expect(out.events.find(e => e.kind === 'hold')).toMatchObject({ why: 'inside', on: true });
         expect(out.calls[0]!.rush).toBeUndefined();
-        // One of ours within 900 of the lord: the rush, once.
+        // Within 900 of the lord but in the courtyard under his roof (870 below, albion-1 at 00:47): no rush.
+        const under = { camelot: frame({ id: 'camelot', members: at(33089, 38671, 6, 'G', { z: -870 }) }) };
+        expect(d.update(under, 955_000, []).calls[0]!.rush).toBeUndefined();
+        // One of ours within 900 of the lord, at his height: the rush, once.
         const byLord = { camelot: frame({ id: 'camelot', members: at(33089, 38671, 6, 'G') }) };
         out = d.update(byLord, 960_000, []);
         expect(out.calls[0]!.rush).toBe(true);
