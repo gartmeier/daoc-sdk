@@ -15,6 +15,7 @@ import { abortable, executionContext } from '../execution-context';
 import { doorBetween } from '../doors';
 import { diedLately, isAlive, untouchable } from './blackboard';
 import { CC_IMMUNE_MS, CC_WALK, canControl, immuneKinds, isMezzEffect } from './cc';
+import { openOnCc, waitForOpener } from './cc-opener';
 import { clearOf, keepDangers, type KeepSettings } from './keeps';
 import { type BuffTask, nextBuff, planBuffs, strippedMembers, surplusConcentration } from './buffs';
 import { combatSpot, dangerStops, effectiveLimits, focusSettled, safeSpot, trackFocus } from './positioning';
@@ -260,10 +261,11 @@ const alive = isAlive;
  * Whether crowd control on `c` keeps our hands off it: on an add, or on a focus with something else free in the fight, while the coordinator moves the focus. Any swing breaks a mezz, a miss too (GameLiving.cs:1700-1704).
  * With nothing else free, the coordinator chose it to be broken: a root has done its job (live a sole rooted Celt stood untouched from +4.2 to +32.3 while its pet killed a member, run 20261103-174453),
  * and with every enemy mezzed the group picks them off one at a time (pack.ts pickOff, decideRvr) instead of standing by them, rebuffing, until they wake (user, live in Thidranki).
+ * A mezzed one waits for its opener (cc-opener.ts): one melee bot's styled first swing, nothing before it (user, playing Niamh, 2026-11-14).
  */
 export function ccHolds(ctx: MemberContext, c: Contact): boolean {
     if (!c.cc) return false;
-    return !loneFocus(ctx, c);
+    return !loneFocus(ctx, c) || waitForOpener(ctx, c);
 }
 
 /** It is the focus, and nothing else in the fight is free. */
@@ -1635,6 +1637,15 @@ export const tank = (opts: { style?: StylePick } = {}): Behavior<TacticsSettings
             reportLeg(ctx, await ctx.bot.walkTo(mob.x, mob.y, { z: mob.z, tolerance: 200, timeout: 10_000 }));
             return true;
         }
+        // A mezzed or stunned focus to break: one of us opens with a style, the other melee wait (cc-opener.ts).
+        if (mob === focus && focus.cc && loneFocus(ctx, focus)) {
+            const open = await openOnCc(ctx, focus);
+            if (open === 'acted') return true;
+            if (open) {
+                await stopSwinging(ctx);
+                return ctx.skip(`tank: ${open.wait}`);
+            }
+        }
         const { taunt, damage } = tankStyles(ctx.sdk.getSkills().styles ?? [], ctx.sdk.getState()?.equipment ?? []);
         // Fighting a stand-in for a focus beyond the leash: back to the focus once it is inside again.
         const focusBack = () => { const f = ctx.focus(); return !!stand && !!f && !beyondLeash(ctx, f); };
@@ -1823,6 +1834,12 @@ export const assist = (opts: { melee?: boolean; holdMs?: number; style?: StylePi
         if (!focus || !alive(focus)) return skipping('assist: focus unknown');
         // Ids are per region (Region.cs:151, :779): what holds it in our view here is something else, and its position means nothing here. holdFormation brings us back.
         if (focus.regionId !== ctx.me().regionId) return skipping('assist: focus in another region');
+        // A mezzed or stunned focus to break: one of us opens with a style, the other melee wait (cc-opener.ts).
+        if (opts.melee && focus.cc && loneFocus(ctx, focus)) {
+            const open = await openOnCc(ctx, focus);
+            if (open === 'acted') return true;
+            if (open) return skipping(`assist: ${open.wait}`);
+        }
         if (ccHolds(ctx, focus)) return skipping('assist: focus is crowd-controlled');
         // Not one under a keep's guards, inside the leash or not: its walk's check below lets that go every time, and the steps add up to a walk into the circle (moveTo 25, stop 24).
         const mob = opts.melee && beyondLeash(ctx, focus) ? leashFallback(ctx, t => !beyondLeash(ctx, t)) : focus;

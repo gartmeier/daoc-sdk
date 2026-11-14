@@ -2189,13 +2189,15 @@ describe('petControl: a rooted focus', () => {
     });
 
     // User, live in Thidranki: with every enemy mezzed the group stood by them. The coordinator picks one off (pack.ts, decideRvr), the pet with the others.
-    test('a mezz, the same: all that\'s left, the order goes; on it already, it stays on it', async () => {
+    // A melee bot opens on a mezz with a style first (cc-opener.ts, user 2026-11-14): with the Tank there, the pet waits for
+    // its swing, which breaks the mezz, and the order goes then. A pet already on it comes back: its next swing would break it first.
+    test('a mezz: the pet waits for the Tank\'s opener; on it already, it is called back', async () => {
         const w = world({ contacts: [celt(mezz())], orders: { focus: FOCUS } });
         await petControl().run(w.ctx);
-        expect(w.sent).toEqual([{ command: 'attack', target: FOCUS }]);
+        expect(w.sent).toEqual([]);
         const on = world({ contacts: [celt(mezz())], orders: { focus: FOCUS }, pet: { targetObjectId: FOCUS } });
         await petControl().run(on.ctx);
-        expect(on.sent).toEqual([]);
+        expect(on.sent).toEqual([{ command: 'follow' }]);
     });
 
     test('a mezz with something else free in the fight, no: called off', async () => {

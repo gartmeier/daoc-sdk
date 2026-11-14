@@ -91,6 +91,15 @@ A mob that failed is avoided for 60 s. A death stops the grind unless `respawn: 
 - **`style.details` says what a style does**, from the 0xD8 tooltip the server pushes after the skills list: `fatigue`, `attackMod`, `defensiveMod`, `openingDamage` (damage growth), `opening` with `result` and `position`, `openingStyle`, `followUps` (learned or not), `weapon`, and `procSpell`. A combat event doesn't name the style; the last one is in "You perform your X perfectly!". Verified live at Celtic Dual 4:
   - Misty Gloom: `fatigue` 15, `openingDamage` 7, anytime.
   - Blinding Rain: `fatigue` 5, `attackMod` 10, `openingDamage` 175, `opening` defensive, `result` evade, `followUps` Blizzard, and a bleed of 3 body damage every 4 s for 20 s.
+- **The first blow on a mezzed or stunned enemy is a style** (`sdk/group/cc-opener.ts`; assist and tank call it on a lone crowd-controlled focus). Any swing breaks a mezz, a miss too. Live, 2026-11-14 10:04 UTC, the melee broke Fiacra's mezz on a Briton with plain swings, because `attack` starts the swing and a style went in only on the next pass. The user: "get close and open with a style, best with a snare or a stun."
+  - Server facts it rests on:
+    - A style sent while not swinging starts the swing itself and is already queued for its first blow (`StyleProcessor.TryToUseStyle`: `RequestStartAttack`, then the style).
+    - A style queued out of reach is cleared after 250 ms (`AttackAction.PrepareMeleeAttack`). So the opener stands within 110 and faces the target before it sends.
+  - The pick (`openerFor`):
+    - A stun proc ("The target is stunned …") beats a snare ("The target is slowed by …"), which beats damage. A positional beats an anytime style, because a mezzed target doesn't turn.
+    - A positional goes only with an anytime style behind it. Taunts come last. Reactions, follow-ups and detaunts never open.
+    - Hero: Disable / Numb. Blademaster: Ice Storm / Hurricane, or Snow Shower from behind when stun-immune.
+  - One opens: the member claiming it (activity `open`), else the nearest melee bot. The other melee wait 300 off, swinging nothing. On a mezz, `ccHolds` keeps nukes and pets off it too, for 10 s at most. A stun breaks on nothing, so there only the first blow waits.
 - **`style.prerequisite`** is the same rule as a code (PacketLib1112.cs:125-146): 0x100 anytime, 100 + result a reaction, 200 + position positional, or result with 100 + the opener's skillIndex in the high byte.
 - **Base classes have no styles; promotion brings them** (verified live):
   - Style rows are keyed by class (`style.ClassId`; SkillBase.cs:600-625, Specialization.cs:374-381). `getStylesFor(14)` (Fighter), `getStylesFor(35)` (Viking) and `getStylesFor(52)` (Guardian) are empty; Armsman (2) has 84.
