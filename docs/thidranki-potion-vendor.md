@@ -60,9 +60,17 @@ Copies of each realm's own NPCs: the realm's portal-keep healer (`DOL.GS.GameHea
 | `thid-pk-mid-healer` | Hagdar | Healer | 2 | 53883, 24680, 4323 | 3072 | |
 | `thid-pk-mid-potions` | Salazo | Potion Merchant | 2 | 54053, 24850, 4323 | 2048 | ThidPotionsMid |
 | `thid-pk-mid-poisons` | Svewn | Poison Merchant | 2 | 54223, 24680, 4323 | 1024 | ThidPoisonsMid |
-| `thid-pk-hib-healer` | Ilyana | Healer | 3 | 18192, 18257, 4323 | 3072 | |
-| `thid-pk-hib-potions` | Yoria | Potion Merchant | 3 | 18362, 18427, 4323 | 2048 | ThidPotionsHib |
-| `thid-pk-hib-poisons` | Riber | Poison Merchant | 3 | 18532, 18257, 4323 | 1024 | ThidPoisonsHib |
+| `thid-pk-hib-healer` | Ilyana | Healer | 3 | 17730, 18884, 4323 | 2500 | |
+| `thid-pk-hib-potions` | Yoria | Potion Merchant | 3 | 17901, 18994, 4326 | 2443 | ThidPotionsHib |
+| `thid-pk-hib-poisons` | Riber | Poison Merchant | 3 | 18100, 19120, 4323 | 2048 | ThidPoisonsHib |
+
+**Moved to the wall (2026-11-14).** In the middle of the yard they were in the way, so they go along the wall the way Druim Ligen's merchants stand. There, Ilyana, Lonrah, Fyr, Araisa, Eithne and Seoltoir stand 55-180 from the wall (most 55-120) and 130-240 apart, measured with the zone's occluders (sdk/occluders.ts). Hibernia's three keep NPCs were moved first, live (`UPDATE mob`, then `/reload mob name <name>` in the region):
+
+- **Yoria:** where the user's Niamh stood, 145 from the north-west wall's inner face, facing the way Niamh faced.
+- **Ilyana:** 200 south-west along the same wall, 86 from it.
+- **Riber:** round the corner on the north wall, 105 from it, facing south.
+
+All three are seen from the keep's centre, about 800-900 from it. Albion and Midgard still stand round the centre.
 
 Keep centres: Albion (37301, 52362), Midgard (54053, 24680), Hibernia (18362, 18257). The navmesh is flat open ground within 300 of each: z 3946, 4323 and 4323.
 
