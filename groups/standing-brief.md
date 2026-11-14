@@ -112,7 +112,16 @@ Items 1-3 don't exist as measures yet. Building them is the first work under thi
 3. **pack.ts:** the melee chases players behind the shut gate.
 4. **Supervisor:** a pause for deliberate offline windows.
 5. **Realm rank cap 255:** unproven until a bot reaches RealmLevel 10.
-6. **Emblems and dyes:** never seen in a real client. That's the user's look at Niamh's cloak.
+6. ~~Emblems and dyes~~: fixed and seen in the user's client (8fd3cda, applied 10:38 UTC; the client draws the symbol in black on the two colours).
+7. **Not yet seen live (11-14 morning, from the user's play):**
+   - the melee opener on a mezzed or stunned focus, with the stun queued again after a bladeturn (1a70ff4, 60537eb);
+   - help calls only at 1.5 to 1 (8f72e0e);
+   - a full group lets a fleeing solo go and skips sightings under 3 (686c77b, 70557fc);
+   - the leader holds the called target for `/assist`, and pickups ask for buffs (1caff00, 7b3514b);
+   - the life cycle's human guard (3a252e8: it held Niamh at 11:45).
+8. **Starting stats the Optimize way** (7aa8f76) for new characters. 42 bots still carry the old split. Re-spending them needs a client packet and a log-out to the character screen; the user hasn't decided. Uncommitted client work for it sat in the tree at 11:5x, from the stats session.
+9. **Watchers:** `scripts/watch.ts` for any log watch; the sweep (`groups/sweep-orphans.log`) under the extra supervisor. Check that log for counts that climb.
+10. **The keep-awake script was stopped at about 10:30.** While the machine may sleep, the world doesn't count as running on its own.
 
 Waiting on the user:
 - pushing the local commits;
