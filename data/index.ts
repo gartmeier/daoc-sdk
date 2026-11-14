@@ -15,6 +15,7 @@ import {
     type SpellLineInfo, type StarterEquipment, type StartupLocation, type StatName, type StyleInfo, type StyleProc, type Teleport, type ZonePoint,
 } from './build';
 import { specKey } from './spec-names';
+import { CLIENT_OPTIMIZE } from './client-optimize';
 
 export * from './zones';
 export * from './spec-names';
@@ -485,15 +486,45 @@ function mostCommon<T>(xs: (T | null)[]): T | null {
 }
 
 /**
- * A valid 30-point allocation: +10 to the class's primary, secondary and
- * tertiary stats (each costs exactly 10). Base classes have no stats of their
- * own, so the most common choice among their advanced classes is used.
+ * What the client's Optimize button gives a class over race base (data/client-optimize.ts).
+ * A base class has no entry of its own: the allocation most of its creatable advanced
+ * classes share, a tie going to the lowest class id. Null when none has one.
+ */
+export function optimizedStatPoints(cls: number | string, realm?: Realm | number): Partial<Record<StatName, number>> | null {
+    const c = getClass(cls, realm);
+    if (!c) throw new Error(`unknown class ${String(cls)}`);
+    const own = CLIENT_OPTIMIZE[c.id];
+    if (own) return { ...own };
+    const counts = new Map<string, { n: number; points: Partial<Record<StatName, number>> }>();
+    for (const id of [...c.advancedClassIds].sort((a, b) => a - b)) {
+        const points = CLIENT_OPTIMIZE[id];
+        if (!points || !getClass(id)?.creatable) continue;
+        const key = STAT_ORDER.map(s => points[s] ?? 0).join('/');
+        const seen = counts.get(key) ?? { n: 0, points };
+        seen.n++;
+        counts.set(key, seen);
+    }
+    let best: { n: number; points: Partial<Record<StatName, number>> } | null = null;
+    for (const v of counts.values()) if (!best || v.n > best.n) best = v;
+    return best ? { ...best.points } : null;
+}
+
+/**
+ * A valid 30-point allocation, the one the client's Optimize button makes
+ * (optimizedStatPoints). A class it doesn't know gets +10 to its primary,
+ * secondary and tertiary stats, those of its advanced classes for a base class.
  */
 export function defaultStats(cls: number | string, race: number | string, realm?: Realm | number): Record<StatName, number> {
     const c = getClass(cls, realm);
     const base = getStartingStats(race);
     if (!c) throw new Error(`unknown class ${String(cls)}`);
     if (!base) throw new Error(`race ${String(race)} has no starting stats`);
+    const optimized = optimizedStatPoints(c.id);
+    if (optimized) {
+        const out = { ...base };
+        for (const s of STAT_ORDER) out[s] += optimized[s] ?? 0;
+        return out;
+    }
     const adv = c.advancedClassIds.map(id => getClass(id)).filter((x): x is ClassInfo => !!x);
     const pick: StatName[] = [];
     for (const k of ['primaryStat', 'secondaryStat', 'tertiaryStat'] as const) {

@@ -73,6 +73,13 @@ describe('classes / character creation', () => {
         expect(() => planCharacter('midgard', 'Warrior', 'Briton')).toThrow(/not a midgard race/);
     });
 
+    test('creation spends the points like the client Optimize button: a Mentalist gets Int and Dex, no Qui', () => {
+        // 0xFF order STR, DEX, CON, QUI, INT, PIE, EMP, CHR; Lurikeen base 40/80/40/80/60/60/60/60.
+        expect(planCharacter('hibernia', 'Mentalist', 'Lurikeen', 1).stats).toEqual([40, 95, 40, 80, 70, 60, 60, 60]);
+        // Elf base DEX 75, QUI 75, INT 70.
+        expect(planCharacter('hibernia', 'Mentalist', 'Elf').stats).toEqual([40, 90, 40, 75, 80, 60, 60, 60]);
+    });
+
     test('Albion and Midgard "Rogue" resolve to different class ids', () => {
         expect(planCharacter('albion', 'Rogue', 'Briton').classId).toBe(17);
         expect(planCharacter('midgard', 'Rogue', 'Norseman').classId).toBe(38);

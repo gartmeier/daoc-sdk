@@ -2,9 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import {
     classAfterCreation, defaultStats, estimateZ, findItemTemplates, findNpcSpawns, getClass, getClasses, getItemTemplate, getMerchantItems,
     getNpcSpawns, getPlayableRacesForClass, getRace, getRacesForClass, getSpell, getSpellLine, getStartingClasses, getStartupLocation,
-    getStarterArmour, getStarterEquipment, getStylesFor, getZoneAt, getZonePoint, getZonePointsFrom, nearestBindpoint, realmId, statPointCost, toStats, validateCharacter,
+    getStarterArmour, getStarterEquipment, getStylesFor, getZoneAt, getZonePoint, getZonePointsFrom, nearestBindpoint, optimizedStatPoints, realmId, statPointCost, toStats, validateCharacter,
 } from './index';
 import { splitClassList } from './build';
+import { CLIENT_OPTIMIZE } from './client-optimize';
 
 // Cotswold Village, Camelot Hills (region 1): bind stone at (560491, 511708, 2280).
 const COTSWOLD = { x: 560491, y: 511708 };
@@ -268,6 +269,28 @@ describe('classes and races', () => {
         const s = defaultStats('Armsman', 'Briton');
         expect(s).toMatchObject({ STR: 70, CON: 70, DEX: 70, QUI: 60 });
         expect(toStats(s).strength).toBe(70);
+    });
+
+    test('defaultStats spends the points the way the client Optimize button does', () => {
+        // Niamh, re-spent with the client's Optimize on 2026-11-14: Lurikeen base INT 60, DEX 80, QUI 80.
+        expect(defaultStats('Mentalist', 'Lurikeen')).toEqual({ STR: 40, CON: 40, DEX: 95, QUI: 80, INT: 70, PIE: 60, EMP: 60, CHR: 60 });
+        expect(optimizedStatPoints('Mentalist')).toEqual({ INT: 10, DEX: 15 });
+        expect(optimizedStatPoints('Druid')).toEqual({ DEX: 15, EMP: 10 });
+        expect(optimizedStatPoints('Hunter')).toEqual({ DEX: 15, STR: 10 });
+        expect(optimizedStatPoints('Paladin')).toEqual({ CON: 10, PIE: 10, STR: 10 });
+        // Every advanced class the client lists costs exactly 30 and gives nothing to Quickness.
+        for (const [id, points] of Object.entries(CLIENT_OPTIMIZE)) {
+            const above = Object.values(points);
+            expect(above.reduce((sum, a) => sum + a + Math.max(0, a - 10) + Math.max(0, a - 15), 0), `class ${id}`).toBe(30);
+            expect(points.QUI, `class ${id}`).toBeUndefined();
+        }
+        // A base class takes what most of its creatable advanced classes share.
+        expect(optimizedStatPoints('Magician')).toEqual({ INT: 10, DEX: 15 });
+        expect(optimizedStatPoints('Fighter')).toEqual({ STR: 10, CON: 10, DEX: 10 });
+        expect(optimizedStatPoints('Naturalist')).toEqual({ DEX: 15, EMP: 10 });
+        for (const realm of ['albion', 'midgard', 'hibernia'] as const) {
+            for (const c of getStartingClasses(realm)) expect(optimizedStatPoints(c.id), c.name).not.toBeNull();
+        }
     });
 
     test('realmId', () => {
