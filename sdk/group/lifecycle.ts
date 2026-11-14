@@ -117,8 +117,14 @@ export interface RaidSettings {
     onlineSlack: number;
     /** ... this share of the target alive out in the battleground ... */
     outShare: number;
-    /** ... and never fewer than this out (small raids at night, but not three) ... */
+    /** ... and never fewer than this out ... */
     minOut: number;
+    /**
+     * ... and only while the realm's target is at least this: no raids at night. Night raids of 1-2 units at 6-8 a realm
+     * (11-14 02:00-08:00: 16 raids, 290 dead for 55 kills, 5 with no unit at the rally) only fed the Faste's guards; at
+     * night the realm fights small instead (the user, 11-14 08:00).
+     */
+    minTarget: number;
     /** ... and this long since the realm's last muster ended (or the life cycle started). */
     gapMs: number;
 }
@@ -158,7 +164,7 @@ export const LIFECYCLE_SETTINGS: LifecycleSettings = {
     leaveRetryMs: 3 * 60_000,
     earlyAfterMs: 30 * 60_000,
     balance: { ratio: 1.5, windowMs: 20 * 60_000, near: 4000, holdMs: 10 * 60_000, decayMs: 20 * 60_000, maxShift: 3, minCount: 4 },
-    raid: { onlineSlack: 1, outShare: 0.7, minOut: 5, gapMs: 25 * 60_000 },
+    raid: { onlineSlack: 1, outShare: 0.7, minOut: 5, minTarget: 12, gapMs: 25 * 60_000 },
     wave: { outMinMs: 12 * 60_000, afterFightMs: 90_000, outMaxMs: 30 * 60_000, quietMinMs: 4 * 60_000, quietMaxMs: 7 * 60_000, sightingMs: 15 * 60_000, clusterRange: 3000, portalClear: 6000 },
 };
 
@@ -516,6 +522,7 @@ export function wantsMuster(o: { playing: number; target: number | undefined; ou
     if (o.open) return { want: false, why: 'a muster is open' };
     if (o.holdsTarget) return { want: false, why: 'we hold the Faste' };
     if (!o.target) return { want: false, why: 'no target yet' };
+    if (o.target < s.minTarget) return { want: false, why: `a target of ${o.target}: raids from ${s.minTarget}` };
     const online = Math.max(1, o.target - s.onlineSlack), out = Math.max(s.minOut, Math.ceil(o.target * s.outShare));
     if (o.playing < online) return { want: false, why: `${o.playing} playing for a target of ${o.target}, a raid wants ${online}` };
     if (o.out < out) return { want: false, why: `${o.out} alive out, a raid wants ${out} (target ${o.target})` };

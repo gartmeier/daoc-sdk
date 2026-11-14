@@ -385,12 +385,13 @@ describe('raids', () => {
         expect(wantsMuster({ ...base, open: true }).want).toBe(false);
         expect(wantsMuster({ ...base, shift: 1 }).want).toBe(false);
     });
-    test('follow the curve: the afternoon 12 and a night of 7 raid too, with most of them out', () => {
+    test('follow the curve: the afternoon 12 raids with most of them out; a night of 7 or 11 never does', () => {
         expect(wantsMuster({ ...base, target: 12, playing: 11, out: 9 }).want).toBe(true);
         expect(wantsMuster({ ...base, target: 12, playing: 11, out: 8 }).want).toBe(false);
-        expect(wantsMuster({ ...base, target: 7, playing: 6, out: 5 }).want).toBe(true);
-        expect(wantsMuster({ ...base, target: 7, playing: 7, out: 4 }).want).toBe(false);
-        expect(wantsMuster({ ...base, target: 6, playing: 6, out: 4 }).want).toBe(false);
+        expect(wantsMuster({ ...base, target: 11, playing: 11, out: 11 })).toEqual({ want: false, why: 'a target of 11: raids from 12' });
+        expect(wantsMuster({ ...base, target: 7, playing: 7, out: 7 }).want).toBe(false);
+        expect(wantsMuster({ ...base, target: 7, playing: 6, out: 5 }, { ...LIFECYCLE_SETTINGS.raid, minTarget: 0 }).want).toBe(true);
+        expect(wantsMuster({ ...base, target: 7, playing: 7, out: 4 }, { ...LIFECYCLE_SETTINGS.raid, minTarget: 0 }).want).toBe(false);
     });
 });
 
