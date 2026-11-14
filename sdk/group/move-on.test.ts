@@ -103,3 +103,36 @@ describe('moving on after fights in one area', () => {
         expect(spentAreas(memory, 1_061_000).length).toBe(2);
     });
 });
+
+describe('a member back with us owed buffs: the stop at once, the speed song, then on (the user, 2026-11-14 09:49: "they come. they buff. speed song. we go.")', () => {
+    const us = { x: 34_000, y: 29_000 };
+    const skin = { name: 'Stoutness of the Oak', slot: 'con' as any, target: 'Realm', concentration: 5 };
+    const members = (menta: Partial<MemberReport>, mentaBuffed = false) => team(us).map(m => ({
+        ...m,
+        ...(m.name === 'Druid' ? { capabilities: { ...m.capabilities, buffSpells: [skin] } } : {}),
+        effects: m.name !== 'Menta' || mentaBuffed ? [skin.name] : [],
+        ...(m.name === 'Menta' ? menta : {}),
+    }));
+    const at = (ms: MemberReport[], memory: Record<string, any>, now: number) =>
+        decidePack({ picture: picture(ms, [], {}, now), orders: { ...picture([], [], {}, now).orders, phase: 'travel' }, memory, now, windingDown: false, settings: mergeSettings(PACK_SETTINGS, { patrol: null }) } as any);
+
+    test.skipIf(isWet(THID, us))('away in another region at the start, back: rebuff until it is on, 3 s on the road, then the roam', () => {
+        const memory: Record<string, any> = { realm: 'hibernia', pack: 'stalk' };
+        const t0 = 1_000_000;
+        expect(at(members({ regionId: -1 }), memory, t0).reason).not.toMatch(/^rebuffing/);
+        const back = at(members({}), memory, t0 + 1000);
+        expect(back.phase).toBe('recover');
+        expect(back.reason).toMatch(/^rebuffing: Menta back with us, 1 buff to go \((Stoutness of the Oak on Menta)\)/);
+        expect(at(members({}), memory, t0 + 30_000).reason).toMatch(/^rebuffing: .*Stoutness of the Oak on Menta/);
+        const speed = at(members({}, true), memory, t0 + 40_000);
+        expect(speed.phase).toBe('travel');
+        expect(speed.reason).toMatch(/^rebuffed: the speed song, then on/);
+        expect(at(members({}, true), memory, t0 + 43_500).reason).toMatch(/^roam: /);
+    });
+
+    test.skipIf(isWet(THID, us))('back with nothing owed: no stop', () => {
+        const memory: Record<string, any> = { realm: 'hibernia', pack: 'stalk' };
+        at(members({ x: us.x + 6000 }, true), memory, 1_000_000);
+        expect(at(members({}, true), memory, 1_001_000).reason).not.toMatch(/^rebuff/);
+    });
+});

@@ -41,6 +41,9 @@ export { focusHealed, pickPackFocus } from './rvr';
 
 /** A rebuff waits for buffs still owed (planBuffs) at most this long from its start; past it, they catch up on the way. */
 export const REBUFF_MAX_MS = 60_000;
+/** After a rebuff, the pack stands this long on the road (phase travel: the Bard's speed song) before it goes on. The user, 2026-11-14:
+ *  "they come. they buff. speed song. we go." */
+export const SPEED_UP_MS = 3000;
 
 export interface PackOptions {
     /** Stop this far from the nearest enemy of a group we mean to raid. */
@@ -325,6 +328,13 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     const onUs = (c: Contact) => { const n = onWhom(c); return n !== null && ours.has(n); };
     const attacked = new Set(p.contacts.filter(c => !c.stale && isAlive(c) && onUs(c)).map(c => onWhom(c)!));
     const { main, far } = mainBody(here, s.gatherRadius, mem, attacked);
+    // Members away from the main body last tick (far, dead, released, in another region): one back in it is a joiner, owed its buffs
+    // before the pack goes on, whatever kept it away (the user, 2026-11-14 09:49, met after a release before the sortie: "they now
+    // picked me up but I don't have buffs").
+    const inMain = new Set(main.map(m => m.name));
+    const wasAway = new Set<string>(mem.packAway ?? []);
+    for (const m of main) if (wasAway.has(m.name) && !(mem.joiners ?? []).includes(m.name)) (mem.joiners ??= []).push(m.name);
+    mem.packAway = p.members.filter(m => !inMain.has(m.name)).map(m => m.name);
     const centre = centroid(main);
     // A shade is no foe, as in decideRvr: no focus, no mezz, nobody to count (AbstractServerRules.cs:449-455).
     noticePhantom(mem, p.contacts, o.phase === 'engage' ? o.focus : null, now, k);
@@ -374,6 +384,8 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     const living = p.members.filter(m => !m.isDead);
     const missingBuffs = () => here.flatMap(c => planBuffs(c.name, living).filter(t => !t.covered && t.rank < 99 && !t.pet).map(t => `${t.spell.name} on ${t.target}`));
     const buffingNow = () => here.filter(m => m.activity?.kind === 'buff');
+    /** The buffs still owed to `names` (as missingBuffs). */
+    const owedTo = (names: ReadonlySet<string>) => here.flatMap(c => planBuffs(c.name, living).filter(t => !t.covered && t.rank < 99 && !t.pet && names.has(t.target)).map(t => `${t.spell.name} on ${t.target}`));
     /** The rebuff isn't done: its minimum time, a buff being cast, or one still owed while REBUFF_MAX_MS hasn't passed. */
     const rebuffHolds = (): boolean => {
         const since = now - (mem.rebuffAt ?? 0);
@@ -616,6 +628,7 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
             }
             mem.pack = 'stalk';
             mem.raids = mem.raids ?? 0;
+            mem.speedUpUntil = now + SPEED_UP_MS;
         }
     }
 
@@ -623,6 +636,17 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     if (mem.pack !== 'rebuff') mem.rebuffSpot = undefined;
     if (dead.length) mem.hadDead = true;
     if (mem.hadDead && !dead.length && !far.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.hadDead = false; mem.pack = 'rebuff'; mem.rebuffAt = now; return say({ ...none, phase: 'recover', anchor: rebuffSpot(), settings: BUFF_STOP_SETTINGS, reason: 'rebuffing: someone is back' }); }
+    /** A buff stop now (the rebuff above holds it until the buffs are on, up to REBUFF_MAX_MS), for `why`. */
+    const startRebuff = (why: string): OrdersUpdate => { mem.pack = 'rebuff'; mem.rebuffAt = now; return say({ ...none, phase: 'recover', anchor: rebuffSpot(), settings: BUFF_STOP_SETTINGS, objective: 'rebuff and rest together', reason: `rebuffing: ${why}` }); };
+    // A joiner owed buffs: the stop at once, with everyone here and nobody near ("they come. they buff. speed song. we go.").
+    const joiners: string[] = mem.joiners ?? [];
+    if (joiners.length && !dead.length && !far.length && !free.some(c => dist(c, centre) <= k.standoff)) {
+        mem.joiners = [];
+        const owed = owedTo(new Set(joiners));
+        if (owed.length) return startRebuff(`${joiners.join(', ')} back with us, ${owed.length} buff${owed.length === 1 ? '' : 's'} to go (${owed.slice(0, 2).join(', ')})`);
+    }
+    // Rebuffed: the speed song on the road (phase travel) before we go on.
+    if (now < (mem.speedUpUntil ?? 0) && !dead.length && !far.length && !free.some(inHunt)) return say({ ...none, phase: 'travel', anchor: stay, objective: 'speed song, then on', reason: `rebuffed: the speed song, then on in ${Math.ceil((mem.speedUpUntil - now) / 1000)} s` });
     if (pickups.length && !free.some(c => dist(c, centre) <= k.standoff)) { mem.pack = 'home'; mem.legKind = null; stepLeg(trip, 'home', homeSpot!, { from: centre, movers: main, replan: Infinity }); return say({ ...none, phase: 'travel', anchor: legAnchor(mem), facing: mem.legFacing, objective: 'pick up the released', reason: `picking up ${pickups.map(m => m.name).join(', ')}` }); }
     const seen = free.filter(inHunt);
     if (!seen.length) {
