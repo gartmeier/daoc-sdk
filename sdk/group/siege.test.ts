@@ -334,6 +334,9 @@ describe('raidOrders', () => {
         const hurt = garrison().map(s => s.name === 'Lady Thidranki' ? { ...s, healthPercent: 67 } : s);
         const under = raidOrders(plan, view({ members: stray, seen: hurt, staged: true, broken: [252000301, 252000302] }));
         expect(under.phase).toBe('lord');
+        // One on the spiral stair under him (within 600 in 3D, 400 below the roof) is not by him (live 00:11:45, hibernia-2).
+        const onStair = [{ id: 1, alive: true, x: 32144, y: 38298, z: plan.roof.z - 400 }, ...stray.slice(1)];
+        expect(raidOrders(plan, view({ members: onStair, seen: hurt, staged: true, broken: [252000301, 252000302] })).phase).toBe('assault');
         expect(under.melee.focus!.name).toBe('Lady Thidranki');
         // The rush, both doors down: the melee go for him whatever the route check made of the centre (live 21:50:58 "melee hold").
         expect(raidOrders(plan, view({ members: stray, seen: hurt, staged: true, broken: [252000301, 252000302], reach: () => false })).melee.focus!.name).toBe('Lady Thidranki');

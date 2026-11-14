@@ -630,7 +630,9 @@ export function raidOrders(plan: RaidPlan, view: RaidView): RaidOrders {
     // Under way means him hurt too: one stray up there by an untouched lord (live 22:33's wait under the wall casters) is no rush.
     const lordSeen = foes.find(s => plan.lordName.test(s.name)) ?? null;
     const besideLord = !!lordSeen && (lordSeen.healthPercent ?? 100) < 100
-        && [...living, ...(view.raid ?? []).filter(m => m.alive)].some(m => Math.hypot(m.x - lordSeen.x, m.y - lordSeen.y, m.z - lordSeen.z) <= LORD_BESIDE);
+        // On the roof by him, not on the spiral stair under it (within 600 of him in 3D from 4000 up): live 00:11:45, hibernia-2 read
+        // the rush with all four wall casters up, the lord still hurt from Albion's raid, and the muster's rush sent the raid in.
+        && [...living, ...(view.raid ?? []).filter(m => m.alive)].some(m => m.z > plan.roof.z - ROOF_UP && Math.hypot(m.x - lordSeen.x, m.y - lordSeen.y) <= LORD_BESIDE);
     const doorsAll = doorSteps.length > 0 && doorSteps.every(t => t.doorId !== undefined && broken.has(t.doorId));
     const rush = !!view.rush || (doorsAll && (wallsDown || besideLord));
     const loose = atLord || rush ? [] : plan.targets.filter(t => t.kind !== 'lord' && !isDone(t));
