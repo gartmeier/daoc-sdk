@@ -52,7 +52,7 @@ import { defenceReachOf, defenceWay, defendCall, defendPatch, meleeHeld, overDef
 import { ONWARD_MIN } from './travel';
 import { countFor, describeCount, groupSize, TUNED_SIZE, type Count } from './size';
 import { planBuffs } from './buffs';
-import { noteFight, placeOk, roamCircuit, roamPlaces, roamStep, spentAreas, type RoamPlace } from './tactics/roam';
+import { noteFight, placeOk, roamCircuit, roamPlaces, roamStep, sideOf, spentAreas, type RoamPlace } from './tactics/roam';
 import { FIELD_REST_MS, fieldRestSpot, loiter, waveOrder, waveWatch, type RealmWave } from './waves';
 import type { Contact, MemberReport, OrdersUpdate, Point, Point3, Role } from './types';
 
@@ -1260,7 +1260,13 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         // Nothing in an enemy portal keep's approach (keeps.ts PK_APPROACH): no sighting there is one to turn to.
         const okPlace = placeOk([...keeps, ...aggroZones(regionId, level)], q => (!dry || isDry(regionId, q)) && !enemyPortalKeepAt(regionId, realm, q));
         if (mem.roamKey !== key) { mem.roamPlaces = roamPlaces(regionId, realm as PlayerRealm, loop, okPlace); mem.roamKey = key; }
-        const r = roamStep(mem, { regionId, centre, places: mem.roamPlaces as RoamPlace[], sightings: mem.realmSeen ?? [], circuit: roamCircuit(realm as PlayerRealm), now, ok: okPlace, blocked: towardFled, spent: spentAreas(mem, now) });
+        // Open help calls of another unit of ours beyond help.ts's reach (it takes them nearer): a heading for the roam, first of all
+        // (the user, 2026-11-14 10:07: "the group ignored Aine's call"). One closed drops out, and the roam goes on from where we are.
+        const left: Record<string, number> = mem.helpLeft ?? {};
+        const callPlaces: RoamPlace[] = ((mem.realmCalls ?? []) as RealmCall[])
+            .filter(c => c.kind === 'help' && c.from !== mem.realmUnit && !(c.id in left) && c.at && okPlace(c.at))
+            .map(c => ({ key: `call:${c.id}`, what: `${c.from}'s call (${enemiesText(c.foes)})`, x: c.at.x, y: c.at.y, at: c.since ?? now, side: sideOf(regionId, c.at) }));
+        const r = roamStep(mem, { regionId, centre, places: mem.roamPlaces as RoamPlace[], sightings: mem.realmSeen ?? [], circuit: roamCircuit(realm as PlayerRealm), now, ok: okPlace, blocked: towardFled, spent: spentAreas(mem, now), calls: callPlaces });
         if (r) {
             stepLeg(trip, 'roam', r.goal, { from: centre, movers: here, replan: 1500 });
             mem.camp = { x: r.place.x, y: r.place.y, z: zAt(r.place), names: r.place.what };

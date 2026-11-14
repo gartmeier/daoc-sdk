@@ -173,11 +173,17 @@ export function sightingPlaces(regionId: number, sightings: readonly RoamSightin
 }
 
 const isSighting = (p: RoamPlace | null | undefined) => p?.at !== undefined;
+/** A realm call beyond the director's reach as a roam place (key `call:<id>`, rvr.ts): the best lead the roam has. The user, playing
+ *  Niamh on 2026-11-14 10:07: "the group ignored Aine's call" (hibernia-s1 caught 19-25k away, the roam walking off the other way). */
+export const isCall = (p: RoamPlace | null | undefined) => !!p?.key.startsWith('call:');
 
 /** Rule 1, the place picker: a fresh sighting near us, else the nearest unpassed place on the circuit's side (turning to the next side when none is left). */
-export function nextPlace(r: RoamMemory, o: { centre: Point; places: readonly RoamPlace[]; sightings: readonly RoamPlace[]; circuit: readonly PlayerRealm[]; blocked?: (p: Point) => boolean }, s: RoamSettings = ROAM_SETTINGS): RoamPlace | null {
+export function nextPlace(r: RoamMemory, o: { centre: Point; places: readonly RoamPlace[]; sightings: readonly RoamPlace[]; circuit: readonly PlayerRealm[]; blocked?: (p: Point) => boolean; calls?: readonly RoamPlace[] }, s: RoamSettings = ROAM_SETTINGS): RoamPlace | null {
     const away = (p: RoamPlace) => dist(p, o.centre) > s.reach && !o.blocked?.(p);
     const nearest = (ps: readonly RoamPlace[]) => (ps.length ? ps.reduce((a, b) => (dist(a, o.centre) <= dist(b, o.centre) ? a : b)) : null);
+    // An open call of our realm's first, at any distance (a heading, not a commitment: help.ts takes it once within its reach).
+    const call = nearest((o.calls ?? []).filter(p => away(p) && !r.done.includes(p.key)));
+    if (call) return call;
     const news = o.sightings.filter(p => away(p) && dist(p, o.centre) <= s.sightingReach && !r.passed.some(q => q.at >= p.at! && dist(q, p) <= s.area));
     const seen = nearest(news);
     if (seen) return seen;
@@ -196,18 +202,19 @@ export function nextPlace(r: RoamMemory, o: { centre: Point; places: readonly Ro
 }
 
 /** Rule 2, the leave rule: whether to drop the current place now (for `better`, when there is one). */
-export function shouldLeave(r: RoamMemory, o: { centre: Point; now: number; better: RoamPlace | null; blocked?: (p: Point) => boolean }, s: RoamSettings = ROAM_SETTINGS): boolean {
+export function shouldLeave(r: RoamMemory, o: { centre: Point; now: number; better: RoamPlace | null; blocked?: (p: Point) => boolean; gone?: boolean }, s: RoamSettings = ROAM_SETTINGS): boolean {
     const p = r.place;
     if (!p) return true;
-    if (dist(o.centre, p) <= s.reach || o.now >= r.until || o.blocked?.(p)) return true;
-    return o.now - r.since >= s.holdMs && !isSighting(p) && isSighting(o.better);
+    if (dist(o.centre, p) <= s.reach || o.now >= r.until || o.blocked?.(p) || o.gone) return true;
+    // A call takes over from anything but a call; a sighting from a circuit place; each only after the place was held holdMs.
+    return o.now - r.since >= s.holdMs && ((!isSighting(p) && isSighting(o.better)) || (!isCall(p) && isCall(o.better)));
 }
 
 /**
  * This tick's roam: mark what we pass, keep the place unless the leave rule says go, else pick the next (rule 1). Null with no
  * place at all (the caller patrols). `blocked`: a place not to walk toward now (the group we just ran from).
  */
-export function roamStep(mem: Record<string, any>, o: { regionId: number; centre: Point; places: readonly RoamPlace[]; sightings?: readonly RoamSighting[]; circuit?: readonly PlayerRealm[]; now: number; ok?: (p: Point) => boolean; blocked?: (p: Point) => boolean; spent?: readonly Point[]; settings?: RoamSettings }): RoamStep | null {
+export function roamStep(mem: Record<string, any>, o: { regionId: number; centre: Point; places: readonly RoamPlace[]; sightings?: readonly RoamSighting[]; circuit?: readonly PlayerRealm[]; now: number; ok?: (p: Point) => boolean; blocked?: (p: Point) => boolean; spent?: readonly Point[]; calls?: readonly RoamPlace[]; settings?: RoamSettings }): RoamStep | null {
     const s = o.settings ?? ROAM_SETTINGS;
     const r: RoamMemory = Array.isArray(mem.roam?.passed) ? mem.roam : (mem.roam = { place: null, since: o.now, until: o.now, side: 0, done: [], passed: [] });
     const circuit = o.circuit ?? [];
@@ -218,6 +225,9 @@ export function roamStep(mem: Record<string, any>, o: { regionId: number; centre
     const sightings = sightingPlaces(o.regionId, o.sightings ?? [], o.now, o.ok ?? (() => true), s);
     const was = r.place;
     const reached = !!was && dist(o.centre, was) <= s.reach;
+    const calls = o.calls ?? [];
+    // A call that closed before we got there: on from where we are.
+    const gone = isCall(was) && !calls.some(c => c.key === was!.key);
     const gaveUp = !!was && !reached && o.now >= r.until;
     // A sighting reached on another side: the circuit goes on from that side, its places fresh (no crossing back).
     if (reached && isSighting(was) && was!.side && circuit.includes(was!.side) && circuit[r.side % circuit.length] !== was!.side) {
@@ -225,24 +235,25 @@ export function roamStep(mem: Record<string, any>, o: { regionId: number; centre
         r.done = r.done.filter(k => o.places.find(p => p.key === k)?.side !== was!.side);
     }
     // Passing through counts: every place we come within reach of, on the way to anything.
-    for (const p of o.places) if (dist(p, o.centre) <= s.reach && !r.done.includes(p.key)) r.done.push(p.key);
+    for (const p of [...o.places, ...calls]) if (dist(p, o.centre) <= s.reach && !r.done.includes(p.key)) r.done.push(p.key);
     // A sighting area passed (any sighting within reach), or one given up: none within `area` of it is news until seen again.
     if (sightings.some(p => dist(p, o.centre) <= s.reach)) r.passed.push({ x: Math.round(o.centre.x), y: Math.round(o.centre.y), at: o.now });
-    if (gaveUp && isSighting(was)) r.passed.push({ x: was!.x, y: was!.y, at: o.now });
+    if (gaveUp && isSighting(was) && !isCall(was)) r.passed.push({ x: was!.x, y: was!.y, at: o.now });
     r.passed = r.passed.filter(q => o.now - q.at <= s.sightingMs).slice(-50);
-    if (gaveUp && !isSighting(was) && !r.done.includes(was!.key)) r.done.push(was!.key);
+    if (gaveUp && (!isSighting(was) || isCall(was)) && !r.done.includes(was!.key)) r.done.push(was!.key);
+    r.done = r.done.filter(k => !k.startsWith('call:') || calls.some(c => c.key === k));
     // An area fought in SPENT_FIGHTS times (spentAreas) is blocked like the group we ran from: no place or sighting in it.
     const inSpent = (p: Point) => (o.spent ?? []).some(a => dist(a, p) <= s.area);
     const blocked = (p: Point) => !!o.blocked?.(p) || inSpent(p);
-    const pickArgs = { centre: o.centre, places: o.places, sightings, circuit, blocked };
-    const better = was && !isSighting(was) && o.now - r.since >= s.holdMs ? nextPlace({ ...r, done: [...r.done] }, pickArgs, s) : null;
-    if (!shouldLeave(r, { centre: o.centre, now: o.now, better, blocked }, s)) return step(was!, o.centre, circuit, 'to');
+    const pickArgs = { centre: o.centre, places: o.places, sightings, circuit, blocked, calls };
+    const better = was && !isCall(was) && o.now - r.since >= s.holdMs ? nextPlace({ ...r, done: [...r.done] }, pickArgs, s) : null;
+    if (!shouldLeave(r, { centre: o.centre, now: o.now, better, blocked, gone }, s)) return step(was!, o.centre, circuit, 'to');
     const place = nextPlace(r, pickArgs, s);
     r.place = place;
     if (!place) return null;
     r.since = o.now;
     r.until = o.now + s.giveUpMs + dist(o.centre, place) / s.giveUpSpeed * 1000;
-    const how = !was ? 'to' : reached ? `past ${was.what}, on to` : gaveUp ? `gave up on ${was.what}, on to` : isSighting(place) && !isSighting(was) ? 'turning for' : inSpent(was) ? 'moving on from where we fought, to' : 'keeping off the group we ran from, to';
+    const how = !was ? 'to' : reached ? `past ${was.what}, on to` : gaveUp ? `gave up on ${was.what}, on to` : gone ? `${was.what} closed, on to` : isCall(place) && !isCall(was) ? 'turning for' : isSighting(place) && !isSighting(was) ? 'turning for' : inSpent(was) ? 'moving on from where we fought, to' : 'keeping off the group we ran from, to';
     return step(place, o.centre, circuit, how);
 }
 

@@ -156,3 +156,41 @@ describe('a member back with us owed buffs: the stop at once, the speed song, th
         expect(at(members({}, true), memory, 1_001_000).reason).not.toMatch(/^rebuff/);
     });
 });
+
+describe('an open call of ours beyond the director\'s reach is the roam\'s heading (the user, 2026-11-14 10:07: "the group ignored Aine\'s call")', () => {
+    const circuit: RoamPlace = { key: 'ring0', what: 'the meeting ground', x: 40_000, y: 30_000 };
+    const call = (over: Partial<RoamPlace> = {}): RoamPlace => ({ key: 'call:hibernia-66', what: "hibernia-s1's call (5 enemies)", x: 22_699, y: 38_908, at: 0, ...over });
+    const centre = { x: 38_000, y: 32_000 };
+
+    test('first, at any distance; it takes over a circuit place after the 10 s hold; closed: on from where we are', () => {
+        const mem: Record<string, any> = {};
+        expect(roamStep(mem, { regionId: 0, centre, places: [circuit], now: 0 })!.place.key).toBe('ring0');
+        // Held under 10 s: the circuit place stays.
+        expect(roamStep(mem, { regionId: 0, centre, places: [circuit], calls: [call()], now: 5000 })!.place.key).toBe('ring0');
+        const turn = roamStep(mem, { regionId: 0, centre, places: [circuit], calls: [call()], now: 11_000 })!;
+        expect(turn.place.key).toBe('call:hibernia-66');
+        expect(turn.reason).toMatch(/^roam: turning for hibernia-s1's call \(5 enemies\) \(22699, 38908\)/);
+        const closed = roamStep(mem, { regionId: 0, centre: { x: 30_000, y: 35_000 }, places: [circuit], now: 30_000 })!;
+        expect(closed.place.key).toBe('ring0');
+        expect(closed.reason).toMatch(/^roam: hibernia-s1's call \(5 enemies\) closed, on to the meeting ground/);
+    });
+
+    test('reached and still open: done with it, the roam goes on', () => {
+        const mem: Record<string, any> = {};
+        roamStep(mem, { regionId: 0, centre, places: [circuit], calls: [call()], now: 0 });
+        const there = roamStep(mem, { regionId: 0, centre: { x: 22_700, y: 38_900 }, places: [circuit], calls: [call()], now: 120_000 })!;
+        expect(there.place.key).toBe('ring0');
+        expect(there.reason).toMatch(/^roam: past hibernia-s1's call/);
+    });
+
+    const us = { x: 38_000, y: 32_000 };
+    test.skipIf(isWet(THID, us) || isWet(THID, { x: 22_699, y: 38_908 }))('the pack walks toward a call 19000 away that the director did not ask it to', () => {
+        const help = { id: 'hibernia-66', kind: 'help', from: 'hibernia-s1', why: 'caught', at: { x: 22_699, y: 38_908, z: 0 }, foes: 5, ours: 3, foeRoles: {}, want: 3, asked: [], coming: [], since: 1_000_000, updatedAt: 1_000_000 };
+        const memory: Record<string, any> = { realm: 'hibernia', pack: 'stalk', realmUnit: 'hibernia', realmCalls: [help] };
+        const u = decide(us, [], memory, 1_000_000);
+        expect(u.phase).toBe('travel');
+        expect(u.reason).toMatch(/^roam: to hibernia-s1's call \(5 enemies\)/);
+        const ahead = decide(us, [], memory, 1_002_000);
+        expect(Math.hypot(ahead.anchor!.x - help.at.x, ahead.anchor!.y - help.at.y)).toBeLessThan(Math.hypot(us.x - help.at.x, us.y - help.at.y));
+    });
+});
