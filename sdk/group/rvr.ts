@@ -627,6 +627,10 @@ export const FIGHT_HOLD_MS = 10_000;
 export const FIGHT_JOIN_MAX = 9000;
 /** A realm call beyond help.ts's reach turns the roam only with this many enemies at it (its most so far): a group, not a pair. */
 export const CALL_GROUP_FOES = 5;
+/** A unit this big (a full group) takes no sighting area of fewer than ROAM_GROUP_MIN_FOES enemies as a roam target: the user, playing Niamh
+ *  at 10:19 on 2026-11-14: "we now followed a solo one forever. not sure a "full" group would do that". Squads still follow singles. */
+export const ROAM_GROUP_SIZE = 5;
+export const ROAM_GROUP_MIN_FOES = 3;
 
 /** Within this of our portal keep's arrival a group is home, and buffs up before it leaves. */
 export const HOME_BUFF_RADIUS = 3000;
@@ -1272,7 +1276,7 @@ function decideRvrOnce(ctx: CoordinatorContext<RvrSettings>): OrdersUpdate {
         const callPlaces: RoamPlace[] = open
             .filter(c => c.from !== mem.realmUnit && !(c.id in left) && mem.callFoesMax[c.id] >= CALL_GROUP_FOES && c.at && okPlace(c.at))
             .map(c => ({ key: `call:${c.id}`, what: `${c.from}'s call (${enemiesText(c.foes)})`, x: c.at.x, y: c.at.y, at: c.since ?? now, side: sideOf(regionId, c.at) }));
-        const r = roamStep(mem, { regionId, centre, places: mem.roamPlaces as RoamPlace[], sightings: mem.realmSeen ?? [], circuit: roamCircuit(realm as PlayerRealm), now, ok: okPlace, blocked: towardFled, spent: spentAreas(mem, now), calls: callPlaces });
+        const r = roamStep(mem, { regionId, centre, places: mem.roamPlaces as RoamPlace[], sightings: mem.realmSeen ?? [], circuit: roamCircuit(realm as PlayerRealm), now, ok: okPlace, blocked: towardFled, spent: spentAreas(mem, now), calls: callPlaces, minFoes: here.length >= ROAM_GROUP_SIZE ? ROAM_GROUP_MIN_FOES : 1 });
         if (r) {
             stepLeg(trip, 'roam', r.goal, { from: centre, movers: here, replan: 1500 });
             mem.camp = { x: r.place.x, y: r.place.y, z: zAt(r.place), names: r.place.what };

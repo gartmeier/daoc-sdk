@@ -51,13 +51,17 @@ describe('the roam\'s place picker (rule 1)', () => {
 });
 
 describe('sightings by area (live 20:44: "past X, on to Y" every 2-5 s through cells 1200-2500 apart, 2-4 min old)', () => {
-    test('those within 3000 of the freshest are one place with all their enemies; none older than 150 s', () => {
+    test('those within 3000 of the freshest are one place, counted by its most in one cell; none older than 150 s', () => {
         const now = 200_000;
         const ps = sightingPlaces(1, [seen(0, 0, now - 60_000, 2), seen(1300, 0, now - 20_000, 5), seen(2500, 1000, now - 90_000, 3), seen(9000, 0, now - 10_000, 1), seen(20_000, 0, now - 160_000, 6)], now, () => true);
         expect(ps).toHaveLength(2);
         const area = ps.find(p => p.x === 1300)!;
-        expect(area.what).toMatch(/^where 10 enemies were seen 20 s ago/);
+        // The most in one cell, not the sum: one runner over three cells is one enemy (S3, hibernia 10:18, "a solo one forever").
+        expect(area.what).toMatch(/^where 5 enemies were seen 20 s ago/);
         expect(ps.some(p => p.x === 9000)).toBe(true);
+        // A full group's minimum (rvr.ts ROAM_GROUP_MIN_FOES): the lone one at 9000 is no place for it.
+        const group = sightingPlaces(1, [seen(0, 0, now - 60_000, 2), seen(1300, 0, now - 20_000, 5), seen(9000, 0, now - 10_000, 1)], now, () => true, undefined, 3);
+        expect(group.map(p => p.x)).toEqual([1300]);
     });
 
     test('passing one area: its neighbours within 3000 are no news, so the roam goes on round the circuit', () => {

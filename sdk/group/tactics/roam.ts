@@ -163,13 +163,14 @@ export function roamPlaces(regionId: number, realm: PlayerRealm, ring: readonly 
  * Fresh sightings (within sightingMs) as places, on dry ground (`ok`), one per area: the freshest of those within `area` of it
  * stands for them, with all their enemies (live 20:44, hibernia went "past X, on to Y" every 2-5 s through 2000-cells 1200-2500 apart).
  */
-export function sightingPlaces(regionId: number, sightings: readonly RoamSighting[], now: number, ok: (p: Point) => boolean, s: RoamSettings = ROAM_SETTINGS): RoamPlace[] {
+export function sightingPlaces(regionId: number, sightings: readonly RoamSighting[], now: number, ok: (p: Point) => boolean, s: RoamSettings = ROAM_SETTINGS, minFoes = 1): RoamPlace[] {
     const areas: RoamSighting[] = [];
     for (const x of sightings.filter(x => now - x.at < s.sightingMs && ok(x)).sort((a, b) => b.at - a.at || b.n - a.n)) {
         const a = areas.find(a => dist(a, x) <= s.area);
-        if (a) a.n += x.n; else areas.push({ ...x });
+        // The most in one cell, not the sum: one runner over three cells read "3 enemies" (S3, hibernia 10:18, "a solo one forever").
+        if (a) a.n = Math.max(a.n, x.n); else areas.push({ ...x });
     }
-    return areas.map(x => ({ key: `seen:${Math.round(x.x)}:${Math.round(x.y)}`, what: `where ${x.n} ${x.n === 1 ? 'enemy was' : 'enemies were'} seen ${Math.round((now - x.at) / 1000)} s ago`, x: x.x, y: x.y, at: x.at, side: sideOf(regionId, x) }));
+    return areas.filter(x => x.n >= minFoes).map(x => ({ key: `seen:${Math.round(x.x)}:${Math.round(x.y)}`, what: `where ${x.n} ${x.n === 1 ? 'enemy was' : 'enemies were'} seen ${Math.round((now - x.at) / 1000)} s ago`, x: x.x, y: x.y, at: x.at, side: sideOf(regionId, x) }));
 }
 
 const isSighting = (p: RoamPlace | null | undefined) => p?.at !== undefined;
@@ -214,7 +215,7 @@ export function shouldLeave(r: RoamMemory, o: { centre: Point; now: number; bett
  * This tick's roam: mark what we pass, keep the place unless the leave rule says go, else pick the next (rule 1). Null with no
  * place at all (the caller patrols). `blocked`: a place not to walk toward now (the group we just ran from).
  */
-export function roamStep(mem: Record<string, any>, o: { regionId: number; centre: Point; places: readonly RoamPlace[]; sightings?: readonly RoamSighting[]; circuit?: readonly PlayerRealm[]; now: number; ok?: (p: Point) => boolean; blocked?: (p: Point) => boolean; spent?: readonly Point[]; calls?: readonly RoamPlace[]; settings?: RoamSettings }): RoamStep | null {
+export function roamStep(mem: Record<string, any>, o: { regionId: number; centre: Point; places: readonly RoamPlace[]; sightings?: readonly RoamSighting[]; circuit?: readonly PlayerRealm[]; now: number; ok?: (p: Point) => boolean; blocked?: (p: Point) => boolean; spent?: readonly Point[]; calls?: readonly RoamPlace[]; minFoes?: number; settings?: RoamSettings }): RoamStep | null {
     const s = o.settings ?? ROAM_SETTINGS;
     const r: RoamMemory = Array.isArray(mem.roam?.passed) ? mem.roam : (mem.roam = { place: null, since: o.now, until: o.now, side: 0, done: [], passed: [] });
     const circuit = o.circuit ?? [];
@@ -222,7 +223,7 @@ export function roamStep(mem: Record<string, any>, o: { regionId: number; centre
     // camelot-2 "gave up on" a sighting after a 2-min field rest it never walked in).
     if (r.place && r.tick !== undefined && o.now - r.tick > PAUSE_MS) r.until += o.now - r.tick;
     r.tick = o.now;
-    const sightings = sightingPlaces(o.regionId, o.sightings ?? [], o.now, o.ok ?? (() => true), s);
+    const sightings = sightingPlaces(o.regionId, o.sightings ?? [], o.now, o.ok ?? (() => true), s, o.minFoes);
     const was = r.place;
     const reached = !!was && dist(o.centre, was) <= s.reach;
     const calls = o.calls ?? [];
