@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
     curveAt, CURVE, groupNeeds, initialLives, LIFECYCLE_SETTINGS, logOutUnsafe, mixFor, newWave, openNeeds, readBalance, see, stepBalance,
-    stepRealm, stepWave, waveFile, wantsMuster, wearOf, type BalanceState, type Life, type LifeBot, type RealmStep, type Sightings,
+    stepRealm, stepWave, waveFile, wantsMuster, wearOf, heldForHumans, readHumanLines, type HumanSeen, type BalanceState, type Life, type LifeBot, type RealmStep, type Sightings,
 } from './lifecycle';
 import { fieldRestSpot, quietSpot, waveOrder, nextIdle, QUIET_DOOR_CLEAR, QUIET_REASON, REST_REASON, type RealmWave } from './waves';
 import { doorSide, PORTAL_DOORS } from '../doors';
@@ -533,5 +533,55 @@ describe('gear wear', () => {
         expect(w.min).toBe(88);
         expect(w.worn.map(i => i.name)).toEqual(['Vest', 'Sword']);
         expect(wearOf([]).min).toBe(100);
+    });
+});
+
+describe('humans on our characters', () => {
+    // The server's log of 2026-11-14 (docker logs --timestamps): the user's Niamh, link-dead, our log-in 21 s after.
+    const LOG = [
+        '2026-11-14T08:33:24.1Z 08:33:24 | INF | LoginRequestHandler | (172.19.0.1) User niamh logging on! (Version1127 type:LabyrinthOfTheMinotaur add:bit4, NewNewFrontiers)',
+        '2026-11-14T08:33:30.1Z 08:33:30 | INF | LoginRequestHandler | (172.19.0.1) User fiacra logging on! (Version1127 type:LabyrinthOfTheMinotaur add:0)',
+        '2026-11-14T09:08:58.1Z 09:08:58 | INF | PlayerMovementComponent | Position update timeout on client. Calling link death. (Version1127 pakLib:x type:LabyrinthOfTheMinotaur(LabyrinthOfTheMinotaur) addons:bit4, NewNewFrontiers state:Playing IP:172.19.0.1 session:1232 acc:niamh char:Niamh class:42)',
+        '2026-11-14T09:09:58.1Z 09:09:58 | INF | GameClient | ([not connected]) niamh just disconnected.',
+        '2026-11-14T09:10:26.1Z 09:10:26 | INF | LoginRequestHandler | (172.19.0.1) User niamh logging on! (Version1127 type:LabyrinthOfTheMinotaur add:0)',
+        '2026-11-14T09:11:24.1Z 09:11:24 | INF | GameClient | ([not connected]) fiacra just disconnected.',
+    ].join('\n');
+    const t = (s: string) => Date.parse(`2026-11-14T${s}Z`);
+    const botOf = new Map([['niamh', 'niamh'], ['fiacra', 'fiacra']]);
+    const bots = new Set(['niamh', 'fiacra']);
+    const hold = LIFECYCLE_SETTINGS.humanHoldMs;
+
+    test('the server log: a real client opens the account, its disconnect closes it; ours (add:0) count for nothing', () => {
+        const seen = new Map<string, HumanSeen>();
+        readHumanLines(seen, LOG.split('\n').slice(0, 3).join('\n'));
+        expect(seen.get('niamh')).toEqual({ open: true, at: t('09:08:58.1') });
+        expect(seen.has('fiacra')).toBe(false);
+        readHumanLines(seen, LOG);
+        expect(seen.get('niamh')).toEqual({ open: false, at: t('09:09:58.1') });
+        expect(seen.has('fiacra')).toBe(false);
+        // Read again over the same lines (the 5 s overlap): the same.
+        readHumanLines(seen, LOG.split('\n').slice(3).join('\n'));
+        expect(seen.get('niamh')).toEqual({ open: false, at: t('09:09:58.1') });
+    });
+
+    test('held while a human plays and an hour after; not for a log-on of ours', () => {
+        const seen = new Map<string, HumanSeen>();
+        readHumanLines(seen, LOG.split('\n').slice(0, 2).join('\n'));
+        expect([...heldForHumans({ seen, botOf, records: [], bots, now: t('11:00:00'), holdMs: hold }).keys()]).toEqual(['niamh']);
+        readHumanLines(seen, LOG);
+        // 09:09:19, when it logged Niamh in: held (link-dead, still open).
+        expect(heldForHumans({ seen, botOf, records: [], bots, now: t('09:09:58.0'), holdMs: hold }).has('niamh')).toBe(true);
+        expect(heldForHumans({ seen, botOf, records: [], bots, now: t('10:09:00'), holdMs: hold }).has('niamh')).toBe(true);
+        expect(heldForHumans({ seen, botOf, records: [], bots, now: t('10:10:00'), holdMs: hold }).size).toBe(0);
+    });
+
+    test('lfg records: a human in it now, or in a group within the hour, by character name', () => {
+        const seen = new Map<string, HumanSeen>();
+        const done = { name: 'Niamh', stage: 'done', asked: t('08:54:51'), joinedAt: t('08:55:31'), lastInGroup: t('09:09:55') };
+        expect(heldForHumans({ seen, botOf, records: [done], bots, now: t('10:00:00'), holdMs: hold }).has('niamh')).toBe(true);
+        expect(heldForHumans({ seen, botOf, records: [done], bots, now: t('10:10:00'), holdMs: hold }).size).toBe(0);
+        expect(heldForHumans({ seen, botOf, records: [{ name: 'Niamh', stage: 'placed', asked: t('06:00:00') }], bots, now: t('10:10:00'), holdMs: hold }).has('niamh')).toBe(true);
+        // A stranger lfg placed is no bot of ours.
+        expect(heldForHumans({ seen, botOf, records: [{ name: 'Gwyn', stage: 'placed' }], bots, now: t('10:10:00'), holdMs: hold }).size).toBe(0);
     });
 });

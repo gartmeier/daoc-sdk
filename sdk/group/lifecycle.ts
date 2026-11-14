@@ -80,6 +80,12 @@ export interface LifecycleSettings {
      */
     healAt: number;
     healRefreshMs: number;
+    /**
+     * A character a human played (a real client in the server's log, or lfg's record of them in a group) is left alone as
+     * if pinned away while they are on and this long after: a link-dead human comes back within minutes (the user's Niamh,
+     * 2026-11-14 09:09: logged in 21 s after their client froze, and they found the bot in their place).
+     */
+    humanHoldMs: number;
     /** At most one log-out (and `logInsPerStep` log-ins) per realm this often. */
     stepMs: number;
     logInsPerStep: number;
@@ -158,6 +164,7 @@ export const LIFECYCLE_SETTINGS: LifecycleSettings = {
     keepClear: 7000,
     healAt: 10,
     healRefreshMs: 5 * 60_000,
+    humanHoldMs: 60 * 60_000,
     stepMs: 90_000,
     logInsPerStep: 2,
     joinTimeoutMs: 5 * 60_000,
@@ -690,6 +697,8 @@ export interface LifecycleOptions {
     log?: (line: string) => void;
     /** S6's lfg state (its `held` bots step out for a human); groups/lfg/state.json by default. */
     lfgState?: string;
+    /** The gameserver's log since a time (real clients: heldForHumans); `docker logs` by default, null for none. */
+    serverLog?: ((sinceMs: number) => Promise<string>) | null;
     /** Plan and log only: no log-ins or log-outs (also while <dir>/off exists). */
     shadow?: boolean;
     rand?: () => number;
@@ -756,6 +765,69 @@ export async function gatewayConLost(bot: string): Promise<number | null> {
         return Number.isFinite(c) ? c! : null;
     } catch {
         return null;
+    }
+}
+
+/** A real client (not ours) on an account, from the server's log: `open` while it plays, `at` its last line. */
+export interface HumanSeen { open: boolean; at: number }
+/** An open real-client session with no line for this long counts as over (a disconnect line the log lost). */
+const HUMAN_OPEN_CAP_MS = 8 * 60 * 60_000;
+
+/**
+ * Read gameserver log lines (`docker logs --timestamps`, oldest first) into `seen`, per account in lower case. Our headless
+ * client logs on with "add:0"; the user's real client with "add:bit4, NewNewFrontiers". A real log-on or link death opens
+ * the account's session, its "just disconnected" closes it.
+ */
+export function readHumanLines(seen: Map<string, HumanSeen>, text: string): void {
+    for (const line of text.split('\n')) {
+        const t = Date.parse(line.slice(0, line.indexOf(' ')));
+        if (!Number.isFinite(t)) continue;
+        let m = /User (\S+) logging on! \(.*\badd:([^)]*)\)/.exec(line);
+        if (m) { if (m[2]!.trim() !== '0') seen.set(m[1]!.toLowerCase(), { open: true, at: t }); continue; }
+        m = /\baddons:(.*?) state:.*\bacc:(\S+)/.exec(line);
+        if (m) { if (m[1]!.trim() !== '0') seen.set(m[2]!.toLowerCase(), { open: true, at: t }); continue; }
+        m = /\(\[not connected\]\) (\S+) just disconnected/.exec(line);
+        if (m && seen.get(m[1]!.toLowerCase())?.open) seen.set(m[1]!.toLowerCase(), { open: false, at: t });
+    }
+}
+
+/** lfg's record of a human it placed (groups/lfg/state.json `records`). */
+export interface LfgSeat { name: string; stage?: string; asked?: number; placedAt?: number; joinedAt?: number; lastInGroup?: number }
+
+/**
+ * Our bots whose character a human plays now or played within `holdMs`: by the server's log (accounts, `botOf` maps an
+ * account to its bot) and by lfg's records (character names; a record not done is a human in it now).
+ */
+export function heldForHumans(o: { seen: ReadonlyMap<string, HumanSeen>; botOf: ReadonlyMap<string, string>; records: readonly LfgSeat[]; bots: ReadonlySet<string>; now: number; holdMs: number }): Map<string, string> {
+    const held = new Map<string, string>();
+    const ago = (t: number) => `${Math.round((o.now - t) / 60_000)} min ago`;
+    for (const [acc, h] of o.seen) {
+        const bot = o.botOf.get(acc);
+        if (!bot) continue;
+        if (h.open && o.now - h.at < HUMAN_OPEN_CAP_MS) held.set(bot, `a human plays it (real client since ${ago(h.at)})`);
+        else if (!h.open && o.now - h.at < o.holdMs) held.set(bot, `a human played it until ${ago(h.at)}`);
+    }
+    for (const r of o.records) {
+        const bot = r.name?.toLowerCase();
+        if (!bot || !o.bots.has(bot) || held.has(bot)) continue;
+        const last = Math.max(r.lastInGroup ?? 0, r.joinedAt ?? 0, r.placedAt ?? 0, r.asked ?? 0);
+        if (r.stage !== 'done') held.set(bot, 'a human in lfg now');
+        else if (o.now - last < o.holdMs) held.set(bot, `a human with lfg until ${ago(last)}`);
+    }
+    return held;
+}
+
+/** The gameserver's log since `sinceMs` (stdout of `docker logs --timestamps`). */
+async function dockerServerLog(sinceMs: number): Promise<string> {
+    const p = Bun.spawn(['docker', 'logs', '--timestamps', '--since', new Date(sinceMs).toISOString(), process.env.DAOC_GAMESERVER_CONTAINER ?? 'daoc-sdk-gameserver-1'], { stdout: 'pipe', stderr: 'pipe' });
+    const timer = setTimeout(() => p.kill(), 15_000);
+    try {
+        const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+        const code = await p.exited;
+        if (code !== 0) throw new Error(`docker logs exited ${code}: ${err.trim().slice(0, 200)}`);
+        return out;
+    } finally {
+        clearTimeout(timer);
     }
 }
 
@@ -885,6 +957,13 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
     const classOf = (bot: string) => opts.realms.flatMap(r => r.bots).find(b => b.bot === bot)?.className ?? '';
     const enterOne = opts.enter ?? ((bot: string) => enterAlone(bot, classOf(bot), line => log(`lifecycle enter ${bot}: ${line}`)));
     const keepOwner = (keep: string) => (keep === 'Thidranki Faste' ? opts.owner?.() ?? null : null);
+    /** Real clients in the server's log (read on from humanReadTo each step), and the bots held for a human now. */
+    const humanSeen = new Map<string, HumanSeen>();
+    let humanReadTo = 0, humanLogFailed = false;
+    let humanHeld = new Map<string, string>();
+    const serverLog = opts.serverLog === undefined ? dockerServerLog : opts.serverLog;
+    const allBots = opts.realms.flatMap(r => r.bots.map(b => b.bot));
+    const botOf = new Map(allBots.map(b => [userOf(b).toLowerCase(), b]));
 
     const tick = async () => {
         if (stopped || busy) return;
@@ -892,8 +971,24 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
         try {
             const now = Date.now();
             const inGame = await (opts.inGame ?? gatewayInGame)();
-            const pins = pinned();
-            const lfg = new Set(readJson<{ held?: string[] }>(opts.lfgState ?? LFG_STATE)?.held ?? []);
+            const lfgJson = readJson<{ held?: string[]; records?: LfgSeat[] }>(opts.lfgState ?? LFG_STATE);
+            const lfg = new Set(lfgJson?.held ?? []);
+            // A character a human plays or played within humanHoldMs: as if pinned away (no log-in, no adoption, not picked).
+            if (serverLog) {
+                try {
+                    readHumanLines(humanSeen, await serverLog(humanReadTo ? humanReadTo - 5000 : now - 2 * s.humanHoldMs));
+                    humanReadTo = now; humanLogFailed = false;
+                } catch (e) {
+                    if (!humanLogFailed) log(`lifecycle: the server's log for real clients: ${(e as Error).message}`);
+                    humanLogFailed = true;
+                }
+            }
+            const heldNow = heldForHumans({ seen: humanSeen, botOf, records: lfgJson?.records ?? [], bots: new Set(allBots), now, holdMs: s.humanHoldMs });
+            for (const [bot, why] of heldNow) if (!humanHeld.has(bot)) { record({ kind: 'human', bot, held: true, why }); log(`lifecycle: ${bot} held for a human: ${why}`); }
+            for (const bot of humanHeld.keys()) if (!heldNow.has(bot)) { record({ kind: 'human', bot, held: false }); log(`lifecycle: ${bot} free again (no human on it for ${Math.round(s.humanHoldMs / 60_000)} min)`); }
+            humanHeld = heldNow;
+            const pinsRead = pinned();
+            const pins = { away: new Set([...pinsRead.away, ...humanHeld.keys()]), stay: pinsRead.stay };
             const shadow = !!opts.shadow || existsSync(join(dir, 'off'));
             if (!started) {
                 started = true;
@@ -993,7 +1088,7 @@ export function startLifecycle(opts: LifecycleOptions): Lifecycle {
     for (const r of opts.realms) for (const u of r.units) unitRealm.set(u, r);
     return {
         mayPlay(bot) {
-            if (pinned().away.has(bot)) return false;
+            if (pinned().away.has(bot) || humanHeld.has(bot)) return false;
             const l = lives.get(bot);
             return !l || !started || l.state === 'online';
         },
