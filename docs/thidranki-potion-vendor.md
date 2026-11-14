@@ -50,16 +50,16 @@ The order follows `HibPoison2`, the one list that has both pages. Albion splits 
 
 ## The NPCs in Thidranki's portal keeps
 
-Copies of each realm's own NPCs: the realm's portal-keep healer (`DOL.GS.GameHealer`, which removes resurrection sickness and buys back lost constitution), a potion merchant's look from region 165, and the realm's portal-keep poison merchant. Each stands 170 from the keep's centre and faces it. The centre is where a release in the battleground lands (`GamePlayer.Release`, `eReleaseType.Battleground`: `keep.X/Y/Z`), so all three are inside the 192 interact range from there. All carry the peace flag (16).
+Copies of each realm's own NPCs: the realm's portal-keep healer (`DOL.GS.GameHealer`, which removes resurrection sickness and buys back lost constitution), a potion merchant's look from region 165, and the realm's portal-keep poison merchant. They stand along a wall of the yard, 500-900 from the keep's centre and seen from it. The centre is where a release in the battleground lands (`GamePlayer.Release`, `eReleaseType.Battleground`: `keep.X/Y/Z`). All carry the peace flag (16).
 
 | Mob_ID | Name | Guild | Realm | Spot (region 252) | Heading | List |
 |---|---|---|---|---|---|---|
-| `thid-pk-alb-healer` | Sister Ellayne | Healer | 1 | 37131, 52362, 3946 | 3072 | |
-| `thid-pk-alb-potions` | Sabine | Potion Merchant | 1 | 37301, 52532, 3946 | 2048 | ThidPotionsAlb |
-| `thid-pk-alb-poisons` | Onyg | Poison Merchant | 1 | 37471, 52362, 3946 | 1024 | ThidPoisonsAlb |
-| `thid-pk-mid-healer` | Hagdar | Healer | 2 | 53883, 24680, 4323 | 3072 | |
-| `thid-pk-mid-potions` | Salazo | Potion Merchant | 2 | 54053, 24850, 4323 | 2048 | ThidPotionsMid |
-| `thid-pk-mid-poisons` | Svewn | Poison Merchant | 2 | 54223, 24680, 4323 | 1024 | ThidPoisonsMid |
+| `thid-pk-alb-healer` | Sister Ellayne | Healer | 1 | 37601, 52962, 3946 | 1024 | |
+| `thid-pk-alb-potions` | Sabine | Potion Merchant | 1 | 37351, 53262, 3946 | 2389 | ThidPotionsAlb |
+| `thid-pk-alb-poisons` | Onyg | Poison Merchant | 1 | 37601, 53162, 3946 | 910 | ThidPoisonsAlb |
+| `thid-pk-mid-healer` | Hagdar | Healer | 2 | 54403, 24980, 4323 | 1593 | |
+| `thid-pk-mid-potions` | Salazo | Potion Merchant | 2 | 54553, 24630, 4323 | 1250 | ThidPotionsMid |
+| `thid-pk-mid-poisons` | Svewn | Poison Merchant | 2 | 54503, 24830, 4323 | 1138 | ThidPoisonsMid |
 | `thid-pk-hib-healer` | Ilyana | Healer | 3 | 18280, 19110, 4323 | 2048 | |
 | `thid-pk-hib-potions` | Yoria | Potion Merchant | 3 | 17901, 18994, 4326 | 2443 | ThidPotionsHib |
 | `thid-pk-hib-poisons` | Riber | Poison Merchant | 3 | 18100, 19120, 4323 | 2048 | ThidPoisonsHib |
@@ -70,7 +70,14 @@ Copies of each realm's own NPCs: the realm's portal-keep healer (`DOL.GS.GameHea
 - **Riber:** round the corner on the north wall, 105 from it, facing south.
 - **Ilyana:** 180 further east on the north wall, 100 from it, facing south. She first stood 200 south-west of Yoria, but that was under the stairs up the wall. The keep has stairs on both sides of this corner: the part with nothing overhead runs from Yoria's spot to about x 18300. A higher navmesh layer above a spot (`navmeshGroundZ` asked from a higher z) shows them.
 
-All three are seen from the keep's centre, about 800-900 from it. Albion and Midgard still stand round the centre.
+All three are seen from the keep's centre, about 800-900 from it.
+
+Albion and Midgard followed the same day. The three keeps have different layouts (Albion's yard is a long rectangle, Midgard's has a building on its north side), so Hibernia's spots rotated by the keep's heading don't fit. The spots were searched for instead: open yard floor at the yard's height, no navmesh layer overhead within 70, 85-150 from the nearest wall (occluder rays), seen from the centre, 450-1300 from it. Then, away from the gates (the `door` table):
+
+- **Albion:** the north-east corner. Sabine is 117-136 from the north wall; Onyg and Sister Ellayne are about 136 from the east wall, 270 and 200 apart. The gates are on the west side.
+- **Midgard:** along the east wall, 140-150 from it, 200 and 180 apart, about 500 from the centre (the yard is smaller). The gates are in the north-west.
+
+The first placement, round each keep's centre (170 west, north and east of it), stood in the middle of the yard.
 
 Keep centres: Albion (37301, 52362), Midgard (54053, 24680), Hibernia (18362, 18257). The navmesh is flat open ground within 300 of each: z 3946, 4323 and 4323.
 

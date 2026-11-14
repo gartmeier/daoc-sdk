@@ -22,10 +22,10 @@ SELECT CONCAT('ThidPoisons', r.name), CONCAT(m.ItemTemplateID, r.suffix), m.Page
 FROM (SELECT 'Alb' AS name, '' AS suffix UNION ALL SELECT 'Mid', '2' UNION ALL SELECT 'Hib', '3') r
 CROSS JOIN merchantitem m WHERE m.ItemListID = 'HibPoison2';
 
--- NPCs: copies of each realm's own healer, potion merchant and poison merchant, placed round the keep's
--- centre, where a release in the battleground lands (GamePlayer.Release, eReleaseType.Battleground):
--- healer 170 west, potions 170 north, poisons 170 east, each facing the centre and inside the 192 interact
--- range from it. Peace flag (16) on all.
+-- NPCs: copies of each realm's own healer, potion merchant and poison merchant, along a wall of the keep's yard
+-- the way Druim Ligen's merchants stand: 85-150 from the wall's inner face, 180-270 apart, nothing overhead (no
+-- stairs), seen from the keep's centre where a release in the battleground lands, away from the gates, facing
+-- into the yard. Peace flag (16) on all.
 
 DELETE FROM mob WHERE Mob_ID LIKE 'thid-pk-%';
 
@@ -44,14 +44,16 @@ INSERT INTO thid_npc SELECT m.* FROM mob m WHERE m.Mob_ID IN (
 
 CREATE TEMPORARY TABLE thid_place (src VARCHAR(255), id VARCHAR(255), x INT, y INT, z INT, heading INT, items VARCHAR(255));
 INSERT INTO thid_place VALUES
-  -- Albion Portal Keep, centre (37301, 52362, 3946)
-  ('4b88d3f4-72c3-4354-b29b-615166a1c6f5', 'thid-pk-alb-healer',  37131, 52362, 3946, 3072, NULL),
-  ('3005bf9f-10ac-4c4e-b931-32e42418ff23', 'thid-pk-alb-potions', 37301, 52532, 3946, 2048, 'ThidPotionsAlb'),
-  ('b283112c-3a11-4b5e-85a9-34f4b5bc14b4', 'thid-pk-alb-poisons', 37471, 52362, 3946, 1024, 'ThidPoisonsAlb'),
-  -- Midgard Portal Keep, centre (54053, 24680, 4323)
-  ('c55184df-f0fb-4247-9d99-9be50680a523', 'thid-pk-mid-healer',  53883, 24680, 4323, 3072, NULL),
-  ('702a057c-be85-41c3-a86e-56d38af3443f', 'thid-pk-mid-potions', 54053, 24850, 4323, 2048, 'ThidPotionsMid'),
-  ('b6c29d73-2c44-48c0-b762-35321f090d62', 'thid-pk-mid-poisons', 54223, 24680, 4323, 1024, 'ThidPoisonsMid'),
+  -- Albion Portal Keep, centre (37301, 52362, 3946). North-east corner of the yard, away from the gates (west):
+  -- potions 117-136 from the north wall, poisons and healer about 136 from the east wall.
+  ('4b88d3f4-72c3-4354-b29b-615166a1c6f5', 'thid-pk-alb-healer',  37601, 52962, 3946, 1024, NULL),
+  ('3005bf9f-10ac-4c4e-b931-32e42418ff23', 'thid-pk-alb-potions', 37351, 53262, 3946, 2389, 'ThidPotionsAlb'),
+  ('b283112c-3a11-4b5e-85a9-34f4b5bc14b4', 'thid-pk-alb-poisons', 37601, 53162, 3946,  910, 'ThidPoisonsAlb'),
+  -- Midgard Portal Keep, centre (54053, 24680, 4323). Along the east wall, away from the gates (north-west), about
+  -- 140-150 from it (the yard is smaller, so they stand about 500 from the centre).
+  ('c55184df-f0fb-4247-9d99-9be50680a523', 'thid-pk-mid-healer',  54403, 24980, 4323, 1593, NULL),
+  ('702a057c-be85-41c3-a86e-56d38af3443f', 'thid-pk-mid-potions', 54553, 24630, 4323, 1250, 'ThidPotionsMid'),
+  ('b6c29d73-2c44-48c0-b762-35321f090d62', 'thid-pk-mid-poisons', 54503, 24830, 4323, 1138, 'ThidPoisonsMid'),
   -- Hibernia Portal Keep, centre (18362, 18257, 4323). Along the north-west wall instead, spaced like Druim Ligen's
   -- merchants: potions where the user's Niamh stood (145 from the wall), poisons on the north wall (105), the healer
   -- 180 east of them (100), clear of both stairs (south-west along the wall is under the stairs).
