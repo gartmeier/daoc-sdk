@@ -424,6 +424,21 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
         return onLand({ x, y }, c);
     };
     // The focus stays, unless it is out of reach or a healer is winning: then the next one, and that target rests a while.
+    // A straggler that runs is not worth a group: past PREY_CHASE_MS on the same one (hunted or killed), not on us and PREY_RUN or
+    // more from where the chase began, it is let go for PREY_LEFT_MS (memory.runners, as noteRunners). The centre follows the
+    // chasers, so the runner rule never saw it out of reach: the user, playing Niamh on 11-14 at 10:19 UTC, "we now followed a solo
+    // one forever. not sure a "full" group would do that" (Norseman#478, 10:16:54-10:17:49, our melee never within 350 of him).
+    const letGoRunner = (c: Contact): OrdersUpdate | null => {
+        const pc = mem.preyChase as { id: number; since: number; last: number; from: Point } | undefined;
+        if (!pc || pc.id !== c.objectId || now - pc.last > PREY_GAP_MS) { mem.preyChase = { id: c.objectId, since: now, last: now, from: { x: c.x, y: c.y } }; return null; }
+        pc.last = now;
+        if (now - pc.since <= PREY_CHASE_MS || onUs(c) || dist(c, pc.from) < PREY_RUN) return null;
+        (mem.runners ??= {})[c.objectId] = { outs: [], until: now + PREY_LEFT_MS };
+        mem.preyChase = undefined;
+        mem.hunted = undefined;
+        mem.pack = 'stalk';
+        return say({ ...calm(), reason: `let go of ${tag(c)}: a straggler running, chased ${Math.round((now - pc.since) / 1000)} s and ${Math.round(dist(c, pc.from))} on; left alone ${PREY_LEFT_MS / 1000} s unless it comes on us` });
+    };
     const keepFocus = (pool: readonly Contact[]): Contact | null => {
         mem.lowHp ??= {};
         mem.dropped ??= {};
@@ -570,6 +585,9 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
         const near = close.filter(c => dist(c, centre) <= k.crowdRadius).length;
         if (near > k.maxChasers + 1 && (mem.pullLegs ?? 0) < k.maxLegs) return startPull(`${near} on us`, (mem.pullLegs ?? 0) + 1);
         const focus = keepFocus(close);
+        // Stragglers only (no more than maxChasers in sight): one that runs is let go (letGoRunner).
+        const gone = focus && free.filter(inHunt).length <= k.maxChasers ? letGoRunner(focus) : null;
+        if (gone) return gone;
         return fight('kill', focus, packCc(close, main, o.cc, { centre, focus, areaRadius, roots: true, now }), onFocus(focus), `${close.length} chasers vs ${main.length}`);
         }
     }
@@ -707,6 +725,8 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
     const inSight = foes.filter(inHunt);
     const prey = inSight.length <= k.maxChasers && main.length >= inSight.length + 2 && !main.some(m => m.hp < k.preyHp);
     if (prey && !ctx.windingDown) {
+        const gone = letGoRunner(lead);
+        if (gone) return gone;
         if (d <= k.reach) {
             mem.pack = 'kill';
             mem.killAt = now;
@@ -783,6 +803,14 @@ function decidePackOnce(ctx: CoordinatorContext<PackSettings>): OrdersUpdate {
 export const HOME_RUN_HOLD_MS = 6000;
 /** ... while one is still within reach + this. */
 const HOME_RUN_NEAR = 500;
+/** A chase of prey (one or two stragglers) on the same one this long ... */
+export const PREY_CHASE_MS = 25_000;
+/** ... with it this far from where the chase began, not on us: let go for PREY_LEFT_MS. */
+export const PREY_RUN = 1500;
+export const PREY_LEFT_MS = 180_000;
+/** A chase not ticked this long starts afresh. */
+const PREY_GAP_MS = 30_000;
+
 /** An engage's focus this far past reach has run out of it ... */
 const RUNNER_SLACK = 200;
 /** ... and one that does so this many times within RUNNER_WINDOW_MS is let go for RUNNER_DROP_MS. */
