@@ -83,6 +83,8 @@ Items 1-3 don't exist as measures yet. Building them is the first work under thi
 - **One short daily report:** the scoreboard trend, what changed, open doubts. The user reads it, plays when they like, and leaves notes.
 - **The world keeps running** under the supervisor, with the machine awake, until the user says stop.
 
+- **Watchers must not leak.** The machine is shared with the user's client. A Monitor or background shell shaped as `tail -F | grep | awk` leaves its processes alive on Windows after it ends: 1,579 of them, plus 1,403 conhosts, had filled 71 of 74 GB by 2026-11-14 09:08, when the user's client dropped. Watch with one bun script, or a poll whose commands end each round.
+
 ### Claude decides alone
 
 - Code, tests and commits on local main.
