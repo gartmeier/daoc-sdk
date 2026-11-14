@@ -380,6 +380,32 @@ describe('raidStep end to end: the long-reach members go up for the roof archer'
     });
 });
 
+describe.skipIf(!meshReady || getOccluderStore().forZone(252) === null)('raidStep end to end: the ranged on the ray that sees the wall caster', () => {
+    test("gate broken, wall-n's Runemaster in view from outside: each living non-melee takes its own point on the ray, nearest the spot first", async () => {
+        const { raidStep } = await import('./tactics/raid');
+        const { report, contact } = await import('./fixtures');
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const raid = require('./siege').raidPlan('hibernia');
+        const wallN = FASTE.targets.find(x => x.label === 'wall-n')!;
+        const caps = { heal: false, cc: false, nuke: true, buffs: [], buffSpells: [], reach: 1500 };
+        const roles = ['tank', 'melee', 'healer', 'nuker', 'nuker'] as const;
+        const members = roles.map((role, i) => report(`M${i}`, { role, className: 'Warrior', objectId: 10 + i, regionId: 252, x: wallN.outside!.x + i * 40, y: wallN.outside!.y - 100, z: 3724, level: 24, capabilities: caps as any, doorsBroken: [252000301] }));
+        const runemaster = contact(55, { kind: 'npc', name: 'Runemaster', realm: 'midgard', level: 28, regionId: 252, ...wallN.at, keepGuard: true });
+        const mem: Record<string, any> = { raid: { callId: 'x', staged: true, broken: [] as number[] } };
+        const { update, orders } = raidStep({ plan: raid, mem, members, guards: [runemaster] });
+        expect(orders.ranged.step?.label).toBe('wall-n');
+        const line = orders.ranged.line!;
+        expect(line.length).toBeGreaterThanOrEqual(3);
+        const own = (update as any).memberOwn as Record<string, { focus: number; anchor: Point3 }>;
+        // The tank and the melee keep the unit's orders; the healer and the nukers, nearest the spot first, one point each.
+        expect(Object.keys(own).sort()).toEqual(['M2', 'M3', 'M4']);
+        expect(own.M2).toEqual({ focus: 55, anchor: line[0]! });
+        expect(own.M3).toEqual({ focus: 55, anchor: line[1]! });
+        expect(own.M4).toEqual({ focus: 55, anchor: line[2]! });
+        expect(update.reason).toContain('3 on the ray to wall-n');
+    });
+});
+
 function defencePlanOf() {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     return require('./siege').raidPlan('midgard');

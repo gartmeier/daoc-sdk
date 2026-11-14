@@ -312,9 +312,17 @@ export function raidStep(o: { plan: RaidPlan; mem: Record<string, any>; members:
     const boltFocus = npc(ro.bolt?.focus ?? null);
     const shooters = ro.bolt && boltFocus ? o.members.filter(m => !m.isDead && m.role !== 'tank' && m.role !== 'melee' && (m.capabilities.reach ?? 0) >= BOLT_REACH)
         .sort((a, b) => Math.hypot(a.x - ro.bolt!.stand.x, a.y - ro.bolt!.stand.y) - Math.hypot(b.x - ro.bolt!.stand.x, b.y - ro.bolt!.stand.y)).slice(0, BOLT_SHOOTERS) : [];
-    const memberOwn = shooters.length ? Object.fromEntries(shooters.map(m => [m.name, { focus: boltFocus!.id, anchor: ro.bolt!.stand }])) : undefined;
+    const boltOwn = shooters.length ? Object.fromEntries(shooters.map(m => [m.name, { focus: boltFocus!.id, anchor: ro.bolt!.stand }])) : undefined;
+    // The ranged half's work from outside the walls (siege.ts RaidTask.line): one on each point of the ray that sees the wall caster,
+    // nearest the spot first, so none stands off it in the formation's fan (hibernia-26, 2026-11-14 00:06 UTC: not_visible).
+    const lineFocus = ro.ranged.line?.length ? npc(ro.ranged.focus) : null;
+    const liners = lineFocus ? o.members.filter(m => !m.isDead && m.role !== 'tank' && m.role !== 'melee' && !(boltOwn && m.name in boltOwn))
+        .sort((a, b) => Math.hypot(a.x - ro.ranged.stand.x, a.y - ro.ranged.stand.y) - Math.hypot(b.x - ro.ranged.stand.x, b.y - ro.ranged.stand.y)) : [];
+    const lineOwn = liners.length ? Object.fromEntries(liners.map((m, i) => [m.name, { focus: lineFocus!.id, anchor: ro.ranged.line![i % ro.ranged.line!.length]! }])) : undefined;
+    const memberOwn = boltOwn || lineOwn ? { ...(lineOwn ?? {}), ...(boltOwn ?? {}) } : undefined;
     const own = memberOwn ? { memberOwn } : {};
-    const bolted = memberOwn ? `; ${shooters.map(m => m.name).join(' and ')} on the ${ro.bolt!.step?.label ?? 'roof'} from the wall` : '';
+    const bolted = (shooters.length ? `; ${shooters.map(m => m.name).join(' and ')} on the ${ro.bolt!.step?.label ?? 'roof'} from the wall` : '')
+        + (lineOwn ? `; ${liners.length} on the ray to ${ro.ranged.step?.label ?? 'the wall caster'}` : '');
     // The ranged half holds out of the walls' sight (siege.ts RaidTask.hold) while the melee climb to a wall caster: the casters and
     // healers stay at ro.stand, the melee get the caster. The user at 17:3x: "Fiacra and Amergin are not safe, they are being hit by
     // the Runemasters" (they followed the melee's focus into the courtyard).
